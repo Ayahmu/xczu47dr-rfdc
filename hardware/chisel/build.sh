@@ -41,20 +41,22 @@ mkdir -p "${OUTPUT_DIR}"
 case "$1" in
     led)
         print_info "Generating LED module..."
-        mill chisel.runMain led.LedTop
+        mill led.run
         print_info "LED Verilog generated in ${OUTPUT_DIR}"
         ;;
 
     gpio)
         print_info "Generating GPIO module..."
-        mill chisel.runMain gpio.GPIOTop
+        mill gpio.run
         print_info "GPIO Verilog generated in ${OUTPUT_DIR}"
         ;;
 
     all)
         print_info "Generating all modules..."
-        mill chisel.runMain led.LedTop
-        mill chisel.runMain gpio.GPIOTop
+        print_info "Building LED module..."
+        mill led.run
+        print_info "Building GPIO module..."
+        mill gpio.run
         print_info "All Verilog files generated in ${OUTPUT_DIR}"
         ;;
 

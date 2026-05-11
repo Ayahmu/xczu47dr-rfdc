@@ -17,6 +17,9 @@ hardware/chisel/out/
 hardware/chisel/.bsp/
 hardware/chisel/generated/*.v
 hardware/chisel/generated/*.sv
+hardware/chisel/generated/*.fir
+hardware/chisel/generated/*.anno.json
+hardware/chisel/test_run_dir/
 
 # Vitis workspace
 firmware/workspace/
