@@ -1,79 +1,384 @@
-# Hardware - Chisel HDL
+# Chisel Hardware Design
 
-This directory contains the Chisel hardware description code for generating custom RTL modules.
+This directory contains Chisel (Constructing Hardware in a Scala Embedded Language) sources for custom hardware modules used in the ZCU216 RFDC project.
+
+## Overview
+
+Chisel is a hardware construction language embedded in Scala that enables:
+- High-level hardware description with type safety
+- Parameterizable and reusable hardware components
+- Automatic generation of synthesizable Verilog
+- Powerful testing framework (ChiselTest)
 
 ## Directory Structure
 
 ```
 chisel/
-├── axidma/             # AXI DMA modules
-├── common/             # Common utilities and components
-├── gpio/               # GPIO modules
-├── led/                # LED control modules
-├── memory/             # Memory-related modules
-├── Verilog/            # Pre-generated Verilog files
-├── build.sc            # Mill build configuration
-├── instant.py          # Quick elaboration script
-├── postElaborating.py  # Post-elaboration processing
-├── .mill-version       # Mill version specification
-└── .scalafmt.conf      # Scala formatting configuration
+├── build.sc           # Mill build configuration
+├── build.sh           # Build automation script
+├── .mill-version      # Mill version specification (0.11.6)
+├── common/            # Common utilities and base classes
+│   └── src/
+├── led/               # LED controller module
+│   └── src/
+├── gpio/              # GPIO controller module
+│   └── src/
+├── axidma/            # AXI DMA module
+│   └── src/
+├── memory/            # Memory controller module
+│   └── src/
+├── out/               # Mill build outputs (auto-generated)
+└── generated/         # Generated Verilog files (auto-generated)
 ```
 
 ## Prerequisites
 
-- Java 11 or later
-- Mill build tool
-- Scala (managed by Mill)
+### Required Tools
+
+1. **Mill Build Tool** (version 0.11.6)
+   ```bash
+   # Check if Mill is installed
+   mill --version
+   
+   # Install Mill if needed
+   curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.6/0.11.6 > mill
+   chmod +x mill
+   sudo mv mill /usr/local/bin/
+   ```
+
+2. **Java JDK** (version 8 or higher)
+   ```bash
+   # Check Java version
+   java -version
+   
+   # Should output Java 8 or higher
+   ```
+
+3. **Scala** (automatically managed by Mill)
+   - Mill will download the correct Scala version
+   - No manual installation needed
 
 ## Quick Start
 
-### Install Mill
+### Generate All Modules
 
 ```bash
-# On Linux
+./build.sh all
+```
+
+This generates Verilog for all modules in the `generated/` directory.
+
+### Generate Specific Modules
+
+```bash
+# LED controller only
+./build.sh led
+
+# GPIO controller only
+./build.sh gpio
+```
+
+### Clean Build Artifacts
+
+```bash
+./build.sh clean
+```
+
+## Build Script Usage
+
+```bash
+./build.sh {led|gpio|all|clean}
+
+Commands:
+  led    - Generate LED module Verilog
+  gpio   - Generate GPIO module Verilog
+  all    - Generate all modules
+  clean  - Remove build artifacts
+
+Output directory: generated/
+```
+
+## Module Descriptions
+
+### LED Controller (`led/`)
+
+Simple LED blinker module for testing and debugging.
+
+**Features:**
+- Configurable blink frequency
+- AXI-Lite slave interface for control
+- Multiple LED outputs
+
+**Generated Files:**
+- `LedTop.v` - Top-level LED controller
+
+**Parameters:**
+- `clockFreq`: System clock frequency (Hz)
+- `blinkFreq`: LED blink frequency (Hz)
+- `numLeds`: Number of LED outputs
+
+### GPIO Controller (`gpio/`)
+
+Extended GPIO functionality with interrupt support.
+
+**Features:**
+- Configurable number of GPIO pins
+- Input/output direction control
+- Interrupt generation on pin changes
+- AXI-Lite slave interface
+
+**Generated Files:**
+- `GPIOTop.v` - Top-level GPIO controller
+
+**Parameters:**
+- `numPins`: Number of GPIO pins
+- `hasInterrupt`: Enable interrupt support
+
+### AXI DMA (`axidma/`)
+
+High-performance DMA engine for data transfer between memory and streaming interfaces.
+
+**Features:**
+- AXI4 memory-mapped interface
+- AXI-Stream data interface
+- Scatter-gather support
+- Configurable data width
+
+**Generated Files:**
+- `AxiDmaTop.v` - Top-level DMA controller
+
+**Parameters:**
+- `dataWidth`: Data bus width (bits)
+- `addrWidth`: Address bus width (bits)
+
+### Memory Controller (`memory/`)
+
+Custom memory controller for specialized memory access patterns.
+
+**Features:**
+- Burst access support
+- Configurable memory interface
+- AXI4 compliant
+
+**Generated Files:**
+- `MemoryTop.v` - Top-level memory controller
+
+## Manual Build with Mill
+
+If you prefer to use Mill directly:
+
+```bash
+# List all available targets
+mill resolve __
+
+# Generate LED module
+mill chisel.runMain led.LedTop
+
+# Generate GPIO module
+mill chisel.runMain gpio.GPIOTop
+
+# Run tests (if available)
+mill chisel.test
+
+# Clean build artifacts
+mill clean
+```
+
+## Development Workflow
+
+### 1. Edit Chisel Sources
+
+Modify Scala files in the appropriate module directory:
+```bash
+vim led/src/LedController.scala
+```
+
+### 2. Generate Verilog
+
+```bash
+./build.sh led
+```
+
+### 3. Verify Generated Verilog
+
+```bash
+cat generated/LedTop.v
+```
+
+### 4. Integrate with Vivado
+
+The generated Verilog files are automatically picked up by the Vivado build:
+```bash
+cd ../vivado
+./build.sh
+```
+
+## Testing
+
+Chisel provides a powerful testing framework. To run tests:
+
+```bash
+# Run all tests
+mill chisel.test
+
+# Run specific test
+mill chisel.test.testOnly led.LedControllerTest
+```
+
+## Generated Verilog
+
+After running the build script, Verilog files are generated in `generated/`:
+
+```
+generated/
+├── LedTop.v           # LED controller
+├── GPIOTop.v          # GPIO controller
+├── AxiDmaTop.v        # AXI DMA
+└── MemoryTop.v        # Memory controller
+```
+
+These files are:
+- **Synthesizable**: Ready for FPGA implementation
+- **Readable**: Well-formatted with comments
+- **Portable**: Standard Verilog compatible with any tool
+
+## Chisel Language Features Used
+
+### Bundles
+Custom data types for grouping signals:
+```scala
+class AxiLiteBundle extends Bundle {
+  val awaddr = Output(UInt(32.W))
+  val awvalid = Output(Bool())
+  val awready = Input(Bool())
+  // ...
+}
+```
+
+### Modules
+Hardware components:
+```scala
+class LedController extends Module {
+  val io = IO(new Bundle {
+    val led = Output(UInt(8.W))
+  })
+  // Hardware logic here
+}
+```
+
+### Registers
+Sequential logic:
+```scala
+val counter = RegInit(0.U(32.W))
+counter := counter + 1.U
+```
+
+### Conditional Logic
+```scala
+when(enable) {
+  led := ~led
+}.otherwise {
+  led := 0.U
+}
+```
+
+## Troubleshooting
+
+### Mill Not Found
+
+```bash
+# Install Mill
 curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.6/0.11.6 > mill
 chmod +x mill
 sudo mv mill /usr/local/bin/
 ```
 
-### Generate Verilog
+### Java Version Issues
 
 ```bash
-# Generate all modules
-mill common.runMain <ModuleName>
+# Check Java version
+java -version
 
-# Or use the instant script
-./instant.py <ModuleName>
+# Install Java 11 (recommended)
+sudo apt install openjdk-11-jdk  # Ubuntu/Debian
 ```
 
-### Example
+### Mill Version Mismatch
 
 ```bash
-# Generate GPIO module
-mill gpio.runMain gpio.GPIO
+# Check required version
+cat .mill-version
 
-# Generate with instant script
-./instant.py gpio.GPIO
+# Install specific version
+curl -L https://github.com/com-lihaoyi/mill/releases/download/$(cat .mill-version)/$(cat .mill-version) > mill
+chmod +x mill
+sudo mv mill /usr/local/bin/
 ```
 
-## Module Overview
+### Build Errors
 
-- **axidma**: AXI DMA interface modules
-- **common**: Shared utilities (buffers, delays, math functions, etc.)
-- **gpio**: General Purpose I/O controllers
-- **led**: LED control logic
-- **memory**: Memory controllers and interfaces
+```bash
+# Clean and rebuild
+./build.sh clean
+./build.sh all
 
-## Integration with Vivado
+# Check Mill output for detailed errors
+mill chisel.runMain led.LedTop
+```
 
-Generated Verilog files can be added to the Vivado project:
+### Generated Verilog Issues
 
-1. Generate Verilog using Mill or instant.py
-2. Copy generated `.v` files to `../vivado/src/`
-3. Rebuild Vivado project
+If generated Verilog has synthesis issues:
+1. Check Chisel source for unsupported constructs
+2. Verify parameter values are reasonable
+3. Review Chisel documentation for synthesis guidelines
 
-## Notes
+## Best Practices
 
-- Generated Verilog files are in the `Verilog/` directory
-- The build system uses Mill instead of SBT for faster builds
-- Chisel version and dependencies are specified in `build.sc`
+### Code Organization
+- Keep modules small and focused
+- Use bundles for complex interfaces
+- Parameterize for reusability
+
+### Naming Conventions
+- Module names: `PascalCase`
+- Signal names: `camelCase`
+- Constants: `UPPER_CASE`
+
+### Documentation
+- Add comments for complex logic
+- Document module parameters
+- Provide usage examples
+
+### Version Control
+- Commit Chisel sources (`.scala` files)
+- **Do not commit** generated Verilog (in `.gitignore`)
+- **Do not commit** build artifacts (`out/` directory)
+
+## Resources
+
+- [Chisel Official Website](https://www.chisel-lang.org/)
+- [Chisel Bootcamp](https://github.com/freechipsproject/chisel-bootcamp)
+- [Chisel Cheatsheet](https://github.com/freechipsproject/chisel-cheatsheet)
+- [Mill Build Tool](https://mill-build.com/)
+- [Scala Documentation](https://docs.scala-lang.org/)
+
+## Next Steps
+
+After generating Verilog:
+
+1. **Verify Verilog**: Check generated files in `generated/`
+2. **Build Vivado Project**: Run `cd ../vivado && ./build.sh`
+3. **Simulate**: Use Vivado simulator or other tools
+4. **Synthesize**: Integrate with complete FPGA design
+
+## Contributing
+
+When adding new Chisel modules:
+
+1. Create new directory under `chisel/`
+2. Add source files in `src/` subdirectory
+3. Update `build.sc` with new module
+4. Add build target to `build.sh`
+5. Document module in this README
+6. Test thoroughly before committing

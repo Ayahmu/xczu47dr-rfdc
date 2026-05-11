@@ -1,17 +1,19 @@
 #!/bin/bash
-# Vivado Build Automation Script
+# Vivado Complete Build Script
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK_DIR="${SCRIPT_DIR}/work"
 PROJECT_NAME="zcu216_rfdc"
+WORK_DIR="${SCRIPT_DIR}/work"
+OUTPUT_DIR="${SCRIPT_DIR}/output"
 
-# Colors for output
-RED='\033[0;31m'
+# Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -25,6 +27,10 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+print_step() {
+    echo -e "${BLUE}[STEP]${NC} $1"
+}
+
 # Check if Vivado is available
 if ! command -v vivado &> /dev/null; then
     print_error "Vivado not found in PATH"
@@ -32,70 +38,158 @@ if ! command -v vivado &> /dev/null; then
     exit 1
 fi
 
-case "$1" in
-    create)
-        print_info "Creating Vivado project..."
-        vivado -mode batch -source "${SCRIPT_DIR}/build.tcl"
-        ;;
+# Create output directory
+mkdir -p "${OUTPUT_DIR}"
 
-    synth)
-        print_info "Running synthesis..."
-        vivado -mode batch -source "${SCRIPT_DIR}/run_synth.tcl"
-        ;;
+# Parse command line arguments
+SKIP_CHISEL=false
+SKIP_SYNTH=false
+SKIP_IMPL=false
+SKIP_BITSTREAM=false
+CLEAN_FIRST=false
 
-    impl)
-        print_info "Running implementation..."
-        vivado -mode batch -source "${SCRIPT_DIR}/run_impl.tcl"
-        ;;
-
-    bitstream)
-        print_info "Generating bitstream..."
-        vivado -mode batch -source "${SCRIPT_DIR}/run_bitstream.tcl"
-        ;;
-
-    xsa)
-        print_info "Exporting XSA..."
-        vivado -mode batch -source "${SCRIPT_DIR}/export_xsa.tcl"
-        ;;
-
-    all)
-        print_info "Running complete build flow..."
-        $0 create
-        $0 synth
-        $0 impl
-        $0 bitstream
-        $0 xsa
-        print_info "Build complete!"
-        ;;
-
-    clean)
-        print_warn "Cleaning work directory..."
-        rm -rf "${WORK_DIR}"
-        print_info "Clean complete"
-        ;;
-
-    gui)
-        print_info "Opening Vivado GUI..."
-        if [ -f "${WORK_DIR}/${PROJECT_NAME}.xpr" ]; then
-            vivado "${WORK_DIR}/${PROJECT_NAME}.xpr" &
-        else
-            print_error "Project not found. Run '$0 create' first."
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --skip-chisel)
+            SKIP_CHISEL=true
+            shift
+            ;;
+        --skip-synth)
+            SKIP_SYNTH=true
+            shift
+            ;;
+        --skip-impl)
+            SKIP_IMPL=true
+            shift
+            ;;
+        --skip-bitstream)
+            SKIP_BITSTREAM=true
+            shift
+            ;;
+        --clean)
+            CLEAN_FIRST=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --skip-chisel      Skip Chisel Verilog generation"
+            echo "  --skip-synth       Skip synthesis"
+            echo "  --skip-impl        Skip implementation"
+            echo "  --skip-bitstream   Skip bitstream generation"
+            echo "  --clean            Clean before build"
+            echo "  --help, -h         Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  $0                           # Full build"
+            echo "  $0 --clean                   # Clean and full build"
+            echo "  $0 --skip-chisel             # Build without regenerating Chisel"
+            echo "  $0 --skip-synth --skip-impl  # Only create project"
+            exit 0
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            echo "Use --help for usage information"
             exit 1
-        fi
-        ;;
+            ;;
+    esac
+done
 
-    *)
-        echo "Usage: $0 {create|synth|impl|bitstream|xsa|all|clean|gui}"
-        echo ""
-        echo "Commands:"
-        echo "  create     - Create Vivado project from TCL scripts"
-        echo "  synth      - Run synthesis"
-        echo "  impl       - Run implementation"
-        echo "  bitstream  - Generate bitstream"
-        echo "  xsa        - Export hardware specification (XSA)"
-        echo "  all        - Run complete build flow"
-        echo "  clean      - Remove work directory"
-        echo "  gui        - Open project in Vivado GUI"
+# Clean if requested
+if [ "$CLEAN_FIRST" = true ]; then
+    print_warn "Cleaning previous build..."
+    rm -rf "${WORK_DIR}"
+    rm -rf "${OUTPUT_DIR}"/*.bit "${OUTPUT_DIR}"/*.ltx "${OUTPUT_DIR}"/*.xsa
+    mkdir -p "${OUTPUT_DIR}"
+    print_info "Clean complete"
+fi
+
+# Step 1: Generate Chisel Verilog
+if [ "$SKIP_CHISEL" = false ]; then
+    print_step "Step 1/5: Generating Chisel Verilog..."
+    cd "${SCRIPT_DIR}/../chisel"
+    ./build.sh all
+    print_info "Chisel Verilog generation complete"
+else
+    print_warn "Skipping Chisel Verilog generation"
+fi
+
+cd "${SCRIPT_DIR}"
+
+# Step 2: Create Vivado Project
+print_step "Step 2/5: Creating Vivado project..."
+vivado -mode batch -source scripts/create_project.tcl -notrace
+if [ $? -ne 0 ]; then
+    print_error "Project creation failed"
+    exit 1
+fi
+print_info "Project created successfully"
+
+# Step 3: Run Synthesis
+if [ "$SKIP_SYNTH" = false ]; then
+    print_step "Step 3/5: Running synthesis..."
+    vivado -mode batch -source scripts/run_synth.tcl -notrace
+    if [ $? -ne 0 ]; then
+        print_error "Synthesis failed"
         exit 1
-        ;;
-esac
+    fi
+    print_info "Synthesis complete"
+else
+    print_warn "Skipping synthesis"
+fi
+
+# Step 4: Run Implementation
+if [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" = false ]; then
+    print_step "Step 4/5: Running implementation..."
+    vivado -mode batch -source scripts/run_impl.tcl -notrace
+    if [ $? -ne 0 ]; then
+        print_error "Implementation failed"
+        exit 1
+    fi
+    print_info "Implementation complete"
+else
+    print_warn "Skipping implementation"
+fi
+
+# Step 5: Generate Bitstream and Export XSA
+if [ "$SKIP_BITSTREAM" = false ] && [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" = false ]; then
+    print_step "Step 5/5: Generating bitstream and exporting XSA..."
+    vivado -mode batch -source scripts/run_bitstream.tcl -notrace
+    if [ $? -ne 0 ]; then
+        print_error "Bitstream generation failed"
+        exit 1
+    fi
+
+    vivado -mode batch -source scripts/export_xsa.tcl -notrace
+    if [ $? -ne 0 ]; then
+        print_error "XSA export failed"
+        exit 1
+    fi
+    print_info "Bitstream and XSA generation complete"
+else
+    print_warn "Skipping bitstream generation"
+fi
+
+# Summary
+echo ""
+print_info "=========================================="
+print_info "Build Summary"
+print_info "=========================================="
+print_info "Project: ${PROJECT_NAME}"
+print_info "Work directory: ${WORK_DIR}"
+print_info "Output directory: ${OUTPUT_DIR}"
+echo ""
+
+if [ -f "${OUTPUT_DIR}/${PROJECT_NAME}.bit" ]; then
+    BIT_SIZE=$(du -h "${OUTPUT_DIR}/${PROJECT_NAME}.bit" | cut -f1)
+    print_info "Bitstream: ${OUTPUT_DIR}/${PROJECT_NAME}.bit (${BIT_SIZE})"
+fi
+
+if [ -f "${OUTPUT_DIR}/${PROJECT_NAME}.xsa" ]; then
+    XSA_SIZE=$(du -h "${OUTPUT_DIR}/${PROJECT_NAME}.xsa" | cut -f1)
+    print_info "XSA: ${OUTPUT_DIR}/${PROJECT_NAME}.xsa (${XSA_SIZE})"
+fi
+
+echo ""
+print_info "Build complete!"
