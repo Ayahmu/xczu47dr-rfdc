@@ -54,6 +54,27 @@ if {[file exists ${xdc_dir}]} {
     }
 }
 
+# Create standalone IP cores
+puts "INFO: Creating standalone IP cores..."
+
+# Create AXI DataMover IP
+set datamover_script "${script_path}/axi_datamover_0.tcl"
+if {[file exists ${datamover_script}]} {
+    source ${datamover_script}
+    puts "INFO: AXI DataMover IP created"
+} else {
+    puts "WARN: AXI DataMover script not found: ${datamover_script}"
+}
+
+# Create AXIS Async FIFO IP
+set async_fifo_script "${script_path}/axis_async_fifo_128.tcl"
+if {[file exists ${async_fifo_script}]} {
+    source ${async_fifo_script}
+    puts "INFO: AXIS Async FIFO IP created"
+} else {
+    puts "WARN: AXIS Async FIFO script not found: ${async_fifo_script}"
+}
+
 # Create and configure Block Design
 puts "INFO: Creating Block Design..."
 set bd_script "${vivado_dir}/bd/design_1.tcl"
