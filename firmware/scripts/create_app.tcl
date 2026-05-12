@@ -37,7 +37,7 @@ platform generate
 
 # Create application
 puts "Creating application..."
-app create -name ${app_name} -platform hw_platform -domain standalone_psu_cortexa53_0 -template "Empty Application(C)"
+app create -name ${app_name} -platform hw_platform -domain standalone_domain -template "Empty Application(C)"
 
 # Import source files
 puts "Importing source files..."

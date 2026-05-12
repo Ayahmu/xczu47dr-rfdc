@@ -26,11 +26,9 @@ vivado/
 │   └── design_1.tcl      # Main block design
 ├── src/                  # Additional RTL sources
 ├── xdc/                  # Constraint files
-│   ├── timing.xdc        # Timing constraints
-│   └── pinout.xdc        # Pin assignments
-├── work/                 # Vivado project workspace (auto-generated)
-│   └── zcu216_rfdc.xpr   # Vivado project file
-└── output/               # Build outputs
+│   └── pin.xdc           # Board and timing constraints
+├── work/                 # Vivado project workspace (auto-generated, ignored)
+└── output/               # Build outputs (auto-generated, ignored)
     ├── zcu216_rfdc.bit   # FPGA bitstream
     ├── zcu216_rfdc.ltx   # Debug probes
     └── zcu216_rfdc.xsa   # Hardware platform
@@ -65,7 +63,7 @@ vivado/
 
 ### Complete Build
 
-Run the complete build process (Chisel → Synthesis → Implementation → Bitstream):
+Run the complete build process (Chisel -> Synthesis -> Implementation -> Bitstream/XSA):
 
 ```bash
 ./build.sh
@@ -99,7 +97,7 @@ cd ../chisel
 cd ../vivado
 ```
 
-**Output**: Verilog files in `../chisel/generated/`
+**Output**: Verilog files in `../chisel/generated/` (auto-generated, ignored)
 
 ### Step 2: Create Vivado Project
 
@@ -343,32 +341,13 @@ vivado work/zcu216_rfdc.xpr &
 
 ## Constraint Files
 
-### Timing Constraints (`xdc/timing.xdc`)
+The active Vivado constraints live in `xdc/pin.xdc`. This file contains the board-level and timing constraints used by `scripts/create_project.tcl`.
 
-```tcl
-# Primary clocks
-create_clock -period 10.000 -name pl_clk0 [get_pins PS_inst/pl_clk0]
-create_clock -period 4.000 -name pl_clk1 [get_pins PS_inst/pl_clk1]
+Key conventions:
 
-# Clock domain crossings
-set_clock_groups -asynchronous -group [get_clocks pl_clk0] -group [get_clocks pl_clk1]
-
-# Input/output delays
-set_input_delay -clock pl_clk0 2.0 [get_ports gpio_in*]
-set_output_delay -clock pl_clk0 2.0 [get_ports gpio_out*]
-```
-
-### Pin Constraints (`xdc/pinout.xdc`)
-
-```tcl
-# LED pins
-set_property PACKAGE_PIN AG14 [get_ports {led[0]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]
-
-# GPIO pins
-set_property PACKAGE_PIN AH14 [get_ports {gpio[0]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {gpio[0]}]
-```
+- Use `-quiet` on constraints that refer to generated BD pins or clocks, so project creation remains robust across regenerated Vivado metadata.
+- Keep board-specific pin and clock constraints in `pin.xdc`; do not create parallel `timing.xdc` or `pinout.xdc` files unless the build scripts are updated to include and document them.
+- Validate constraint changes with `make hardware` or the step targets `make synth` and `make impl`.
 
 ## Troubleshooting
 
@@ -491,7 +470,7 @@ After successful hardware build:
 3. **Program FPGA**
    ```bash
    cd ../../firmware
-   xsct scripts/program.tcl
+   ./build.sh program
    ```
 
 ## References

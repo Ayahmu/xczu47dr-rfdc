@@ -9,6 +9,8 @@ PROJECT_ROOT="$(dirname "${FIRMWARE_DIR}")"
 WORKSPACE_DIR="${FIRMWARE_DIR}/workspace"
 SRC_DIR="${FIRMWARE_DIR}/src"
 XSA_FILE="${PROJECT_ROOT}/hardware/vivado/output/zcu216_rfdc.xsa"
+BIT_FILE="${PROJECT_ROOT}/hardware/vivado/output/zcu216_rfdc.bit"
+PSU_INIT_FILE="${WORKSPACE_DIR}/hw_platform/hw/psu_init.tcl"
 APP_NAME="rfdc_app"
 
 # Colors
@@ -45,6 +47,22 @@ check_xsa() {
     fi
 }
 
+check_bit() {
+    if [ ! -f "${BIT_FILE}" ]; then
+        print_error "Bitstream file not found: ${BIT_FILE}"
+        print_info "Please build hardware first: cd ../hardware/vivado && ./build.sh"
+        exit 1
+    fi
+}
+
+check_psu_init() {
+    if [ ! -f "${PSU_INIT_FILE}" ]; then
+        print_error "PS init script not found: ${PSU_INIT_FILE}"
+        print_info "Please create the firmware platform first: $0 create"
+        exit 1
+    fi
+}
+
 case "$1" in
     create)
         check_xsa
@@ -72,7 +90,8 @@ case "$1" in
         ;;
 
     program)
-        check_xsa
+        check_bit
+        check_psu_init
         ELF_FILE="${WORKSPACE_DIR}/${APP_NAME}/Debug/${APP_NAME}.elf"
         if [ ! -f "${ELF_FILE}" ]; then
             print_error "ELF file not found: ${ELF_FILE}"
@@ -80,7 +99,7 @@ case "$1" in
             exit 1
         fi
         print_info "Programming FPGA and downloading ELF..."
-        xsct "${SCRIPT_DIR}/scripts/program.tcl" "${XSA_FILE}" "${ELF_FILE}"
+        xsct "${SCRIPT_DIR}/scripts/program.tcl" "${BIT_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
         ;;
 
     clean)

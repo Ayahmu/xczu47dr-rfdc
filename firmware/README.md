@@ -27,7 +27,7 @@ firmware/
 ## Prerequisites
 
 - Xilinx Vitis 2024.2
-- Hardware XSA file from Vivado build
+- Hardware XSA and bitstream from Vivado build
 - ARM cross-compiler (aarch64-none-elf-gcc)
 
 ## Quick Start
@@ -61,12 +61,13 @@ source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
 1. **Create**: Creates Vitis platform and application from XSA
 2. **Build**: Compiles source code and generates ELF
-3. **Program**: Programs FPGA bitstream and downloads ELF via JTAG
+3. **Program**: Sources the generated PS init script, programs the FPGA bitstream, downloads the ELF via JTAG, and starts Cortex-A53 #0
 
 ## Build Outputs
 
 - **ELF file**: `workspace/rfdc_app/Debug/rfdc_app.elf`
 - **Map file**: `workspace/rfdc_app/Debug/rfdc_app.elf.map`
+- **PS init script**: `workspace/hw_platform/hw/psu_init.tcl`
 
 ## Hardware Configuration
 

@@ -32,9 +32,9 @@ set_property IOSTANDARD LVCMOS18  [get_ports trigger_out_sma]
 set_property SLEW SLOW            [get_ports trigger_out_sma]
 set_property DRIVE 4              [get_ports trigger_out_sma]
 
-set_false_path -from [get_cells axigpio_i/ip/U0/gpio_core_1/Dual.gpio2_Data_Out_reg[*]]
+set_false_path -quiet -from [get_cells -quiet {axigpio_i/gpio2_reg_reg[*]}]
 
-set_clock_groups -asynchronous \
-    -group [get_clocks clk_pl_0] \
-    -group [get_clocks mmcm_clkout0] \
-    -group [get_clocks RFDAC2_CLK]
+set_clock_groups -quiet -asynchronous \
+    -group [get_clocks -quiet clk_pl_0] \
+    -group [get_clocks -quiet mmcm_clkout0] \
+    -group [get_clocks -quiet RFDAC2_CLK]

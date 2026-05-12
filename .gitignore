@@ -1,30 +1,25 @@
-# Xilinx Vivado
+# Xilinx Vivado generated state
 hardware/vivado/work/
 hardware/vivado/.Xil/
+hardware/vivado/output/
 hardware/vivado/*.jou
 hardware/vivado/*.log
 hardware/vivado/*.str
 hardware/vivado/*.zip
+hardware/vivado/*.backup.*
 
-# Xilinx Vitis/XSCT
-firmware/.Xil/
+# Xilinx Vitis/XSCT generated state
 firmware/workspace/
+firmware/.Xil/
 firmware/.metadata/
 firmware/*.log
 
 # Chisel/Mill generated files
 hardware/chisel/out/
 hardware/chisel/.bsp/
-hardware/chisel/generated/*.v
-hardware/chisel/generated/*.sv
-hardware/chisel/generated/*.fir
-hardware/chisel/generated/*.anno.json
+hardware/chisel/generated/
+hardware/chisel/Verilog/
 hardware/chisel/test_run_dir/
-
-# Vitis workspace
-firmware/workspace/
-firmware/.metadata/
-firmware/*.log
 
 # Python
 software/__pycache__/
@@ -32,6 +27,7 @@ software/*.pyc
 software/.pytest_cache/
 software/venv/
 software/.venv/
+software/output/
 
 # IDE
 .vscode/
@@ -51,6 +47,7 @@ Thumbs.db
 *.bit
 *.ltx
 *.mmi
+*.xsa
 
 # Temporary files
 *.tmp

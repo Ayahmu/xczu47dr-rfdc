@@ -13,9 +13,15 @@ open_project ${proj_file}
 # Create output directory
 file mkdir ${output_dir}
 
-puts "INFO: Generating bitstream..."
-launch_runs impl_1 -to_step write_bitstream -jobs 8
-wait_on_run impl_1
+set impl_dir "${proj_dir}/${proj_name}.runs/impl_1"
+set existing_bit_files [glob -nocomplain ${impl_dir}/*.bit]
+if {[llength $existing_bit_files] == 0} {
+    puts "INFO: Generating bitstream..."
+    launch_runs impl_1 -to_step write_bitstream -jobs 8
+    wait_on_run impl_1
+} else {
+    puts "INFO: Reusing existing bitstream: [lindex $existing_bit_files 0]"
+}
 
 # Check bitstream generation status
 set bit_status [get_property STATUS [get_runs impl_1]]
@@ -30,9 +36,8 @@ if {${bit_progress} != "100%"} {
 }
 
 # Copy bitstream and debug files to output directory
-set impl_dir "${proj_dir}/${proj_name}.runs/impl_1"
-set bit_file "${impl_dir}/*_wrapper.bit"
-set ltx_file "${impl_dir}/*_wrapper.ltx"
+set bit_file "${impl_dir}/*.bit"
+set ltx_file "${impl_dir}/*.ltx"
 
 puts "INFO: Copying bitstream to output directory..."
 set bit_files [glob -nocomplain ${bit_file}]

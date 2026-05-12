@@ -1,5 +1,9 @@
+import argparse
+import os
 import socket
 import struct
+from pathlib import Path
+
 import numpy as np
 
 import matplotlib
@@ -18,6 +22,8 @@ DELAY = 1
 DDR_BASE = 0x500000000
 DDR_X_ADDR = DDR_BASE
 DDR_Y_ADDR = DDR_BASE + 0x1000  # 4096 对齐
+DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "10.87.5.241")
+DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "7"))
 
 
 # ============================================================
@@ -146,7 +152,7 @@ class RFSocController:
 def plot_waveforms(qx: np.ndarray, qy: np.ndarray, n_preview: int = 400, title_prefix: str = ""):
     plt.figure(figsize=(12, 5))
     plt.plot(qx[:n_preview], label="X (CH1) int16")
-    plt.plot(qx[:n_preview], label="X (CH2) int16")
+    plt.plot(qy[:n_preview], label="Y (CH2) int16")
     plt.title(f"{title_prefix}Waveform Preview (first {n_preview} samples)")
     plt.xlabel("Sample")
     plt.ylabel("Amplitude (int16)")
@@ -158,7 +164,7 @@ def plot_waveforms(qx: np.ndarray, qy: np.ndarray, n_preview: int = 400, title_p
 
     plt.figure(figsize=(12, 5))
     plt.plot(qx, label="X (CH1) int16")
-    plt.plot(qx, label="X (CH2) int16")
+    plt.plot(qy, label="Y (CH2) int16")
     plt.title(f"{title_prefix}Waveform Full Length ({len(qx)} samples)")
     plt.xlabel("Sample")
     plt.ylabel("Amplitude (int16)")
@@ -174,45 +180,88 @@ def plot_waveforms(qx: np.ndarray, qy: np.ndarray, n_preview: int = 400, title_p
 # ============================================================
 # 5. 主程序
 # ============================================================
-if __name__ == "__main__":
-    Interpolation = 4
-    RF_FREQ = 0.250e9
+def build_default_waveforms():
+    interpolation = 4
+    rf_freq = 0.250e9
 
     x_wave = generate_rf_burst(
-        freq=RF_FREQ, duration_s=100e-9, delay_s=0,
-        fs=DAC_XY_FS, interpolation=Interpolation, amp=0.8
+        freq=rf_freq, duration_s=100e-9, delay_s=0,
+        fs=DAC_XY_FS, interpolation=interpolation, amp=0.8
     )
     y_wave = generate_rf_burst(
-        freq=RF_FREQ, duration_s=20e-9, delay_s=15e-9,
-        fs=DAC_XY_FS, interpolation=Interpolation, amp=0.8
+        freq=rf_freq, duration_s=20e-9, delay_s=15e-9,
+        fs=DAC_XY_FS, interpolation=interpolation, amp=0.8
     )
 
     qx = quantize_to_int16_array(x_wave)
     qy = quantize_to_int16_array(y_wave)
 
-    # 对齐长度（2048 samples）
     qx = (np.concatenate([qx, np.zeros(NUM_SAMPLES - len(qx), dtype=np.int16)])
           if len(qx) < NUM_SAMPLES else qx[:NUM_SAMPLES])
     qy = (np.concatenate([qy, np.zeros(NUM_SAMPLES - len(qy), dtype=np.int16)])
           if len(qy) < NUM_SAMPLES else qy[:NUM_SAMPLES])
 
-    plot_waveforms(qx, qy, n_preview=400, title_prefix="Before Send: ")
+    return qx, qy
 
-    ctrl = RFSocController("10.87.5.241", port=7)
 
-    # 关键：上传时带 DDR 目标地址
-    ctrl.upload_waveform(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
-    ctrl.upload_waveform(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
+def parse_args():
+    parser = argparse.ArgumentParser(description="ZCU216 RFSoC host controller")
+    parser.add_argument("--ip", default=DEFAULT_BOARD_IP, help="Board IPv4 address")
+    parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT, help="Board TCP port")
+    parser.add_argument("--timeout", type=float, default=5.0, help="Socket timeout in seconds")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Generate plots and waveform dumps without connecting to hardware")
+    parser.add_argument("--output-dir", default=".", help="Directory for generated plots and dumps")
+    return parser.parse_args()
 
-    cmds = [
-        [1, 1, 0, 0],                           # ch1 idle delay=0
-        [2, 1, FIXED_DATA_BYTES, DDR_X_ADDR],   # ch1 play
-        [1, 2, 0, 0],                          # ch2 idle delay=0
-        [2, 2, FIXED_DATA_BYTES, DDR_X_ADDR],   # ch2 play
-        [3, 0, 0, 0]                            # END
-    ]
 
-    ctrl.send_instructions(cmds)
-    ctrl.trigger()
-    print("Done.")
-    ctrl.close()
+def main():
+    args = parse_args()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    qx, qy = build_default_waveforms()
+
+    old_cwd = Path.cwd()
+    os.chdir(output_dir)
+    try:
+        plot_waveforms(qx, qy, n_preview=400, title_prefix="Before Send: ")
+
+        if args.dry_run:
+            RFSocController._save_hex_text(qx.astype("<i2").tobytes(), "x_waveform_hex.txt")
+            RFSocController._save_hex_text(qy.astype("<i2").tobytes(), "y_waveform_hex.txt")
+            print(f"[dry-run] generated waveform artifacts in {output_dir.resolve()}")
+            return 0
+
+        try:
+            ctrl = RFSocController(args.ip, port=args.port, timeout_s=args.timeout)
+        except OSError as exc:
+            raise SystemExit(
+                f"Unable to connect to RFSoC board at {args.ip}:{args.port}: {exc}. "
+                "Use --dry-run for offline validation or set RFSOC_BOARD_IP/RFSOC_BOARD_PORT."
+            ) from exc
+
+        try:
+            ctrl.upload_waveform(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
+            ctrl.upload_waveform(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
+
+            cmds = [
+                [1, 1, 0, 0],
+                [2, 1, FIXED_DATA_BYTES, DDR_X_ADDR],
+                [1, 2, 0, 0],
+                [2, 2, FIXED_DATA_BYTES, DDR_Y_ADDR],
+                [3, 0, 0, 0]
+            ]
+
+            ctrl.send_instructions(cmds)
+            ctrl.trigger()
+            print("Done.")
+            return 0
+        finally:
+            ctrl.close()
+    finally:
+        os.chdir(old_cwd)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

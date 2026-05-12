@@ -1,46 +1,79 @@
 #!/usr/bin/env xsct
 # Program FPGA and Download ELF
-# Usage: xsct program.tcl <xsa_file> <elf_file>
+# Usage: xsct program.tcl <bit_file> <elf_file> [psu_init_tcl]
 
-if {$argc != 2} {
-    puts "Usage: xsct program.tcl <xsa_file> <elf_file>"
-    puts "Example: xsct program.tcl ../hardware/vivado/output/zcu216_rfdc.xsa workspace/rfdc_app/Debug/rfdc_app.elf"
+if {$argc < 2 || $argc > 3} {
+    puts "Usage: xsct program.tcl <bit_file> <elf_file> \[psu_init_tcl\]"
+    puts "Example: xsct program.tcl ../hardware/vivado/output/zcu216_rfdc.bit workspace/rfdc_app/Debug/rfdc_app.elf workspace/hw_platform/hw/psu_init.tcl"
     exit 1
 }
 
-set xsa_file [lindex $argv 0]
-set elf_file [lindex $argv 1]
+set bit_file [file normalize [lindex $argv 0]]
+set elf_file [file normalize [lindex $argv 1]]
+set script_dir [file dirname [file normalize [info script]]]
+set firmware_dir [file normalize [file join $script_dir ".."]]
+
+if {$argc == 3} {
+    set psu_init_file [file normalize [lindex $argv 2]]
+} else {
+    set psu_init_file [file join $firmware_dir "workspace" "hw_platform" "hw" "psu_init.tcl"]
+    if {![file exists $psu_init_file]} {
+        set psu_init_file [file join $firmware_dir "workspace" "rfdc_app" "_ide" "psinit" "psu_init.tcl"]
+    }
+}
+
+if {![file exists $bit_file]} {
+    puts "ERROR: bitstream not found: $bit_file"
+    exit 1
+}
+if {![file exists $elf_file]} {
+    puts "ERROR: ELF not found: $elf_file"
+    exit 1
+}
+if {![file exists $psu_init_file]} {
+    puts "ERROR: psu_init.tcl not found: $psu_init_file"
+    puts "Run firmware platform creation first: make firmware-create or make firmware"
+    exit 1
+}
 
 puts "=========================================="
 puts "Programming FPGA"
 puts "=========================================="
-puts "XSA: ${xsa_file}"
+puts "BIT: ${bit_file}"
 puts "ELF: ${elf_file}"
+puts "PS init: ${psu_init_file}"
 puts ""
 
-# Connect to target
 puts "Connecting to target..."
 connect
 
-# List available targets
 puts "Available targets:"
 targets
 
-# Reset system
 puts "Resetting system..."
 targets -set -filter {name =~ "PSU"}
 rst -system
+after 3000
 
-# Program FPGA
+puts "Initializing PS..."
+source $psu_init_file
+targets -set -filter {name =~ "PSU"}
+psu_init
+
 puts "Programming FPGA..."
-fpga ${xsa_file}
+fpga ${bit_file}
 
-# Download ELF to A53 core
+puts "Configuring PS-PL isolation and resets..."
+targets -set -filter {name =~ "PSU"}
+psu_ps_pl_isolation_removal
+psu_ps_pl_reset_config
+
 puts "Downloading ELF to A53 #0..."
 targets -set -filter {name =~ "Cortex-A53 #0"}
+rst -processor
+after 1000
 dow ${elf_file}
 
-# Start execution
 puts "Starting execution..."
 con
 

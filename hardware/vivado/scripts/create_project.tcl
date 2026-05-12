@@ -37,9 +37,15 @@ set src_dir "${vivado_dir}/src"
 if {[file exists ${src_dir}]} {
     puts "INFO: Adding RTL source files from ${src_dir}"
     set rtl_files [glob -nocomplain ${src_dir}/*.v ${src_dir}/*.sv ${src_dir}/*.vhd]
-    if {[llength $rtl_files] > 0} {
-        add_files -norecurse $rtl_files
-        puts "INFO: Added [llength $rtl_files] RTL source files"
+    set filtered_rtl_files [list]
+    foreach rtl_file $rtl_files {
+        if {[file tail $rtl_file] ne "design_1_wrapper.v"} {
+            lappend filtered_rtl_files $rtl_file
+        }
+    }
+    if {[llength $filtered_rtl_files] > 0} {
+        add_files -norecurse $filtered_rtl_files
+        puts "INFO: Added [llength $filtered_rtl_files] RTL source files"
     }
 }
 
@@ -66,6 +72,15 @@ if {[file exists ${datamover_script}]} {
     puts "WARN: AXI DataMover script not found: ${datamover_script}"
 }
 
+# Create instruction FIFO IP used by waveform_system_top.v
+set instr_fifo_script "${script_path}/axis_data_fifo_1.tcl"
+if {[file exists ${instr_fifo_script}]} {
+    source ${instr_fifo_script}
+    puts "INFO: AXIS Data FIFO IP created"
+} else {
+    puts "WARN: AXIS Data FIFO script not found: ${instr_fifo_script}"
+}
+
 # Create AXIS Async FIFO IP
 set async_fifo_script "${script_path}/axis_async_fifo_128.tcl"
 if {[file exists ${async_fifo_script}]} {
@@ -82,17 +97,25 @@ if {[file exists ${bd_script}]} {
     source ${bd_script}
     puts "INFO: Block Design created from ${bd_script}"
 
+    set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]
+    if {$bd_file eq ""} {
+        puts "ERROR: Top-level Block Design file not found"
+        exit 1
+    }
+
     # Generate Block Design
-    generate_target all [get_files *.bd]
+    generate_target all $bd_file
 
     # Create HDL wrapper
-    set bd_files [get_files *.bd]
-    if {[llength $bd_files] > 0} {
-        make_wrapper -files [get_files *.bd] -top
-        set wrapper_file [get_files *_wrapper.v]
+    make_wrapper -files $bd_file -top
+    set wrapper_file [get_files -quiet *_wrapper.v]
+    if {[llength $wrapper_file] > 0} {
         add_files -norecurse $wrapper_file
-        set_property top [file rootname [file tail $wrapper_file]] [current_fileset]
+        set_property top [file rootname [file tail [lindex $wrapper_file 0]]] [current_fileset]
         puts "INFO: HDL wrapper created and set as top"
+    } else {
+        puts "ERROR: HDL wrapper file not found"
+        exit 1
     }
 } else {
     puts "WARN: Block Design script not found: ${bd_script}"
