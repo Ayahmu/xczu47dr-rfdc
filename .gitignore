@@ -49,7 +49,11 @@ Thumbs.db
 *.mmi
 *.xsa
 
-# Temporary files
+# Temporary and backup files
 *.tmp
 *.bak
 *.old
+*.backup
+*.backup.*
+*.orig
+*.rej
