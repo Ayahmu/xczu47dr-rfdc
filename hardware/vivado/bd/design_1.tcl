@@ -129,11 +129,10 @@ set bCheckIPsPassed 1
 ##################################################################
 set bCheckIPs 1
 if { $bCheckIPs == 1 } {
-   set list_check_ips "\ 
+   set list_check_ips "\
 xilinx.com:ip:zynq_ultra_ps_e:3.5\
 xilinx.com:ip:usp_rf_data_converter:2.6\
 xilinx.com:ip:proc_sys_reset:5.0\
-xilinx.com:ip:system_ila:1.1\
 xilinx.com:ip:smartconnect:1.0\
 xilinx.com:ip:ddr4:2.2\
 xilinx.com:ip:util_vector_logic:2.0\
@@ -761,47 +760,6 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   # Create instance: rst_ps8_0_99M, and set properties
   set rst_ps8_0_99M [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps8_0_99M ]
 
-  # Create instance: system_ila_0, and set properties
-  set system_ila_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 system_ila_0 ]
-  set_property -dict [list \
-    CONFIG.C_DATA_DEPTH {16384} \
-    CONFIG.C_MON_TYPE {INTERFACE} \
-    CONFIG.C_NUM_MONITOR_SLOTS {6} \
-    CONFIG.C_SLOT {4} \
-    CONFIG.C_SLOT_0_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_1_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_2_APC_EN {0} \
-    CONFIG.C_SLOT_2_AXI_DATA_SEL {1} \
-    CONFIG.C_SLOT_2_AXI_TRIG_SEL {1} \
-    CONFIG.C_SLOT_2_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_3_APC_EN {0} \
-    CONFIG.C_SLOT_3_AXI_DATA_SEL {1} \
-    CONFIG.C_SLOT_3_AXI_TRIG_SEL {1} \
-    CONFIG.C_SLOT_3_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_4_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_5_APC_EN {0} \
-    CONFIG.C_SLOT_5_AXI_DATA_SEL {1} \
-    CONFIG.C_SLOT_5_AXI_TRIG_SEL {1} \
-    CONFIG.C_SLOT_5_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_6_APC_EN {0} \
-    CONFIG.C_SLOT_6_AXI_DATA_SEL {1} \
-    CONFIG.C_SLOT_6_AXI_TRIG_SEL {1} \
-    CONFIG.C_SLOT_6_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_7_APC_EN {0} \
-    CONFIG.C_SLOT_7_AXI_AR_SEL_DATA {1} \
-    CONFIG.C_SLOT_7_AXI_AR_SEL_TRIG {1} \
-    CONFIG.C_SLOT_7_AXI_AW_SEL_DATA {1} \
-    CONFIG.C_SLOT_7_AXI_AW_SEL_TRIG {1} \
-    CONFIG.C_SLOT_7_AXI_B_SEL_DATA {1} \
-    CONFIG.C_SLOT_7_AXI_B_SEL_TRIG {1} \
-    CONFIG.C_SLOT_7_AXI_R_SEL_DATA {1} \
-    CONFIG.C_SLOT_7_AXI_R_SEL_TRIG {1} \
-    CONFIG.C_SLOT_7_AXI_W_SEL_DATA {1} \
-    CONFIG.C_SLOT_7_AXI_W_SEL_TRIG {1} \
-    CONFIG.C_SLOT_7_INTF_TYPE {xilinx.com:interface:aximm_rtl:1.0} \
-  ] $system_ila_0
-
-
   # Create instance: rst_design_1_184M, and set properties
   set rst_design_1_184M [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_design_1_184M ]
   set_property -dict [list \
@@ -845,26 +803,6 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   # Create instance: proc_sys_reset_0, and set properties
   set proc_sys_reset_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0 ]
 
-  # Create instance: system_ila_1, and set properties
-  set system_ila_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 system_ila_1 ]
-  set_property -dict [list \
-    CONFIG.C_MON_TYPE {INTERFACE} \
-    CONFIG.C_NUM_MONITOR_SLOTS {1} \
-    CONFIG.C_SLOT_0_APC_EN {0} \
-    CONFIG.C_SLOT_0_AXI_AR_SEL_DATA {1} \
-    CONFIG.C_SLOT_0_AXI_AR_SEL_TRIG {1} \
-    CONFIG.C_SLOT_0_AXI_AW_SEL_DATA {1} \
-    CONFIG.C_SLOT_0_AXI_AW_SEL_TRIG {1} \
-    CONFIG.C_SLOT_0_AXI_B_SEL_DATA {1} \
-    CONFIG.C_SLOT_0_AXI_B_SEL_TRIG {1} \
-    CONFIG.C_SLOT_0_AXI_R_SEL_DATA {1} \
-    CONFIG.C_SLOT_0_AXI_R_SEL_TRIG {1} \
-    CONFIG.C_SLOT_0_AXI_W_SEL_DATA {1} \
-    CONFIG.C_SLOT_0_AXI_W_SEL_TRIG {1} \
-    CONFIG.C_SLOT_0_INTF_TYPE {xilinx.com:interface:aximm_rtl:1.0} \
-  ] $system_ila_1
-
-
   # Create interface connections
   connect_bd_intf_net -intf_net S01_AXI_0_1 [get_bd_intf_ports S_AXI_01] [get_bd_intf_pins smartconnect_2/S01_AXI]
   connect_bd_intf_net -intf_net adc2_clk_1 [get_bd_intf_ports adc2_clk] [get_bd_intf_pins usp_rf_data_converter_0/adc2_clk]
@@ -874,23 +812,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_intf_net -intf_net ddr4_0_C0_DDR4 [get_bd_intf_ports c0_ddr4] [get_bd_intf_pins ddr4_0/C0_DDR4]
   connect_bd_intf_net -intf_net default_sysclk_c0_300mhz_1 [get_bd_intf_ports c0_sys] [get_bd_intf_pins ddr4_0/C0_SYS_CLK]
   connect_bd_intf_net -intf_net s20_axis_0_1 [get_bd_intf_ports S_AXIS_20] [get_bd_intf_pins usp_rf_data_converter_0/s20_axis]
-connect_bd_intf_net -intf_net [get_bd_intf_nets s20_axis_0_1] [get_bd_intf_ports S_AXIS_20] [get_bd_intf_pins system_ila_0/SLOT_0_AXIS]
   connect_bd_intf_net -intf_net s22_axis_0_1 [get_bd_intf_ports S_AXIS_22] [get_bd_intf_pins usp_rf_data_converter_0/s22_axis]
-connect_bd_intf_net -intf_net [get_bd_intf_nets s22_axis_0_1] [get_bd_intf_ports S_AXIS_22] [get_bd_intf_pins system_ila_0/SLOT_2_AXIS]
   connect_bd_intf_net -intf_net s30_axis_0_1 [get_bd_intf_ports S_AXIS_30] [get_bd_intf_pins usp_rf_data_converter_0/s30_axis]
-connect_bd_intf_net -intf_net [get_bd_intf_nets s30_axis_0_1] [get_bd_intf_ports S_AXIS_30] [get_bd_intf_pins system_ila_0/SLOT_4_AXIS]
   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_ports M_AXI_GPIO] [get_bd_intf_pins smartconnect_0/M00_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins smartconnect_0/M01_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HP0_FPD]
   connect_bd_intf_net -intf_net smartconnect_0_M02_AXI [get_bd_intf_pins smartconnect_0/M02_AXI] [get_bd_intf_pins usp_rf_data_converter_0/s_axi]
   connect_bd_intf_net -intf_net smartconnect_0_M03_AXI [get_bd_intf_ports M_AXI_DMA] [get_bd_intf_pins smartconnect_0/M03_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M04_AXI [get_bd_intf_ports M_AXI_INST] [get_bd_intf_pins smartconnect_0/M04_AXI]
-connect_bd_intf_net -intf_net [get_bd_intf_nets smartconnect_0_M04_AXI] [get_bd_intf_ports M_AXI_INST] [get_bd_intf_pins system_ila_1/SLOT_0_AXI]
-  set_property HDL_ATTRIBUTE.DEBUG {true} [get_bd_intf_nets smartconnect_0_M04_AXI]
   connect_bd_intf_net -intf_net smartconnect_2_M00_AXI [get_bd_intf_pins smartconnect_2/M00_AXI] [get_bd_intf_pins ddr4_0/C0_DDR4_S_AXI]
   connect_bd_intf_net -intf_net smartconnect_2_M01_AXI [get_bd_intf_pins smartconnect_2/M01_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HP1_FPD]
-connect_bd_intf_net -intf_net usp_rf_data_converter_0_m20_axis [get_bd_intf_pins usp_rf_data_converter_0/m20_axis] [get_bd_intf_pins system_ila_0/SLOT_1_AXIS]
-connect_bd_intf_net -intf_net usp_rf_data_converter_0_m22_axis [get_bd_intf_pins usp_rf_data_converter_0/m22_axis] [get_bd_intf_pins system_ila_0/SLOT_3_AXIS]
-connect_bd_intf_net -intf_net usp_rf_data_converter_0_m30_axis1 [get_bd_intf_pins usp_rf_data_converter_0/m30_axis] [get_bd_intf_pins system_ila_0/SLOT_5_AXIS]
   connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout20 [get_bd_intf_ports vout20] [get_bd_intf_pins usp_rf_data_converter_0/vout20]
   connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout22 [get_bd_intf_ports vout22] [get_bd_intf_pins usp_rf_data_converter_0/vout22]
   connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout30 [get_bd_intf_ports vout30] [get_bd_intf_pins usp_rf_data_converter_0/vout30]
@@ -902,7 +832,6 @@ connect_bd_intf_net -intf_net usp_rf_data_converter_0_m30_axis1 [get_bd_intf_pin
 
   # Create port connections
   connect_bd_net -net CLK1_1  [get_bd_pins usp_rf_data_converter_0/clk_dac2] \
-  [get_bd_pins system_ila_0/clk] \
   [get_bd_pins usp_rf_data_converter_0/m2_axis_aclk] \
   [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
   [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
@@ -926,7 +855,6 @@ connect_bd_intf_net -intf_net usp_rf_data_converter_0_m30_axis1 [get_bd_intf_pin
   [get_bd_pins smartconnect_2/aresetn] \
   [get_bd_ports ddr4_ui_aresetn]
   connect_bd_net -net rst_design_1_184M_peripheral_aresetn  [get_bd_pins rst_design_1_184M/peripheral_aresetn] \
-  [get_bd_pins system_ila_0/resetn] \
   [get_bd_pins usp_rf_data_converter_0/m2_axis_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s3_axis_aresetn] \
@@ -935,8 +863,7 @@ connect_bd_intf_net -intf_net usp_rf_data_converter_0_m30_axis1 [get_bd_intf_pin
   connect_bd_net -net rst_ps8_0_99M_peripheral_aresetn  [get_bd_pins rst_ps8_0_99M/peripheral_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s_axi_aresetn] \
   [get_bd_pins smartconnect_0/aresetn] \
-  [get_bd_ports pl_aresetn] \
-  [get_bd_pins system_ila_1/resetn]
+  [get_bd_ports pl_aresetn]
   connect_bd_net -net util_vector_logic_0_Res  [get_bd_pins util_vector_logic_0/Res] \
   [get_bd_pins ddr4_0/sys_rst]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0  [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
@@ -945,8 +872,7 @@ connect_bd_intf_net -intf_net usp_rf_data_converter_0_m30_axis1 [get_bd_intf_pin
   [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk] \
   [get_bd_pins zynq_ultra_ps_e_0/saxihp0_fpd_aclk] \
   [get_bd_pins smartconnect_0/aclk] \
-  [get_bd_ports pl_clk] \
-  [get_bd_pins system_ila_1/clk]
+  [get_bd_ports pl_clk]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0  [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0] \
   [get_bd_pins rst_ps8_0_99M/ext_reset_in] \
   [get_bd_pins rst_design_1_184M/ext_reset_in] \

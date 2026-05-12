@@ -117,14 +117,21 @@ fi
 
 cd "${SCRIPT_DIR}"
 
-# Step 2: Create Vivado Project
-print_step "Step 2/5: Creating Vivado project..."
-vivado -mode batch -source scripts/create_project.tcl -notrace
-if [ $? -ne 0 ]; then
-    print_error "Project creation failed"
-    exit 1
+# Step 2: Create Vivado Project (or use existing)
+PROJECT_FILE="${WORK_DIR}/${PROJECT_NAME}.xpr"
+if [ -f "${PROJECT_FILE}" ]; then
+    print_step "Step 2/5: Using existing Vivado project..."
+    print_info "Found existing project: ${PROJECT_FILE}"
+    print_info "To recreate project from scratch, use --clean option"
+else
+    print_step "Step 2/5: Creating Vivado project..."
+    vivado -mode batch -source scripts/create_project.tcl -notrace
+    if [ $? -ne 0 ]; then
+        print_error "Project creation failed"
+        exit 1
+    fi
+    print_info "Project created successfully"
 fi
-print_info "Project created successfully"
 
 # Step 3: Run Synthesis
 if [ "$SKIP_SYNTH" = false ]; then
