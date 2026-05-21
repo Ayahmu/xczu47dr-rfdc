@@ -1,6 +1,11 @@
 SHELL := /bin/bash
 
-PROJECT := zcu216_rfdc
+TARGET ?= zcu216
+ALLOWED_TARGETS := zcu216 custom_xczu47dr
+ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
+$(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
+endif
+
 ROOT := $(CURDIR)
 
 VIVADO_DIR := $(ROOT)/hardware/vivado
@@ -8,12 +13,31 @@ CHISEL_DIR := $(ROOT)/hardware/chisel
 FIRMWARE_DIR := $(ROOT)/firmware
 SOFTWARE_DIR := $(ROOT)/software
 
-BIT ?= $(VIVADO_DIR)/output/$(PROJECT).bit
-LTX ?= $(VIVADO_DIR)/output/$(PROJECT).ltx
-XSA ?= $(VIVADO_DIR)/output/$(PROJECT).xsa
-ELF ?= $(FIRMWARE_DIR)/workspace/rfdc_app/Debug/rfdc_app.elf
-PSU_INIT ?= $(FIRMWARE_DIR)/workspace/hw_platform/hw/psu_init.tcl
-BOARD ?= zcu216
+TARGET_PROJECT_BASENAME := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^project_basename:/ {print $$2}')
+TARGET_OUTPUT_BASENAME := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^output_basename:/ {print $$2}')
+TARGET_FIRMWARE_WORKSPACE := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^firmware_workspace:/ {print $$2}')
+TARGET_FIRMWARE_ELF := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^firmware_elf:/ {print $$2}')
+TARGET_PSU_INIT := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^psu_init:/ {print $$2}')
+
+BIT ?= $(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).bit
+LTX ?= $(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).ltx
+XSA ?= $(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).xsa
+ELF ?= $(ROOT)/$(TARGET_FIRMWARE_ELF)
+PSU_INIT ?= $(ROOT)/$(TARGET_PSU_INIT)
+
+BIT_ORIGIN := $(origin BIT)
+ELF_ORIGIN := $(origin ELF)
+PSU_INIT_ORIGIN := $(origin PSU_INIT)
+EXPLICIT_PROGRAM_ARTIFACTS := 0
+ifeq ($(BIT_ORIGIN),command line)
+  EXPLICIT_PROGRAM_ARTIFACTS := 1
+endif
+ifeq ($(ELF_ORIGIN),command line)
+  EXPLICIT_PROGRAM_ARTIFACTS := 1
+endif
+ifeq ($(PSU_INIT_ORIGIN),command line)
+  EXPLICIT_PROGRAM_ARTIFACTS := 1
+endif
 
 RUN_ARGS :=
 ifneq ($(filter run program,$(MAKECMDGOALS)),)
@@ -23,12 +47,14 @@ ifneq ($(filter run program,$(MAKECMDGOALS)),)
   ifneq ($(RUN_ARG1),)
     ifneq ($(filter %.elf,$(RUN_ARG1)),)
       ELF := $(RUN_ARG1)
+      EXPLICIT_PROGRAM_ARTIFACTS := 1
     else
-      BOARD := $(RUN_ARG1)
+      $(error legacy BOARD argument '$(RUN_ARG1)' is no longer supported. Use TARGET=$(ALLOWED_TARGETS) and optional BIT=... ELF=... PSU_INIT=...)
     endif
   endif
   ifneq ($(RUN_ARG2),)
     ELF := $(RUN_ARG2)
+    EXPLICIT_PROGRAM_ARTIFACTS := 1
   endif
 endif
 
@@ -60,8 +86,8 @@ help:
 	@echo ""
 	@echo "Board/host targets:"
 	@echo "  make run              Program FPGA with BIT and download ELF over JTAG"
-	@echo "  make run ELF=/path/app.elf BIT=/path/top.bit"
-	@echo "  make run zcu216 /path/app.elf"
+	@echo "  make run TARGET=custom_xczu47dr"
+	@echo "  make run ELF=/path/app.elf BIT=/path/top.bit PSU_INIT=/path/psu_init.tcl"
 	@echo "  make host             Run host.py against board IP/PORT"
 	@echo "  make host IP=10.87.5.241 PORT=7"
 	@echo "  make host-dry-run     Generate host artifacts without board access"
@@ -72,11 +98,14 @@ help:
 	@echo "  make clean            Clean firmware workspace and Vivado generated outputs"
 	@echo ""
 	@echo "Defaults:"
+	@echo "  PROJECT=$(TARGET_PROJECT_BASENAME)"
 	@echo "  BIT=$(BIT)"
 	@echo "  XSA=$(XSA)"
 	@echo "  ELF=$(ELF)"
 	@echo "  PSU_INIT=$(PSU_INIT)"
-	@echo "  BOARD=$(BOARD)"
+	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
+	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
+	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
 
 all: hardware firmware artifacts
@@ -90,42 +119,43 @@ chisel:
 	$(MAKE) -C $(CHISEL_DIR) all
 
 vivado-project:
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/create_project.tcl
+	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/create_project.tcl -tclargs $(TARGET)
 
 synth: vivado-project
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_synth.tcl
+	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)
 
 impl: synth
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_impl.tcl
+	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_impl.tcl -tclargs $(TARGET)
 
 bitstream: impl
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_bitstream.tcl
+	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_bitstream.tcl -tclargs $(TARGET)
 
 xsa: bitstream
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/export_xsa.tcl
+	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
 
 hardware:
-	cd $(VIVADO_DIR) && ./build.sh --clean
+	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) BIT=$(BIT) LTX=$(LTX) XSA=$(XSA)"
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh --clean
 
 hardware-clean:
 	rm -rf "$(VIVADO_DIR)/work"
-	rm -f "$(VIVADO_DIR)/output/$(PROJECT).bit" "$(VIVADO_DIR)/output/$(PROJECT).ltx" "$(VIVADO_DIR)/output/$(PROJECT).xsa"
+	rm -f "$(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).bit" "$(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).ltx" "$(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).xsa"
 	mkdir -p "$(VIVADO_DIR)/output"
 
 firmware:
-	cd $(FIRMWARE_DIR) && ./build.sh clean && ./build.sh create && ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh clean && TARGET=$(TARGET) ./build.sh create && TARGET=$(TARGET) ./build.sh build
 
 firmware-create:
-	cd $(FIRMWARE_DIR) && ./build.sh create
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh create
 
 firmware-build:
-	cd $(FIRMWARE_DIR) && ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh build
 
 firmware-rebuild:
-	cd $(FIRMWARE_DIR) && ./build.sh clean && ./build.sh create && ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh clean && TARGET=$(TARGET) ./build.sh create && TARGET=$(TARGET) ./build.sh build
 
 firmware-clean:
-	cd $(FIRMWARE_DIR) && ./build.sh clean
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh clean
 
 artifacts:
 	@test -f "$(BIT)" || { echo "ERROR: missing bitstream: $(BIT)"; exit 1; }
@@ -135,11 +165,14 @@ artifacts:
 	@du -h "$(BIT)" "$(LTX)" "$(XSA)" "$(ELF)"
 
 run program:
-	@test "$(BOARD)" = "zcu216" || { echo "ERROR: unsupported BOARD=$(BOARD). Only zcu216 is configured."; exit 1; }
-	@test -f "$(BIT)" || { echo "ERROR: missing BIT=$(BIT). Run make hardware first."; exit 1; }
-	@test -f "$(ELF)" || { echo "ERROR: missing ELF=$(ELF). Run make firmware first."; exit 1; }
-	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PSU_INIT=$(PSU_INIT). Run make firmware-create first."; exit 1; }
+ifeq ($(EXPLICIT_PROGRAM_ARTIFACTS),1)
+	@test -f "$(BIT)" || { echo "ERROR: missing BIT=$(BIT). Run make hardware first or pass BIT=..."; exit 1; }
+	@test -f "$(ELF)" || { echo "ERROR: missing ELF=$(ELF). Run make firmware first or pass ELF=..."; exit 1; }
+	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PSU_INIT=$(PSU_INIT). Run make firmware-create first or pass PSU_INIT=..."; exit 1; }
 	cd $(FIRMWARE_DIR) && xsct scripts/program.tcl "$(BIT)" "$(ELF)" "$(PSU_INIT)"
+else
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh program
+endif
 
 $(RUN_ARGS):
 	@:
