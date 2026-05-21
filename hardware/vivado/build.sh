@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_NAME="zcu216_rfdc"
+TARGET="${TARGET:-zcu216}"
 WORK_DIR="${SCRIPT_DIR}/work"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 
@@ -105,6 +105,12 @@ if [ "$CLEAN_FIRST" = true ]; then
     print_info "Clean complete"
 fi
 
+PROJECT_NAME="$(cd "${SCRIPT_DIR}/scripts" && tclsh target_config.tcl "${TARGET}" | awk -F': ' '/^project_basename:/ {print $2}')"
+if [ -z "${PROJECT_NAME}" ]; then
+    print_error "Unable to resolve project name for TARGET=${TARGET}"
+    exit 1
+fi
+
 # Step 1: Generate Chisel Verilog
 if [ "$SKIP_CHISEL" = false ]; then
     print_step "Step 1/5: Generating Chisel Verilog..."
@@ -125,7 +131,7 @@ if [ -f "${PROJECT_FILE}" ]; then
     print_info "To recreate project from scratch, use --clean option"
 else
     print_step "Step 2/5: Creating Vivado project..."
-    vivado -mode batch -source scripts/create_project.tcl -notrace
+    vivado -mode batch -source scripts/create_project.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Project creation failed"
         exit 1
@@ -136,7 +142,7 @@ fi
 # Step 3: Run Synthesis
 if [ "$SKIP_SYNTH" = false ]; then
     print_step "Step 3/5: Running synthesis..."
-    vivado -mode batch -source scripts/run_synth.tcl -notrace
+    vivado -mode batch -source scripts/run_synth.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Synthesis failed"
         exit 1
@@ -149,7 +155,7 @@ fi
 # Step 4: Run Implementation
 if [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" = false ]; then
     print_step "Step 4/5: Running implementation..."
-    vivado -mode batch -source scripts/run_impl.tcl -notrace
+    vivado -mode batch -source scripts/run_impl.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Implementation failed"
         exit 1
@@ -162,13 +168,13 @@ fi
 # Step 5: Generate Bitstream and Export XSA
 if [ "$SKIP_BITSTREAM" = false ] && [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" = false ]; then
     print_step "Step 5/5: Generating bitstream and exporting XSA..."
-    vivado -mode batch -source scripts/run_bitstream.tcl -notrace
+    vivado -mode batch -source scripts/run_bitstream.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Bitstream generation failed"
         exit 1
     fi
 
-    vivado -mode batch -source scripts/export_xsa.tcl -notrace
+    vivado -mode batch -source scripts/export_xsa.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "XSA export failed"
         exit 1

@@ -115,6 +115,14 @@ module axi_fifo_interface #(
     wire fifo_full;
     reg  fifo_wr_en;
     reg [127:0] data_accumulator; // 用于拼接 4 个 32位数据
+    reg [31:0] awaddr_hold;
+    reg [AXI_DATA_WIDTH-1:0] wdata_hold;
+    reg aw_hold_valid;
+    reg w_hold_valid;
+    wire [127:0] packed_write_data = {wdata_hold, data_accumulator[95:0]};
+    wire accept_aw = s_axi_awvalid && !aw_hold_valid && !s_axi_bvalid;
+    wire accept_w  = s_axi_wvalid && !w_hold_valid && !s_axi_bvalid;
+    wire write_complete = aw_hold_valid && w_hold_valid && !s_axi_bvalid;
 
     // 1. AXI 握手逻辑
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
@@ -125,38 +133,57 @@ module axi_fifo_interface #(
             s_axi_bresp   <= 0;
             fifo_wr_en    <= 0;
             data_accumulator <= 128'd0;
+            awaddr_hold <= 32'd0;
+            wdata_hold <= {AXI_DATA_WIDTH{1'b0}};
+            aw_hold_valid <= 1'b0;
+            w_hold_valid <= 1'b0;
         end else begin
             // 默认拉低写使能 (脉冲信号)
             fifo_wr_en <= 0;
 
-            // Ready 生成
-            s_axi_awready <= (s_axi_awvalid && s_axi_wvalid && !s_axi_awready);
-            s_axi_wready  <= (s_axi_wvalid && s_axi_awvalid && !s_axi_wready);
+            s_axi_awready <= !aw_hold_valid && !s_axi_bvalid && !write_complete;
+            s_axi_wready  <= !w_hold_valid && !s_axi_bvalid && !write_complete;
 
-            // 数据接收与拼接
-            if (s_axi_wready && s_axi_wvalid && s_axi_awready && s_axi_awvalid) begin
-                // 根据地址的低位 [3:2] 判断是第几个 32位字
-                // 0x00 -> [31:0]
-                // 0x04 -> [63:32]
-                // 0x08 -> [95:64]
-                // 0x0C -> [127:96] (并且写入 FIFO)
-                case (s_axi_awaddr[3:2])
-                    2'b00: data_accumulator[31:0]   <= s_axi_wdata;
-                    2'b01: data_accumulator[63:32]  <= s_axi_wdata;
-                    2'b10: data_accumulator[95:64]  <= s_axi_wdata;
+            if (accept_aw) begin
+                awaddr_hold <= s_axi_awaddr;
+                aw_hold_valid <= 1'b1;
+            end
+
+            if (accept_w) begin
+                wdata_hold <= s_axi_wdata;
+                w_hold_valid <= 1'b1;
+            end
+
+            if (aw_hold_valid && w_hold_valid && !s_axi_bvalid) begin
+                case (awaddr_hold[3:2])
+                    2'b00: begin
+                        data_accumulator[31:0] <= wdata_hold;
+                        s_axi_bresp <= 2'b00;
+                    end
+                    2'b01: begin
+                        data_accumulator[63:32] <= wdata_hold;
+                        s_axi_bresp <= 2'b00;
+                    end
+                    2'b10: begin
+                        data_accumulator[95:64] <= wdata_hold;
+                        s_axi_bresp <= 2'b00;
+                    end
                     2'b11: begin
-                           data_accumulator[127:96] <= s_axi_wdata;
-                           // 只有在写入最后一个字 (0x0C) 时，且 FIFO 没满，才触发写入
-                           if (!fifo_full) begin
-                               fifo_wr_en <= 1;
-                           end
+                        data_accumulator[127:96] <= wdata_hold;
+                        if (!fifo_full) begin
+                            fifo_wr_en <= 1'b1;
+                            s_axi_bresp <= 2'b00;
+                        end else begin
+                            s_axi_bresp <= 2'b10;
+                        end
                     end
                 endcase
-                
-                // 发送写响应
-                s_axi_bvalid <= 1;
+
+                aw_hold_valid <= 1'b0;
+                w_hold_valid <= 1'b0;
+                s_axi_bvalid <= 1'b1;
             end else if (s_axi_bready && s_axi_bvalid) begin
-                s_axi_bvalid <= 0;
+                s_axi_bvalid <= 1'b0;
             end
         end
     end
@@ -195,7 +222,7 @@ module axi_fifo_interface #(
         .wr_clk   (s_axi_aclk),
         .wr_rst_n (s_axi_aresetn),
         .wr_en    (fifo_wr_en),        // 由 0x0C 写操作触发
-        .wr_data  (data_accumulator),  // 写入拼接好的 128 位数据
+        .wr_data  (packed_write_data), // 写入包含当前 0x0C word 的 128 位数据
         .full     (fifo_full),
 
         .rd_clk   (m_aclk),

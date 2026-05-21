@@ -1,6 +1,6 @@
 module Waveform_System_Top #(
   parameter integer BEAT_BYTES   = 16,
-  parameter integer CHUNK_BEATS  = 64,
+  parameter integer CHUNK_BEATS  = 256,
   parameter integer LOW_WM       = 128,
   parameter integer HIGH_WM      = 512,
   parameter integer START_WM     = 256
@@ -38,6 +38,7 @@ module Waveform_System_Top #(
     output reg  [31:0]  ch2_len_beats,
     output reg          ch1_arm,        // 本波通道是否有效（PLAY过）；供 DAC 域门控使用
     output reg          ch2_arm,
+    output reg          cfg_auto_start, // END ch=15：无需 GPIO trigger，DAC 域收到配置后直接放行
     output reg          cfg_commit,     // END 时 pulse（提交一帧配置到 DAC 域）
 
     // ===== debug ports =====
@@ -98,8 +99,9 @@ module Waveform_System_Top #(
   // 2) 状态机
   // =========================================================
   localparam ST_BUILD    = 3'd0; // 接收指令；PLAY 到就启动预取
-  localparam ST_WAITTRIG = 3'd1; // END 后暂停取指令，继续预取并等待 trigger
-  localparam ST_PLAYING  = 3'd2; // trigger 到，DAC 在放行读；DDR 继续补货直到 bytes_left=0 且 FIFO 读空
+  localparam ST_PREFILL  = 3'd1; // END 后暂停取指令，等待本帧 DDR 数据全部进入 FIFO
+  localparam ST_WAITTRIG = 3'd2; // 预填完成后等待 trigger
+  localparam ST_PLAYING  = 3'd3; // trigger 到，DAC 在放行读；等待 FIFO 读空
 
   (* MARK_DEBUG="TRUE" *) reg [2:0] st;
 
@@ -116,12 +118,15 @@ module Waveform_System_Top #(
 
   // END 后置 1（debug 用）
   reg pending_valid;
+  reg prefill_auto_start;
+  reg loop_enable;
 
   // active_valid：一旦任一路 PLAY 到来就置 1，直到波结束清掉
   reg active_valid;
 
   // 观测用（你 Top ILA 已在抓）
   reg [31:0] run_delay_cnt;
+  reg        cfg_commit_pending;
 
   // 允许从 main_fifo 取指令：只有 BUILD 才取；END 后暂停取指令
   assign main_tready = (st == ST_BUILD);
@@ -151,6 +156,10 @@ module Waveform_System_Top #(
 
   reg act_ch1_valid_dm, act_ch2_valid_dm;
   reg ch1_load_tog_d, ch2_load_tog_d;
+
+  wire prefill_done = active_valid && (dm_st == DM_IDLE) &&
+                      (!cur_ch1_have_play || (ch1_bytes_left == 0)) &&
+                      (!cur_ch2_have_play || (ch2_bytes_left == 0));
 
   // Data routing（写 FIFO）
   assign m_axis_ch1_tdata  = s_axis_dm_data_tdata;
@@ -234,6 +243,8 @@ module Waveform_System_Top #(
     if(!aresetn) begin
       st <= ST_BUILD;
       pending_valid <= 1'b0;
+      prefill_auto_start <= 1'b0;
+      loop_enable <= 1'b0;
       active_valid  <= 1'b0;
       run_delay_cnt <= 32'd0;
 
@@ -245,27 +256,44 @@ module Waveform_System_Top #(
       ch1_len_beats    <= 0; ch2_len_beats    <= 0;
       ch1_arm          <= 1'b0;
       ch2_arm          <= 1'b0;
+      cfg_auto_start   <= 1'b0;
       cfg_commit       <= 1'b0;
+      cfg_commit_pending <= 1'b0;
 
       ch1_load_tog <= 1'b0; ch2_load_tog <= 1'b0;
       ch1_load_addr <= 64'd0; ch2_load_addr <= 64'd0;
       ch1_load_bytes<= 32'd0; ch2_load_bytes<= 32'd0;
     end else begin
-      cfg_commit <= 1'b0;
+      cfg_commit <= cfg_commit_pending;
+      cfg_commit_pending <= 1'b0;
 
       // 播放完成：清空并回到 BUILD
       if(wave_done) begin
-        st <= ST_BUILD;
-        pending_valid <= 1'b0;
-        active_valid  <= 1'b0;
-        run_delay_cnt <= 32'd0;
+        if(loop_enable) begin
+          st <= ST_PREFILL;
+          pending_valid <= 1'b0;
+          prefill_auto_start <= 1'b1;
+          active_valid  <= 1'b1;
+          run_delay_cnt <= 32'd0;
 
-        cur_ch1_delay <= 0; cur_ch2_delay <= 0;
-        cur_ch1_have_play <= 1'b0;
-        cur_ch2_have_play <= 1'b0;
+          if(cur_ch1_have_play) ch1_load_tog <= ~ch1_load_tog;
+          if(cur_ch2_have_play) ch2_load_tog <= ~ch2_load_tog;
+        end else begin
+          st <= ST_BUILD;
+          pending_valid <= 1'b0;
+          prefill_auto_start <= 1'b0;
+          loop_enable <= 1'b0;
+          active_valid  <= 1'b0;
+          run_delay_cnt <= 32'd0;
 
-        ch1_arm <= 1'b0;
-        ch2_arm <= 1'b0;
+          cur_ch1_delay <= 0; cur_ch2_delay <= 0;
+          cur_ch1_have_play <= 1'b0;
+          cur_ch2_have_play <= 1'b0;
+
+          ch1_arm <= 1'b0;
+          ch2_arm <= 1'b0;
+          cfg_auto_start <= 1'b0;
+        end
       end
 
       case(st)
@@ -312,17 +340,18 @@ module Waveform_System_Top #(
             else if(main_tdata[3:0] == 4'd3) begin
               // 如果本波没有任何 PLAY，则忽略（不进入等待触发）
               if(cur_ch1_have_play || cur_ch2_have_play) begin
-                st <= ST_WAITTRIG;
-                pending_valid <= 1'b1;
+                st <= ST_PREFILL;
+                pending_valid <= (main_tdata[7:4] != 4'hF);
+                prefill_auto_start <= (main_tdata[7:4] == 4'hF);
+                loop_enable <= main_tdata[8];
+                cfg_auto_start <= 1'b0;
 
-                // END 时把最终 delay/arm 输出到 DAC cfg FIFO
+                // END 时冻结最终 delay/arm，等预填完成后再写 DAC cfg FIFO
                 ch1_delay_cycles <= cur_ch1_delay;
                 ch2_delay_cycles <= cur_ch2_delay;
 
                 ch1_arm <= cur_ch1_have_play;
                 ch2_arm <= cur_ch2_have_play;
-
-                cfg_commit <= 1'b1;
 
                 run_delay_cnt <= (cur_ch1_delay > cur_ch2_delay) ? cur_ch1_delay : cur_ch2_delay;
               end
@@ -330,9 +359,23 @@ module Waveform_System_Top #(
           end
         end
 
+        ST_PREFILL: begin
+          if(prefill_done) begin
+            cfg_auto_start <= prefill_auto_start;
+            cfg_commit_pending <= 1'b1;
+            if(prefill_auto_start) begin
+              st <= ST_PLAYING;
+              pending_valid <= 1'b0;
+            end else begin
+              st <= ST_WAITTRIG;
+              pending_valid <= 1'b1;
+            end
+            prefill_auto_start <= 1'b0;
+          end
+        end
+
         ST_WAITTRIG: begin
           // 等 trigger，上升沿到就进入 PLAYING
-          // （可选 warm 条件：START_WM 或 bytes_left==0；这里保守一点：只要 trigger 到就放行）
           if(trig_pulse && pending_valid) begin
             st <= ST_PLAYING;
             pending_valid <= 1'b0;

@@ -2,13 +2,30 @@
 
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
-set proj_name "zcu216_rfdc"
+source "${script_path}/target_config.tcl"
+source "${script_path}/reference_xxv_dcp.tcl"
+
+set target "zcu216"
+if {$argc > 0} {
+    set target [lindex $argv 0]
+}
+if {![target_config_exists $target]} {
+    target_config_error $target
+}
+
+set proj_name [target_config_get $target project_basename]
+set output_basename [target_config_get $target output_basename]
 set proj_dir "${vivado_dir}/work"
 set proj_file "${proj_dir}/${proj_name}.xpr"
 set output_dir "${vivado_dir}/output"
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+
+# Do not reset or regenerate XXV Ethernet during bitstream generation.
+# The generated Design_Linking checkpoint cannot produce a bitstream in this environment.
+# Restore the known-good reference checkpoint instead.
+restore_reference_xxv_dcp ${vivado_dir} ${target}
 
 # Create output directory
 file mkdir ${output_dir}
@@ -42,8 +59,8 @@ set ltx_file "${impl_dir}/*.ltx"
 puts "INFO: Copying bitstream to output directory..."
 set bit_files [glob -nocomplain ${bit_file}]
 if {[llength $bit_files] > 0} {
-    file copy -force [lindex $bit_files 0] ${output_dir}/${proj_name}.bit
-    puts "INFO: Bitstream copied to ${output_dir}/${proj_name}.bit"
+    file copy -force [lindex $bit_files 0] ${output_dir}/${output_basename}.bit
+    puts "INFO: Bitstream copied to ${output_dir}/${output_basename}.bit"
 } else {
     puts "ERROR: Bitstream file not found!"
     exit 1
@@ -52,8 +69,8 @@ if {[llength $bit_files] > 0} {
 # Copy debug probe file if exists
 set ltx_files [glob -nocomplain ${ltx_file}]
 if {[llength $ltx_files] > 0} {
-    file copy -force [lindex $ltx_files 0] ${output_dir}/${proj_name}.ltx
-    puts "INFO: Debug probes copied to ${output_dir}/${proj_name}.ltx"
+    file copy -force [lindex $ltx_files 0] ${output_dir}/${output_basename}.ltx
+    puts "INFO: Debug probes copied to ${output_dir}/${output_basename}.ltx"
 }
 
 puts "INFO: Bitstream generation complete"

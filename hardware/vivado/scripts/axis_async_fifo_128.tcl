@@ -20,10 +20,27 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 # project, but make sure you do not have an existing project
 # in the current working folder.
 
+set script_folder [file dirname [file normalize [info script]]]
+if {![llength [info commands target_config_get]]} {
+  source "${script_folder}/target_config.tcl"
+}
+if {![info exists target]} {
+  set target "zcu216"
+  if {[info exists argc] && $argc > 0} {
+    set target [lindex $argv 0]
+  }
+}
+set target_part [target_config_get $target part]
+set target_board_part [target_config_get $target board_part]
+
 set list_projs [get_projects -quiet]
 if { $list_projs eq "" } {
-  create_project zcu216_loopback work -part xczu49dr-ffvf1760-2-e
-  set_property BOARD_PART xilinx.com:zcu216:part0:2.0 [current_project]
+  create_project ${target}_loopback work -part $target_part
+  if {$target_board_part ne ""} {
+    set_property BOARD_PART $target_board_part [current_project]
+  } else {
+    puts "INFO: No board_part for TARGET=${target}"
+  }
   set_property target_language Verilog [current_project]
   set_property simulator_language Mixed [current_project]
 }

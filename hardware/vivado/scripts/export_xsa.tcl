@@ -2,7 +2,18 @@
 
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
-set proj_name "zcu216_rfdc"
+source "${script_path}/target_config.tcl"
+
+set target "zcu216"
+if {$argc > 0} {
+    set target [lindex $argv 0]
+}
+if {![target_config_exists $target]} {
+    target_config_error $target
+}
+
+set proj_name [target_config_get $target project_basename]
+set output_basename [target_config_get $target output_basename]
 set proj_dir "${vivado_dir}/work"
 set proj_file "${proj_dir}/${proj_name}.xpr"
 set output_dir "${vivado_dir}/output"
@@ -17,7 +28,7 @@ file mkdir ${output_dir}
 open_run impl_1
 
 puts "INFO: Exporting hardware platform (XSA)..."
-set xsa_file "${output_dir}/${proj_name}.xsa"
+set xsa_file "${output_dir}/${output_basename}.xsa"
 
 # Export XSA with bitstream
 write_hw_platform -fixed -force -include_bit -file ${xsa_file}

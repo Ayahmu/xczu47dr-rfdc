@@ -12,6 +12,7 @@ module dac_play_ctrl #(
 
     input  wire        trigger,      // DAC 域同步后的 trigger 电平
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
+    input  wire        auto_start,   // END ch=15：配置到达后直接启动
 
     input  wire [31:0] ch1_delay_cycles,
     input  wire [31:0] ch2_delay_cycles,
@@ -22,6 +23,8 @@ module dac_play_ctrl #(
 
     input  wire        ch1_fifo_tvalid,
     input  wire        ch2_fifo_tvalid,
+    input  wire        ch1_fifo_prog_empty,
+    input  wire        ch2_fifo_prog_empty,
 
     input  wire        dac_ch1_ready_in,
     input  wire        dac_ch2_ready_in,
@@ -41,6 +44,7 @@ module dac_play_ctrl #(
 );
 
   reg started;
+  reg start_pending;
   reg [31:0] dly1, dly2;
   reg [31:0] beats1, beats2;
 
@@ -58,8 +62,12 @@ module dac_play_ctrl #(
 
   wire new_cfg = (!cfg_seen) || (cfg_seq_id != last_seq_id);
 
-  // 只有：trigger 上升沿 + 新配置帧 + 未 started + 至少一路 arm，才启动
-  wire trig_start = trig_pulse && new_cfg && !started && (ch1_arm || ch2_arm);
+  // 普通帧等 GPIO trigger；END ch=15 帧在配置到达 DAC 域后直接启动。
+  wire start_req = trig_pulse || auto_start;
+  wire trig_start = start_req && new_cfg && !started && !start_pending && (ch1_arm || ch2_arm);
+
+  // 启动前等待已启用通道 FIFO 达到 programmable-empty 以上水位。
+  wire start_warm = (!ch1_arm || !ch1_fifo_prog_empty) && (!ch2_arm || !ch2_fifo_prog_empty);
 
   // allow：started 且 delay==0 且 beats!=0 且 arm
   assign ch1_allow = started && ch1_arm && (dly1 == 0) && (beats1 != 0);
@@ -72,6 +80,7 @@ module dac_play_ctrl #(
   always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
       started     <= 1'b0;
+      start_pending <= 1'b0;
       dly1        <= 32'd0;
       dly2        <= 32'd0;
       beats1      <= 32'd0;
@@ -82,16 +91,21 @@ module dac_play_ctrl #(
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
     end else begin
-      // 启动：锁存配置，并“消费掉”该 seq_id
+      // 启动请求先挂起，直到 FIFO 预填达到阈值后才真正开始消耗。
       if(trig_start) begin
-        started     <= 1'b1;
-        dly1        <= ch1_delay_cycles;
-        dly2        <= ch2_delay_cycles;
-        beats1      <= ch1_len_beats;
-        beats2      <= ch2_len_beats;
+        start_pending <= 1'b1;
+      end
 
-        cfg_seen    <= 1'b1;
-        last_seq_id <= cfg_seq_id;
+      if(start_pending && start_warm) begin
+        started       <= 1'b1;
+        start_pending <= 1'b0;
+        dly1          <= ch1_delay_cycles;
+        dly2          <= ch2_delay_cycles;
+        beats1        <= ch1_len_beats;
+        beats2        <= ch2_len_beats;
+
+        cfg_seen      <= 1'b1;
+        last_seq_id   <= cfg_seq_id;
       end
 
       if(started) begin
@@ -104,6 +118,7 @@ module dac_play_ctrl #(
         // 两路都发完才结束
         if((beats1 == 0) && (beats2 == 0)) begin
           started <= 1'b0;
+          start_pending <= 1'b0;
         end
       end
 
