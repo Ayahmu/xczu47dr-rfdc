@@ -8,11 +8,14 @@
 #include "sleep.h"
 #include "xstatus.h"
 #include "xil_printf.h"
+#include "xil_cache.h"
 
 #include "xrfdc.h"
 #include "modules/rf/LMK_display.h"
 #include "modules/rf/LMX_display.h"
+#if defined(BOARD_ZCU216)
 #include "modules/rf/xrfclk.h"
+#endif
 
 #include "platform/platform.h"
 #include "modules/dma/dma_ctrl.h"
@@ -23,6 +26,10 @@
 
 /******************** Constant Definitions **********************************/
 #define ENABLE_METAL_PRINTS
+
+#if defined(BOARD_ZCU216) == defined(BOARD_CUSTOM_XCZU47DR)
+#error "Define exactly one firmware board: BOARD_ZCU216 or BOARD_CUSTOM_XCZU47DR"
+#endif
 
 #define URAM_PLAY_BASE XPAR_HIER_PLAY_AXI_BRAM_CTRL_0_S_AXI_BASEADDR
 
@@ -42,9 +49,13 @@ struct netif *echo_netif = &server_netif;
 void my_metal_default_log_handler(enum metal_log_level level,
 								  const char *format, ...);
 
+#if defined(BOARD_ZCU216)
 static int resetAllClk104(void);
+#endif
 void reverse32bArray(u32 *src, int size);
+#if defined(BOARD_ZCU216)
 void printCLK104_settings(void);
+#endif
 void rfdcStartup(void);
 
 /************************** Variable Definitions *****************************/
@@ -57,8 +68,10 @@ char BLINK_ON[5] = "\x1B[5m";
 char REVERSE_ON[5] = "\x1B[5m";
 char CLR_SCREEN[5] = "\x1B[2J";
 
+#if defined(BOARD_ZCU216)
 // data buffer used for reading PLL registers
 static u32 data[256];
+#endif
 
 const char clkoutBrdNames[][18] = {
 	"RFIN_RF1",
@@ -80,13 +93,42 @@ const char clkoutBrdNames[][18] = {
 lmk_config_t lmkConfig;
 lmx_config_t lmxConfig;
 
+#if defined(BOARD_ZCU216)
 extern const u32 LMK_CKin[LMK_FREQ_NUM][LMK_COUNT];
 extern const u32 LMX2594[][LMX2594_COUNT];
+#endif
 
 #include "xtime_l.h"
 #define TEST_LENGTH (32 * 1024 * 1024)
 
 XRFdc RFdcInst; /* RFdc driver instance */
+
+#if defined(BOARD_CUSTOM_XCZU47DR)
+#define DEBUG_WAVEFORM_BYTES 4096U
+#define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
+
+static void preload_debug_waveforms(void)
+{
+	s16 *ch1 = (s16 *)(UINTPTR)DDR4_BASE;
+	s16 *ch2 = (s16 *)((UINTPTR)DDR4_BASE + DEBUG_WAVEFORM_BYTES);
+	u32 i;
+
+	for (i = 0U; i < DEBUG_WAVEFORM_SAMPLES; i++)
+	{
+		ch1[i] = (i & 0x20U) ? 12000 : -12000;
+		ch2[i] = (i & 0x20U) ? -12000 : 12000;
+	}
+
+	Xil_DCacheFlushRange((UINTPTR)ch1, DEBUG_WAVEFORM_BYTES);
+	Xil_DCacheFlushRange((UINTPTR)ch2, DEBUG_WAVEFORM_BYTES);
+	xil_printf("Preloaded debug waveforms: ch1=0x%08lx%08lx ch2=0x%08lx%08lx bytes=%lu\r\n",
+		   (unsigned long)(((u64)(UINTPTR)ch1) >> 32),
+		   (unsigned long)(((u64)(UINTPTR)ch1) & 0xffffffffU),
+		   (unsigned long)(((u64)(UINTPTR)ch2) >> 32),
+		   (unsigned long)(((u64)(UINTPTR)ch2) & 0xffffffffU),
+		   (unsigned long)DEBUG_WAVEFORM_BYTES);
+}
+#endif
 
 int Init_GPIO(void)
 {
@@ -146,11 +188,11 @@ int main(void)
 	u32 Major;
 	int Status;
 	XRFdc_Config *ConfigPtr;
+	#if defined(BOARD_ZCU216)
 	int lmkConfigIndex;
+	#endif
 
 	init_platform();
-
-	init_lwip();
 
 	// Initialize CLI commands structure
 
@@ -164,9 +206,10 @@ int main(void)
 
 	xil_printf("RFDC IP Version: %d.%d\r\n", Major, Minor);
 
-	// Configure ZCU208 clks
+	// Configure board clocks
 	xil_printf("\nConfiguring the data converter clocks...\r\n");
 
+#if defined(BOARD_ZCU216)
 	// initialize and reset CLK104 devices on i2c and i2c muxes
 	XRFClk_Init();
 
@@ -193,6 +236,21 @@ int main(void)
 	printCLK104_settings();
 	/* Close spi connections to clk104 */
 	XRFClk_Close();
+#elif defined(BOARD_CUSTOM_XCZU47DR)
+	xil_printf("Custom XCZU47DR clock policy: HMC7044 is programmed by PL sequencer.\r\n");
+	u32 hmcStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
+	for (int hmcWait = 0; ((hmcStatus & HMC7044_DONE_MASK) == 0U) && (hmcWait < 50); hmcWait++)
+	{
+		usleep(100000);
+		hmcStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
+	}
+	xil_printf("HMC7044 PL sequencer status: 0x%08lx\r\n", hmcStatus);
+	if ((hmcStatus & HMC7044_DONE_MASK) == 0U)
+	{
+		xil_printf("ERROR: HMC7044 PL sequencer did not finish before RFDC startup.\r\n");
+		return XST_FAILURE;
+	}
+#endif
 
 	sleep(2);
 
@@ -246,6 +304,13 @@ int main(void)
 
 	if (Init_GPIO() != XST_SUCCESS)
 		return XST_FAILURE;
+
+	init_lwip();
+
+#if defined(BOARD_CUSTOM_XCZU47DR) && defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
+	// DDR offsets 0/0x1000 are host-uploaded PL regions; firmware must not preload them.
+	preload_debug_waveforms();
+#endif
 
 	// measure_dma_bandwidth();
 	while (1)
@@ -387,6 +452,7 @@ void my_metal_default_log_handler(enum metal_log_level level,
  * @note		None
  *
  ****************************************************************************/
+#if defined(BOARD_ZCU216)
 static int resetAllClk104(void)
 {
 	int ret = EXIT_FAILURE;
@@ -422,7 +488,9 @@ static int resetAllClk104(void)
 
 	return EXIT_SUCCESS;
 }
+#endif
 
+#if defined(BOARD_ZCU216)
 /****************************************************************************/
 /**
  *
@@ -595,6 +663,7 @@ void printCLK104_settings(void)
 		xil_printf("\n\r");
 	}
 }
+#endif
 
 void reverse32bArray(u32 *src, int size)
 {

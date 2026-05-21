@@ -51,6 +51,7 @@
 *****************************************************************************/
 
 
+#ifndef BOARD_CUSTOM_XCZU47DR
 /***************************** Include Files ********************************/
 #ifndef __BAREMETAL__
 #include <string.h>
@@ -239,11 +240,11 @@ XClockingLmk ClockingLmk[] = {
 	  0x0200000E,0x8000800F,0xC1550410,0x00000058,0x02C9C419,
 	  0x8FA8001A,0x10001E1B,0x0021201C,0x0180033D,0x0200033E,0x003F001F}}
 
-};  
+};
 
 
 XClockingLmx ClockingLmx[] = {
-	{5120000, /* 0 */ 
+	{5120000, /* 0 */
 		{7340032, 7274496, 7208960, 7143424, 7077888, 7012352, 6946816,
 		6881313, 6815744, 6750208, 6700928, 6619153, 6553600, 6488064, 6423040,
 		6359176, 6291456, 6225920, 6160384, 6094848, 6029312, 5963776, 5898240,
@@ -651,7 +652,7 @@ XClockingLmx ClockingLmx[] = {
 		2098067, 2049004, 1978764, 1913228, 1836168, 1769474, 1707440, 1639972,
 		1574682, 1507452, 1441793, 1377281, 1368136, 1255351, 1179748, 1114412,
 		1048704,  984655,  925296,  868352,  806913,  720920,  659672,  591364,
-    	532480,   475314,  444418,  327880,  264771,  198210,  132352,   67592, 9372}},
+		532480,   475314,  444418,  327880,  264771,  198210,  132352,   67592, 9372}},
 	{3194880,  /* 27 */
 		{0x700000, 0x6F0000, 0x6E0000, 0x6D0000, 0x6C0000, 0x6B0000, 0x6A0000, 0x690021,
 		0x680000, 0x670000, 0x663F80, 0x650011, 0x640000, 0x630000, 0x620200, 0x610888,
@@ -684,13 +685,13 @@ XClockingLmx ClockingLmx[] = {
 		0x100080, 0x0F064F, 0x0E1E70, 0x0D4000, 0x0C5001, 0x0B0018, 0x0A10D8, 0x091604,
 		0x082000, 0x0740B2, 0x06C802, 0x0500C8, 0x040A43, 0x030642, 0x020500, 0x010808, 0x00259C}}
 };
-    
+
 // Define must be after array creation
 #define SIZEOF_LMX (sizeof(ClockingLmx)/sizeof(ClockingLmx[0]))
-    
-    
+
+
 #ifndef __BAREMETAL__
-    
+
 static inline void IicWriteData(int XIicDevFile, unsigned char command,
                                                   unsigned char length,
                                                   const unsigned char *values)
@@ -758,7 +759,7 @@ static int Lmx2594UpdateDACFreq(int XIicDevFile,int  XFrequency)
 {
 	int XFreqIndex=0;
 	unsigned char tx_array[3];
-    
+
 #ifdef LDEBUG
 	printf("%s:%d entered\r\n", __func__, __LINE__);
 #endif
@@ -788,7 +789,7 @@ static int Lmx2594UpdateADCFreq(int XIicDevFile,int  XFrequency)
 {
 	int XFreqIndex=0;
 	unsigned char tx_array[3];
-    
+
 #ifdef LDEBUG
 	printf("%s:%d entered\r\n", __func__, __LINE__);
 #endif
@@ -852,7 +853,7 @@ static int Lmk04208UpdateFreq(int XIicDevFile, int LMK04208_configIndex )
 ****************************************************************************/
 void LMK04208ClockConfig(int XIicBus, int LMK04208_configIndex)
 {
-    
+
 #ifdef LDEBUG
 	printf("%s:%d entered\r\n", __func__, __LINE__);
 #endif
@@ -1268,7 +1269,7 @@ void LMX2594DisplaySupportedFreq(void)
 void LMK04208DisplaySettings(int LMK04208_configIndex)
 {
     int val;
-    
+
     // Display values if they are defined in structure
     if(ClockingLmk[LMK04208_configIndex].Fosc != -1) {
         printf("           Fosc: %6.2f MHz\n\r", (double)ClockingLmk[LMK04208_configIndex].Fosc / (double)1000);
@@ -1280,10 +1281,10 @@ void LMK04208DisplaySettings(int LMK04208_configIndex)
         printf("       SYSREF's: %6.2f MHz\n\r", (double)ClockingLmk[LMK04208_configIndex].sysrefFreq / (double)1000);
     }
     if ( (val = ClockingLmk[LMK04208_configIndex].refClkSrc) != -1) {
-        printf(" Ref Clk (%4s): %6.2f MHz\r\n", 
-                    (val==0) ? "int" : 
-    		        (val==1) ? "ext" : "auto",
-    				(double)ClockingLmk[LMK04208_configIndex].refClkFreq / (double)1000);
+        printf(" Ref Clk (%4s): %6.2f MHz\r\n",
+                    (val==0) ? "int" :
+		            (val==1) ? "ext" : "auto",
+				(double)ClockingLmk[LMK04208_configIndex].refClkFreq / (double)1000);
     }
 	return;
 }
@@ -1298,3 +1299,4 @@ void stringCnv_KHz_2_HZ(int valKhz, char *bufptr)
 	bufptr += sprintf(bufptr, "%03d,", val = (valKhz/1000) - val*1000);
 	bufptr += sprintf(bufptr, "%03d,000",  valKhz % 1000);
 }
+#endif /* BOARD_CUSTOM_XCZU47DR */

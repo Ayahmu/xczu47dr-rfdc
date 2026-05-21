@@ -2,7 +2,7 @@
  * main.h
  *
  *  Created on: Sep 17, 2017
- *      Author: 
+ *      Author:
  */
 
 #ifndef SRC_MAIN_H_
@@ -19,10 +19,17 @@
 //#define STRIP_CHAR_CR
 
 // Memory and GPIO definitions
-#define DDR4_BASE 0x00000000  // DDR base address for ZynqMP
+#if defined(BOARD_CUSTOM_XCZU47DR) && defined(XPAR_DDR4_0_C0_DDR4_MEMORY_MAP_BASEADDR)
+#define DDR4_BASE ((UINTPTR)XPAR_DDR4_0_C0_DDR4_MEMORY_MAP_BASEADDR)
+#else
+#define DDR4_BASE ((UINTPTR)0x00000000U)  // ZynqMP PS DDR base address
+#endif
 #define GPIO_BASE_ADDR XPAR_M_AXI_GPIO_BASEADDR
+#define GPIO_DATA_CH1_OFFSET 0x00
 #define GPIO_TRI_CH1_OFFSET 0x04
-#define GPIO_TRI_CH2_OFFSET 0x08
+#define GPIO_DATA_CH2_OFFSET 0x08
+#define GPIO_TRI_CH2_OFFSET 0x0C
+#define HMC7044_DONE_MASK 0x80000000U
 
 // RFDC defines
 #define RFDC_DEVICE_ID 	XPAR_XRFDC_0_DEVICE_ID

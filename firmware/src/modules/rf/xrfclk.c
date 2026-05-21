@@ -45,6 +45,7 @@
 *
 ******************************************************************************/
 
+#ifndef BOARD_CUSTOM_XCZU47DR
 #include "xrfclk.h"
 
 #include <stdlib.h>
@@ -1444,3 +1445,4 @@ u32 XRFClk_ConfigOutputDividerAndMUXOnLMK(u32 PortId, u32 DCLKoutX_DIV,
 	return ret;
 }
 /** @} */
+#endif /* BOARD_CUSTOM_XCZU47DR */
