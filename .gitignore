@@ -1,12 +1,18 @@
 # Xilinx Vivado generated state
+.Xil/
 hardware/vivado/work/
 hardware/vivado/.Xil/
 hardware/vivado/output/
 hardware/vivado/*.jou
 hardware/vivado/*.log
+hardware/vivado/*.pb
 hardware/vivado/*.str
 hardware/vivado/*.zip
 hardware/vivado/*.backup.*
+hardware/vivado/xsim.dir/
+test.gen/
+vivado.jou
+vivado.log
 
 # Xilinx Vitis/XSCT generated state
 firmware/workspace/
@@ -22,8 +28,11 @@ hardware/chisel/Verilog/
 hardware/chisel/test_run_dir/
 
 # Python
+__pycache__/
 software/__pycache__/
 software/*.pyc
+tests/__pycache__/
+tests/*.pyc
 software/.pytest_cache/
 software/venv/
 software/.venv/
