@@ -2,6 +2,7 @@ import argparse
 import os
 import socket
 import struct
+import time
 from pathlib import Path
 
 import numpy as np
@@ -19,11 +20,40 @@ FIXED_DATA_BYTES = 4096
 NUM_SAMPLES = FIXED_DATA_BYTES // 2
 DELAY = 1
 
-DDR_BASE = 0x500000000
+DDR_BASE = 0x0000000000000000
 DDR_X_ADDR = DDR_BASE
 DDR_Y_ADDR = DDR_BASE + 0x1000  # 4096 对齐
-DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "10.87.5.241")
-DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "7"))
+DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "192.168.1.128")
+DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "1234"))
+DEFAULT_UDP_WRITE_SETTLE_S = float(os.environ.get("RFSOC_UDP_WRITE_SETTLE_S", "0.25"))
+DEFAULT_UDP_INTERFACE = os.environ.get("RFSOC_UDP_INTERFACE", "")
+DEFAULT_UDP_SOURCE_IP = os.environ.get("RFSOC_UDP_SOURCE_IP", "")
+SO_BINDTODEVICE = 25
+UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
+
+
+def _normalize_waveform_int16(data_int16: np.ndarray, sample_count: int = NUM_SAMPLES) -> np.ndarray:
+    if data_int16.dtype != np.int16:
+        data_int16 = data_int16.astype(np.int16)
+
+    if len(data_int16) >= sample_count:
+        return data_int16[:sample_count]
+
+    pad = np.zeros(sample_count - len(data_int16), dtype=np.int16)
+    return np.concatenate([data_int16, pad])
+
+
+def iter_udp_waveform_packets(data_int16: np.ndarray, ddr_addr: int, sample_count: int = NUM_SAMPLES):
+    data_int16 = _normalize_waveform_int16(data_int16, sample_count=sample_count)
+    wave_bytes = data_int16.astype("<i2").tobytes()
+
+    if len(wave_bytes) % 16 != 0:
+        wave_bytes += b"\x00" * (16 - (len(wave_bytes) % 16))
+
+    base_addr = int(ddr_addr) & 0xFFFFFFFFFFFFFFFF
+    for offset in range(0, len(wave_bytes), 16):
+        low, high = struct.unpack("<QQ", wave_bytes[offset:offset + 16])
+        yield struct.pack("<QQQQ", UDP_WAVE_DDR_MAGIC, base_addr + offset, low, high)
 
 
 # ============================================================
@@ -61,12 +91,19 @@ def quantize_to_int16_array(signal):
 # 3. 发送控制
 # ============================================================
 class RFSocController:
-    def __init__(self, ip, port=7, timeout_s=5.0):
+    def __init__(self, ip, port=1234, timeout_s=5.0, transport="udp", udp_interface="", udp_source_ip=""):
         self.ip = ip
         self.port = port
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.transport = transport
+        sock_type = socket.SOCK_DGRAM if transport == "udp" else socket.SOCK_STREAM
+        self.sock = socket.socket(socket.AF_INET, sock_type)
         self.sock.settimeout(timeout_s)
-        self.sock.connect((ip, port))
+        if transport == "udp" and udp_interface:
+            self.sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, udp_interface.encode("ascii") + b"\0")
+        if transport == "udp" and udp_source_ip:
+            self.sock.bind((udp_source_ip, 0))
+        if transport == "tcp":
+            self.sock.connect((ip, port))
 
     def close(self):
         try:
@@ -77,8 +114,17 @@ class RFSocController:
     def _send_packet(self, p_type, data: bytes):
         """发送 [Type(u32), Len(u32), Data] 小端"""
         header = struct.pack("<II", p_type, len(data))
-        self.sock.sendall(header + data)
+        packet = header + data
+        if self.transport == "udp":
+            return self.sock.sendto(packet, (self.ip, self.port))
+        self.sock.sendall(packet)
         return self.sock.recv(1024)  # 等待 ACK
+
+    def send_udp_words(self, payload: bytes):
+        if len(payload) % 8 != 0:
+            payload += b"\x00" * (8 - (len(payload) % 8))
+        print(f"[udp] Sending {len(payload)} bytes ({len(payload) // 8} x 64-bit words) to {self.ip}:{self.port}")
+        return self.sock.sendto(payload, (self.ip, self.port))
 
     @staticmethod
     def _save_hex_text(byte_data: bytes, filepath: str, bytes_per_line: int = 16, style: str = "hexdump"):
@@ -105,14 +151,7 @@ class RFSocController:
           [uint64 ddr_addr (little endian)] + [wave bytes...]
         wave bytes 固定对齐到 4096B (2048 samples of int16)
         """
-        if data_int16.dtype != np.int16:
-            data_int16 = data_int16.astype(np.int16)
-
-        if len(data_int16) >= NUM_SAMPLES:
-            data_int16 = data_int16[:NUM_SAMPLES]
-        else:
-            pad = np.zeros(NUM_SAMPLES - len(data_int16), dtype=np.int16)
-            data_int16 = np.concatenate([data_int16, pad])
+        data_int16 = _normalize_waveform_int16(data_int16)
 
         wave_bytes = data_int16.astype("<i2").tobytes()
 
@@ -125,12 +164,29 @@ class RFSocController:
 
         return self._send_packet(0, payload)
 
+    def upload_waveform_udp(self, data_int16: np.ndarray, ddr_addr: int,
+                            dump_path: str, dump_style: str = "hexdump"):
+        data_int16 = _normalize_waveform_int16(data_int16)
+        wave_bytes = data_int16.astype("<i2").tobytes()
+        self._save_hex_text(wave_bytes, dump_path, bytes_per_line=16, style=dump_style)
+
+        packet_count = 0
+        for packet in iter_udp_waveform_packets(data_int16, ddr_addr):
+            self.sock.sendto(packet, (self.ip, self.port))
+            packet_count += 1
+            if packet_count % 8 == 0:
+                time.sleep(0.00001)
+
+        print(f"[udp-upload] addr=0x{ddr_addr:016X}, wave={len(wave_bytes)} bytes, packets={packet_count}")
+        return packet_count
+
     def send_instructions(self, cmd_list):
         """type=1：每条 16B：w0/w1/w2/w3"""
         bin_cmds = b""
         for cmd in cmd_list:
-            # cmd=[op,ch,len_or_delay,addr]
-            word0 = (cmd[1] << 4) | (cmd[0] & 0xF)
+            # cmd=[op,ch,len_or_delay,addr] or [op,ch,len_or_delay,addr,flags]
+            flags = int(cmd[4]) if len(cmd) > 4 else 0
+            word0 = (int(cmd[1]) << 4) | (int(cmd[0]) & 0xF) | ((flags & 0x1) << 8)
             word1 = int(cmd[2]) & 0xFFFFFFFF
             addr = int(cmd[3]) & 0xFFFFFFFFFFFFFFFF
             word2 = addr & 0xFFFFFFFF
@@ -138,6 +194,8 @@ class RFSocController:
             bin_cmds += struct.pack("<IIII", word0, word1, word2, word3)
 
         print(f"[instr] Sending {len(cmd_list)} instructions, {len(bin_cmds)} bytes")
+        if self.transport == "udp":
+            return self.send_udp_words(bin_cmds)
         return self._send_packet(1, bin_cmds)
 
     def trigger(self):
@@ -205,13 +263,23 @@ def build_default_waveforms():
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ZCU216 RFSoC host controller")
+    parser = argparse.ArgumentParser(description="XCZU47DR RFSoC host controller")
     parser.add_argument("--ip", default=DEFAULT_BOARD_IP, help="Board IPv4 address")
-    parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT, help="Board TCP port")
+    parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT, help="Board UDP/TCP port")
+    parser.add_argument("--transport", choices=("udp", "tcp"), default="udp",
+                        help="Transport for instructions; UDP is the 10G PL path")
     parser.add_argument("--timeout", type=float, default=5.0, help="Socket timeout in seconds")
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate plots and waveform dumps without connecting to hardware")
     parser.add_argument("--output-dir", default=".", help="Directory for generated plots and dumps")
+    parser.add_argument("--wait-for-trigger", action="store_true",
+                        help="In UDP mode, send a normal END and wait for a PS/external trigger instead of auto-starting")
+    parser.add_argument("--udp-write-settle-s", type=float, default=DEFAULT_UDP_WRITE_SETTLE_S,
+                        help="Delay after UDP waveform upload before PLAY instructions, allowing DDR writes to settle")
+    parser.add_argument("--udp-interface", default=DEFAULT_UDP_INTERFACE,
+                        help="UDP sender interface name, e.g. enp225s0f0, to avoid wrong same-subnet routes")
+    parser.add_argument("--udp-source-ip", default=DEFAULT_UDP_SOURCE_IP,
+                        help="UDP source IPv4 address to bind before sending")
     return parser.parse_args()
 
 
@@ -234,7 +302,14 @@ def main():
             return 0
 
         try:
-            ctrl = RFSocController(args.ip, port=args.port, timeout_s=args.timeout)
+            ctrl = RFSocController(
+                args.ip,
+                port=args.port,
+                timeout_s=args.timeout,
+                transport=args.transport,
+                udp_interface=args.udp_interface,
+                udp_source_ip=args.udp_source_ip,
+            )
         except OSError as exc:
             raise SystemExit(
                 f"Unable to connect to RFSoC board at {args.ip}:{args.port}: {exc}. "
@@ -242,19 +317,31 @@ def main():
             ) from exc
 
         try:
-            ctrl.upload_waveform(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
-            ctrl.upload_waveform(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
+            RFSocController._save_hex_text(qx.astype("<i2").tobytes(), "x_waveform_hex.txt")
+            RFSocController._save_hex_text(qy.astype("<i2").tobytes(), "y_waveform_hex.txt")
 
+            end_channel = 0 if (args.transport == "tcp" or args.wait_for_trigger) else 15
             cmds = [
                 [1, 1, 0, 0],
                 [2, 1, FIXED_DATA_BYTES, DDR_X_ADDR],
                 [1, 2, 0, 0],
                 [2, 2, FIXED_DATA_BYTES, DDR_Y_ADDR],
-                [3, 0, 0, 0]
+                [3, end_channel, 0, 0]
             ]
 
+            if args.transport == "tcp":
+                ctrl.upload_waveform(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
+                ctrl.upload_waveform(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
+            else:
+                ctrl.upload_waveform_udp(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
+                ctrl.upload_waveform_udp(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
+                if args.udp_write_settle_s > 0:
+                    print(f"[udp-upload] waiting {args.udp_write_settle_s:.3f}s for DDR write completion")
+                    time.sleep(args.udp_write_settle_s)
+
             ctrl.send_instructions(cmds)
-            ctrl.trigger()
+            if args.transport == "tcp":
+                ctrl.trigger()
             print("Done.")
             return 0
         finally:

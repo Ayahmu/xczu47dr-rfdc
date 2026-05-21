@@ -1,165 +1,97 @@
-# Software - Host Control
+# Software - RFSoC Waveform Sender
 
-This directory contains the host-side Python software for controlling the ZCU216 RFDC system.
+Use `send_waveform_udp.py` as the main waveform sender. It generates the X/Y
+waveforms locally, saves the exact samples under `--output-dir`, uploads them to
+the PL-side DDR offsets expected by the FPGA design, then sends the standard
+BEGIN/PLAY/BEGIN/PLAY/END instruction sequence.
 
-## Directory Structure
+## Quick Start
 
-```
-software/
-├── host.py             # Main control script
-├── requirements.txt    # Python dependencies
-└── README.md           # This file
-```
-
-## Prerequisites
-
-- Python 3.7 or later
-- Network connection to ZCU216 board
-
-## Installation
+Continuous sine output:
 
 ```bash
-# Create virtual environment (recommended)
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+python3 software/send_waveform_udp.py sine \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --sample-rate-hz 4608000000 \
+  --x-freq-hz 20000000 \
+  --y-freq-hz 20000000 \
+  --loop
 ```
 
-## Usage
-
-### Basic Usage
+Gaussian RF burst:
 
 ```bash
-python host.py
+python3 software/send_waveform_udp.py burst \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --sample-rate-hz 4608000000 \
+  --x-freq-hz 80000000 \
+  --y-freq-hz 120000000 \
+  --duration-s 120e-9
 ```
 
-### Configuration
-
-Edit the following parameters in `host.py`:
-
-```python
-# Hardware parameters
-DAC_XY_FS = 4.608e9          # DAC sampling frequency
-FIXED_DATA_BYTES = 4096      # Fixed data size (2048 samples)
-DDR_BASE = 0x500000000       # DDR base address
-
-# Network configuration
-BOARD_IP = "10.87.5.241"     # ZCU216 IP address
-BOARD_PORT = 7               # TCP port
-```
-
-### Waveform Generation
-
-The script generates RF bursts with Gaussian envelopes:
-
-```python
-# Generate X channel waveform
-x_wave = generate_rf_burst(
-    freq=0.250e9,           # RF frequency (250 MHz)
-    duration_s=100e-9,      # Pulse duration (100 ns)
-    delay_s=0,              # Delay (0 ns)
-    fs=DAC_XY_FS,           # Sampling frequency
-    interpolation=4,        # Interpolation factor
-    amp=0.8                 # Amplitude (0.8 = 80%)
-)
-```
-
-## Features
-
-### RFSocController Class
-
-Main interface for controlling the RFDC system:
-
-```python
-ctrl = RFSocController("10.87.5.241", port=7)
-
-# Upload waveform to DDR
-ctrl.upload_waveform(waveform_data, ddr_addr=0x500000000, 
-                     dump_path="waveform.txt")
-
-# Send instruction sequence
-ctrl.send_instructions([
-    [1, 1, 0, 0],                    # CH1 idle
-    [2, 1, 4096, 0x500000000],       # CH1 play from DDR
-    [3, 0, 0, 0]                     # END
-])
-
-# Trigger execution
-ctrl.trigger()
-
-ctrl.close()
-```
-
-### Packet Protocol
-
-Communication uses a simple packet protocol:
-
-```
-[Type (u32)] [Length (u32)] [Data]
-```
-
-**Packet Types:**
-- Type 0: Upload waveform (8-byte DDR address + waveform data)
-- Type 1: Send instructions (16 bytes per instruction)
-- Type 2: Trigger execution
-
-### Instruction Format
-
-Each instruction is 16 bytes (4 x 32-bit words):
-
-```
-Word 0: [Channel (4 bits)] [Opcode (4 bits)]
-Word 1: Length or Delay (32 bits)
-Word 2: Address Low (32 bits)
-Word 3: Address High (32 bits)
-```
-
-**Opcodes:**
-- 1: Idle/Delay
-- 2: Play waveform from DDR
-- 3: End sequence
-
-## Output Files
-
-The script generates:
-- `x_waveform_hex.txt`: X channel waveform in hex format
-- `y_waveform_hex.txt`: Y channel waveform in hex format
-- `wave_preview_firstN.png`: Preview of first N samples
-- `wave_preview_full.png`: Full waveform plot
-
-## Example Workflow
-
-1. **Generate waveforms** with desired parameters
-2. **Upload to DDR** via TCP connection
-3. **Send instruction sequence** defining playback
-4. **Trigger execution** to start RF output
-5. **Verify output** using oscilloscope or spectrum analyzer
-
-## Troubleshooting
-
-### Connection Issues
+Golden ILA/debug pattern:
 
 ```bash
-# Check network connectivity
-ping 10.87.5.241
-
-# Check if port is open
-nc -zv 10.87.5.241 7
+python3 software/send_waveform_udp.py golden \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10
 ```
 
-### Timeout Errors
+Dry run without touching the board:
 
-Increase timeout in RFSocController:
-
-```python
-ctrl = RFSocController("10.87.5.241", port=7, timeout_s=10.0)
+```bash
+python3 software/send_waveform_udp.py sine --dry-run --x-freq-hz 80000000
 ```
 
-## Notes
+## Important Parameters
 
-- Waveforms are quantized to 16-bit signed integers
-- Data is always padded/truncated to 2048 samples (4096 bytes)
-- All multi-byte values use little-endian byte order
-- DDR addresses must be 4096-byte aligned
+- `--sample-rate-hz`: the DAC sample rate used to synthesize the sample array.
+  This must match the actual RFDC output sample rate for the oscilloscope
+  frequency to match `--x-freq-hz` / `--y-freq-hz`.
+- `--x-freq-hz`, `--y-freq-hz`: tone/carrier frequencies in Hz.
+- `--amplitude`: raw DAC code amplitude, from `0` to `32767`.
+- `--loop`: sets the END instruction loop bit. The hardware then refills and
+  replays the same DDR waveform continuously.
+- `--wait-for-trigger`: sends a non-auto-start END instruction and waits for an
+  external/PS trigger instead of immediately playing.
+- `--output-dir`: stores exact `.npy`, `.csv`, `.bin`, `.txt`, and metadata files
+  for the samples that were uploaded.
+
+The generated metadata includes `sample_rate_hz`, `record_duration_s`,
+`samples_per_channel`, `bytes_per_channel`, and the number of waveform cycles in
+the 2048-sample record. Check this file first when a frequency change appears to
+have no effect.
+
+## Fixed Hardware Contract
+
+Current hardware uses a fixed 4096-byte record per channel:
+
+- `samples_per_channel = 2048` int16 samples
+- `x_ddr_offset = 0x0000000000000000`
+- `y_ddr_offset = 0x0000000000001000`
+- PLAY length = `4096` bytes per channel
+
+Instruction word 0 is encoded as:
+
+```text
+bits [3:0]  opcode: 1=BEGIN/IDLE, 2=PLAY, 3=END
+bits [7:4]  channel: 1=X, 2=Y, 15=END auto-start
+bit  [8]    loop enable on END
+```
+
+The old scripts `send_sine_wave_udp.py`, `send_xy_waveform_udp.py`, and
+`send_golden_pattern_udp.py` are kept as compatibility wrappers. New tests and
+new usage should target `waveform_tools.py` and `send_waveform_udp.py`.
+
+## Verification
+
+Run the Python protocol and waveform tests:
+
+```bash
+python3 -m unittest tests.test_waveform_tools tests.test_host_udp_waveform tests.test_golden_pattern_udp
+```
