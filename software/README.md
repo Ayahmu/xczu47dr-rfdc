@@ -48,6 +48,45 @@ Dry run without touching the board:
 python3 software/send_waveform_udp.py sine --dry-run --x-freq-hz 80000000
 ```
 
+## Local GUI
+
+Launch the local Tkinter GUI from the repository root:
+
+```bash
+python3 software/waveform_gui.py
+```
+
+The GUI uses only standard-library `tkinter` plus the existing `matplotlib`
+dependency. It provides separate panels for target connection settings, global
+playback settings, independent CH1 / DDR X and CH2 / DDR Y waveform controls,
+artifact output, an I/Q waveform preview, and a status log. Each channel can
+choose `off`, `quantum`, `pulse`, `sine`, `burst`, or `golden` independently, and
+the right-side preview refreshes automatically after a short debounce when
+relevant fields change. Dry run is enabled by default, so `Save / Dry Run` writes
+the same artifact bundle as the CLI without sending UDP packets. The default NIC
+binding is `enp225s0f0` with source IP `192.168.1.10`, matching the current 10G
+bring-up host link. Use `Send to Board` only after confirming the target IP, UDP
+port, NIC binding, source IP, loop mode, and trigger mode.
+
+For quantum-domain pulses, use the `quantum` channel type. The GUI follows the
+usual two-quadrature control convention: an `x` gate emits a Gaussian drive on the
+I quadrature (CH1 / DDR X), a `y` gate emits a Gaussian drive on the Q quadrature
+(CH2 / DDR Y), and a `z` gate is treated as a virtual Z frame phase update. The
+virtual Z operation is recorded in metadata but emits zero DAC samples, because
+the current FPGA upload path has two physical DAC records, not a third Z output.
+CH1 always maps to DDR X and upload argument `x`; CH2 always maps to DDR Y and
+upload argument `y`.
+
+If launching from SSH or a non-desktop shell, `tkinter` needs a graphical display
+(`DISPLAY`) or X11 forwarding. Without one, the GUI exits with a clear message
+instead of a Python traceback.
+
+For a non-display dependency smoke check, run:
+
+```bash
+python3 software/waveform_gui.py --smoke
+```
+
 ## Important Parameters
 
 - `--sample-rate-hz`: the DAC sample rate used to synthesize the sample array.
@@ -84,14 +123,13 @@ bits [7:4]  channel: 1=X, 2=Y, 15=END auto-start
 bit  [8]    loop enable on END
 ```
 
-The old scripts `send_sine_wave_udp.py`, `send_xy_waveform_udp.py`, and
-`send_golden_pattern_udp.py` are kept as compatibility wrappers. New tests and
-new usage should target `waveform_tools.py` and `send_waveform_udp.py`.
+`send_waveform_udp.py` is the supported CLI entry point. Shared waveform
+generation and protocol helpers live in `waveform_tools.py`.
 
 ## Verification
 
 Run the Python protocol and waveform tests:
 
 ```bash
-python3 -m unittest tests.test_waveform_tools tests.test_host_udp_waveform tests.test_golden_pattern_udp
+python3 -m unittest tests.test_waveform_tools tests.test_host_udp_waveform tests.test_golden_pattern_udp tests.test_waveform_gui_model
 ```

@@ -65,7 +65,7 @@ if {[file exists ${src_dir}]} {
     set filtered_rtl_files [list]
     foreach rtl_file $rtl_files {
         set rtl_tail [file tail $rtl_file]
-        if {$rtl_tail ne "design_1_wrapper.v" && $rtl_tail ne "top_ctrl.v"} {
+        if {$rtl_tail ne "design_1_wrapper.v"} {
             lappend filtered_rtl_files $rtl_file
         }
     }

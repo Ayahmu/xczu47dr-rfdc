@@ -21,19 +21,19 @@ def load_software_module(module_name: str, filename: str):
 
 
 host = load_software_module("host", "host.py")
-golden = load_software_module("send_golden_pattern_udp", "send_golden_pattern_udp.py")
+waveform_tools = load_software_module("waveform_tools", "waveform_tools.py")
 
 
 class GoldenPatternTests(unittest.TestCase):
     def test_incrementing_pattern_has_unambiguous_first_axi_word(self):
-        samples = golden.make_incrementing_pattern(sample_count=8, start=0)
+        samples = waveform_tools.make_incrementing_pattern(sample_count=8, start=0)
 
         np.testing.assert_array_equal(samples, np.arange(8, dtype=np.int16))
-        self.assertEqual(golden.expected_axi_wdata_hex(samples), "0x00070006000500040003000200010000")
-        self.assertEqual(golden.lane_bytes_hex(samples), "00 00 01 00 02 00 03 00 04 00 05 00 06 00 07 00")
+        self.assertEqual(waveform_tools.expected_axi_wdata_hex(samples), "0x00070006000500040003000200010000")
+        self.assertEqual(waveform_tools.lane_bytes_hex(samples), "00 00 01 00 02 00 03 00 04 00 05 00 06 00 07 00")
 
     def test_first_waveform_packet_matches_rtl_parser_contract(self):
-        samples = golden.make_incrementing_pattern(sample_count=8, start=0)
+        samples = waveform_tools.make_incrementing_pattern(sample_count=8, start=0)
         packet = next(host.iter_udp_waveform_packets(samples, host.DDR_X_ADDR, sample_count=8))
 
         magic, addr, low, high = struct.unpack("<QQQQ", packet)
@@ -43,14 +43,14 @@ class GoldenPatternTests(unittest.TestCase):
         self.assertEqual(high, 0x0007000600050004)
 
     def test_play_instruction_hex_matches_executor_decode(self):
-        instruction = golden.play_instruction_words(channel=1, length_bytes=host.FIXED_DATA_BYTES, ddr_addr=host.DDR_X_ADDR)
+        instruction = waveform_tools.play_instruction_words(channel=1, length_bytes=host.FIXED_DATA_BYTES, ddr_addr=host.DDR_X_ADDR)
 
         self.assertEqual(instruction, (0x0000100000000012, 0x0000000000000000))
-        self.assertEqual(golden.rtl_instruction_tdata_hex(instruction), "0x00000000000000000000100000000012")
+        self.assertEqual(waveform_tools.rtl_instruction_tdata_hex(instruction), "0x00000000000000000000100000000012")
 
     def test_loop_end_instruction_uses_reserved_bit(self):
         words = (0x0000000000000000, 0x00000000000001f3)
-        self.assertEqual(golden.rtl_instruction_tdata_hex(words), "0x00000000000001f30000000000000000")
+        self.assertEqual(waveform_tools.rtl_instruction_tdata_hex(words), "0x00000000000001f30000000000000000")
 
 
 if __name__ == "__main__":
