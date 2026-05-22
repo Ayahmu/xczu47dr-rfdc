@@ -22,7 +22,7 @@ import waveform_gui_model as model
 PREVIEW_TITLES = ("CH1 I-drive waveform (DDR X)", "CH2 Q-drive waveform (DDR Y)")
 
 
-WAVEFORM_TYPES = ("off", "quantum", "pulse", "sine", "burst", "golden")
+WAVEFORM_TYPES = ("quantum", "sine")
 ACTION_BUTTONS = ("Preview", "Test Connection", "Save / Dry Run", "Send to Board")
 ACTION_BUTTON_GRID_COLUMNS = 2
 ACTION_BUTTON_GRID_STICKY = "ew"
@@ -34,15 +34,12 @@ SEND_CONFIRMATION_TITLE = "Confirm send to board"
 GLOBAL_SAMPLE_RATE_LABEL = "Sample rate (GS/s)"
 
 CHANNEL_FIELD_GROUPS = {
-    "off": (),
     "quantum": ("quantum_gate", "rotation_angle_rad", "freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"),
-    "pulse": ("pulse_preset", "freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"),
     "sine": ("freq_hz", "phase_rad", "amplitude", "encoding"),
-    "burst": ("freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"),
-    "golden": ("start",),
 }
 
 CONTROL_SCROLLBAR_MARKERS = ("tk.Canvas", "ttk.Scrollbar", "yscrollcommand", "<MouseWheel>")
+COMBOBOX_WHEEL_BLOCK_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")
 
 LABELS = {
     "pulse_preset": "Pulse preset",
@@ -69,6 +66,10 @@ FIELD_HELP_TEXTS = {
 
 def _field_display_label(field_name: str) -> str:
     return FIELD_DISPLAY_LABELS.get(field_name, LABELS[field_name])
+
+
+def _block_combobox_mousewheel(_event: object) -> str:
+    return "break"
 
 
 def _format_display_value(value: float) -> str:
@@ -350,7 +351,12 @@ class WaveformSenderApp(ttk.Frame):
         ttk.Label(frame, text="Type", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=4, padx=(0, 10))
         menu = ttk.Combobox(frame, textvariable=self.channel_type[channel], values=WAVEFORM_TYPES, state="readonly", width=18)
         menu.grid(row=0, column=1, sticky="ew", pady=4)
+        self._disable_combobox_mousewheel(menu)
         menu.bind("<<ComboboxSelected>>", lambda _event, channel=channel: self._set_channel_fields(channel))
+
+    def _disable_combobox_mousewheel(self, combobox: ttk.Combobox) -> None:
+        for event_name in COMBOBOX_WHEEL_BLOCK_EVENTS:
+            combobox.bind(event_name, _block_combobox_mousewheel)
 
     def _set_channel_fields(self, channel: str) -> None:
         frame = self.channel_frames[channel]
@@ -367,38 +373,34 @@ class WaveformSenderApp(ttk.Frame):
             )
             variable = self.channel_fields[channel][field_name]
             if field_name == "encoding":
-                ttk.Combobox(
+                encoding_menu = ttk.Combobox(
                     frame,
                     textvariable=variable,
                     values=("signed", "offset-binary"),
                     state="readonly",
                     width=18,
-                ).grid(row=row_offset, column=1, sticky="ew", pady=4)
+                )
+                encoding_menu.grid(row=row_offset, column=1, sticky="ew", pady=4)
+                self._disable_combobox_mousewheel(encoding_menu)
             elif field_name == "quantum_gate":
                 quantum_gate_row = ttk.Frame(frame, style="Card.TFrame")
                 quantum_gate_row.grid(row=row_offset, column=1, sticky="ew", pady=4)
                 quantum_gate_row.columnconfigure(0, weight=1)
-                ttk.Combobox(
+                quantum_gate_menu = ttk.Combobox(
                     quantum_gate_row,
                     textvariable=variable,
                     values=("x", "y", "z"),
                     state="readonly",
                     width=18,
-                ).grid(row=0, column=0, sticky="ew")
+                )
+                quantum_gate_menu.grid(row=0, column=0, sticky="ew")
+                self._disable_combobox_mousewheel(quantum_gate_menu)
                 ttk.Label(
                     quantum_gate_row,
                     text=FIELD_HELP_TEXTS[field_name],
                     style="Card.TLabel",
                     wraplength=180,
                 ).grid(row=1, column=0, sticky="w", pady=(3, 0))
-            elif field_name == "pulse_preset":
-                ttk.Combobox(
-                    frame,
-                    textvariable=variable,
-                    values=("x", "y", "z"),
-                    state="readonly",
-                    width=18,
-                ).grid(row=row_offset, column=1, sticky="ew", pady=4)
             else:
                 ttk.Entry(frame, textvariable=variable, width=22).grid(row=row_offset, column=1, sticky="ew", pady=4)
         if self._preview_binder is not None:

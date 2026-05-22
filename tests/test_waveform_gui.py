@@ -17,9 +17,10 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(waveform_gui.PREVIEW_TITLES[0], "CH1 I-drive waveform (DDR X)")
         self.assertEqual(waveform_gui.PREVIEW_TITLES[1], "CH2 Q-drive waveform (DDR Y)")
 
-    def test_waveform_types_include_quantum_operation(self):
-        self.assertIn("quantum", waveform_gui.WAVEFORM_TYPES)
+    def test_waveform_types_only_expose_quantum_and_sine(self):
+        self.assertEqual(waveform_gui.WAVEFORM_TYPES, ("quantum", "sine"))
         self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["quantum"], ("quantum_gate", "rotation_angle_rad", "freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"))
+        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["sine"], ("freq_hz", "phase_rad", "amplitude", "encoding"))
 
     def test_engineering_unit_labels_hide_scientific_notation(self):
         self.assertEqual(waveform_gui.LABELS["quantum_gate"], "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)")
@@ -62,6 +63,11 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(waveform_gui.LABELS["quantum_gate"], "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)")
         self.assertEqual(waveform_gui.FIELD_DISPLAY_LABELS["quantum_gate"], "Quantum gate")
         self.assertIn("Q+90deg", waveform_gui.FIELD_HELP_TEXTS["quantum_gate"])
+
+
+    def test_combobox_mousewheel_events_are_blocked(self):
+        self.assertEqual(waveform_gui.COMBOBOX_WHEEL_BLOCK_EVENTS, ("<MouseWheel>", "<Button-4>", "<Button-5>"))
+        self.assertEqual(waveform_gui._block_combobox_mousewheel(object()), "break")
 
     def test_live_preview_binder_debounces_variable_changes_without_display(self):
         calls = []
