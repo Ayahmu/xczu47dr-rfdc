@@ -192,7 +192,7 @@ proc create_root_design { parentCell } {
   set dac2_axis_freq_hz [expr {$custom_target ? 250000000 : 288000000}]
   set dac2_refclk_freq_hz [expr {$custom_target ? 125000000 : 184320000}]
   set dac2_outclk_freq_hz [expr {$custom_target ? 125000000 : 288000000}]
-  set dac2_associated_busif [expr {$custom_target ? "S_AXIS_20:S_AXIS_22" : "S_AXIS_30:S_AXIS_20:S_AXIS_22"}]
+  set dac2_associated_busif [expr {$custom_target ? "S_AXIS_20:S_AXIS_22:S_AXIS_30:S_AXIS_32" : "S_AXIS_30:S_AXIS_20:S_AXIS_22"}]
   variable design_name
 
   if { $parentCell eq "" } {
@@ -251,8 +251,9 @@ proc create_root_design { parentCell } {
     set vin30 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vin30 ]
   }
 
-  if { !$custom_target } {
-    set vout30 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vout30 ]
+  set vout30 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vout30 ]
+  if { $custom_target } {
+    set vout32 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vout32 ]
   }
 
   set M_AXI_GPIO [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_GPIO ]
@@ -270,12 +271,26 @@ proc create_root_design { parentCell } {
    CONFIG.PROTOCOL {AXI4} \
    ] $M_AXI_GPIO
 
-  if { !$custom_target } {
-    set S_AXIS_30 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 S_AXIS_30 ]
+  set S_AXIS_30 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 S_AXIS_30 ]
+  set_property -dict [ list \
+   CONFIG.FREQ_HZ $dac2_axis_freq_hz \
+   CONFIG.HAS_TKEEP {0} \
+   CONFIG.HAS_TLAST {0} \
+   CONFIG.HAS_TREADY {1} \
+   CONFIG.HAS_TSTRB {0} \
+   CONFIG.LAYERED_METADATA {undef} \
+   CONFIG.TDATA_NUM_BYTES {8} \
+   CONFIG.TDEST_WIDTH {0} \
+   CONFIG.TID_WIDTH {0} \
+   CONFIG.TUSER_WIDTH {0} \
+   ] $S_AXIS_30
+
+  if { $custom_target } {
+    set S_AXIS_32 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 S_AXIS_32 ]
     set_property -dict [ list \
-     CONFIG.FREQ_HZ {288000000} \
+     CONFIG.FREQ_HZ $dac2_axis_freq_hz \
      CONFIG.HAS_TKEEP {0} \
-     CONFIG.HAS_TLAST {1} \
+     CONFIG.HAS_TLAST {0} \
      CONFIG.HAS_TREADY {1} \
      CONFIG.HAS_TSTRB {0} \
      CONFIG.LAYERED_METADATA {undef} \
@@ -283,7 +298,7 @@ proc create_root_design { parentCell } {
      CONFIG.TDEST_WIDTH {0} \
      CONFIG.TID_WIDTH {0} \
      CONFIG.TUSER_WIDTH {0} \
-     ] $S_AXIS_30
+     ] $S_AXIS_32
   }
 
   set S_AXIS_20 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 S_AXIS_20 ]
@@ -824,7 +839,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   # Create instance: usp_rf_data_converter_0, and set properties
   set usp_rf_data_converter_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0 ]
   if { $target eq "custom_xczu47dr" } {
-    # First custom-board bring-up: keep only DAC tile 2 slices 20/22.
+    # Custom-board bring-up uses DAC tile 2 slices 20/22 and tile 3 slices 30/32.
     set rfdc_config [list \
       CONFIG.ADC_Slice00_Enable {false} \
       CONFIG.ADC_Slice20_Enable {false} \
@@ -836,20 +851,36 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.DAC2_PLL_Enable {true} \
       CONFIG.DAC2_Refclk_Freq {125.000} \
       CONFIG.DAC2_Sampling_Rate {1} \
+      CONFIG.DAC3_Clock_Source {6} \
+      CONFIG.DAC3_Fabric_Freq {250.000} \
+      CONFIG.DAC3_Outclk_Freq {125.000} \
+      CONFIG.DAC3_PLL_Enable {false} \
+      CONFIG.DAC3_Sampling_Rate {1} \
       CONFIG.DAC_Coarse_Mixer_Freq20 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq22 {3} \
+      CONFIG.DAC_Coarse_Mixer_Freq30 {3} \
+      CONFIG.DAC_Coarse_Mixer_Freq32 {3} \
       CONFIG.DAC_Data_Width20 {4} \
       CONFIG.DAC_Data_Width22 {4} \
+      CONFIG.DAC_Data_Width30 {4} \
+      CONFIG.DAC_Data_Width32 {4} \
       CONFIG.DAC_Interpolation_Mode20 {1} \
       CONFIG.DAC_Interpolation_Mode22 {1} \
+      CONFIG.DAC_Interpolation_Mode30 {1} \
+      CONFIG.DAC_Interpolation_Mode32 {1} \
       CONFIG.DAC_Mixer_Mode20 {2} \
       CONFIG.DAC_Mixer_Mode22 {2} \
+      CONFIG.DAC_Mixer_Mode30 {2} \
+      CONFIG.DAC_Mixer_Mode32 {2} \
       CONFIG.DAC_Mixer_Type20 {1} \
       CONFIG.DAC_Mixer_Type22 {1} \
+      CONFIG.DAC_Mixer_Type30 {1} \
+      CONFIG.DAC_Mixer_Type32 {1} \
       CONFIG.DAC_Slice00_Enable {false} \
       CONFIG.DAC_Slice20_Enable {true} \
       CONFIG.DAC_Slice22_Enable {true} \
-      CONFIG.DAC_Slice30_Enable {false} \
+      CONFIG.DAC_Slice30_Enable {true} \
+      CONFIG.DAC_Slice32_Enable {true} \
       CONFIG.DAC_VOP_Mode {1} \
       CONFIG.RF_Analyzer {1}]
   } else {
@@ -998,8 +1029,9 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_intf_net -intf_net default_sysclk_c0_300mhz_1 [get_bd_intf_ports c0_sys] [get_bd_intf_pins ddr4_0/C0_SYS_CLK]
   connect_bd_intf_net -intf_net s20_axis_0_1 [get_bd_intf_ports S_AXIS_20] [get_bd_intf_pins usp_rf_data_converter_0/s20_axis]
   connect_bd_intf_net -intf_net s22_axis_0_1 [get_bd_intf_ports S_AXIS_22] [get_bd_intf_pins usp_rf_data_converter_0/s22_axis]
-  if { $target ne "custom_xczu47dr" } {
-    connect_bd_intf_net -intf_net s30_axis_0_1 [get_bd_intf_ports S_AXIS_30] [get_bd_intf_pins usp_rf_data_converter_0/s30_axis]
+  connect_bd_intf_net -intf_net s30_axis_0_1 [get_bd_intf_ports S_AXIS_30] [get_bd_intf_pins usp_rf_data_converter_0/s30_axis]
+  if { $custom_target } {
+    connect_bd_intf_net -intf_net s32_axis_0_1 [get_bd_intf_ports S_AXIS_32] [get_bd_intf_pins usp_rf_data_converter_0/s32_axis]
   }
   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_ports M_AXI_GPIO] [get_bd_intf_pins smartconnect_0/M00_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins smartconnect_0/M01_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HP0_FPD]
@@ -1027,8 +1059,11 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   }
   connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout20 [get_bd_intf_ports vout20] [get_bd_intf_pins usp_rf_data_converter_0/vout20]
   connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout22 [get_bd_intf_ports vout22] [get_bd_intf_pins usp_rf_data_converter_0/vout22]
+  connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout30 [get_bd_intf_ports vout30] [get_bd_intf_pins usp_rf_data_converter_0/vout30]
+  if { $custom_target } {
+    connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout32 [get_bd_intf_ports vout32] [get_bd_intf_pins usp_rf_data_converter_0/vout32]
+  }
   if { $target ne "custom_xczu47dr" } {
-    connect_bd_intf_net -intf_net usp_rf_data_converter_0_vout30 [get_bd_intf_ports vout30] [get_bd_intf_pins usp_rf_data_converter_0/vout30]
     connect_bd_intf_net -intf_net vin20_1 [get_bd_intf_ports vin20] [get_bd_intf_pins usp_rf_data_converter_0/vin20]
     connect_bd_intf_net -intf_net vin22_0_1 [get_bd_intf_ports vin22] [get_bd_intf_pins usp_rf_data_converter_0/vin22]
     connect_bd_intf_net -intf_net vin30_0_1 [get_bd_intf_ports vin30] [get_bd_intf_pins usp_rf_data_converter_0/vin30]
@@ -1041,13 +1076,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins clk_wiz_dac_axis_0/clk_in1] \
   [get_bd_ports clk_dac2]
   connect_bd_net -net dac_axis_clk_1 [get_bd_pins clk_wiz_dac_axis_0/clk_out1] \
-  [get_bd_pins usp_rf_data_converter_0/m2_axis_aclk] \
   [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
   [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
   [get_bd_ports dac_axis_clk]
-  if { $target ne "custom_xczu47dr" } {
-    connect_bd_net -net CLK1_1  [get_bd_pins usp_rf_data_converter_0/m3_axis_aclk] \
+  if { $custom_target } {
+    connect_bd_net -net dac_axis_clk_1 \
     [get_bd_pins usp_rf_data_converter_0/s3_axis_aclk]
+  }
+  if { $target ne "custom_xczu47dr" } {
+    connect_bd_net -net CLK1_1  [get_bd_pins usp_rf_data_converter_0/s3_axis_aclk]
     connect_bd_net -net CLK_1  [get_bd_pins usp_rf_data_converter_0/clk_adc2] \
     [get_bd_ports clk_adc2]
   }
@@ -1066,12 +1103,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins smartconnect_2/aresetn] \
   [get_bd_ports ddr4_ui_aresetn]
   connect_bd_net -net rst_design_1_184M_peripheral_aresetn  [get_bd_pins rst_design_1_184M/peripheral_aresetn] \
-  [get_bd_pins usp_rf_data_converter_0/m2_axis_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn] \
   [get_bd_ports clk104_aresetn]
-  if { $target ne "custom_xczu47dr" } {
-    connect_bd_net -net rst_design_1_184M_peripheral_aresetn  [get_bd_pins usp_rf_data_converter_0/s3_axis_aresetn] \
-    [get_bd_pins usp_rf_data_converter_0/m3_axis_aresetn]
+  if { $custom_target } {
+    connect_bd_net -net rst_design_1_184M_peripheral_aresetn [get_bd_pins usp_rf_data_converter_0/s3_axis_aresetn]
   }
   connect_bd_net -net rst_ps8_0_99M_peripheral_aresetn  [get_bd_pins rst_ps8_0_99M/peripheral_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s_axi_aresetn] \
