@@ -14,6 +14,21 @@ import numpy as np
 import host
 
 
+DEFAULT_CHANNEL_ADDRS = {
+    1: host.DDR_CH1_ADDR,
+    2: host.DDR_CH2_ADDR,
+    3: host.DDR_CH3_ADDR,
+    4: host.DDR_CH4_ADDR,
+}
+
+DEFAULT_DAC_PORTS = {
+    1: 20,
+    2: 22,
+    3: 30,
+    4: 32,
+}
+
+
 def waveform_bytes(wave: np.ndarray) -> bytes:
     return wave.astype("<i2").tobytes()
 
@@ -98,16 +113,19 @@ def build_play_commands(
     x_addr: int = host.DDR_X_ADDR,
     y_addr: int = host.DDR_Y_ADDR,
     length_bytes: int = host.FIXED_DATA_BYTES,
+    channel_addrs: dict[int, int] | None = None,
 ) -> list[list[int]]:
     end_channel = 15 if auto_start else 0
     loop_flag = 1 if loop else 0
-    return [
-        [1, 1, 0, 0],
-        [2, 1, int(length_bytes), int(x_addr)],
-        [1, 2, 0, 0],
-        [2, 2, int(length_bytes), int(y_addr)],
-        [3, end_channel, 0, 0, loop_flag],
-    ]
+    addrs = dict(DEFAULT_CHANNEL_ADDRS if channel_addrs is None else channel_addrs)
+    addrs[1] = int(x_addr)
+    addrs[2] = int(y_addr)
+    commands: list[list[int]] = []
+    for channel in sorted(addrs):
+        commands.append([1, int(channel), 0, 0])
+        commands.append([2, int(channel), int(length_bytes), int(addrs[channel])])
+    commands.append([3, end_channel, 0, 0, loop_flag])
+    return commands
 
 
 def build_metadata(
@@ -128,6 +146,14 @@ def build_metadata(
         "record_duration_s": record_duration_s,
         "samples_per_channel": int(host.NUM_SAMPLES),
         "bytes_per_channel": int(host.FIXED_DATA_BYTES),
+        "ch1_ddr_offset": f"0x{host.DDR_CH1_ADDR:016X}",
+        "ch2_ddr_offset": f"0x{host.DDR_CH2_ADDR:016X}",
+        "ch3_ddr_offset": f"0x{host.DDR_CH3_ADDR:016X}",
+        "ch4_ddr_offset": f"0x{host.DDR_CH4_ADDR:016X}",
+        "ch1_dac_port": DEFAULT_DAC_PORTS[1],
+        "ch2_dac_port": DEFAULT_DAC_PORTS[2],
+        "ch3_dac_port": DEFAULT_DAC_PORTS[3],
+        "ch4_dac_port": DEFAULT_DAC_PORTS[4],
         "x_ddr_offset": f"0x{host.DDR_X_ADDR:016X}",
         "y_ddr_offset": f"0x{host.DDR_Y_ADDR:016X}",
         "loop": bool(loop),
@@ -142,24 +168,45 @@ def build_metadata(
     return metadata
 
 
-def save_waveform_bundle(out_dir: Path, x: np.ndarray, y: np.ndarray, metadata: dict[str, Any], stem: str = "waveform") -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    x_bytes = waveform_bytes(x)
-    y_bytes = waveform_bytes(y)
+def _save_named_waveform(out_dir: Path, name: str, samples: np.ndarray) -> None:
+    wave_bytes = waveform_bytes(samples)
+    np.save(out_dir / f"{name}_waveform.npy", samples)
+    (out_dir / f"{name}_waveform_int16_le.bin").write_bytes(wave_bytes)
+    np.savetxt(out_dir / f"{name}_waveform.csv", samples, fmt="%d", delimiter=",")
+    host.RFSocController._save_hex_text(wave_bytes, str(out_dir / f"{name}_waveform_hex.txt"))
 
-    np.save(out_dir / "x_waveform.npy", x)
-    np.save(out_dir / "y_waveform.npy", y)
-    (out_dir / "x_waveform_int16_le.bin").write_bytes(x_bytes)
-    (out_dir / "y_waveform_int16_le.bin").write_bytes(y_bytes)
-    np.savetxt(out_dir / "x_waveform.csv", x, fmt="%d", delimiter=",")
-    np.savetxt(out_dir / "y_waveform.csv", y, fmt="%d", delimiter=",")
-    host.RFSocController._save_hex_text(x_bytes, str(out_dir / "x_waveform_hex.txt"))
-    host.RFSocController._save_hex_text(y_bytes, str(out_dir / "y_waveform_hex.txt"))
+
+def save_waveform_bundle(
+    out_dir: Path,
+    x: np.ndarray,
+    y: np.ndarray,
+    metadata: dict[str, Any],
+    stem: str = "waveform",
+    ch3: np.ndarray | None = None,
+    ch4: np.ndarray | None = None,
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _save_named_waveform(out_dir, "x", x)
+    _save_named_waveform(out_dir, "y", y)
+    _save_named_waveform(out_dir, "ch1", x)
+    _save_named_waveform(out_dir, "ch2", y)
+    if ch3 is not None:
+        _save_named_waveform(out_dir, "ch3", ch3)
+    if ch4 is not None:
+        _save_named_waveform(out_dir, "ch4", ch4)
     (out_dir / f"{stem}_metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
-def save_waveform_artifacts(out_dir: Path, x: np.ndarray, y: np.ndarray, metadata: dict[str, Any], prefix: str = "waveform") -> None:
-    save_waveform_bundle(out_dir, x, y, metadata, stem=prefix)
+def save_waveform_artifacts(
+    out_dir: Path,
+    x: np.ndarray,
+    y: np.ndarray,
+    metadata: dict[str, Any],
+    prefix: str = "waveform",
+    ch3: np.ndarray | None = None,
+    ch4: np.ndarray | None = None,
+) -> None:
+    save_waveform_bundle(out_dir, x, y, metadata, stem=prefix, ch3=ch3, ch4=ch4)
 
 
 def upload_and_play(
@@ -174,6 +221,8 @@ def upload_and_play(
     output_dir: Path,
     loop: bool,
     auto_start: bool = True,
+    ch3: np.ndarray | None = None,
+    ch4: np.ndarray | None = None,
 ) -> None:
     ctrl = host.RFSocController(
         ip,
@@ -183,11 +232,21 @@ def upload_and_play(
         udp_source_ip=udp_source_ip,
         timeout_s=timeout_s,
     )
+    uploads: list[tuple[int, np.ndarray, int, str]] = [
+        (1, x, host.DDR_CH1_ADDR, "ch1_upload_hex.txt"),
+        (2, y, host.DDR_CH2_ADDR, "ch2_upload_hex.txt"),
+    ]
+    if ch3 is not None:
+        uploads.append((3, ch3, host.DDR_CH3_ADDR, "ch3_upload_hex.txt"))
+    if ch4 is not None:
+        uploads.append((4, ch4, host.DDR_CH4_ADDR, "ch4_upload_hex.txt"))
+
     try:
-        ctrl.upload_waveform_udp(x, host.DDR_X_ADDR, str(output_dir / "x_upload_hex.txt"))
-        ctrl.upload_waveform_udp(y, host.DDR_Y_ADDR, str(output_dir / "y_upload_hex.txt"))
+        for _, samples, ddr_addr, filename in uploads:
+            ctrl.upload_waveform_udp(samples, ddr_addr, str(output_dir / filename))
         if post_upload_sleep_s > 0:
             time.sleep(post_upload_sleep_s)
-        ctrl.send_instructions(build_play_commands(loop=loop, auto_start=auto_start))
+        channel_addrs = {channel: ddr_addr for channel, _, ddr_addr, _ in uploads}
+        ctrl.send_instructions(build_play_commands(loop=loop, auto_start=auto_start, channel_addrs=channel_addrs))
     finally:
         ctrl.close()

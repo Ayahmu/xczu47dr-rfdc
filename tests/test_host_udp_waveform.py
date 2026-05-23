@@ -25,10 +25,17 @@ host = load_software_module("host", "host.py")
 
 
 class UdpWaveformPacketTests(unittest.TestCase):
+    def test_default_sample_rate_matches_custom_rfdc_config(self):
+        self.assertEqual(host.DAC_XY_FS, 1_000_000_000.0)
+
     def test_default_ddr_addresses_match_bd_mapped_base(self):
         self.assertEqual(host.DDR_BASE, 0x0000000000000000)
-        self.assertEqual(host.DDR_X_ADDR, 0x0000000000000000)
-        self.assertEqual(host.DDR_Y_ADDR, 0x0000000000001000)
+        self.assertEqual(host.DDR_CH1_ADDR, 0x0000000000000000)
+        self.assertEqual(host.DDR_CH2_ADDR, 0x0000000000001000)
+        self.assertEqual(host.DDR_CH3_ADDR, 0x0000000000002000)
+        self.assertEqual(host.DDR_CH4_ADDR, 0x0000000000003000)
+        self.assertEqual(host.DDR_X_ADDR, host.DDR_CH1_ADDR)
+        self.assertEqual(host.DDR_Y_ADDR, host.DDR_CH2_ADDR)
 
     def test_packets_are_128_bit_ddr_writes(self):
         samples = np.arange(8, dtype=np.int16)

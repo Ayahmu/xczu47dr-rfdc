@@ -15,14 +15,18 @@ import matplotlib.pyplot as plt
 # ============================================================
 # 1. 硬件参数
 # ============================================================
-DAC_XY_FS = 4.608e9
+DAC_XY_FS = 1.0e9
 FIXED_DATA_BYTES = 4096
 NUM_SAMPLES = FIXED_DATA_BYTES // 2
 DELAY = 1
 
 DDR_BASE = 0x0000000000000000
-DDR_X_ADDR = DDR_BASE
-DDR_Y_ADDR = DDR_BASE + 0x1000  # 4096 对齐
+DDR_CH1_ADDR = DDR_BASE
+DDR_CH2_ADDR = DDR_BASE + 0x1000
+DDR_CH3_ADDR = DDR_BASE + 0x2000
+DDR_CH4_ADDR = DDR_BASE + 0x3000
+DDR_X_ADDR = DDR_CH1_ADDR
+DDR_Y_ADDR = DDR_CH2_ADDR  # 4096 aligned legacy alias
 DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "192.168.1.128")
 DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "1234"))
 DEFAULT_UDP_WRITE_SETTLE_S = float(os.environ.get("RFSOC_UDP_WRITE_SETTLE_S", "0.25"))
