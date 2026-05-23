@@ -16,6 +16,17 @@ import waveform_gui_model  # type: ignore[import-not-found]  # noqa: E402
 
 
 class WaveformGuiModelTests(unittest.TestCase):
+    def test_default_sample_rate_matches_custom_rfdc_config(self):
+        self.assertEqual(waveform_gui_model.WaveformConfig().sample_rate_hz, 1_000_000_000.0)
+
+    def test_generated_waveforms_are_channel_primary_with_xy_aliases(self):
+        fields = set(waveform_gui_model.GeneratedWaveforms.__dataclass_fields__)
+
+        self.assertIn("ch1", fields)
+        self.assertIn("ch2", fields)
+        self.assertNotIn("x", fields)
+        self.assertNotIn("y", fields)
+
     def test_connection_defaults_match_10g_bringup_link(self):
         connection = waveform_gui_model.ConnectionConfig()
 
@@ -45,8 +56,10 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(len(result.y), host.NUM_SAMPLES)
         self.assertFalse(np.array_equal(result.x, result.y))
         self.assertEqual(result.metadata["mode"], "sine")
-        self.assertEqual(result.metadata["x_freq_hz"], 20e6)
-        self.assertEqual(result.metadata["y_freq_hz"], 80e6)
+        self.assertEqual(result.metadata["ch1_freq_hz"], 20e6)
+        self.assertEqual(result.metadata["ch2_freq_hz"], 80e6)
+        self.assertNotIn("x_freq_hz", result.metadata)
+        self.assertNotIn("y_freq_hz", result.metadata)
         self.assertTrue(result.metadata["loop"])
 
     def test_burst_config_preserves_timing_parameters_in_metadata(self):
@@ -66,8 +79,8 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertGreater(np.max(np.abs(result.x)), 1000)
         self.assertGreater(np.max(np.abs(result.y)), 1000)
         self.assertEqual(result.metadata["mode"], "burst")
-        self.assertEqual(result.metadata["x_delay_s"], 80e-9)
-        self.assertEqual(result.metadata["y_delay_s"], 140e-9)
+        self.assertEqual(result.metadata["ch1_delay_s"], 80e-9)
+        self.assertEqual(result.metadata["ch2_delay_s"], 140e-9)
         self.assertEqual(result.metadata["duration_s"], 120e-9)
 
     def test_golden_config_generates_incrementing_debug_pattern(self):
@@ -92,8 +105,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 self.assertGreater(peak_sum, 1000)
                 self.assertEqual(result.metadata["mode"], "pulse")
                 self.assertEqual(result.metadata["pulse_preset"], preset)
-                self.assertEqual(result.metadata["ch1_label"], "CH1 / DDR X")
-                self.assertEqual(result.metadata["ch2_label"], "CH2 / DDR Y")
+                self.assertEqual(result.metadata["ch1_label"], "CH1 / DDR 0x0 / DAC20")
+                self.assertEqual(result.metadata["ch2_label"], "CH2 / DDR 0x1000 / DAC22")
 
         x_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="x"))
         y_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="y"))
@@ -114,19 +127,37 @@ class WaveformGuiModelTests(unittest.TestCase):
                 encoding="signed",
             ),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="off"),
+            ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=0x2000),
+            ch4=waveform_gui_model.ChannelWaveformConfig(
+                waveform_type="sine",
+                freq_hz=60e6,
+                phase_rad=0.5,
+                amplitude=7000,
+                encoding="signed",
+            ),
         )
 
         result = waveform_gui_model.generate_waveforms(config)
 
         self.assertEqual(result.x.dtype, np.int16)
         self.assertEqual(result.y.dtype, np.int16)
+        self.assertEqual(result.ch3.dtype, np.int16)
+        self.assertEqual(result.ch4.dtype, np.int16)
         self.assertEqual(len(result.x), host.NUM_SAMPLES)
         self.assertEqual(len(result.y), host.NUM_SAMPLES)
+        self.assertEqual(len(result.ch3), host.NUM_SAMPLES)
+        self.assertEqual(len(result.ch4), host.NUM_SAMPLES)
         self.assertGreater(np.max(np.abs(result.x)), 1000)
         self.assertFalse(np.any(result.y))
+        self.assertEqual(result.ch3[:4].view(np.uint16).tolist(), [0x2000, 0x2001, 0x2002, 0x2003])
+        self.assertGreater(np.max(np.abs(result.ch4)), 1000)
         self.assertEqual(result.metadata["mode"], "per-channel")
         self.assertEqual(result.metadata["ch1"]["type"], "sine")
         self.assertEqual(result.metadata["ch2"]["type"], "off")
+        self.assertEqual(result.metadata["ch3"]["type"], "golden")
+        self.assertEqual(result.metadata["ch4"]["type"], "sine")
+        self.assertEqual(result.metadata["ch3"]["upload_arg"], "ch3")
+        self.assertEqual(result.metadata["ch4"]["upload_arg"], "ch4")
 
     def test_independent_channels_preserve_ddr_x_y_upload_mapping(self):
         config = waveform_gui_model.WaveformConfig(
@@ -144,8 +175,8 @@ class WaveformGuiModelTests(unittest.TestCase):
 
         self.assertEqual(result.x[:4].view(np.uint16).tolist(), [0x20, 0x21, 0x22, 0x23])
         self.assertLess(int(np.min(result.y)), -1000)
-        self.assertEqual(result.metadata["ch1_label"], "CH1 / DDR X")
-        self.assertEqual(result.metadata["ch2_label"], "CH2 / DDR Y")
+        self.assertEqual(result.metadata["ch1_label"], "CH1 / DDR 0x0 / DAC20")
+        self.assertEqual(result.metadata["ch2_label"], "CH2 / DDR 0x1000 / DAC22")
         self.assertEqual(result.metadata["ch1"]["upload_arg"], "x")
         self.assertEqual(result.metadata["ch2"]["upload_arg"], "y")
 
@@ -239,6 +270,10 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertTrue(result.dry_run)
             self.assertIn("dry-run", "\n".join(result.log_lines))
             self.assertTrue((Path(temp_dir) / "x_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch1_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch2_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch3_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch4_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "sine_metadata.json").exists())
             controller.uploader.assert_not_called()
 
@@ -275,6 +310,10 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(kwargs["post_upload_sleep_s"], 0.05)
             self.assertTrue(kwargs["loop"])
             self.assertFalse(kwargs["auto_start"])
+            self.assertIn("ch3", kwargs)
+            self.assertIn("ch4", kwargs)
+            self.assertEqual(kwargs["ch3"].dtype, np.int16)
+            self.assertEqual(kwargs["ch4"].dtype, np.int16)
 
     def test_build_send_summary_includes_target_and_channel_plan(self):
         config = waveform_gui_model.WaveformConfig(
@@ -293,8 +332,10 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertIn("Source IP: 192.0.2.2", summary)
         self.assertIn("Loop playback: yes", summary)
         self.assertIn("Auto start: no, wait for trigger", summary)
-        self.assertIn("CH1 / DDR X: quantum x", summary)
-        self.assertIn("CH2 / DDR Y: sine", summary)
+        self.assertIn("CH1 / DDR 0x0 / DAC20: quantum x", summary)
+        self.assertIn("CH2 / DDR 0x1000 / DAC22: sine", summary)
+        self.assertIn("CH3 / DDR 0x2000 / DAC30: off", summary)
+        self.assertIn("CH4 / DDR 0x3000 / DAC32: off", summary)
 
     def test_connection_tester_sends_minimal_udp_probe(self):
         calls = []

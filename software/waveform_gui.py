@@ -19,7 +19,15 @@ import host
 import waveform_gui_model as model
 
 
-PREVIEW_TITLES = ("CH1 I-drive waveform (DDR X)", "CH2 Q-drive waveform (DDR Y)")
+CHANNELS = ("ch1", "ch2", "ch3", "ch4")
+PREVIEW_TITLES = (
+    "CH1 DDR 0x0 DAC20",
+    "CH2 DDR 0x1000 DAC22",
+    "CH3 DDR 0x2000 DAC30",
+    "CH4 DDR 0x3000 DAC32",
+)
+CHANNEL_PANEL_TITLES = dict(zip(CHANNELS, PREVIEW_TITLES, strict=True))
+PREVIEW_COLORS = ("#38bdf8", "#f97316", "#22c55e", "#e879f9")
 
 
 WAVEFORM_TYPES = ("quantum", "sine")
@@ -149,8 +157,7 @@ class WaveformSenderApp(ttk.Frame):
         self.wait_for_trigger = tk.BooleanVar(value=defaults.wait_for_trigger)
         self.dry_run = tk.BooleanVar(value=True)
         self.channel_type = {
-            "ch1": tk.StringVar(value=defaults.mode),
-            "ch2": tk.StringVar(value=defaults.mode),
+            channel: tk.StringVar(value=defaults.mode) for channel in CHANNELS
         }
         self.channel_fields = {
             "ch1": {
@@ -180,6 +187,34 @@ class WaveformSenderApp(ttk.Frame):
                 "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
                 "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
                 "start": tk.StringVar(value=hex(defaults.y_start)),
+            },
+            "ch3": {
+                "quantum_gate": tk.StringVar(value="x"),
+                "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
+                "freq_hz": tk.StringVar(value=to_display_mhz(defaults.x_freq_hz)),
+                "phase_rad": tk.StringVar(value=f"{defaults.x_phase_rad:g}"),
+                "amplitude": tk.StringVar(value=str(defaults.amplitude)),
+                "encoding": tk.StringVar(value=defaults.encoding),
+                "delay_s": tk.StringVar(value=to_display_ns(defaults.x_delay_s)),
+                "duration_s": tk.StringVar(value=to_display_ns(defaults.duration_s)),
+                "pulse_preset": tk.StringVar(value="x"),
+                "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
+                "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
+                "start": tk.StringVar(value=hex(host.DDR_CH3_ADDR)),
+            },
+            "ch4": {
+                "quantum_gate": tk.StringVar(value="y"),
+                "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
+                "freq_hz": tk.StringVar(value=to_display_mhz(defaults.y_freq_hz)),
+                "phase_rad": tk.StringVar(value=f"{defaults.y_phase_rad:g}"),
+                "amplitude": tk.StringVar(value=str(defaults.amplitude)),
+                "encoding": tk.StringVar(value=defaults.encoding),
+                "delay_s": tk.StringVar(value=to_display_ns(defaults.y_delay_s)),
+                "duration_s": tk.StringVar(value=to_display_ns(defaults.duration_s)),
+                "pulse_preset": tk.StringVar(value="y"),
+                "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
+                "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
+                "start": tk.StringVar(value=hex(host.DDR_CH4_ADDR)),
             },
         }
 
@@ -220,7 +255,7 @@ class WaveformSenderApp(ttk.Frame):
         ttk.Label(self, text="RFSoC Waveform Sender", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(
             self,
-            text="CH1 maps to DDR X and CH2 maps to DDR Y. Configure, preview, save, dry-run safely, or upload both channels.",
+            text="Configure CH1-CH4 for DDR offsets 0x0/0x1000/0x2000/0x3000 and DAC ports 20/22/30/32.",
             style="Hint.TLabel",
         ).grid(row=0, column=1, sticky="e", padx=(20, 0))
 
@@ -270,15 +305,15 @@ class WaveformSenderApp(ttk.Frame):
         ttk.Checkbutton(controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=11, column=0, columnspan=2, sticky="w")
 
         self.channel_frames = {}
-        self._build_channel_panel(controls, "ch1", "CH1 / DDR X", 12)
-        self._build_channel_panel(controls, "ch2", "CH2 / DDR Y", 14)
+        for index, channel in enumerate(CHANNELS):
+            self._build_channel_panel(controls, channel, CHANNEL_PANEL_TITLES[channel], 12 + (index * 2))
 
-        self._add_section_label(controls, "Artifacts", 16)
-        self._add_entry(controls, "Output dir", self.output_dir, 17)
-        ttk.Button(controls, text="Browse", command=self._browse_output_dir).grid(row=18, column=1, sticky="e", pady=(0, 8))
+        self._add_section_label(controls, "Artifacts", 20)
+        self._add_entry(controls, "Output dir", self.output_dir, 21)
+        ttk.Button(controls, text="Browse", command=self._browse_output_dir).grid(row=22, column=1, sticky="e", pady=(0, 8))
 
         button_bar = ttk.Frame(controls, style="Card.TFrame")
-        button_bar.grid(row=19, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        button_bar.grid(row=23, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         for column in range(ACTION_BUTTON_GRID_COLUMNS):
             button_bar.columnconfigure(column, weight=1, uniform="actions")
         button_specs = (
@@ -302,9 +337,10 @@ class WaveformSenderApp(ttk.Frame):
         right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
 
-        self.figure = Figure(figsize=(7, 4.8), dpi=100, facecolor="#172033")
-        self.ax_x = cast(Any, self.figure.add_subplot(211))
-        self.ax_y = cast(Any, self.figure.add_subplot(212, sharex=self.ax_x))
+        self.figure = Figure(figsize=(7, 5.8), dpi=100, facecolor="#172033")
+        self.preview_axes = [cast(Any, self.figure.add_subplot(4, 1, index + 1)) for index in range(4)]
+        self.ax_x = self.preview_axes[0]
+        self.ax_y = self.preview_axes[1]
         self.canvas = FigureCanvasTkAgg(self.figure, master=right)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
@@ -449,6 +485,8 @@ class WaveformSenderApp(ttk.Frame):
             dry_run=bool(self.dry_run.get() if dry_run is None else dry_run),
             ch1=self._collect_channel_config("ch1"),
             ch2=self._collect_channel_config("ch2"),
+            ch3=self._collect_channel_config("ch3"),
+            ch4=self._collect_channel_config("ch4"),
         )
 
     def _collect_connection(self) -> model.ConnectionConfig:
@@ -465,8 +503,8 @@ class WaveformSenderApp(ttk.Frame):
         try:
             generated = model.generate_waveforms(self._collect_config(dry_run=True))
             self._draw_preview(generated)
-            self._append_log(model.summarize_waveform("Preview CH1", generated.x))
-            self._append_log(model.summarize_waveform("Preview CH2", generated.y))
+            for label, wave in generated.channel_items():
+                self._append_log(model.summarize_waveform(f"Preview {label}", wave))
         except Exception as exc:
             messagebox.showerror("Preview failed", str(exc))
             self._append_log(f"preview failed: {exc}")
@@ -479,10 +517,8 @@ class WaveformSenderApp(ttk.Frame):
             self._append_log(f"live preview pending valid settings: {exc}")
 
     def _draw_preview(self, generated: model.GeneratedWaveforms) -> None:
-        for axis, title, wave, color in (
-            (self.ax_x, PREVIEW_TITLES[0], generated.x, "#38bdf8"),
-            (self.ax_y, PREVIEW_TITLES[1], generated.y, "#f97316"),
-        ):
+        waves = (generated.x, generated.y, generated.ch3, generated.ch4)
+        for axis, title, wave, color in zip(self.preview_axes, PREVIEW_TITLES, waves, PREVIEW_COLORS, strict=True):
             axis.clear()
             indices, values = model.preview_series(wave)
             axis.plot(indices, values, color=color, linewidth=1.5)
@@ -491,7 +527,7 @@ class WaveformSenderApp(ttk.Frame):
             axis.grid(True, color="#334155", linewidth=0.6, alpha=0.8)
             axis.tick_params(colors="#cbd5e1")
             axis.set_facecolor("#0f172a")
-        self.ax_y.set_xlabel("Sample index", color="#cbd5e1")
+        self.preview_axes[-1].set_xlabel("Sample index", color="#cbd5e1")
         self.figure.tight_layout()
         self.canvas.draw_idle()
 

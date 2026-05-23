@@ -56,6 +56,14 @@ class WaveformConfig:
     loop: bool = False
     wait_for_trigger: bool = False
     dry_run: bool = True
+    ch1_freq_hz: float = 80e6
+    ch2_freq_hz: float = 120e6
+    ch1_phase_rad: float = 0.0
+    ch2_phase_rad: float = 0.0
+    ch1_delay_s: float = 80e-9
+    ch2_delay_s: float = 120e-9
+    ch1_start: int = 0
+    ch2_start: int = 0x1000
     x_freq_hz: float = 80e6
     y_freq_hz: float = 120e6
     x_phase_rad: float = 0.0
@@ -72,13 +80,28 @@ class WaveformConfig:
     y_start: int = 0x1000
     ch1: ChannelWaveformConfig | None = None
     ch2: ChannelWaveformConfig | None = None
+    ch3: ChannelWaveformConfig | None = None
+    ch4: ChannelWaveformConfig | None = None
 
 
 @dataclass(slots=True)
 class GeneratedWaveforms:
-    x: np.ndarray
-    y: np.ndarray
+    ch1: np.ndarray
+    ch2: np.ndarray
     metadata: dict
+    ch3: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
+    ch4: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
+
+    @property
+    def x(self) -> np.ndarray:
+        return self.ch1
+
+    @property
+    def y(self) -> np.ndarray:
+        return self.ch2
+
+    def channel_items(self) -> tuple[tuple[str, np.ndarray], ...]:
+        return (("CH1", self.ch1), ("CH2", self.ch2), ("CH3", self.ch3), ("CH4", self.ch4))
 
 
 @dataclass(slots=True)
@@ -95,8 +118,23 @@ class ConnectionTestResult:
     message: str
 
 
+CHANNEL_LABELS = {
+    "ch1": "CH1 / DDR 0x0 / DAC20",
+    "ch2": "CH2 / DDR 0x1000 / DAC22",
+    "ch3": "CH3 / DDR 0x2000 / DAC30",
+    "ch4": "CH4 / DDR 0x3000 / DAC32",
+}
+
+CHANNEL_UPLOAD_ARGS = {
+    "ch1": "x",
+    "ch2": "y",
+    "ch3": "ch3",
+    "ch4": "ch4",
+}
+
+
 def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
-    if config.ch1 is not None or config.ch2 is not None:
+    if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4)):
         return _generate_independent_waveforms(config)
 
     mode = config.mode.lower()
@@ -111,12 +149,14 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             pulse_sigma_s=config.pulse_sigma_s,
             pulse_center_s=config.pulse_center_s,
             amplitude=config.amplitude,
-            ch1_label="CH1 / DDR X",
-            ch2_label="CH2 / DDR Y",
+            ch1_label=CHANNEL_LABELS["ch1"],
+            ch2_label=CHANNEL_LABELS["ch2"],
+            ch3_label=CHANNEL_LABELS["ch3"],
+            ch4_label=CHANNEL_LABELS["ch4"],
             ch1_semantics=ch1_semantics,
             ch2_semantics=ch2_semantics,
         )
-        return GeneratedWaveforms(x=x, y=y, metadata=metadata)
+        return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     if mode == "sine":
         x = waveform_tools.make_sine(
@@ -138,13 +178,13 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             sample_rate_hz=config.sample_rate_hz,
             encoding=config.encoding,
             loop=config.loop,
-            x_freq_hz=config.x_freq_hz,
-            y_freq_hz=config.y_freq_hz,
-            x_phase_rad=config.x_phase_rad,
-            y_phase_rad=config.y_phase_rad,
+            ch1_freq_hz=config.x_freq_hz,
+            ch2_freq_hz=config.y_freq_hz,
+            ch1_phase_rad=config.x_phase_rad,
+            ch2_phase_rad=config.y_phase_rad,
             amplitude=config.amplitude,
         )
-        return GeneratedWaveforms(x=x, y=y, metadata=metadata)
+        return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     if mode == "burst":
         x = waveform_tools.make_gaussian_burst(
@@ -170,16 +210,16 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             sample_rate_hz=config.sample_rate_hz,
             encoding="signed",
             loop=config.loop,
-            x_freq_hz=config.x_freq_hz,
-            y_freq_hz=config.y_freq_hz,
-            x_phase_rad=config.x_phase_rad,
-            y_phase_rad=config.y_phase_rad,
-            x_delay_s=config.x_delay_s,
-            y_delay_s=config.y_delay_s,
+            ch1_freq_hz=config.x_freq_hz,
+            ch2_freq_hz=config.y_freq_hz,
+            ch1_phase_rad=config.x_phase_rad,
+            ch2_phase_rad=config.y_phase_rad,
+            ch1_delay_s=config.x_delay_s,
+            ch2_delay_s=config.y_delay_s,
             duration_s=config.duration_s,
             amplitude=config.amplitude,
         )
-        return GeneratedWaveforms(x=x, y=y, metadata=metadata)
+        return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     if mode == "golden":
         x = waveform_tools.make_incrementing_pattern(start=config.x_start)
@@ -189,10 +229,10 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             sample_rate_hz=config.sample_rate_hz,
             encoding="uint16-viewed-as-int16",
             loop=config.loop,
-            x_start=config.x_start,
-            y_start=config.y_start,
+            ch1_start=config.x_start,
+            ch2_start=config.y_start,
         )
-        return GeneratedWaveforms(x=x, y=y, metadata=metadata)
+        return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     raise ValueError(f"Unsupported waveform mode: {config.mode}")
 
@@ -200,19 +240,27 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
 def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
     ch1_config = config.ch1 or ChannelWaveformConfig(waveform_type="off")
     ch2_config = config.ch2 or ChannelWaveformConfig(waveform_type="off")
+    ch3_config = config.ch3 or ChannelWaveformConfig(waveform_type="off")
+    ch4_config = config.ch4 or ChannelWaveformConfig(waveform_type="off")
     x = _make_channel_waveform(ch1_config, config.sample_rate_hz, "ch1")
     y = _make_channel_waveform(ch2_config, config.sample_rate_hz, "ch2")
+    ch3 = _make_channel_waveform(ch3_config, config.sample_rate_hz, "ch3")
+    ch4 = _make_channel_waveform(ch4_config, config.sample_rate_hz, "ch4")
     metadata = waveform_tools.build_metadata(
         mode="per-channel",
         sample_rate_hz=config.sample_rate_hz,
         encoding="mixed-per-channel",
         loop=config.loop,
-        ch1_label="CH1 / DDR X",
-        ch2_label="CH2 / DDR Y",
-        ch1=_channel_metadata(ch1_config, "CH1", "DDR X", "x"),
-        ch2=_channel_metadata(ch2_config, "CH2", "DDR Y", "y"),
+        ch1_label=CHANNEL_LABELS["ch1"],
+        ch2_label=CHANNEL_LABELS["ch2"],
+        ch3_label=CHANNEL_LABELS["ch3"],
+        ch4_label=CHANNEL_LABELS["ch4"],
+        ch1=_channel_metadata(ch1_config, "ch1"),
+        ch2=_channel_metadata(ch2_config, "ch2"),
+        ch3=_channel_metadata(ch3_config, "ch3"),
+        ch4=_channel_metadata(ch4_config, "ch4"),
     )
-    return GeneratedWaveforms(x=x, y=y, metadata=metadata)
+    return GeneratedWaveforms(ch1=x, ch2=y, ch3=ch3, ch4=ch4, metadata=metadata)
 
 
 def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, channel_name: str) -> np.ndarray:
@@ -305,11 +353,10 @@ def _channel_gaussian_window_pulse(config: ChannelWaveformConfig, sample_rate_hz
     return wave
 
 
-def _channel_metadata(config: ChannelWaveformConfig, channel_label: str, ddr_label: str, upload_arg: str) -> dict:
+def _channel_metadata(config: ChannelWaveformConfig, channel: str) -> dict:
     return {
-        "label": channel_label,
-        "ddr": ddr_label,
-        "upload_arg": upload_arg,
+        "label": CHANNEL_LABELS[channel],
+        "upload_arg": CHANNEL_UPLOAD_ARGS[channel],
         "type": config.waveform_type.lower(),
         "quantum_gate": config.quantum_gate.lower(),
         "rotation_angle_rad": config.rotation_angle_rad,
@@ -378,6 +425,8 @@ def summarize_waveform(name: str, wave: np.ndarray) -> str:
 def build_send_summary(config: WaveformConfig, connection: ConnectionConfig) -> str:
     ch1 = config.ch1 or ChannelWaveformConfig(waveform_type=config.mode)
     ch2 = config.ch2 or ChannelWaveformConfig(waveform_type=config.mode)
+    ch3 = config.ch3 or ChannelWaveformConfig(waveform_type="off")
+    ch4 = config.ch4 or ChannelWaveformConfig(waveform_type="off")
     auto_start = "no, wait for trigger" if config.wait_for_trigger else "yes"
     return "\n".join(
         [
@@ -388,8 +437,10 @@ def build_send_summary(config: WaveformConfig, connection: ConnectionConfig) -> 
             f"Loop playback: {'yes' if config.loop else 'no'}",
             f"Auto start: {auto_start}",
             f"Output dir: {Path(config.output_dir)}",
-            f"CH1 / DDR X: {_summarize_channel(ch1)}",
-            f"CH2 / DDR Y: {_summarize_channel(ch2)}",
+            f"{CHANNEL_LABELS['ch1']}: {_summarize_channel(ch1)}",
+            f"{CHANNEL_LABELS['ch2']}: {_summarize_channel(ch2)}",
+            f"{CHANNEL_LABELS['ch3']}: {_summarize_channel(ch3)}",
+            f"{CHANNEL_LABELS['ch4']}: {_summarize_channel(ch4)}",
         ]
     )
 
@@ -440,13 +491,23 @@ class WaveformController:
     def run(self, config: WaveformConfig, connection: ConnectionConfig) -> ControllerResult:
         generated = generate_waveforms(config)
         output_dir = Path(config.output_dir)
-        waveform_tools.save_waveform_bundle(output_dir, generated.x, generated.y, generated.metadata, stem=config.mode)
+        waveform_tools.save_waveform_bundle(
+            output_dir,
+            generated.x,
+            generated.y,
+            generated.metadata,
+            stem=config.mode,
+            ch3=generated.ch3,
+            ch4=generated.ch4,
+        )
 
         log_lines = [
             "progress: generated waveforms",
             f"mode={config.mode} sample_rate_hz={config.sample_rate_hz:g}",
             summarize_waveform("X", generated.x),
             summarize_waveform("Y", generated.y),
+            summarize_waveform("CH3", generated.ch3),
+            summarize_waveform("CH4", generated.ch4),
             "progress: saved artifacts",
             f"saved artifacts to {output_dir}",
         ]
@@ -468,6 +529,8 @@ class WaveformController:
             output_dir=output_dir,
             loop=config.loop,
             auto_start=not config.wait_for_trigger,
+            ch3=generated.ch3,
+            ch4=generated.ch4,
         )
         log_lines.append("progress: send complete")
         log_lines.append(f"sent UDP waveform to {connection.ip}:{connection.port}")

@@ -14,8 +14,15 @@ import waveform_gui  # type: ignore[import-not-found]  # noqa: E402
 
 class WaveformGuiTests(unittest.TestCase):
     def test_preview_titles_use_channel_names(self):
-        self.assertEqual(waveform_gui.PREVIEW_TITLES[0], "CH1 I-drive waveform (DDR X)")
-        self.assertEqual(waveform_gui.PREVIEW_TITLES[1], "CH2 Q-drive waveform (DDR Y)")
+        self.assertEqual(
+            waveform_gui.PREVIEW_TITLES,
+            (
+                "CH1 DDR 0x0 DAC20",
+                "CH2 DDR 0x1000 DAC22",
+                "CH3 DDR 0x2000 DAC30",
+                "CH4 DDR 0x3000 DAC32",
+            ),
+        )
 
     def test_waveform_types_only_expose_quantum_and_sine(self):
         self.assertEqual(waveform_gui.WAVEFORM_TYPES, ("quantum", "sine"))
@@ -32,10 +39,10 @@ class WaveformGuiTests(unittest.TestCase):
     def test_engineering_unit_conversions(self):
         self.assertEqual(waveform_gui.to_display_mhz(100e6), "100")
         self.assertEqual(waveform_gui.to_display_ns(120e-9), "120")
-        self.assertEqual(waveform_gui.to_display_gsps(4.608e9), "4.608")
+        self.assertEqual(waveform_gui.to_display_gsps(1.0e9), "1")
         self.assertEqual(waveform_gui.from_display_mhz("100"), 100e6)
         self.assertEqual(waveform_gui.from_display_ns("120"), 120e-9)
-        self.assertEqual(waveform_gui.from_display_gsps("4.608"), 4.608e9)
+        self.assertEqual(waveform_gui.from_display_gsps("1"), 1.0e9)
 
     def test_left_controls_define_scrollable_container(self):
         self.assertEqual(
