@@ -40,7 +40,7 @@ source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
 ### Build Commands
 
-The default firmware target is `TARGET=zcu216`. Set `TARGET=custom_xczu47dr` for the custom XCZU47DR offline migration flow.
+The default firmware target is `TARGET=zcu216`. Set `TARGET=custom_xczu47dr` for the custom XCZU47DR four-DAC bring-up flow.
 
 ```bash
 # Create application from XSA, first time, default ZCU216
@@ -109,18 +109,18 @@ Custom `TARGET=custom_xczu47dr` outputs:
 
 ### Modules
 - `rf/`: RFDC control and board clock policy
-- `net/`: Network stubs (lwip disabled)
+- `net/`: lwIP packet handling for waveform upload, instructions, and trigger commands
 - `dma/`: DMA stubs (not used in current hardware)
 
 ## Custom XCZU47DR Firmware Notes
 
-`TARGET=custom_xczu47dr` builds with `BOARD_CUSTOM_XCZU47DR` and uses `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`, `hardware/vivado/output/custom_xczu47dr_rfdc.bit`, and `workspace/custom_xczu47dr`. This flow is for offline migration and minimal bring up preparation. It is not a claim that the custom board has been programmed, validated, or hardware-tested.
+`TARGET=custom_xczu47dr` builds with `BOARD_CUSTOM_XCZU47DR` and uses `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`, `hardware/vivado/output/custom_xczu47dr_rfdc.bit`, and `workspace/custom_xczu47dr`. The custom build produces a target-specific Vitis workspace and ELF for the four-DAC bring-up path.
 
 The custom hardware trigger pair is `EXT_TRIGGER_P/N`. The hardware wrapper is `TopCustomXczu47dr`, which maps that pair into the legacy `Top.trigger_in` path. The confirmed package balls are AR7 for `EXT_TRIGGER_P` and AR6 for `EXT_TRIGGER_N`.
 
-The HMC7044 register and frequency table is not implemented. For the custom target, firmware bypasses the ZCU216 CLK104, LMK, and LMX programming path and prints a policy message. The custom Vivado flow now assumes the board supplies the required RFDC clock on the DAC2 clock pins and limits first bring-up to DAC20 and DAC22 only; ADC capture and DAC30 are deferred until board clock/channel validation.
+For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC. Firmware bypasses the ZCU216 CLK104/LMK/LMX path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
 
-The custom offline Vivado project can now be created with top `TopCustomXczu47dr` and part `xczu47dr-ffvg1517-2-i`. Firmware still depends on a generated custom XSA/BSP before a full C build can be claimed, and JTAG programming has not been run.
+The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1 GS/s sample rate. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. JTAG programming and board-level validation are still separate bring-up steps.
 
 Deferred custom-board interfaces include PCIe, QSFP, SFP, Type-C, Aurora, and extra PL DDR unless later work requests them.
 

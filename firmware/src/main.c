@@ -56,7 +56,8 @@ void reverse32bArray(u32 *src, int size);
 #if defined(BOARD_ZCU216)
 void printCLK104_settings(void);
 #endif
-void rfdcStartup(void);
+int rfdcStartup(void);
+int Configure_DAC_Output_Current(void);
 
 /************************** Variable Definitions *****************************/
 
@@ -106,6 +107,8 @@ XRFdc RFdcInst; /* RFdc driver instance */
 #if defined(BOARD_CUSTOM_XCZU47DR)
 #define DEBUG_WAVEFORM_BYTES 4096U
 #define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
+#define HMC7044_POLL_COUNT 50
+#define HMC7044_POLL_INTERVAL_US 100000
 
 static void preload_debug_waveforms(void)
 {
@@ -161,6 +164,30 @@ int Adjust_DAC_Power(u32 Tile_Id, u32 Block_Id, u32 CurrentMA)
 
 	xil_printf("Success: DAC Tile%d Block%d Current set to %d mA (%d uA)\r\n",
 			   Tile_Id, Block_Id, CurrentMA, uAmps);
+
+	return XST_SUCCESS;
+}
+
+int Configure_DAC_Output_Current(void)
+{
+	static const struct {
+		u32 Tile_Id;
+		u32 Block_Id;
+	} CustomDacBlocks[] = {
+		{2, 0},
+		{2, 2},
+		{3, 0},
+		{3, 2},
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(CustomDacBlocks) / sizeof(CustomDacBlocks[0]); i++)
+	{
+		if (Adjust_DAC_Power(CustomDacBlocks[i].Tile_Id, CustomDacBlocks[i].Block_Id, 20) != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+	}
 
 	return XST_SUCCESS;
 }
@@ -238,10 +265,13 @@ int main(void)
 	XRFClk_Close();
 #elif defined(BOARD_CUSTOM_XCZU47DR)
 	xil_printf("Custom XCZU47DR clock policy: HMC7044 is programmed by PL sequencer.\r\n");
+	xil_printf("HMC7044 reset policy: PL drives RESET_H7044_H_0 low to release the active-high reset net.\r\n");
 	u32 hmcStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
-	for (int hmcWait = 0; ((hmcStatus & HMC7044_DONE_MASK) == 0U) && (hmcWait < 50); hmcWait++)
+	xil_printf("HMC7044 PL sequencer initial status: 0x%08lx (done mask 0x%08lx)\r\n",
+		   (unsigned long)hmcStatus, (unsigned long)HMC7044_DONE_MASK);
+	for (int hmcWait = 0; ((hmcStatus & HMC7044_DONE_MASK) == 0U) && (hmcWait < HMC7044_POLL_COUNT); hmcWait++)
 	{
-		usleep(100000);
+		usleep(HMC7044_POLL_INTERVAL_US);
 		hmcStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
 	}
 	xil_printf("HMC7044 PL sequencer status: 0x%08lx\r\n", hmcStatus);
@@ -295,10 +325,16 @@ int main(void)
 	{
 		xil_printf("The RFDC controller is initialized.\r\n");
 	}
-	// Display the Power-on Status
-	rfdcStartup();
-	Adjust_DAC_Power(2, 0, 20);
-	Adjust_DAC_Power(2, 2, 20);
+	// Display and verify the Power-on Status
+	Status = rfdcStartup();
+	if (Status != XST_SUCCESS)
+	{
+		return Status;
+	}
+	if (Configure_DAC_Output_Current() != XST_SUCCESS)
+	{
+		return XST_FAILURE;
+	}
 
 	// init_dma_ip(&AxiDma, CH0_DMA_DEV_ID, CH0_MM2S_INTR_ID, &INST);
 
@@ -691,16 +727,17 @@ void reverse32bArray(u32 *src, int size)
  *
  * @param	None
  *
- * @return	None
+ * @return	XST_SUCCESS if enabled RFDC tiles started, otherwise XST_FAILURE.
  *
  * @note		TBD
  *
  ******************************************************************************/
 // void rfdcStartup (u32 *cmdVals) {
-void rfdcStartup()
+int rfdcStartup(void)
 {
 
 	int Tile_Id;
+	int Status;
 	XRFdc_IPStatus ipStatus;
 	XRFdc *RFdcInstPtr = &RFdcInst;
 	u32 val;
@@ -723,14 +760,20 @@ void rfdcStartup()
 	{
 		if (ipStatus.DACTileStatus[Tile_Id].IsEnabled == 1)
 		{
-			val = XRFdc_ReadReg16(RFdcInstPtr, XRFDC_ADC_TILE_CTRL_STATS_ADDR(Tile_Id), XRFDC_ADC_DEBUG_RST_OFFSET);
+			val = XRFdc_ReadReg16(RFdcInstPtr, XRFDC_DAC_TILE_CTRL_STATS_ADDR(Tile_Id), XRFDC_ADC_DEBUG_RST_OFFSET);
 			if (val & XRFDC_DBG_RST_CAL_MASK)
 			{
 				xil_printf("DAC Tile: %d NOT ready.\r\n", Tile_Id);
+				return XST_FAILURE;
 			}
 			else
 			{
-				XRFdc_StartUp(RFdcInstPtr, 1, Tile_Id);
+				Status = XRFdc_StartUp(RFdcInstPtr, 1, Tile_Id);
+				if (Status != XST_SUCCESS)
+				{
+					xil_printf("XRFdc_StartUp failed for DAC Tile: %d status=%d\r\n", Tile_Id, Status);
+					return XST_FAILURE;
+				}
 				usleep(200000);
 			}
 		}
@@ -744,14 +787,22 @@ void rfdcStartup()
 			if (val & XRFDC_DBG_RST_CAL_MASK)
 			{
 				xil_printf("ADC Tile: %d NOT ready.\r\n", Tile_Id);
+				return XST_FAILURE;
 			}
 			else
 			{
-				XRFdc_StartUp(RFdcInstPtr, 0, Tile_Id);
+				Status = XRFdc_StartUp(RFdcInstPtr, 0, Tile_Id);
+				if (Status != XST_SUCCESS)
+				{
+					xil_printf("XRFdc_StartUp failed for ADC Tile: %d status=%d\r\n", Tile_Id, Status);
+					return XST_FAILURE;
+				}
 				usleep(200000);
 			}
 		}
 	}
+
+	XRFdc_GetIPStatus(RFdcInstPtr, &ipStatus);
 
 	xil_printf("\r\nThe Power-on sequence step. 0xF is complete.\r\n");
 
@@ -759,10 +810,11 @@ void rfdcStartup()
 	{
 		if (ipStatus.DACTileStatus[Tile_Id].IsEnabled == 1)
 		{
-			val = XRFdc_ReadReg16(RFdcInstPtr, XRFDC_ADC_TILE_CTRL_STATS_ADDR(Tile_Id), XRFDC_ADC_DEBUG_RST_OFFSET);
+			val = XRFdc_ReadReg16(RFdcInstPtr, XRFDC_DAC_TILE_CTRL_STATS_ADDR(Tile_Id), XRFDC_ADC_DEBUG_RST_OFFSET);
 			if (val & XRFDC_DBG_RST_CAL_MASK)
 			{
 				xil_printf("DAC Tile: %d NOT ready.\r\n", Tile_Id);
+				return XST_FAILURE;
 			}
 			else
 			{
@@ -780,6 +832,7 @@ void rfdcStartup()
 			if (val & XRFDC_DBG_RST_CAL_MASK)
 			{
 				xil_printf("ADC Tile: %d NOT ready.\r\n", Tile_Id);
+				return XST_FAILURE;
 			}
 			else
 			{
@@ -792,5 +845,5 @@ void rfdcStartup()
 	xil_printf("\n\rData Converter start up is complete!");
 	xil_printf("\r\n###############################################\r\n");
 
-	return;
+	return XST_SUCCESS;
 }
