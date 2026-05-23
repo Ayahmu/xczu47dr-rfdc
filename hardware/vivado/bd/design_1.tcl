@@ -840,6 +840,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   set usp_rf_data_converter_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0 ]
   if { $target eq "custom_xczu47dr" } {
     # Custom-board bring-up uses DAC tile 2 slices 20/22 and tile 3 slices 30/32.
+    # Vivado 2024.2 RFDC 2.6 GUI enum notes for these enabled DAC slices:
+    #   DAC_Mixer_Mode=2 is Real->Real.
+    #   DAC_Mixer_Type accepts 1=Coarse or 2=Fine; Bypassed/Off are rejected.
+    #   DAC_Coarse_Mixer_Freq=3 is GUI "0", so this does not coarse-shift the tone.
     set rfdc_config [list \
       CONFIG.ADC_Slice00_Enable {false} \
       CONFIG.ADC_Slice20_Enable {false} \
