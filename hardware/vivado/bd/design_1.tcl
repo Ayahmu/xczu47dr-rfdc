@@ -191,7 +191,7 @@ proc create_root_design { parentCell } {
   set custom_target [expr {$target eq "custom_xczu47dr"}]
   set dac2_axis_freq_hz [expr {$custom_target ? 250000000 : 288000000}]
   set dac2_refclk_freq_hz [expr {$custom_target ? 125000000 : 184320000}]
-  set dac2_outclk_freq_hz [expr {$custom_target ? 125000000 : 288000000}]
+  set dac2_outclk_freq_hz [expr {$custom_target ? 62500000 : 288000000}]
   set dac2_associated_busif [expr {$custom_target ? "S_AXIS_20:S_AXIS_22:S_AXIS_30:S_AXIS_32" : "S_AXIS_30:S_AXIS_20:S_AXIS_22"}]
   variable design_name
 
@@ -840,6 +840,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   set usp_rf_data_converter_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0 ]
   if { $target eq "custom_xczu47dr" } {
     # Custom-board bring-up uses DAC tile 2 slices 20/22 and tile 3 slices 30/32.
+    # The host/PL stream remains 1 GS/s: 250 MHz AXIS * 4 samples/cycle.
+    # RFDC 4x interpolation raises the analog DAC sample rate to 4 GS/s.
     # Vivado 2024.2 RFDC 2.6 GUI enum notes for these enabled DAC slices:
     #   DAC_Mixer_Mode=2 is Real->Real.
     #   DAC_Mixer_Type accepts 1=Coarse or 2=Fine; Bypassed/Off are rejected.
@@ -851,15 +853,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.ADC_Slice30_Enable {false} \
       CONFIG.DAC2_Clock_Dist {2} \
       CONFIG.DAC2_Clock_Source {6} \
-      CONFIG.DAC2_Outclk_Freq {125.000} \
+      CONFIG.DAC2_Outclk_Freq {62.500} \
       CONFIG.DAC2_PLL_Enable {true} \
       CONFIG.DAC2_Refclk_Freq {125.000} \
-      CONFIG.DAC2_Sampling_Rate {1} \
+      CONFIG.DAC2_Sampling_Rate {4} \
       CONFIG.DAC3_Clock_Source {6} \
       CONFIG.DAC3_Fabric_Freq {250.000} \
-      CONFIG.DAC3_Outclk_Freq {125.000} \
+      CONFIG.DAC3_Outclk_Freq {62.500} \
       CONFIG.DAC3_PLL_Enable {false} \
-      CONFIG.DAC3_Sampling_Rate {1} \
+      CONFIG.DAC3_Sampling_Rate {4} \
       CONFIG.DAC_Coarse_Mixer_Freq20 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq22 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq30 {3} \
@@ -868,10 +870,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.DAC_Data_Width22 {4} \
       CONFIG.DAC_Data_Width30 {4} \
       CONFIG.DAC_Data_Width32 {4} \
-      CONFIG.DAC_Interpolation_Mode20 {1} \
-      CONFIG.DAC_Interpolation_Mode22 {1} \
-      CONFIG.DAC_Interpolation_Mode30 {1} \
-      CONFIG.DAC_Interpolation_Mode32 {1} \
+      CONFIG.DAC_Interpolation_Mode20 {4} \
+      CONFIG.DAC_Interpolation_Mode22 {4} \
+      CONFIG.DAC_Interpolation_Mode30 {4} \
+      CONFIG.DAC_Interpolation_Mode32 {4} \
       CONFIG.DAC_Mixer_Mode20 {2} \
       CONFIG.DAC_Mixer_Mode22 {2} \
       CONFIG.DAC_Mixer_Mode30 {2} \
@@ -1009,7 +1011,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   if { $custom_target } {
     set_property -dict [ list \
       CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {250.000} \
-      CONFIG.PRIM_IN_FREQ {125.000} \
+      CONFIG.PRIM_IN_FREQ {62.500} \
       CONFIG.RESET_TYPE {ACTIVE_LOW} \
     ] $clk_wiz_dac_axis_0
   } else {
