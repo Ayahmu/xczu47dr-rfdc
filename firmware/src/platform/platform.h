@@ -34,29 +34,11 @@
 extern "C" {
 #endif
 
-/* Platform timer is calibrated for 50 ms, so kept interval value 20 to call
- * eth_link_detect() at every one second
- */
-#define ETH_LINK_DETECT_INTERVAL 20
-
 void init_platform();
 void cleanup_platform();
-#ifdef SDT
-void init_timer();
-void TimerCounterHandler(void *CallBackRef, u32_t TmrCtrNumber);
-#endif
-#ifdef __MICROBLAZE__
-void timer_callback();
-#endif
-#ifdef __PPC__
-void timer_callback();
-#endif
-void platform_setup_timer();
-void platform_enable_interrupts();
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif
-

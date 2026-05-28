@@ -19,7 +19,6 @@
 
 #include "platform/platform.h"
 #include "modules/dma/dma_ctrl.h"
-#include "modules/net/lwip_user.h"
 
 #include <metal/log.h>
 #include <metal/sys.h>
@@ -38,13 +37,6 @@
 #undef LMX_DEBUG
 
 // XAxiDma AxiDma;
-
-volatile u8 *data_buffer = (u8 *)DDR4_BASE;
-int data_len = 0;
-int data_ready = 0;
-
-struct netif server_netif;
-struct netif *echo_netif = &server_netif;
 
 void my_metal_default_log_handler(enum metal_log_level level,
 								  const char *format, ...);
@@ -341,8 +333,6 @@ int main(void)
 	if (Init_GPIO() != XST_SUCCESS)
 		return XST_FAILURE;
 
-	init_lwip();
-
 #if defined(BOARD_CUSTOM_XCZU47DR) && defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
 	// DDR offsets 0/0x1000 are host-uploaded PL regions; firmware must not preload them.
 	preload_debug_waveforms();
@@ -351,49 +341,7 @@ int main(void)
 	// measure_dma_bandwidth();
 	while (1)
 	{
-		if (TcpFastTmrFlag)
-		{
-			tcp_fasttmr();
-			TcpFastTmrFlag = 0;
-		}
-		if (TcpSlowTmrFlag)
-		{
-			tcp_slowtmr();
-			TcpSlowTmrFlag = 0;
-		}
-		xemacif_input(echo_netif);
-		if (data_ready)
-		{
-			// data_len = 4096;
-			// u32 delay_a = 100;
-			// u32 delay_b = 200;
-			// u32 combined = (delay_b << 16) | (delay_a & 0xFFFF);
-			// Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, combined);
-			// xil_printf("DMA cur_wave_delay=%d @%p\r\n",
-			// 		   combined, &combined);
-
-			// xil_printf("Data Buffer Preview (First 32 bytes):\r\n");
-			// u8 *chk_ptr = (u8 *)data_buffer;
-			// for (int i = 0; i < 32; i++)
-			// {
-			// 	xil_printf("%02X ", chk_ptr[i]);
-
-			// 	if ((i + 1) % 16 == 0)
-			// 	{
-			// 		xil_printf("\r\n");
-			// 	}
-			// }
-			// xil_printf("\r\n");
-
-			// xil_printf("Starting DMA transfer...\r\n");
-			// dma_transfer(&AxiDma, (u64)data_buffer, data_len);
-
-			// while (XAxiDma_Busy(&AxiDma, XAXIDMA_DMA_TO_DEVICE))
-			// 	;
-
-			// xil_printf("DMA transfer complete.\n\r");
-			data_ready = 0;
-		}
+		sleep(1);
 	}
 
 	return 0;

@@ -1,8 +1,6 @@
 #ifndef __GLOBAL_H__
 #define __GLOBAL_H__
 
-#include "xscugic.h"
-
 #define CH0_MM2S_INTR_ID 121U
 #define CH0_DMA_DEV_ID 0
 #define CH0_DMA_BASE XPAR_M_AXI_DMA_BASEADDR
@@ -22,20 +20,6 @@
 
 #define MAX_BUF_SIZE 8192
 
-static uint32_t current_offset = 0;
-static uint32_t expected_total_len = 0;
-
-extern volatile u8 *data_buffer;
-extern int data_len;
-extern int data_ready;
-
 extern u32 Ch0BdTxChainBuffer[0x40 * 16] __attribute__((aligned(64)));
-
-extern volatile int TcpFastTmrFlag;
-extern volatile int TcpSlowTmrFlag;
-extern struct netif server_netif;
-extern struct netif *echo_netif;
-
-extern XScuGic INST;
 
 #endif /* __GLOBAL_H__ */

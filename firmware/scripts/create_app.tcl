@@ -38,17 +38,6 @@ setws ${workspace_dir}
 puts "Creating platform from XSA..."
 platform create -name hw_platform -hw ${xsa_file} -proc psu_cortexa53_0 -os standalone
 
-# Add lwIP to the standalone BSP before the platform is generated.  Vitis
-# 2024.2 XSCT accepts bsp setlib/config/write in the active domain context.
-puts "Configuring standalone BSP with lwip220..."
-domain active standalone_domain
-bsp setlib -name lwip220
-bsp config api_mode RAW_API
-bsp config lwip_dhcp false
-bsp config ipv6_enable false
-bsp config pbuf_pool_size 2048
-bsp write
-
 # Generate platform
 puts "Generating platform..."
 platform generate -domains
