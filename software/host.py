@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 # ============================================================
 # 1. 硬件参数
 # ============================================================
-DAC_XY_FS = 1.0e9
+DAC_XY_FS = 1.2e9
+DAC_AXIS_HZ = 300e6
 FIXED_DATA_BYTES = 4096
 NUM_SAMPLES = FIXED_DATA_BYTES // 2
 DELAY = 1
@@ -244,7 +245,7 @@ def plot_waveforms(qx: np.ndarray, qy: np.ndarray, n_preview: int = 400, title_p
 # ============================================================
 def build_default_waveforms():
     interpolation = 4
-    rf_freq = 0.250e9
+    rf_freq = 0.300e9
 
     x_wave = generate_rf_burst(
         freq=rf_freq, duration_s=100e-9, delay_s=0,

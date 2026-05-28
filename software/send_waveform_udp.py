@@ -34,6 +34,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument("--post-upload-sleep-s", type=float, default=0.5)
     parser.add_argument("--sample-rate-hz", "--sample-rate", dest="sample_rate_hz", type=float, default=host.DAC_XY_FS, help="DAC sample rate used for waveform synthesis")
+    parser.add_argument("--axis-freq-hz", type=float, default=host.DAC_AXIS_HZ, help="DAC AXIS clock used to convert hardware delay ns to cycles")
     parser.add_argument("--loop", action="store_true", help="Replay the uploaded waveform continuously")
     parser.add_argument("--wait-for-trigger", action="store_true", help="Do not auto-start; wait for PS/external trigger")
     parser.add_argument("--dry-run", action="store_true", help="Only generate local waveform files; do not send UDP packets")
@@ -145,7 +146,6 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray
                 args.amplitude,
                 args.sample_rate_hz,
                 args.duration_s,
-                float(_channel_value(args, "delay_s", channel)),
             )
             for channel in range(1, 5)
         )
@@ -154,6 +154,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray
         metadata = waveform_tools.build_metadata(
             mode="burst",
             sample_rate_hz=args.sample_rate_hz,
+            axis_freq_hz=args.axis_freq_hz,
             encoding="signed",
             loop=args.loop,
             duration_s=args.duration_s,
@@ -161,6 +162,12 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray
             **{_channel_key(channel, "freq_hz"): float(_channel_value(args, "freq_hz", channel)) for channel in range(1, 5)},
             **{_channel_key(channel, "phase_rad"): float(_channel_value(args, "phase_rad", channel)) for channel in range(1, 5)},
             **{_channel_key(channel, "delay_s"): float(_channel_value(args, "delay_s", channel)) for channel in range(1, 5)},
+            **{
+                _channel_key(channel, "delay_cycles"): waveform_tools.delay_seconds_to_axis_cycles_by_freq(
+                    float(_channel_value(args, "delay_s", channel)), args.axis_freq_hz
+                )
+                for channel in range(1, 5)
+            },
         )
         return waves[0], waves[1], waves[2], waves[3], metadata
 
@@ -208,6 +215,10 @@ def main() -> int:
         auto_start=not args.wait_for_trigger,
         ch3=ch3,
         ch4=ch4,
+        channel_delays={
+            channel: waveform_tools.delay_seconds_to_axis_cycles_by_freq(float(_channel_value(args, "delay_s", channel)), args.axis_freq_hz)
+            for channel in range(1, 5)
+        } if args.mode == "burst" else None,
     )
     print("Done.")
     return 0

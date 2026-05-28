@@ -57,15 +57,15 @@ def make_gaussian_burst(
     amplitude: int,
     sample_rate_hz: float,
     duration_s: float,
-    delay_s: float,
+    delay_s: float = 0.0,
     sample_count: int = host.NUM_SAMPLES,
 ) -> np.ndarray:
     n = np.arange(sample_count, dtype=np.float64)
     t = n / float(sample_rate_hz)
     sigma = float(duration_s) / 6.0
-    center = float(delay_s) + (float(duration_s) / 2.0)
+    center = float(duration_s) / 2.0
     env = np.exp(-0.5 * ((t - center) / sigma) ** 2)
-    signal = env * np.cos((2.0 * np.pi * float(freq_hz) * (t - float(delay_s))) + float(phase_rad))
+    signal = env * np.cos((2.0 * np.pi * float(freq_hz) * t) + float(phase_rad))
     return np.round(np.clip(signal * float(amplitude), -32767.0, 32767.0)).astype(np.int16)
 
 
@@ -107,6 +107,19 @@ def rtl_instruction_tdata_hex(words: tuple[int, int]) -> str:
     return f"0x{second:016x}{first:016x}"
 
 
+def delay_seconds_to_axis_cycles(delay_s: float, sample_rate_hz: float = host.DAC_XY_FS, samples_per_axis_cycle: int = 4) -> int:
+    axis_hz = float(sample_rate_hz) / int(samples_per_axis_cycle)
+    return max(0, int(round(float(delay_s) * axis_hz)))
+
+
+def delay_ns_to_axis_cycles(delay_ns: float, axis_freq_hz: float = host.DAC_AXIS_HZ) -> int:
+    return max(0, int(round(float(delay_ns) * float(axis_freq_hz) / 1e9)))
+
+
+def delay_seconds_to_axis_cycles_by_freq(delay_s: float, axis_freq_hz: float = host.DAC_AXIS_HZ) -> int:
+    return delay_ns_to_axis_cycles(float(delay_s) * 1e9, axis_freq_hz)
+
+
 def build_play_commands(
     loop: bool,
     auto_start: bool,
@@ -114,15 +127,17 @@ def build_play_commands(
     y_addr: int = host.DDR_Y_ADDR,
     length_bytes: int = host.FIXED_DATA_BYTES,
     channel_addrs: dict[int, int] | None = None,
+    channel_delays: dict[int, int] | None = None,
 ) -> list[list[int]]:
     end_channel = 15 if auto_start else 0
     loop_flag = 1 if loop else 0
     addrs = dict(DEFAULT_CHANNEL_ADDRS if channel_addrs is None else channel_addrs)
+    delays = {} if channel_delays is None else {int(channel): int(delay) for channel, delay in channel_delays.items()}
     addrs[1] = int(x_addr)
     addrs[2] = int(y_addr)
     commands: list[list[int]] = []
     for channel in sorted(addrs):
-        commands.append([1, int(channel), 0, 0])
+        commands.append([1, int(channel), max(0, delays.get(int(channel), 0)), 0])
         commands.append([2, int(channel), int(length_bytes), int(addrs[channel])])
     commands.append([3, end_channel, 0, 0, loop_flag])
     return commands
@@ -184,6 +199,7 @@ def save_waveform_bundle(
     stem: str = "waveform",
     ch3: np.ndarray | None = None,
     ch4: np.ndarray | None = None,
+    channel_delays: dict[int, int] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _save_named_waveform(out_dir, "x", x)
@@ -223,6 +239,7 @@ def upload_and_play(
     auto_start: bool = True,
     ch3: np.ndarray | None = None,
     ch4: np.ndarray | None = None,
+    channel_delays: dict[int, int] | None = None,
 ) -> None:
     ctrl = host.RFSocController(
         ip,
@@ -247,6 +264,6 @@ def upload_and_play(
         if post_upload_sleep_s > 0:
             time.sleep(post_upload_sleep_s)
         channel_addrs = {channel: ddr_addr for channel, _, ddr_addr, _ in uploads}
-        ctrl.send_instructions(build_play_commands(loop=loop, auto_start=auto_start, channel_addrs=channel_addrs))
+        ctrl.send_instructions(build_play_commands(loop=loop, auto_start=auto_start, channel_addrs=channel_addrs, channel_delays=channel_delays))
     finally:
         ctrl.close()

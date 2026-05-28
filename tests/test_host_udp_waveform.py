@@ -26,7 +26,7 @@ host = load_software_module("host", "host.py")
 
 class UdpWaveformPacketTests(unittest.TestCase):
     def test_default_sample_rate_matches_custom_rfdc_config(self):
-        self.assertEqual(host.DAC_XY_FS, 1_000_000_000.0)
+        self.assertEqual(host.DAC_XY_FS, 1_200_000_000.0)
 
     def test_default_ddr_addresses_match_bd_mapped_base(self):
         self.assertEqual(host.DDR_BASE, 0x0000000000000000)

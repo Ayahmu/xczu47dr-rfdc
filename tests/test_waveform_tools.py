@@ -83,6 +83,33 @@ class WaveformToolTests(unittest.TestCase):
         self.assertEqual(len(burst), host.NUM_SAMPLES)
         self.assertGreater(np.max(np.abs(burst)), 1000)
 
+    def test_gaussian_burst_delay_is_hardware_only_not_waveform_padding(self):
+        no_delay = waveform_tools.make_gaussian_burst(
+            freq_hz=80e6,
+            phase_rad=0.0,
+            amplitude=24000,
+            sample_rate_hz=host.DAC_XY_FS,
+            duration_s=120e-9,
+            delay_s=0.0,
+            sample_count=host.NUM_SAMPLES,
+        )
+        delayed = waveform_tools.make_gaussian_burst(
+            freq_hz=80e6,
+            phase_rad=0.0,
+            amplitude=24000,
+            sample_rate_hz=host.DAC_XY_FS,
+            duration_s=120e-9,
+            delay_s=200e-9,
+            sample_count=host.NUM_SAMPLES,
+        )
+
+        np.testing.assert_array_equal(no_delay, delayed)
+
+    def test_delay_ns_to_axis_cycles_uses_axis_frequency(self):
+        self.assertEqual(waveform_tools.delay_ns_to_axis_cycles(80.0, 300_000_000.0), 24)
+        self.assertEqual(waveform_tools.delay_ns_to_axis_cycles(120.0, 300_000_000.0), 36)
+        self.assertEqual(waveform_tools.delay_ns_to_axis_cycles(2.0, 250_000_000.0), 0)
+
     def test_golden_helpers_match_expected_hex(self):
         samples = waveform_tools.make_incrementing_pattern(sample_count=8, start=0)
 
@@ -129,6 +156,18 @@ class WaveformToolTests(unittest.TestCase):
             [2, 4, host.FIXED_DATA_BYTES, host.DDR_CH4_ADDR],
             [3, 15, 0, 0, 1],
         ])
+
+    def test_build_play_commands_encodes_per_channel_idle_delays(self):
+        cmds = waveform_tools.build_play_commands(
+            loop=False,
+            auto_start=True,
+            channel_delays={1: 0, 2: 24, 3: 30, 4: 0},
+        )
+
+        self.assertEqual(cmds[0], [1, 1, 0, 0])
+        self.assertEqual(cmds[2], [1, 2, 24, 0])
+        self.assertEqual(cmds[4], [1, 3, 30, 0])
+        self.assertEqual(cmds[6], [1, 4, 0, 0])
 
     def test_upload_and_play_uploads_supplied_four_channel_arrays(self):
         arrays = [np.full(8, value, dtype=np.int16) for value in (1, 2, 3, 4)]
