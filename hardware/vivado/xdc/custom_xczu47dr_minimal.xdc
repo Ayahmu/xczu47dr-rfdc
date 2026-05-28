@@ -1,18 +1,9 @@
 # Minimal constraints for the custom XCZU47DR bring-up target.
 # Source of truth: /home/kyu/workspace/定制卡1原理图.pdf, page 14 (RFSOC-B84-B87).
-# Confirmed nets only: EXT_TRIGGER_P/N to FPGA U24 (XCZU47DR-2FFVG1517I), BANK84.
+# END-complete trigger output is driven through XS18 TRIG_1 below.
 
-# EXT_TRIGGER_P -> IO_L11P_AD1P_84, package ball AR7; HD bank differential input
-set_property PACKAGE_PIN AR7 [get_ports EXT_TRIGGER_P]
-set_property IOSTANDARD DIFF_HSTL_I_18 [get_ports EXT_TRIGGER_P]
-
-# EXT_TRIGGER_N -> IO_L11N_AD1N_84, package ball AR6; HD bank differential input
-set_property PACKAGE_PIN AR6 [get_ports EXT_TRIGGER_N]
-set_property IOSTANDARD DIFF_HSTL_I_18 [get_ports EXT_TRIGGER_N]
-
-# First two-DAC bring-up intentionally exposes only DAC tile 2 slices 20/22.
-# RFDC analog output pins use dedicated package wiring; no PACKAGE_PIN constraints
-# are applied for vout20/vout22 here.
+# RFDC analog output and tile clock pins use dedicated package wiring;
+# no PACKAGE_PIN constraints are applied for vout20/vout22/vout30/vout32 or dac2_clk here.
 
 # HMC7044 clock chip control pins (SPI interface)
 set_property PACKAGE_PIN E8 [get_ports RESET_H7044_H_0]
@@ -30,6 +21,11 @@ set_property IOSTANDARD LVCMOS25 [get_ports H7044_SDATA_0]
 # 4.7K pull-up and 1uF reset capacitor; drive it high after PL configuration.
 set_property PACKAGE_PIN A5 [get_ports RST_88E1111]
 set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
+
+# XS18 TRIG_1 MMCX output.  Schematic pin table maps TRIG_1 to BANK87
+# package ball A6, with VCCO_87 tied to VCC_2V5.
+set_property PACKAGE_PIN A6 [get_ports TRIG_1]
+set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
 
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]

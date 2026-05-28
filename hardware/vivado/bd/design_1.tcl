@@ -189,9 +189,9 @@ proc create_root_design { parentCell } {
   variable script_folder
   variable target
   set custom_target [expr {$target eq "custom_xczu47dr"}]
-  set dac2_axis_freq_hz [expr {$custom_target ? 250000000 : 288000000}]
+  set dac2_axis_freq_hz [expr {$custom_target ? 300000000 : 288000000}]
   set dac2_refclk_freq_hz [expr {$custom_target ? 125000000 : 184320000}]
-  set dac2_outclk_freq_hz [expr {$custom_target ? 62500000 : 288000000}]
+  set dac2_outclk_freq_hz [expr {$custom_target ? 300000000 : 288000000}]
   set dac2_associated_busif [expr {$custom_target ? "S_AXIS_20:S_AXIS_22:S_AXIS_30:S_AXIS_32" : "S_AXIS_30:S_AXIS_20:S_AXIS_22"}]
   variable design_name
 
@@ -225,6 +225,7 @@ proc create_root_design { parentCell } {
     set vin20 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vin20 ]
   }
 
+
   set vout20 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vout20 ]
 
   set vout22 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vout22 ]
@@ -239,6 +240,7 @@ proc create_root_design { parentCell } {
      CONFIG.FREQ_HZ {184320000.0} \
      ] $adc2_clk
   }
+
 
   set dac2_clk [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 dac2_clk ]
   set_property -dict [ list \
@@ -270,6 +272,7 @@ proc create_root_design { parentCell } {
    CONFIG.NUM_WRITE_OUTSTANDING {8} \
    CONFIG.PROTOCOL {AXI4} \
    ] $M_AXI_GPIO
+
 
   set S_AXIS_30 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 S_AXIS_30 ]
   set_property -dict [ list \
@@ -333,7 +336,7 @@ proc create_root_design { parentCell } {
 
   set c0_sys [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 c0_sys ]
   set_property -dict [ list \
-   CONFIG.FREQ_HZ {300000000} \
+   CONFIG.FREQ_HZ {200080032} \
    ] $c0_sys
 
   set M_AXI_DMA [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_DMA ]
@@ -840,8 +843,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   set usp_rf_data_converter_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0 ]
   if { $target eq "custom_xczu47dr" } {
     # Custom-board bring-up uses DAC tile 2 slices 20/22 and tile 3 slices 30/32.
-    # The host/PL stream remains 1 GS/s: 250 MHz AXIS * 4 samples/cycle.
-    # RFDC 4x interpolation raises the analog DAC sample rate to 4 GS/s.
+    # The host/PL stream is 1.2 GS/s: 300 MHz AXIS * 4 samples/cycle.
+    # RFDC 4x interpolation raises the analog DAC sample rate to 4.8 GS/s.
+    # The PL HMC7044 sequencer sets the DAC refclk outputs to 120 MHz.
+    # The RFDC clk_dac2 output directly drives the DAC AXIS clock domain.
     # Vivado 2024.2 RFDC 2.6 GUI enum notes for these enabled DAC slices:
     #   DAC_Mixer_Mode=2 is Real->Real.
     #   DAC_Mixer_Type accepts 1=Coarse or 2=Fine; Bypassed/Off are rejected.
@@ -853,15 +858,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.ADC_Slice30_Enable {false} \
       CONFIG.DAC2_Clock_Dist {2} \
       CONFIG.DAC2_Clock_Source {6} \
-      CONFIG.DAC2_Outclk_Freq {62.500} \
+      CONFIG.DAC2_Outclk_Freq {300.000} \
       CONFIG.DAC2_PLL_Enable {true} \
-      CONFIG.DAC2_Refclk_Freq {125.000} \
-      CONFIG.DAC2_Sampling_Rate {4} \
+      CONFIG.DAC2_Refclk_Freq {120.000} \
+      CONFIG.DAC2_Sampling_Rate {4.8} \
       CONFIG.DAC3_Clock_Source {6} \
-      CONFIG.DAC3_Fabric_Freq {250.000} \
-      CONFIG.DAC3_Outclk_Freq {62.500} \
+      CONFIG.DAC3_Fabric_Freq {300.000} \
+      CONFIG.DAC3_Outclk_Freq {300.000} \
       CONFIG.DAC3_PLL_Enable {false} \
-      CONFIG.DAC3_Sampling_Rate {4} \
+      CONFIG.DAC3_Sampling_Rate {4.8} \
       CONFIG.DAC_Coarse_Mixer_Freq20 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq22 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq30 {3} \
@@ -1006,15 +1011,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   # Create instance: proc_sys_reset_0, and set properties
   set proc_sys_reset_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0 ]
 
-  # Create instance: clk_wiz_dac_axis_0, and set properties
-  set clk_wiz_dac_axis_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_dac_axis_0 ]
   if { $custom_target } {
+    set dac_axis_dcm_locked [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 dac_axis_dcm_locked ]
     set_property -dict [ list \
-      CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {250.000} \
-      CONFIG.PRIM_IN_FREQ {62.500} \
-      CONFIG.RESET_TYPE {ACTIVE_LOW} \
-    ] $clk_wiz_dac_axis_0
+      CONFIG.CONST_VAL {1} \
+      CONFIG.CONST_WIDTH {1} \
+    ] $dac_axis_dcm_locked
   } else {
+    # Create instance: clk_wiz_dac_axis_0, and set properties
+    set clk_wiz_dac_axis_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_dac_axis_0 ]
     set_property -dict [ list \
       CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {288.000} \
       CONFIG.PRIM_IN_FREQ {288.000} \
@@ -1078,16 +1083,22 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM1_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM1_FPD] [get_bd_intf_pins smartconnect_2/S00_AXI]
 
   # Create port connections
-  connect_bd_net -net CLK1_1  [get_bd_pins usp_rf_data_converter_0/clk_dac2] \
-  [get_bd_pins clk_wiz_dac_axis_0/clk_in1] \
-  [get_bd_ports clk_dac2]
-  connect_bd_net -net dac_axis_clk_1 [get_bd_pins clk_wiz_dac_axis_0/clk_out1] \
-  [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
-  [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
-  [get_bd_ports dac_axis_clk]
   if { $custom_target } {
-    connect_bd_net -net dac_axis_clk_1 \
-    [get_bd_pins usp_rf_data_converter_0/s3_axis_aclk]
+    connect_bd_net -net dac_axis_clk_1 [get_bd_pins usp_rf_data_converter_0/clk_dac2] \
+    [get_bd_pins usp_rf_data_converter_0/s0_axis_aclk] \
+    [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
+    [get_bd_pins usp_rf_data_converter_0/s3_axis_aclk] \
+    [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
+    [get_bd_ports clk_dac2] \
+    [get_bd_ports dac_axis_clk]
+  } else {
+    connect_bd_net -net CLK1_1 [get_bd_pins usp_rf_data_converter_0/clk_dac2] \
+    [get_bd_pins clk_wiz_dac_axis_0/clk_in1] \
+    [get_bd_ports clk_dac2]
+    connect_bd_net -net dac_axis_clk_1 [get_bd_pins clk_wiz_dac_axis_0/clk_out1] \
+    [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
+    [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
+    [get_bd_ports dac_axis_clk]
   }
   if { $target ne "custom_xczu47dr" } {
     connect_bd_net -net CLK1_1  [get_bd_pins usp_rf_data_converter_0/s3_axis_aclk]
@@ -1109,6 +1120,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins smartconnect_2/aresetn] \
   [get_bd_ports ddr4_ui_aresetn]
   connect_bd_net -net rst_design_1_184M_peripheral_aresetn  [get_bd_pins rst_design_1_184M/peripheral_aresetn] \
+  [get_bd_pins usp_rf_data_converter_0/s0_axis_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn] \
   [get_bd_ports clk104_aresetn]
   if { $custom_target } {
@@ -1132,9 +1144,12 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins rst_design_1_184M/ext_reset_in] \
   [get_bd_pins util_vector_logic_0/Op1] \
   [get_bd_pins proc_sys_reset_0/ext_reset_in]
+  set rst_design_1_300M_ext_reset [get_bd_pins -quiet rst_design_1_300M/ext_reset_in]
+  if { [llength $rst_design_1_300M_ext_reset] != 0 } {
+    connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 $rst_design_1_300M_ext_reset
+  }
   if { $target eq "custom_xczu47dr" } {
-    connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 [get_bd_pins clk_wiz_dac_axis_0/resetn]
-    connect_bd_net -net clk_wiz_dac_axis_locked [get_bd_pins clk_wiz_dac_axis_0/locked] \
+    connect_bd_net -net dac_axis_dcm_locked [get_bd_pins dac_axis_dcm_locked/dout] \
     [get_bd_pins rst_design_1_184M/dcm_locked]
   }
 
@@ -1144,7 +1159,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   assign_bd_address -offset 0xA0020000 -range 0x00008000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_INST/Reg] -force
   assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
   assign_bd_address -offset 0xA0040000 -range 0x00040000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs usp_rf_data_converter_0/s_axi/Reg] -force
-  assign_bd_address -offset 0x000000000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_01] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
+  assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_01] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
 
   # Exclude Address Segments
   exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP2/HP0_DDR_HIGH]

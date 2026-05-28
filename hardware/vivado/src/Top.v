@@ -2,12 +2,10 @@ module Top (
 `ifndef CUSTOM_XCZU47DR
     output [0:0] LED0,
     output [0:0] LED1,
-    output [1:0] clk104_clk_spi_mux_sel_tri_o,
 
     output [0:0] trigger_out_sma,
     output [0:0] trigger_out_loop,
 `endif
-    input  [0:0] trigger_in,
 
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
@@ -64,6 +62,7 @@ module Top (
 `ifdef CUSTOM_XCZU47DR
     output vout32_v_n,
     output vout32_v_p,
+    output TRIG_1,
 `endif
 
     input           c0_sys_clk_n,
@@ -104,10 +103,6 @@ module Top (
   reg  [1:0]  hmc7044_clk_div;
   wire        hmc7044_clk_25m;
   wire        hmc7044_set_finish;
-`ifdef CUSTOM_XCZU47DR
-  wire [1:0]  clk104_clk_spi_mux_sel_tri_o;
-`endif
-
   always @(posedge pl_clk or negedge pl_aresetn) begin
     if (!pl_aresetn) hmc7044_clk_div <= 2'b00;
     else             hmc7044_clk_div <= hmc7044_clk_div + 2'b01;
@@ -142,6 +137,12 @@ module Top (
   assign instr_tvalid     = udp_instr_tvalid | ps_instr_tvalid;
   assign udp_instr_tready = udp_instr_tvalid && instr_tready;
   assign ps_instr_tready  = !udp_instr_tvalid && instr_tready;
+
+`ifdef CUSTOM_XCZU47DR
+  localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0005_0000_0000;
+`else
+  localparam [63:0] EXT_DDR_ADDR_BASE = 64'd0;
+`endif
 
   // ========== Reference 10G UDP receiver ==========
   wire        udp64_rcv_vld;
@@ -202,7 +203,9 @@ module Top (
       .loop_en     (1'b0)
   );
 
-  udp_waveform_ddr_writer udp_waveform_ddr_writer_i (
+  udp_waveform_ddr_writer #(
+      .DDR_ADDR_BASE(EXT_DDR_ADDR_BASE)
+  ) udp_waveform_ddr_writer_i (
       .clk              (ddr4_ui_clk),
       .rst_n            (ddr4_ui_aresetn),
       .udp_tvalid       (udp64_rcv_vld),
@@ -395,6 +398,24 @@ module Top (
   wire        cfg_auto_start;
   wire        cfg_commit; // 每次 END 提交一帧配置
 
+`ifdef CUSTOM_XCZU47DR
+  localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
+  reg [15:0] trig_1_count;
+
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if(!ddr4_ui_aresetn) begin
+      trig_1_count <= 16'd0;
+    end else if(cfg_commit) begin
+      trig_1_count <= TRIG_1_WIDTH_CYCLES;
+    end else if(trig_1_count != 16'd0) begin
+      trig_1_count <= trig_1_count - 16'd1;
+    end
+  end
+
+  wire trig_1_ddr = (trig_1_count != 16'd0);
+  assign TRIG_1 = trig_1_ddr;
+`endif
+
   wire [2:0]  ex_dbg_st;
   wire [1:0]  ex_dbg_dm_st;
   wire        ex_dbg_dm_sel_ch1;
@@ -415,7 +436,9 @@ module Top (
   wire [31:0]  ex_dbg_run_delay_cnt;
 
   // ========== executor ==========
-  Waveform_System_Top executor_inst (
+  Waveform_System_Top #(
+    .DDR_ADDR_BASE(EXT_DDR_ADDR_BASE)
+  ) executor_inst (
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
     .trigger(ps_trigger_ddr_sync),
@@ -499,6 +522,27 @@ module Top (
     else                dac_rstff <= {dac_rstff[1:0], 1'b1};
   end
   wire dac_rst_n = dac_rstff[2];
+
+`ifdef CUSTOM_XCZU47DR
+  (* ASYNC_REG="TRUE" *) reg [2:0] trig_1_dac_sync_ff;
+  reg trig_1_dac_sync_d;
+
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if(!dac_rst_n) begin
+      trig_1_dac_sync_ff <= 3'b000;
+      trig_1_dac_sync_d  <= 1'b0;
+    end else begin
+      trig_1_dac_sync_ff <= {trig_1_dac_sync_ff[1:0], trig_1_ddr};
+      trig_1_dac_sync_d  <= trig_1_dac_sync_ff[2];
+    end
+  end
+
+  wire trig_1_dac_sync  = trig_1_dac_sync_ff[2];
+  wire trig_1_dac_pulse = trig_1_dac_sync & ~trig_1_dac_sync_d;
+`else
+  wire trig_1_dac_sync  = 1'b0;
+  wire trig_1_dac_pulse = 1'b0;
+`endif
 
   // ==========================================================
   // DDR 域：配置帧（160-bit）打包，commit 时写入 cfg FIFO
@@ -1157,7 +1201,7 @@ module Top (
       .io_axi_b_valid(M_AXI_GPIO_bvalid),
       .io_axi_b_bits_resp(M_AXI_GPIO_bresp),
 
-      .io_gpio(clk104_clk_spi_mux_sel_tri_o),
+      .io_gpio(),
       .io_gpio2(gpio_out_reg)
   );
 
@@ -1234,7 +1278,9 @@ module Top (
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      57'd0,
+      25'd0,
+      trig_1_dac_pulse,
+      trig_1_dac_sync,
       ch4_prog_full,
       ch3_prog_full,
       ch2_prog_full,

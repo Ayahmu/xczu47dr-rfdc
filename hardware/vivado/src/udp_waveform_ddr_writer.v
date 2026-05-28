@@ -2,6 +2,7 @@
 
 module udp_waveform_ddr_writer #(
     parameter [63:0] MAGIC = 64'h5741564544445230,
+    parameter [63:0] DDR_ADDR_BASE = 64'd0,
     parameter FIFO_DEPTH_LOG2 = 4
 ) (
     input  wire         clk,
@@ -130,11 +131,11 @@ module udp_waveform_ddr_writer #(
       end
 
       if (launch_write) begin
-        m_axi_awaddr  <= fifo_addr[fifo_rd_ptr];
+        m_axi_awaddr  <= DDR_ADDR_BASE + fifo_addr[fifo_rd_ptr];
         m_axi_awvalid <= 1'b1;
         m_axi_wdata   <= fifo_data[fifo_rd_ptr];
         m_axi_wvalid  <= 1'b1;
-        dbg_last_addr  <= fifo_addr[fifo_rd_ptr];
+        dbg_last_addr  <= DDR_ADDR_BASE + fifo_addr[fifo_rd_ptr];
         dbg_last_wdata <= fifo_data[fifo_rd_ptr];
         fifo_rd_ptr <= fifo_rd_ptr + {{FIFO_DEPTH_LOG2-1{1'b0}}, 1'b1};
         write_resp_pending <= 1'b1;

@@ -3,7 +3,8 @@ module Waveform_System_Top #(
   parameter integer CHUNK_BEATS  = 256,
   parameter integer LOW_WM       = 128,
   parameter integer HIGH_WM      = 512,
-  parameter integer START_WM     = 256
+  parameter integer START_WM     = 256,
+  parameter [63:0] DDR_ADDR_BASE = 64'd0
 )(
     input  wire         aclk,
     input  wire         aresetn,
@@ -234,7 +235,7 @@ module Waveform_System_Top #(
     input [63:0] addr;
     input [31:0] bytes;
     begin
-      make_dm_cmd = {8'h00, addr, 1'b0, 1'b1, 6'h00, 1'b1, bytes[22:0]};
+      make_dm_cmd = {8'h00, DDR_ADDR_BASE + addr, 1'b0, 1'b1, 6'h00, 1'b1, bytes[22:0]};
     end
   endfunction
 

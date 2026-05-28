@@ -1,7 +1,4 @@
 module TopCustomXczu47dr (
-    input  EXT_TRIGGER_P,
-    input  EXT_TRIGGER_N,
-
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
     output H7044_SYNC_0,
@@ -10,6 +7,7 @@ module TopCustomXczu47dr (
     output H7044_SDATA_0,
 
     output RST_88E1111,
+    output TRIG_1,
 
     // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
     input  PL_CLK_P_0,
@@ -70,23 +68,11 @@ module TopCustomXczu47dr (
     output          c0_ddr4_reset_n
 );
 
-  wire       trigger_in_single_ended;
-
   assign RST_88E1111 = 1'b1;
 
-  IBUFDS #(
-      .DIFF_TERM("FALSE"),
-      .IBUF_LOW_PWR("TRUE"),
-      .IOSTANDARD("LVDS")
-  ) ext_trigger_ibufds_i (
-      .I(EXT_TRIGGER_P),
-      .IB(EXT_TRIGGER_N),
-      .O(trigger_in_single_ended)
-  );
-
   Top top_i (
-      .trigger_in(trigger_in_single_ended),
-      
+      .TRIG_1(TRIG_1),
+
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),
       .H7044_SYNC_0(H7044_SYNC_0),
