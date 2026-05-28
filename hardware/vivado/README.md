@@ -26,7 +26,8 @@ vivado/
 │   └── design_1.tcl      # Main block design
 ├── src/                  # Additional RTL sources
 ├── xdc/                  # Constraint files
-│   └── pin.xdc           # Board and timing constraints
+│   ├── pin.xdc           # ZCU216 board and timing constraints
+│   └── custom_xczu47dr_minimal.xdc  # Custom XCZU47DR bring-up constraints
 ├── work/                 # Vivado project workspace (auto-generated, ignored)
 └── output/               # Build outputs (auto-generated, ignored)
     ├── zcu216_rfdc.bit   # FPGA bitstream
@@ -341,12 +342,15 @@ vivado work/zcu216_rfdc.xpr &
 
 ## Constraint Files
 
-The active Vivado constraints live in `xdc/pin.xdc`. This file contains the board-level and timing constraints used by `scripts/create_project.tcl`.
+Vivado constraints are selected per target by `scripts/target_config.tcl` and loaded by `scripts/create_project.tcl`.
+
+- `TARGET=zcu216` uses `xdc/pin.xdc`.
+- `TARGET=custom_xczu47dr` uses `xdc/custom_xczu47dr_minimal.xdc`.
 
 Key conventions:
 
 - Use `-quiet` on constraints that refer to generated BD pins or clocks, so project creation remains robust across regenerated Vivado metadata.
-- Keep board-specific pin and clock constraints in `pin.xdc`; do not create parallel `timing.xdc` or `pinout.xdc` files unless the build scripts are updated to include and document them.
+- Keep board-specific pin and clock constraints in the target's configured XDC file; do not create parallel `timing.xdc` or `pinout.xdc` files unless `target_config.tcl` and this section are updated together.
 - Validate constraint changes with `make hardware` or the step targets `make synth` and `make impl`.
 
 ## Troubleshooting

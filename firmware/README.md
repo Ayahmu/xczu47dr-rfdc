@@ -13,7 +13,6 @@ firmware/
 │   ├── drivers/            # Custom drivers
 │   ├── modules/            # Functional modules
 │   │   ├── rf/             # RFDC and clock control
-│   │   ├── net/            # Network stubs
 │   │   └── dma/            # DMA stubs
 │   ├── config/             # Configuration files
 │   └── lscript.ld          # Linker script
@@ -109,18 +108,17 @@ Custom `TARGET=custom_xczu47dr` outputs:
 
 ### Modules
 - `rf/`: RFDC control and board clock policy
-- `net/`: lwIP packet handling for waveform upload, instructions, and trigger commands
 - `dma/`: DMA stubs (not used in current hardware)
 
 ## Custom XCZU47DR Firmware Notes
 
 `TARGET=custom_xczu47dr` builds with `BOARD_CUSTOM_XCZU47DR` and uses `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`, `hardware/vivado/output/custom_xczu47dr_rfdc.bit`, and `workspace/custom_xczu47dr`. The custom build produces a target-specific Vitis workspace and ELF for the four-DAC bring-up path.
 
-The custom hardware trigger pair is `EXT_TRIGGER_P/N`. The hardware wrapper is `TopCustomXczu47dr`, which maps that pair into the legacy `Top.trigger_in` path. The confirmed package balls are AR7 for `EXT_TRIGGER_P` and AR6 for `EXT_TRIGGER_N`.
+The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
 
-For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC. Firmware bypasses the ZCU216 CLK104/LMK/LMX path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
+For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 120 MHz DAC refclk outputs used by the 4.8 GS/s RFDC configuration. Firmware bypasses the ZCU216 CLK104/LMK/LMX path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
 
-The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1 GS/s sample rate. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. JTAG programming and board-level validation are still separate bring-up steps.
+The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1.2 GS/s sample rate for the 4.8 GS/s RFDC interpolation path. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
 
 Deferred custom-board interfaces include PCIe, QSFP, SFP, Type-C, Aurora, and extra PL DDR unless later work requests them.
 
@@ -149,6 +147,6 @@ xsct% mwr 0xA0010000 0x1234 # Write memory
 ## Notes
 
 - The firmware is built for bare-metal (no OS)
-- Network functionality is disabled (no Ethernet MAC in hardware)
+- PS Ethernet/lwIP support is removed from the firmware
 - DMA functionality is stubbed (no AXI DMA in hardware)
 - RFDC and clock configuration are the main features

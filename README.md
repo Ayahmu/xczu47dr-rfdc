@@ -58,11 +58,11 @@ cd firmware
 DRY_RUN=1 TARGET=custom_xczu47dr ./build.sh create
 DRY_RUN=1 TARGET=custom_xczu47dr ./build.sh program
 
-# Run host-side waveform upload/control against the board
-make host IP=10.87.5.241 PORT=7
-
 # Offline host validation without board access
 make host-dry-run
+
+# Launch the local waveform GUI
+python3 software/waveform_gui.py
 ```
 
 Default `TARGET=zcu216` handoff artifacts:
@@ -85,13 +85,13 @@ Custom `TARGET=custom_xczu47dr` handoff artifacts:
 
 ## Custom XCZU47DR Bring-Up Scope
 
-`TARGET=custom_xczu47dr` selects the `xczu47dr-ffvg1517-2-i` part without a Vivado `board_part`, uses `hardware/vivado/xdc/custom_xczu47dr_minimal.xdc`, and selects the `TopCustomXczu47dr` wrapper. The wrapper receives the custom board `EXT_TRIGGER_P/N` pair and feeds the legacy `Top.trigger_in` path. Schematic page 14 maps `EXT_TRIGGER_P` to package ball AR7 and `EXT_TRIGGER_N` to package ball AR6.
+`TARGET=custom_xczu47dr` selects the `xczu47dr-ffvg1517-2-i` part without a Vivado `board_part`, uses `hardware/vivado/xdc/custom_xczu47dr_minimal.xdc`, and selects the `TopCustomXczu47dr` wrapper. The wrapper drives the XS18 `TRIG_1` MMCX output from package ball A6 as an END-after-commit trigger/debug pulse.
 
 The current custom scope is four-channel DAC playback on the custom XCZU47DR board. CH1/CH2/CH3/CH4 map to RFDC DAC20/DAC22/DAC30/DAC32 and DDR offsets `0x0`/`0x1000`/`0x2000`/`0x3000`. PCIe, QSFP, Type-C, Aurora, ADC capture, LEDs, and unrelated board interfaces remain outside this bring-up scope unless requested later.
 
-The user-provided reference project `/home/kyu/workspace/fpga_rfsoc_zjdx_20260503_jiaofu` is also built for `xczu47dr-ffvg1517-2-i`. Its generated RFDC XCI uses DAC tile 2 slices 20/22 with `DAC2_Sampling_Rate=1`, `DAC2_Refclk_Freq=125.000`, and interpolation mode `1`. The custom target keeps DAC2 at 1 GS/s, enables DAC3 slices 30/32 at 1 GS/s, and configures DAC3 to use the DAC2/DAC230 clock source rather than its own PLL.
+The user-provided reference project `/home/kyu/workspace/fpga_rfsoc_zjdx_20260503_jiaofu` is also built for `xczu47dr-ffvg1517-2-i`. Its generated RFDC XCI uses DAC tile 2 slices 20/22 with `DAC2_Sampling_Rate=1`, `DAC2_Refclk_Freq=125.000`, and interpolation mode `1`. The custom target runs DAC2/DAC3 at 4.8 GS/s with 4x interpolation, uses a 1.2 GS/s host/PL stream, sets the HMC7044 DAC refclk outputs to 120 MHz, and configures DAC3 to use the DAC2/DAC230 clock source rather than its own PLL.
 
-The custom PL includes an HMC7044 sequencer and the firmware waits for its done bit before RFDC startup. The RTL currently drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The host waveform default sample rate is 1 GS/s to match the custom RFDC configuration.
+The custom PL includes an HMC7044 sequencer and the firmware waits for its done bit before RFDC startup. The RTL currently drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The host waveform default sample rate is 1.2 GS/s to match the custom 4.8 GS/s RFDC configuration. The custom firmware no longer initializes PS Ethernet or lwIP.
 
 Vivado project creation, synthesis, implementation, bitstream generation, and XSA export have passed for `TARGET=custom_xczu47dr` with top module `TopCustomXczu47dr` and part `xczu47dr-ffvg1517-2-i`. The custom DDR4 controller uses a `Custom` board interface with `CONFIG.C0.DDR4_InputClockPeriod {3334}` to match the existing 300 MHz `c0_sys` port. The reference project exposes two separate 64-bit DDR4 controllers, while this bring-up flow still uses the existing single-DDR4 BD path. Full DDR4 topology, memory part, data width, and pin constraints still need schematic/BOM confirmation before production hardware-readiness claims.
 

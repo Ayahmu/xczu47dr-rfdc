@@ -16,7 +16,7 @@ python3 software/send_waveform_udp.py sine \
   --ip 192.168.1.128 \
   --udp-interface enp225s0f0 \
   --udp-source-ip 192.168.1.10 \
-  --sample-rate-hz 1000000000 \
+  --sample-rate-hz 1200000000 \
   --ch1-freq-hz 20000000 \
   --ch2-freq-hz 20000000 \
   --ch3-freq-hz 30000000 \
@@ -34,7 +34,7 @@ python3 software/send_waveform_udp.py burst \
   --ip 192.168.1.128 \
   --udp-interface enp225s0f0 \
   --udp-source-ip 192.168.1.10 \
-  --sample-rate-hz 1000000000 \
+  --sample-rate-hz 1200000000 \
   --ch1-freq-hz 80000000 \
   --ch2-freq-hz 120000000 \
   --ch3-freq-hz 80000000 \
@@ -65,6 +65,13 @@ Launch the local Tkinter GUI from the repository root:
 python3 software/waveform_gui.py
 ```
 
+If dependencies have not been installed yet, install the Python requirements
+first:
+
+```bash
+python3 -m pip install -r software/requirements.txt
+```
+
 The GUI uses only standard-library `tkinter` plus the existing `matplotlib`
 dependency. It provides separate panels for target connection settings, global
 playback settings, independent CH1-CH4 waveform controls, artifact output, a
@@ -76,6 +83,11 @@ the same artifact bundle as the CLI without sending UDP packets. The default NIC
 binding is `enp225s0f0` with source IP `192.168.1.10`, matching the current 10G
 bring-up host link. Use `Send to Board` only after confirming the target IP, UDP
 port, NIC binding, source IP, loop mode, and trigger mode.
+
+For the current custom XCZU47DR build, keep the GUI/global sample rate at
+`1.2e9` unless the RFDC fabric/sample-rate configuration changes. The GUI sends
+the same PL-side UDP waveform/control protocol as the CLI; it does not depend on
+the removed PS Ethernet/lwIP firmware server.
 
 For quantum-domain pulses, use the `quantum` channel type. The GUI follows the
 usual two-quadrature control convention for CH1/CH2 while CH3/CH4 remain
@@ -112,6 +124,60 @@ The generated metadata includes `sample_rate_hz`, `record_duration_s`,
 `samples_per_channel`, `bytes_per_channel`, and the number of waveform cycles in
 the 2048-sample record. Check this file first when a frequency change appears to
 have no effect.
+
+## ILA Capture Report
+
+After sending or saving a waveform bundle, use `ila_capture_report.py` to capture
+the Vivado ILA and compare the RFDC-facing CH1-CH4 stream against the exact
+Python artifacts. The script checks the trigger-to-valid delay, valid cycle
+count, and every int16 sample carried by `dac_in_chN_tdata` while the channel's
+gated valid signal is asserted.
+
+End-to-end capture from a connected board. This checks whether a usable ILA is
+already present; if not, it asks before programming the FPGA with the project
+bitstream, arms the ILA, uploads the saved waveform artifacts, triggers playback,
+exports the ILA CSV, and writes the reports:
+
+```bash
+python3 software/ila_capture_report.py \
+  --capture \
+  --send-after-arm \
+  --artifact-dir software/waveform_out \
+  --bit hardware/vivado/output/custom_xczu47dr_rfdc.bit \
+  --ltx hardware/vivado/output/custom_xczu47dr_rfdc.ltx \
+  --out-dir software/ila_reports \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10
+```
+
+Use `--program-mode never` when you are certain the board already has the right
+design and you only want to attach the LTX. Use `--program-mode auto --yes` for
+non-interactive lab runs where the script may program the board whenever the ILA
+preflight check does not find this design. Add `--wait-for-trigger` when you want
+the END instruction to wait for a host trigger packet instead of auto-starting.
+If `software/waveform_out` is empty, the script automatically creates a four-channel
+golden/incrementing artifact bundle there before arming the ILA; pass
+`--no-generate-default-artifacts` to require pre-existing artifacts instead.
+
+If you already exported an ILA CSV from Vivado, run the same analysis offline:
+
+```bash
+python3 software/ila_capture_report.py \
+  --csv software/ila_reports/ila_capture_report.csv \
+  --artifact-dir software/waveform_out \
+  --out-dir software/ila_reports
+```
+
+The default trigger reference is `top_i/pc_trig_start`, falling back to
+`top_i/pc_trig_pulse`. The default valid probes are
+`top_i/dac_chN_valid_gated`, and the default data probes are
+`top_i/dac_in_chN_tdata`. If your regenerated ILA uses different probe names,
+pass a flat JSON map with keys such as `trigger`, `ch1_valid`, and `ch1_data`
+through `--probe-map`. To make delay checks strict, add
+`--expected-delay-cycles ch1=0,ch2=0,ch3=0,ch4=0`; otherwise the report still
+prints the observed delay but marks the expected-delay check as not evaluated.
+
+The outputs are a Markdown report and a JSON detail file under `--out-dir`.
 
 ## Fixed Hardware Contract
 

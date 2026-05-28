@@ -3,6 +3,8 @@
 hardware/vivado/work/
 hardware/vivado/.Xil/
 hardware/vivado/output/
+hardware/vivado/bitstream_recovery/
+hardware/vivado/myproj/
 hardware/vivado/*.jou
 hardware/vivado/*.log
 hardware/vivado/*.pb
@@ -10,6 +12,9 @@ hardware/vivado/*.str
 hardware/vivado/*.zip
 hardware/vivado/*.backup.*
 hardware/vivado/xsim.dir/
+xsim.dir/
+xvlog.log
+xvlog.pb
 test.gen/
 vivado.jou
 vivado.log
@@ -37,6 +42,8 @@ software/.pytest_cache/
 software/venv/
 software/.venv/
 software/output/
+software/waveform_out/
+software/ila_reports*/
 
 # IDE
 .vscode/
