@@ -1,11 +1,11 @@
-# ZCU216 RFDC Project
+# XCZU47DR RFDC
 
-FPGA, bare-metal firmware, and host-control project for the Xilinx ZCU216 RFSoC board with RF Data Converter support.
+FPGA, bare-metal firmware, and host-control project for custom XCZU47DR RFDC waveform playback, migrated from the ZCU216 RFDC baseline.
 
 ## Project Layout
 
 ```text
-zcu216_rfdc_project/
+xczu47dr-rfdc/
 ├── Makefile              # Top-level build, program, and host-control entry point
 ├── hardware/
 │   ├── chisel/           # Chisel sources and generated RTL flow
