@@ -32,7 +32,7 @@ class WaveformGuiTests(unittest.TestCase):
     def test_engineering_unit_labels_hide_scientific_notation(self):
         self.assertEqual(waveform_gui.LABELS["quantum_gate"], "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)")
         self.assertEqual(waveform_gui.LABELS["freq_hz"], "Frequency (MHz)")
-        self.assertEqual(waveform_gui.LABELS["delay_s"], "Burst delay (ns)")
+        self.assertEqual(waveform_gui.LABELS["delay_s"], "Hardware delay (ns)")
         self.assertEqual(waveform_gui.LABELS["duration_s"], "Burst duration (ns)")
         self.assertEqual(waveform_gui.GLOBAL_SAMPLE_RATE_LABEL, "Sample rate (GS/s)")
 
@@ -44,7 +44,14 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(waveform_gui.from_display_ns("120"), 120e-9)
         self.assertEqual(waveform_gui.from_display_gsps("1"), 1.0e9)
 
-    def test_left_controls_define_scrollable_container(self):
+    def test_left_controls_define_tabbed_container(self):
+        self.assertEqual(waveform_gui.CONTROL_TABS, ("Setup", "Channels", "ILA Report"))
+        self.assertEqual(
+            waveform_gui.CONTROL_TAB_MARKERS,
+            ("ttk.Notebook", "Setup", "Channels", "ILA Report"),
+        )
+
+    def test_control_tabs_keep_scrollable_content_regions(self):
         self.assertEqual(
             waveform_gui.CONTROL_SCROLLBAR_MARKERS,
             ("tk.Canvas", "ttk.Scrollbar", "yscrollcommand", "<MouseWheel>"),
@@ -56,6 +63,11 @@ class WaveformGuiTests(unittest.TestCase):
             ("Preview", "Test Connection", "Save / Dry Run", "Send to Board"),
         )
         self.assertEqual(waveform_gui.SEND_CONFIRMATION_TITLE, "Confirm send to board")
+
+    def test_ila_program_modes_default_to_never(self):
+        self.assertEqual(waveform_gui.ILA_PROGRAM_MODES, ("never", "auto", "always"))
+        self.assertEqual(waveform_gui.DEFAULT_ILA_PROGRAM_MODE, "never")
+        self.assertEqual(waveform_gui.ILA_CAPTURE_BUTTON_TEXT, "Run ILA Capture + Report")
 
     def test_action_buttons_fit_left_control_panel(self):
         self.assertLessEqual(waveform_gui.ACTION_BUTTON_GRID_COLUMNS, 2)
@@ -112,6 +124,44 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertIn(("cancel", "after-1"), calls)
         scheduled[-1][1]()
         self.assertIn("preview", calls)
+        self.assertIsNone(binder.pending_after_id)
+
+    def test_auto_save_binder_debounces_variable_changes_without_display(self):
+        calls = []
+        scheduled = []
+
+        class FakeVariable:
+            def __init__(self):
+                self.callbacks = []
+
+            def trace_add(self, mode, callback):
+                self.callbacks.append((mode, callback))
+                return f"trace-{len(self.callbacks)}"
+
+        class FakeScheduler:
+            def after(self, delay_ms, callback):
+                scheduled.append((delay_ms, callback))
+                return f"after-{len(scheduled)}"
+
+            def after_cancel(self, token):
+                calls.append(("cancel", token))
+
+        variables = [FakeVariable(), FakeVariable()]
+        binder = waveform_gui.AutoSaveBinder(
+            scheduler=FakeScheduler(),
+            variables=variables,
+            callback=lambda: calls.append("save"),
+            delay_ms=500,
+        )
+
+        variables[0].callbacks[0][1]("var", "", "write")
+        variables[1].callbacks[0][1]("var", "", "write")
+
+        self.assertEqual(scheduled[0][0], 500)
+        self.assertEqual(scheduled[1][0], 500)
+        self.assertIn(("cancel", "after-1"), calls)
+        scheduled[-1][1]()
+        self.assertIn("save", calls)
         self.assertIsNone(binder.pending_after_id)
 
     def test_launch_without_display_returns_clear_message(self):

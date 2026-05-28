@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import queue
+import shlex
 import sys
 import threading
 import tkinter as tk
@@ -28,6 +29,18 @@ PREVIEW_TITLES = (
 )
 CHANNEL_PANEL_TITLES = dict(zip(CHANNELS, PREVIEW_TITLES, strict=True))
 PREVIEW_COLORS = ("#38bdf8", "#f97316", "#22c55e", "#e879f9")
+COLOR_BACKGROUND = "#0f172a"
+COLOR_CARD = "#172033"
+COLOR_TEXT = "#dbeafe"
+COLOR_TEXT_STRONG = "#f8fafc"
+COLOR_TEXT_MUTED = "#94a3b8"
+COLOR_ACCENT = "#38bdf8"
+COLOR_ACCENT_ACTIVE = "#7dd3fc"
+COLOR_ACCENT_TEXT = "#082f49"
+COLOR_INPUT_BACKGROUND = "#e2e8f0"
+COLOR_INPUT_TEXT = "#0f172a"
+COLOR_DISABLED_TEXT = "#64748b"
+COLOR_LOG_BACKGROUND = "#020617"
 
 
 WAVEFORM_TYPES = ("quantum", "sine")
@@ -40,6 +53,11 @@ WINDOW_MIN_WIDTH_PX = 1020
 WINDOW_MIN_HEIGHT_PX = 680
 SEND_CONFIRMATION_TITLE = "Confirm send to board"
 GLOBAL_SAMPLE_RATE_LABEL = "Sample rate (GS/s)"
+GLOBAL_AXIS_FREQ_LABEL = "AXIS clock (MHz)"
+ILA_CAPTURE_BUTTON_TEXT = "Run ILA Capture + Report"
+ILA_PROGRAM_MODES = ("never", "auto", "always")
+DEFAULT_ILA_PROGRAM_MODE = "never"
+CONTROL_TABS = ("Setup", "Channels", "ILA Report")
 
 CHANNEL_FIELD_GROUPS = {
     "quantum": ("quantum_gate", "rotation_angle_rad", "freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"),
@@ -47,6 +65,7 @@ CHANNEL_FIELD_GROUPS = {
 }
 
 CONTROL_SCROLLBAR_MARKERS = ("tk.Canvas", "ttk.Scrollbar", "yscrollcommand", "<MouseWheel>")
+CONTROL_TAB_MARKERS = ("ttk.Notebook",) + CONTROL_TABS
 COMBOBOX_WHEEL_BLOCK_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")
 
 LABELS = {
@@ -59,7 +78,7 @@ LABELS = {
     "phase_rad": "Phase (rad)",
     "amplitude": "Amplitude (DAC codes)",
     "encoding": "Sine encoding",
-    "delay_s": "Burst delay (ns)",
+    "delay_s": "Hardware delay (ns)",
     "duration_s": "Burst duration (ns)",
     "start": "Golden start code",
 }
@@ -126,25 +145,34 @@ class DebouncedPreviewBinder:
         self.callback()
 
 
+class AutoSaveBinder(DebouncedPreviewBinder):
+    pass
+
+
 class WaveformSenderApp(ttk.Frame):
     def __init__(self, master: tk.Tk):
         super().__init__(master, padding=18)
         self.root = master
         self.controller = model.WaveformController()
         self.messages: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.settings_path = model.DEFAULT_GUI_SETTINGS_PATH
+        self._settings_loaded = False
         self._preview_binder: DebouncedPreviewBinder | None = None
+        self._autosave_binder: AutoSaveBinder | None = None
         self._build_variables()
         self._configure_style()
         self._build_widgets()
-        self._set_channel_fields("ch1")
-        self._set_channel_fields("ch2")
+        for channel in CHANNELS:
+            self._set_channel_fields(channel)
         self._preview_binder = DebouncedPreviewBinder(self, self._preview_variables(), self._preview_from_live_edit)
+        self._autosave_binder = AutoSaveBinder(self, self._settings_variables(), self._save_settings_from_live_edit, delay_ms=600)
         self.preview_waveforms()
         self.after(100, self._drain_messages)
 
     def _build_variables(self) -> None:
-        defaults = model.WaveformConfig()
-        connection = model.ConnectionConfig()
+        settings = model.load_gui_settings(self.settings_path)
+        defaults = settings.waveform
+        connection = settings.connection
         self.output_dir = tk.StringVar(value=str(defaults.output_dir))
         self.ip = tk.StringVar(value=connection.ip)
         self.port = tk.StringVar(value=str(connection.port))
@@ -153,11 +181,27 @@ class WaveformSenderApp(ttk.Frame):
         self.timeout_s = tk.StringVar(value=str(connection.timeout_s))
         self.post_upload_sleep_s = tk.StringVar(value=str(connection.post_upload_sleep_s))
         self.sample_rate_hz = tk.StringVar(value=to_display_gsps(defaults.sample_rate_hz))
+        self.axis_freq_hz = tk.StringVar(value=to_display_mhz(defaults.axis_freq_hz))
         self.loop = tk.BooleanVar(value=defaults.loop)
         self.wait_for_trigger = tk.BooleanVar(value=defaults.wait_for_trigger)
-        self.dry_run = tk.BooleanVar(value=True)
+        self.dry_run = tk.BooleanVar(value=defaults.dry_run)
+        ila_defaults = settings.ila
+        self.ila_bitstream_path = tk.StringVar(value=str(ila_defaults.bitstream_path))
+        self.ila_ltx_path = tk.StringVar(value=str(ila_defaults.ltx_path))
+        self.ila_report_dir = tk.StringVar(value=str(ila_defaults.output_dir))
+        self.ila_program_mode = tk.StringVar(value=ila_defaults.program_mode)
+        channel_defaults = {
+            "ch1": defaults.ch1,
+            "ch2": defaults.ch2,
+            "ch3": defaults.ch3,
+            "ch4": defaults.ch4,
+        }
+        def channel_waveform_type(channel: str) -> str:
+            channel_config = channel_defaults[channel]
+            return channel_config.waveform_type if channel_config is not None else defaults.mode
+
         self.channel_type = {
-            channel: tk.StringVar(value=defaults.mode) for channel in CHANNELS
+            channel: tk.StringVar(value=channel_waveform_type(channel)) for channel in CHANNELS
         }
         self.channel_fields = {
             "ch1": {
@@ -217,31 +261,65 @@ class WaveformSenderApp(ttk.Frame):
                 "start": tk.StringVar(value=hex(host.DDR_CH4_ADDR)),
             },
         }
+        self._apply_channel_settings(defaults)
+        self._settings_loaded = self.settings_path.exists()
+
+    def _apply_channel_settings(self, config: model.WaveformConfig) -> None:
+        channel_configs = {
+            "ch1": config.ch1,
+            "ch2": config.ch2,
+            "ch3": config.ch3,
+            "ch4": config.ch4,
+        }
+        for channel, channel_config in channel_configs.items():
+            if channel_config is None:
+                continue
+            fields = self.channel_fields[channel]
+            self.channel_type[channel].set(channel_config.waveform_type)
+            fields["quantum_gate"].set(channel_config.quantum_gate)
+            fields["rotation_angle_rad"].set(f"{channel_config.rotation_angle_rad:g}")
+            fields["freq_hz"].set(to_display_mhz(channel_config.freq_hz))
+            fields["phase_rad"].set(f"{channel_config.phase_rad:g}")
+            fields["amplitude"].set(str(channel_config.amplitude))
+            fields["encoding"].set(channel_config.encoding)
+            fields["delay_s"].set(to_display_ns(channel_config.delay_s))
+            fields["duration_s"].set(to_display_ns(channel_config.duration_s))
+            fields["pulse_preset"].set(channel_config.pulse_preset)
+            fields["pulse_sigma_s"].set(to_display_ns(channel_config.pulse_sigma_s))
+            fields["pulse_center_s"].set(to_display_ns(channel_config.pulse_center_s))
+            fields["start"].set(hex(channel_config.start))
 
     def _configure_style(self) -> None:
         self.root.title("RFSoC Waveform Sender")
         self.root.geometry("1180x760")
         self.root.minsize(WINDOW_MIN_WIDTH_PX, WINDOW_MIN_HEIGHT_PX)
-        self.root.configure(background="#0f172a")
+        self.root.configure(background=COLOR_BACKGROUND)
         style = ttk.Style(self.root)
         style.theme_use("clam")
-        style.configure("TFrame", background="#0f172a")
-        style.configure("Card.TFrame", background="#172033", relief="flat")
-        style.configure("TLabel", background="#0f172a", foreground="#dbeafe", font=("TkDefaultFont", 10))
-        style.configure("Card.TLabel", background="#172033", foreground="#dbeafe", font=("TkDefaultFont", 10))
-        style.configure("Title.TLabel", background="#0f172a", foreground="#f8fafc", font=("TkDefaultFont", 20, "bold"))
-        style.configure("Hint.TLabel", background="#0f172a", foreground="#94a3b8", font=("TkDefaultFont", 10))
-        style.configure("Accent.TButton", background="#38bdf8", foreground="#082f49", font=("TkDefaultFont", 10, "bold"))
-        style.map("Accent.TButton", background=[("active", "#7dd3fc")])
+        style.configure("TFrame", background=COLOR_BACKGROUND)
+        style.configure("Card.TFrame", background=COLOR_CARD, relief="flat")
+        style.configure("TLabel", background=COLOR_BACKGROUND, foreground=COLOR_TEXT, font=("TkDefaultFont", 10))
+        style.configure("Card.TLabel", background=COLOR_CARD, foreground=COLOR_TEXT, font=("TkDefaultFont", 10))
+        style.configure("Title.TLabel", background=COLOR_BACKGROUND, foreground=COLOR_TEXT_STRONG, font=("TkDefaultFont", 20, "bold"))
+        style.configure("Hint.TLabel", background=COLOR_BACKGROUND, foreground=COLOR_TEXT_MUTED, font=("TkDefaultFont", 10))
+        style.configure("Accent.TButton", background=COLOR_ACCENT, foreground=COLOR_ACCENT_TEXT, font=("TkDefaultFont", 10, "bold"))
+        style.map("Accent.TButton", background=[("active", COLOR_ACCENT_ACTIVE)])
         style.configure("TButton", padding=(10, 6))
-        style.configure("TEntry", fieldbackground="#e2e8f0", foreground="#0f172a")
-        style.configure("TCombobox", fieldbackground="#e2e8f0", foreground="#0f172a")
-        style.configure("TCheckbutton", background="#172033", foreground="#dbeafe")
+        style.configure("TEntry", fieldbackground=COLOR_INPUT_BACKGROUND, foreground=COLOR_INPUT_TEXT)
+        style.configure("TCombobox", fieldbackground=COLOR_INPUT_BACKGROUND, foreground=COLOR_INPUT_TEXT)
+        style.configure("TNotebook", background=COLOR_CARD, borderwidth=0, tabmargins=(0, 0, 0, 8))
+        style.configure("TNotebook.Tab", background=COLOR_BACKGROUND, foreground=COLOR_TEXT, padding=(12, 8))
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", COLOR_ACCENT), ("active", COLOR_CARD)],
+            foreground=[("selected", COLOR_ACCENT_TEXT), ("active", COLOR_TEXT_STRONG)],
+        )
+        style.configure("TCheckbutton", background=COLOR_CARD, foreground=COLOR_TEXT)
         style.map(
             "TCheckbutton",
-            background=[("active", "#172033"), ("selected", "#172033"), ("!disabled", "#172033")],
-            foreground=[("active", "#dbeafe"), ("selected", "#dbeafe"), ("!disabled", "#dbeafe"), ("disabled", "#64748b")],
-            indicatorcolor=[("selected", "#38bdf8"), ("!selected", "#0f172a")],
+            background=[("active", COLOR_CARD), ("selected", COLOR_CARD), ("!disabled", COLOR_CARD)],
+            foreground=[("active", COLOR_TEXT), ("selected", COLOR_TEXT), ("!disabled", COLOR_TEXT), ("disabled", COLOR_DISABLED_TEXT)],
+            indicatorcolor=[("selected", COLOR_ACCENT), ("!selected", COLOR_BACKGROUND)],
         )
 
     def _build_widgets(self) -> None:
@@ -264,56 +342,110 @@ class WaveformSenderApp(ttk.Frame):
         controls_shell.rowconfigure(0, weight=1)
         controls_shell.columnconfigure(0, weight=1)
 
-        self.controls_canvas = tk.Canvas(
-            controls_shell,
+        self.control_notebook = ttk.Notebook(controls_shell, width=CONTROL_PANEL_WIDTH_PX)
+        self.control_notebook.grid(row=0, column=0, sticky="nsew")
+        self.control_tab_canvases: list[tk.Canvas] = []
+
+        setup_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[0])
+        channels_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[1])
+        ila_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[2])
+
+        self._add_section_label(setup_controls, "Target Connection", 0)
+        self._add_entry(setup_controls, "Board IP", self.ip, 1)
+        self._add_entry(setup_controls, "UDP port", self.port, 2)
+        self._add_entry(setup_controls, "UDP interface", self.udp_interface, 3)
+        self._add_entry(setup_controls, "Source IP", self.udp_source_ip, 4)
+        self._add_entry(setup_controls, "Timeout (s)", self.timeout_s, 5)
+        self._add_entry(setup_controls, "Post-upload sleep (s)", self.post_upload_sleep_s, 6)
+
+        self._add_section_label(setup_controls, "Global Playback", 7)
+        self._add_entry(setup_controls, GLOBAL_SAMPLE_RATE_LABEL, self.sample_rate_hz, 8)
+        self._add_entry(setup_controls, GLOBAL_AXIS_FREQ_LABEL, self.axis_freq_hz, 9)
+        ttk.Checkbutton(setup_controls, text="Loop playback", variable=self.loop).grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(setup_controls, text="Wait for trigger", variable=self.wait_for_trigger).grid(row=11, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(setup_controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=12, column=0, columnspan=2, sticky="w")
+
+        self._add_section_label(setup_controls, "Artifacts", 13)
+        self._add_entry(setup_controls, "Output dir", self.output_dir, 14)
+        ttk.Button(setup_controls, text="Browse", command=self._browse_output_dir).grid(row=15, column=1, sticky="e", pady=(0, 8))
+        self._build_action_buttons(setup_controls, 16)
+
+        self.channel_frames = {}
+        for index, channel in enumerate(CHANNELS):
+            self._build_channel_panel(channels_controls, channel, CHANNEL_PANEL_TITLES[channel], index * 2)
+
+        self._add_section_label(ila_controls, "ILA Capture / Report", 0)
+        self._add_entry(ila_controls, "Bitstream path", self.ila_bitstream_path, 1)
+        ttk.Button(ila_controls, text="Browse", command=self._browse_ila_bitstream).grid(row=2, column=1, sticky="e", pady=(0, 4))
+        self._add_entry(ila_controls, "LTX path", self.ila_ltx_path, 3)
+        ttk.Button(ila_controls, text="Browse", command=self._browse_ila_ltx).grid(row=4, column=1, sticky="e", pady=(0, 4))
+        self._add_entry(ila_controls, "Report dir", self.ila_report_dir, 5)
+        ttk.Button(ila_controls, text="Browse", command=self._browse_ila_report_dir).grid(row=6, column=1, sticky="e", pady=(0, 4))
+        ttk.Label(ila_controls, text="Program mode", style="Card.TLabel", wraplength=180).grid(row=7, column=0, sticky="w", pady=4, padx=(0, 10))
+        ila_program_menu = ttk.Combobox(
+            ila_controls,
+            textvariable=self.ila_program_mode,
+            values=ILA_PROGRAM_MODES,
+            state="readonly",
+            width=18,
+        )
+        ila_program_menu.grid(row=7, column=1, sticky="ew", pady=4)
+        self._disable_combobox_mousewheel(ila_program_menu)
+        ttk.Button(ila_controls, text=ILA_CAPTURE_BUTTON_TEXT, style="Accent.TButton", command=self.run_ila_capture_report).grid(
+            row=8, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+        )
+
+        right = ttk.Frame(self, style="Card.TFrame", padding=16)
+        right.grid(row=1, column=1, sticky="nsew", pady=(16, 0))
+        right.rowconfigure(0, weight=3)
+        right.rowconfigure(1, weight=1)
+        right.columnconfigure(0, weight=1)
+
+        self.figure = Figure(figsize=(7, 5.8), dpi=100, facecolor=COLOR_CARD)
+        self.preview_axes = [cast(Any, self.figure.add_subplot(4, 1, index + 1)) for index in range(4)]
+        self.ax_x = self.preview_axes[0]
+        self.ax_y = self.preview_axes[1]
+        self.canvas = FigureCanvasTkAgg(self.figure, master=right)
+        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
+        self.log = scrolledtext.ScrolledText(right, height=9, bg=COLOR_LOG_BACKGROUND, fg=COLOR_TEXT, insertbackground=COLOR_TEXT)
+        self.log.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        self._append_log("Ready. Dry run is enabled by default.")
+        self._append_log(f"Settings file: {self.settings_path}")
+        if self._settings_loaded:
+            self._append_log("Loaded saved GUI settings.")
+
+    def _build_control_tab(self, notebook: ttk.Notebook, title: str) -> ttk.Frame:
+        tab_shell = ttk.Frame(notebook, style="Card.TFrame")
+        tab_shell.rowconfigure(0, weight=1)
+        tab_shell.columnconfigure(0, weight=1)
+        notebook.add(tab_shell, text=title)
+
+        canvas = tk.Canvas(
+            tab_shell,
             width=CONTROL_PANEL_WIDTH_PX,
-            background="#172033",
+            background=COLOR_CARD,
             borderwidth=0,
             highlightthickness=0,
             yscrollincrement=24,
         )
-        controls_scrollbar = ttk.Scrollbar(controls_shell, orient="vertical", command=self.controls_canvas.yview)
-        self.controls_canvas.configure(yscrollcommand=controls_scrollbar.set)
-        self.controls_canvas.grid(row=0, column=0, sticky="nsew")
-        controls_scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar = ttk.Scrollbar(tab_shell, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
-        controls = ttk.Frame(self.controls_canvas, style="Card.TFrame", padding=16)
-        controls_window = self.controls_canvas.create_window((0, 0), window=controls, anchor="nw")
-        controls.bind(
-            "<Configure>",
-            lambda _event: self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all")),
-        )
-        self.controls_canvas.bind(
-            "<Configure>",
-            lambda event: self.controls_canvas.itemconfigure(controls_window, width=event.width),
-        )
-        self._bind_control_mousewheel(self.controls_canvas)
+        controls = ttk.Frame(canvas, style="Card.TFrame", padding=16)
+        controls_window = canvas.create_window((0, 0), window=controls, anchor="nw")
+        controls.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(controls_window, width=event.width))
+        self._bind_control_mousewheel(canvas)
+        self.control_tab_canvases.append(canvas)
         controls.columnconfigure(1, weight=1)
+        return controls
 
-        self._add_section_label(controls, "Target Connection", 0)
-        self._add_entry(controls, "Board IP", self.ip, 1)
-        self._add_entry(controls, "UDP port", self.port, 2)
-        self._add_entry(controls, "UDP interface", self.udp_interface, 3)
-        self._add_entry(controls, "Source IP", self.udp_source_ip, 4)
-        self._add_entry(controls, "Timeout (s)", self.timeout_s, 5)
-        self._add_entry(controls, "Post-upload sleep (s)", self.post_upload_sleep_s, 6)
-
-        self._add_section_label(controls, "Global Playback", 7)
-        self._add_entry(controls, GLOBAL_SAMPLE_RATE_LABEL, self.sample_rate_hz, 8)
-        ttk.Checkbutton(controls, text="Loop playback", variable=self.loop).grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(controls, text="Wait for trigger", variable=self.wait_for_trigger).grid(row=10, column=0, columnspan=2, sticky="w")
-        ttk.Checkbutton(controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=11, column=0, columnspan=2, sticky="w")
-
-        self.channel_frames = {}
-        for index, channel in enumerate(CHANNELS):
-            self._build_channel_panel(controls, channel, CHANNEL_PANEL_TITLES[channel], 12 + (index * 2))
-
-        self._add_section_label(controls, "Artifacts", 20)
-        self._add_entry(controls, "Output dir", self.output_dir, 21)
-        ttk.Button(controls, text="Browse", command=self._browse_output_dir).grid(row=22, column=1, sticky="e", pady=(0, 8))
-
-        button_bar = ttk.Frame(controls, style="Card.TFrame")
-        button_bar.grid(row=23, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+    def _build_action_buttons(self, parent: ttk.Frame, row: int) -> None:
+        button_bar = ttk.Frame(parent, style="Card.TFrame")
+        button_bar.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         for column in range(ACTION_BUTTON_GRID_COLUMNS):
             button_bar.columnconfigure(column, weight=1, uniform="actions")
         button_specs = (
@@ -330,23 +462,6 @@ class WaveformSenderApp(ttk.Frame):
                 padx=(0, 8) if index % ACTION_BUTTON_GRID_COLUMNS == 0 else (0, 0),
                 pady=(0, 8) if index < ACTION_BUTTON_GRID_COLUMNS else (0, 0),
             )
-
-        right = ttk.Frame(self, style="Card.TFrame", padding=16)
-        right.grid(row=1, column=1, sticky="nsew", pady=(16, 0))
-        right.rowconfigure(0, weight=3)
-        right.rowconfigure(1, weight=1)
-        right.columnconfigure(0, weight=1)
-
-        self.figure = Figure(figsize=(7, 5.8), dpi=100, facecolor="#172033")
-        self.preview_axes = [cast(Any, self.figure.add_subplot(4, 1, index + 1)) for index in range(4)]
-        self.ax_x = self.preview_axes[0]
-        self.ax_y = self.preview_axes[1]
-        self.canvas = FigureCanvasTkAgg(self.figure, master=right)
-        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-
-        self.log = scrolledtext.ScrolledText(right, height=9, bg="#020617", fg="#dbeafe", insertbackground="#dbeafe")
-        self.log.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
-        self._append_log("Ready. Dry run is enabled by default.")
 
     def _bind_control_mousewheel(self, canvas: tk.Canvas) -> None:
         def scroll_units(event: tk.Event) -> int:
@@ -447,14 +562,48 @@ class WaveformSenderApp(ttk.Frame):
         if selected:
             self.output_dir.set(selected)
 
+    def _browse_ila_bitstream(self) -> None:
+        selected = filedialog.askopenfilename(initialfile=Path(self.ila_bitstream_path.get()).name, filetypes=(("Bitstreams", "*.bit"), ("All files", "*")))
+        if selected:
+            self.ila_bitstream_path.set(selected)
+
+    def _browse_ila_ltx(self) -> None:
+        selected = filedialog.askopenfilename(initialfile=Path(self.ila_ltx_path.get()).name, filetypes=(("LTX probes", "*.ltx"), ("All files", "*")))
+        if selected:
+            self.ila_ltx_path.set(selected)
+
+    def _browse_ila_report_dir(self) -> None:
+        selected = filedialog.askdirectory(initialdir=self.ila_report_dir.get() or str(Path.home()))
+        if selected:
+            self.ila_report_dir.set(selected)
+
     def _parse_int(self, value: str) -> int:
         return int(value.strip(), 0)
 
     def _preview_variables(self) -> list[Any]:
-        variables: list[Any] = [self.sample_rate_hz, self.loop, self.wait_for_trigger, self.dry_run]
+        variables: list[Any] = [self.sample_rate_hz, self.axis_freq_hz, self.loop, self.wait_for_trigger, self.dry_run]
         variables.extend(self.channel_type.values())
         for channel_fields in self.channel_fields.values():
             variables.extend(channel_fields.values())
+        return variables
+
+    def _settings_variables(self) -> list[Any]:
+        variables = self._preview_variables()
+        variables.extend(
+            [
+                self.output_dir,
+                self.ip,
+                self.port,
+                self.udp_interface,
+                self.udp_source_ip,
+                self.timeout_s,
+                self.post_upload_sleep_s,
+                self.ila_bitstream_path,
+                self.ila_ltx_path,
+                self.ila_report_dir,
+                self.ila_program_mode,
+            ]
+        )
         return variables
 
     def _collect_channel_config(self, channel: str) -> model.ChannelWaveformConfig:
@@ -480,6 +629,7 @@ class WaveformSenderApp(ttk.Frame):
             mode="per-channel",
             output_dir=Path(self.output_dir.get()).expanduser(),
             sample_rate_hz=from_display_gsps(self.sample_rate_hz.get()),
+            axis_freq_hz=from_display_mhz(self.axis_freq_hz.get()),
             loop=bool(self.loop.get()),
             wait_for_trigger=bool(self.wait_for_trigger.get()),
             dry_run=bool(self.dry_run.get() if dry_run is None else dry_run),
@@ -498,6 +648,28 @@ class WaveformSenderApp(ttk.Frame):
             timeout_s=float(self.timeout_s.get()),
             post_upload_sleep_s=float(self.post_upload_sleep_s.get()),
         )
+
+    def _collect_ila_config(self) -> model.IlaReportConfig:
+        return model.IlaReportConfig(
+            bitstream_path=Path(self.ila_bitstream_path.get()).expanduser(),
+            ltx_path=Path(self.ila_ltx_path.get()).expanduser(),
+            output_dir=Path(self.ila_report_dir.get()).expanduser(),
+            artifact_dir=Path(self.output_dir.get()).expanduser(),
+            program_mode=self.ila_program_mode.get(),
+        )
+
+    def _collect_settings(self) -> model.GuiSettings:
+        return model.GuiSettings(
+            waveform=self._collect_config(),
+            connection=self._collect_connection(),
+            ila=self._collect_ila_config(),
+        )
+
+    def _save_settings_from_live_edit(self) -> None:
+        try:
+            model.save_gui_settings(self._collect_settings(), self.settings_path)
+        except Exception as exc:
+            self._append_log(f"settings autosave skipped: {exc}")
 
     def preview_waveforms(self) -> None:
         try:
@@ -547,6 +719,28 @@ class WaveformSenderApp(ttk.Frame):
     def _worker_test_connection(self, connection: model.ConnectionConfig) -> None:
         result = model.test_connection(connection)
         self.messages.put(("connection", result))
+
+    def run_ila_capture_report(self) -> None:
+        try:
+            config = self._collect_ila_config()
+            connection = self._collect_connection()
+        except Exception as exc:
+            messagebox.showerror("Invalid ILA settings", str(exc))
+            return
+        command = model.build_ila_capture_command(config, connection)
+        self._append_log("ila capture: starting capture/report...")
+        self._append_log(f"ila artifact dir: {config.artifact_dir}")
+        self._append_log(f"ila report dir: {config.output_dir}")
+        self._append_log(f"ila command: {shlex.join(command)}")
+        worker = threading.Thread(target=self._worker_ila_capture_report, args=(config, connection), daemon=True)
+        worker.start()
+
+    def _worker_ila_capture_report(self, config: model.IlaReportConfig, connection: model.ConnectionConfig) -> None:
+        try:
+            result = model.run_ila_capture_report(config, connection)
+            self.messages.put(("ila", result))
+        except Exception as exc:
+            self.messages.put(("error", exc))
 
     def send_to_board(self) -> None:
         try:
@@ -599,6 +793,12 @@ class WaveformSenderApp(ttk.Frame):
                 self._append_log(result.message)
                 if not result.ok:
                     messagebox.showerror("Connection test failed", result.message)
+            elif kind == "ila":
+                result = cast(model.IlaReportResult, payload)
+                for line in result.log_lines:
+                    self._append_log(line)
+                if not result.ok:
+                    messagebox.showerror("ILA capture/report failed", f"Exit {result.returncode}; status {result.overall_status}")
             else:
                 self._append_log(f"operation failed: {payload}")
                 messagebox.showerror("Operation failed", str(payload))
