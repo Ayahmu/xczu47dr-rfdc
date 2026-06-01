@@ -844,7 +844,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   if { $target eq "custom_xczu47dr" } {
     # Custom-board bring-up uses DAC tile 2 slices 20/22 and tile 3 slices 30/32.
     # The host/PL stream is 1.2 GS/s: 300 MHz AXIS * 4 samples/cycle.
-    # RFDC 4x interpolation raises the analog DAC sample rate to 4.8 GS/s.
+    # RFDC 2x interpolation raises the analog DAC sample rate to 2.4 GS/s.
     # The PL HMC7044 sequencer sets the DAC refclk outputs to 120 MHz.
     # The RFDC clk_dac2 output directly drives the DAC AXIS clock domain.
     # Vivado 2024.2 RFDC 2.6 GUI enum notes for these enabled DAC slices:
@@ -861,12 +861,12 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.DAC2_Outclk_Freq {300.000} \
       CONFIG.DAC2_PLL_Enable {true} \
       CONFIG.DAC2_Refclk_Freq {120.000} \
-      CONFIG.DAC2_Sampling_Rate {4.8} \
+      CONFIG.DAC2_Sampling_Rate {2.4} \
       CONFIG.DAC3_Clock_Source {6} \
       CONFIG.DAC3_Fabric_Freq {300.000} \
       CONFIG.DAC3_Outclk_Freq {300.000} \
       CONFIG.DAC3_PLL_Enable {false} \
-      CONFIG.DAC3_Sampling_Rate {4.8} \
+      CONFIG.DAC3_Sampling_Rate {2.4} \
       CONFIG.DAC_Coarse_Mixer_Freq20 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq22 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq30 {3} \
@@ -875,10 +875,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.DAC_Data_Width22 {4} \
       CONFIG.DAC_Data_Width30 {4} \
       CONFIG.DAC_Data_Width32 {4} \
-      CONFIG.DAC_Interpolation_Mode20 {4} \
-      CONFIG.DAC_Interpolation_Mode22 {4} \
-      CONFIG.DAC_Interpolation_Mode30 {4} \
-      CONFIG.DAC_Interpolation_Mode32 {4} \
+      CONFIG.DAC_Interpolation_Mode20 {2} \
+      CONFIG.DAC_Interpolation_Mode22 {2} \
+      CONFIG.DAC_Interpolation_Mode30 {2} \
+      CONFIG.DAC_Interpolation_Mode32 {2} \
       CONFIG.DAC_Mixer_Mode20 {2} \
       CONFIG.DAC_Mixer_Mode22 {2} \
       CONFIG.DAC_Mixer_Mode30 {2} \
@@ -887,6 +887,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.DAC_Mixer_Type22 {1} \
       CONFIG.DAC_Mixer_Type30 {1} \
       CONFIG.DAC_Mixer_Type32 {1} \
+      CONFIG.DAC_Nyquist20 {1} \
+      CONFIG.DAC_Nyquist22 {1} \
       CONFIG.DAC_Slice00_Enable {false} \
       CONFIG.DAC_Slice20_Enable {true} \
       CONFIG.DAC_Slice22_Enable {true} \
