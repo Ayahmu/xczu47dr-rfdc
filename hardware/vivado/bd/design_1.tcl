@@ -1053,6 +1053,11 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
         APC_EN "0" \
       } \
     ]
+    set rst_design_1_300M_debug_reset [get_bd_cells -quiet rst_design_1_300M]
+    if { [llength $rst_design_1_300M_debug_reset] != 0 } {
+      delete_bd_objs $rst_design_1_300M_debug_reset
+      set rst_design_1_300M [ create_bd_cell -type module -reference ChiselProcSysReset rst_design_1_300M ]
+    }
   }
   if { $target ne "custom_xczu47dr" } {
     connect_bd_intf_net -intf_net smartconnect_2_M01_AXI [get_bd_intf_pins smartconnect_2/M01_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HP1_FPD]
@@ -1100,14 +1105,26 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins zynq_ultra_ps_e_0/maxihpm1_fpd_aclk] \
   [get_bd_pins proc_sys_reset_0/io_slowest_sync_clk] \
   [get_bd_ports ddr4_ui_clk]
+  set rst_design_1_300M_clk [get_bd_pins -quiet rst_design_1_300M/io_slowest_sync_clk]
+  if { [llength $rst_design_1_300M_clk] != 0 } {
+    connect_bd_net -net ddr4_0_c0_ddr4_ui_clk $rst_design_1_300M_clk
+  }
   connect_bd_net -net ddr4_0_c0_ddr4_ui_clk_sync_rst  [get_bd_pins ddr4_0/c0_ddr4_ui_clk_sync_rst] \
   [get_bd_pins proc_sys_reset_0/io_aux_reset_in]
   connect_bd_net -net reset_const_low [get_bd_pins reset_const_low/io_dout] \
   [get_bd_pins rst_ps8_0_99M/io_aux_reset_in] \
   [get_bd_pins rst_design_1_184M/io_aux_reset_in]
+  set rst_design_1_300M_aux_reset [get_bd_pins -quiet rst_design_1_300M/io_aux_reset_in]
+  if { [llength $rst_design_1_300M_aux_reset] != 0 } {
+    connect_bd_net -net reset_const_low $rst_design_1_300M_aux_reset
+  }
   connect_bd_net -net reset_const_high [get_bd_pins reset_const_high/io_dout] \
   [get_bd_pins rst_ps8_0_99M/io_dcm_locked] \
   [get_bd_pins proc_sys_reset_0/io_dcm_locked]
+  set rst_design_1_300M_dcm_locked [get_bd_pins -quiet rst_design_1_300M/io_dcm_locked]
+  if { [llength $rst_design_1_300M_dcm_locked] != 0 } {
+    connect_bd_net -net reset_const_high $rst_design_1_300M_dcm_locked
+  }
   connect_bd_net -net pl_ps_irq_1  [get_bd_ports pl_ps_irq] \
   [get_bd_pins zynq_ultra_ps_e_0/pl_ps_irq0]
   connect_bd_net -net proc_sys_reset_0_peripheral_aresetn  [get_bd_pins proc_sys_reset_0/io_peripheral_aresetn] \
@@ -1139,9 +1156,14 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins rst_design_1_184M/io_ext_reset_in] \
   [get_bd_pins util_vector_logic_0/io_Op1] \
   [get_bd_pins proc_sys_reset_0/io_ext_reset_in]
-  set rst_design_1_300M_ext_reset [get_bd_pins -quiet rst_design_1_300M/ext_reset_in]
+  set rst_design_1_300M_ext_reset [get_bd_pins -quiet rst_design_1_300M/io_ext_reset_in]
   if { [llength $rst_design_1_300M_ext_reset] != 0 } {
     connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 $rst_design_1_300M_ext_reset
+  }
+  set rst_design_1_300M_peripheral_aresetn [get_bd_pins -quiet rst_design_1_300M/io_peripheral_aresetn]
+  if { [llength $rst_design_1_300M_peripheral_aresetn] != 0 } {
+    connect_bd_net -net rst_design_1_300M_peripheral_aresetn $rst_design_1_300M_peripheral_aresetn \
+    [get_bd_pins system_ila_0/resetn]
   }
   if { $target eq "custom_xczu47dr" } {
     connect_bd_net -net dac_axis_dcm_locked [get_bd_pins dac_axis_dcm_locked/io_dout] \
