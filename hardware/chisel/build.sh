@@ -51,12 +51,20 @@ case "$1" in
         print_info "GPIO Verilog generated in ${OUTPUT_DIR}"
         ;;
 
+    reset)
+        print_info "Generating reset module..."
+        mill reset.run
+        print_info "Reset Verilog generated in ${OUTPUT_DIR}"
+        ;;
+
     all)
         print_info "Generating all modules..."
         print_info "Building LED module..."
         mill led.run
         print_info "Building GPIO module..."
         mill gpio.run
+        print_info "Building reset module..."
+        mill reset.run
         print_info "All Verilog files generated in ${OUTPUT_DIR}"
         ;;
 
@@ -68,11 +76,12 @@ case "$1" in
         ;;
 
     *)
-        echo "Usage: $0 {led|gpio|all|clean}"
+        echo "Usage: $0 {led|gpio|reset|all|clean}"
         echo ""
         echo "Commands:"
         echo "  led    - Generate LED module Verilog"
         echo "  gpio   - Generate GPIO module Verilog"
+        echo "  reset  - Generate reset module Verilog"
         echo "  all    - Generate all modules"
         echo "  clean  - Remove build artifacts"
         echo ""
