@@ -23,6 +23,24 @@ class WaveformGuiModelTests(unittest.TestCase):
     def test_default_axis_frequency_matches_custom_rfdc_axis_clock(self):
         self.assertEqual(waveform_gui_model.WaveformConfig().axis_freq_hz, 300_000_000.0)
 
+    def test_default_rfdc_interpolation_matches_custom_rfdc_config(self):
+        self.assertEqual(waveform_gui_model.WaveformConfig().rfdc_interpolation, 2)
+
+    def test_rfdc_interpolation_scales_scope_frequency_to_python_frequency(self):
+        config = waveform_gui_model.WaveformConfig(
+            sample_rate_hz=1_200_000_000.0,
+            rfdc_interpolation=2,
+            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=200_000_000.0),
+        )
+
+        result = waveform_gui_model.generate_waveforms(config)
+
+        self.assertEqual(result.metadata["sample_rate_hz"], 1_200_000_000.0)
+        self.assertEqual(result.metadata["rfdc_interpolation"], 2)
+        self.assertEqual(result.metadata["analog_sample_rate_hz"], 2_400_000_000.0)
+        self.assertEqual(result.metadata["ch1"]["scope_freq_hz"], 200_000_000.0)
+        self.assertEqual(result.metadata["ch1"]["python_freq_hz"], 400_000_000.0)
+
     def test_generated_waveforms_are_channel_primary_with_xy_aliases(self):
         fields = set(waveform_gui_model.GeneratedWaveforms.__dataclass_fields__)
 
@@ -361,7 +379,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
         )
-        expected = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
+        expected = waveform_tools.make_gaussian_burst(160e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
 
         result = waveform_gui_model.generate_waveforms(config)
 
@@ -380,7 +398,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
-        expected = waveform_tools.make_gaussian_burst(120e6, np.pi / 2.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
+        expected = waveform_tools.make_gaussian_burst(240e6, np.pi / 2.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
 
         result = waveform_gui_model.generate_waveforms(config)
 
@@ -400,8 +418,8 @@ class WaveformGuiModelTests(unittest.TestCase):
             ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
-        expected_x = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
-        expected_y = waveform_tools.make_gaussian_burst(120e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
+        expected_x = waveform_tools.make_gaussian_burst(160e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
+        expected_y = waveform_tools.make_gaussian_burst(240e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
 
         result = waveform_gui_model.generate_waveforms(config)
 

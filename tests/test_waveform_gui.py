@@ -31,10 +31,11 @@ class WaveformGuiTests(unittest.TestCase):
 
     def test_engineering_unit_labels_hide_scientific_notation(self):
         self.assertEqual(waveform_gui.LABELS["quantum_gate"], "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)")
-        self.assertEqual(waveform_gui.LABELS["freq_hz"], "Frequency (MHz)")
+        self.assertEqual(waveform_gui.LABELS["freq_hz"], "Scope target freq (MHz)")
         self.assertEqual(waveform_gui.LABELS["delay_s"], "Hardware delay (ns)")
         self.assertEqual(waveform_gui.LABELS["duration_s"], "Burst duration (ns)")
-        self.assertEqual(waveform_gui.GLOBAL_SAMPLE_RATE_LABEL, "Sample rate (GS/s)")
+        self.assertEqual(waveform_gui.GLOBAL_SAMPLE_RATE_LABEL, "Python sample rate (GS/s)")
+        self.assertEqual(waveform_gui.GLOBAL_RFDC_INTERPOLATION_LABEL, "RFDC interpolation (x)")
 
     def test_engineering_unit_conversions(self):
         self.assertEqual(waveform_gui.to_display_mhz(100e6), "100")

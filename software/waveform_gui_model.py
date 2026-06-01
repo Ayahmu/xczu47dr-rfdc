@@ -10,7 +10,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict
 
 import numpy as np
 from scipy.signal.windows import gaussian
@@ -33,6 +33,11 @@ DEFAULT_GUI_SETTINGS_PATH = (
     / "xczu47dr-waveform-gui"
     / "settings.json"
 )
+
+
+class MetadataBase(TypedDict):
+    rfdc_interpolation: int
+    analog_sample_rate_hz: float
 
 
 @dataclass(slots=True)
@@ -68,6 +73,7 @@ class WaveformConfig:
     mode: str = "sine"
     output_dir: Path = Path("/tmp/opencode/rfsoc_waveform_gui")
     sample_rate_hz: float = host.DAC_XY_FS
+    rfdc_interpolation: int = 2
     axis_freq_hz: float = host.DAC_AXIS_HZ
     loop: bool = False
     wait_for_trigger: bool = False
@@ -247,6 +253,7 @@ def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
         "mode": config.mode,
         "output_dir": str(config.output_dir),
         "sample_rate_hz": config.sample_rate_hz,
+        "rfdc_interpolation": config.rfdc_interpolation,
         "axis_freq_hz": config.axis_freq_hz,
         "loop": config.loop,
         "wait_for_trigger": config.wait_for_trigger,
@@ -286,6 +293,7 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
     allowed = {
         "mode",
         "sample_rate_hz",
+        "rfdc_interpolation",
         "axis_freq_hz",
         "loop",
         "wait_for_trigger",
@@ -409,6 +417,21 @@ CHANNEL_UPLOAD_ARGS = {
 }
 
 
+def analog_sample_rate_hz(config: WaveformConfig) -> float:
+    return float(config.sample_rate_hz) * int(config.rfdc_interpolation)
+
+
+def python_frequency_hz(scope_freq_hz: float, rfdc_interpolation: int) -> float:
+    return float(scope_freq_hz) * int(rfdc_interpolation)
+
+
+def _metadata_base(config: WaveformConfig) -> MetadataBase:
+    return {
+        "rfdc_interpolation": int(config.rfdc_interpolation),
+        "analog_sample_rate_hz": analog_sample_rate_hz(config),
+    }
+
+
 def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
     if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4)):
         return _generate_independent_waveforms(config)
@@ -431,19 +454,22 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             ch4_label=CHANNEL_LABELS["ch4"],
             ch1_semantics=ch1_semantics,
             ch2_semantics=ch2_semantics,
+            **_metadata_base(config),
         )
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     if mode == "sine":
+        x_python_freq_hz = python_frequency_hz(config.x_freq_hz, config.rfdc_interpolation)
+        y_python_freq_hz = python_frequency_hz(config.y_freq_hz, config.rfdc_interpolation)
         x = waveform_tools.make_sine(
-            config.x_freq_hz,
+            x_python_freq_hz,
             config.x_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
             encoding=config.encoding,
         )
         y = waveform_tools.make_sine(
-            config.y_freq_hz,
+            y_python_freq_hz,
             config.y_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
@@ -459,19 +485,26 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             ch1_phase_rad=config.x_phase_rad,
             ch2_phase_rad=config.y_phase_rad,
             amplitude=config.amplitude,
+            ch1_scope_freq_hz=config.x_freq_hz,
+            ch2_scope_freq_hz=config.y_freq_hz,
+            ch1_python_freq_hz=x_python_freq_hz,
+            ch2_python_freq_hz=y_python_freq_hz,
+            **_metadata_base(config),
         )
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     if mode == "burst":
+        x_python_freq_hz = python_frequency_hz(config.x_freq_hz, config.rfdc_interpolation)
+        y_python_freq_hz = python_frequency_hz(config.y_freq_hz, config.rfdc_interpolation)
         x = waveform_tools.make_gaussian_burst(
-            config.x_freq_hz,
+            x_python_freq_hz,
             config.x_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
             config.duration_s,
         )
         y = waveform_tools.make_gaussian_burst(
-            config.y_freq_hz,
+            y_python_freq_hz,
             config.y_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
@@ -495,6 +528,11 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             ch2_delay_cycles=waveform_tools.delay_seconds_to_axis_cycles_by_freq(config.y_delay_s, config.axis_freq_hz),
             duration_s=config.duration_s,
             amplitude=config.amplitude,
+            ch1_scope_freq_hz=config.x_freq_hz,
+            ch2_scope_freq_hz=config.y_freq_hz,
+            ch1_python_freq_hz=x_python_freq_hz,
+            ch2_python_freq_hz=y_python_freq_hz,
+            **_metadata_base(config),
         )
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
@@ -508,6 +546,7 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             loop=config.loop,
             ch1_start=config.x_start,
             ch2_start=config.y_start,
+            **_metadata_base(config),
         )
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
@@ -519,10 +558,10 @@ def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveform
     ch2_config = config.ch2 or ChannelWaveformConfig(waveform_type="off")
     ch3_config = config.ch3 or ChannelWaveformConfig(waveform_type="off")
     ch4_config = config.ch4 or ChannelWaveformConfig(waveform_type="off")
-    x = _make_channel_waveform(ch1_config, config.sample_rate_hz, "ch1")
-    y = _make_channel_waveform(ch2_config, config.sample_rate_hz, "ch2")
-    ch3 = _make_channel_waveform(ch3_config, config.sample_rate_hz, "ch3")
-    ch4 = _make_channel_waveform(ch4_config, config.sample_rate_hz, "ch4")
+    x = _make_channel_waveform(ch1_config, config.sample_rate_hz, config.rfdc_interpolation, "ch1")
+    y = _make_channel_waveform(ch2_config, config.sample_rate_hz, config.rfdc_interpolation, "ch2")
+    ch3 = _make_channel_waveform(ch3_config, config.sample_rate_hz, config.rfdc_interpolation, "ch3")
+    ch4 = _make_channel_waveform(ch4_config, config.sample_rate_hz, config.rfdc_interpolation, "ch4")
     metadata = waveform_tools.build_metadata(
         mode="per-channel",
         sample_rate_hz=config.sample_rate_hz,
@@ -532,25 +571,26 @@ def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveform
         ch2_label=CHANNEL_LABELS["ch2"],
         ch3_label=CHANNEL_LABELS["ch3"],
         ch4_label=CHANNEL_LABELS["ch4"],
-        ch1=_channel_metadata(ch1_config, "ch1", config.axis_freq_hz),
-        ch2=_channel_metadata(ch2_config, "ch2", config.axis_freq_hz),
-        ch3=_channel_metadata(ch3_config, "ch3", config.axis_freq_hz),
-        ch4=_channel_metadata(ch4_config, "ch4", config.axis_freq_hz),
+        ch1=_channel_metadata(ch1_config, "ch1", config.axis_freq_hz, config.rfdc_interpolation),
+        ch2=_channel_metadata(ch2_config, "ch2", config.axis_freq_hz, config.rfdc_interpolation),
+        ch3=_channel_metadata(ch3_config, "ch3", config.axis_freq_hz, config.rfdc_interpolation),
+        ch4=_channel_metadata(ch4_config, "ch4", config.axis_freq_hz, config.rfdc_interpolation),
+        **_metadata_base(config),
     )
     return GeneratedWaveforms(ch1=x, ch2=y, ch3=ch3, ch4=ch4, metadata=metadata)
 
 
-def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, channel_name: str) -> np.ndarray:
+def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, rfdc_interpolation: int, channel_name: str) -> np.ndarray:
     waveform_type = config.waveform_type.lower()
     if waveform_type == "off":
         return np.zeros(host.NUM_SAMPLES, dtype=np.int16)
     if waveform_type == "pulse":
-        return _make_channel_pulse(config, sample_rate_hz, channel_name)
+        return _make_channel_pulse(config, sample_rate_hz, rfdc_interpolation, channel_name)
     if waveform_type == "quantum":
-        return _make_quantum_gate_waveform(config, sample_rate_hz, channel_name)
+        return _make_quantum_gate_waveform(config, sample_rate_hz, rfdc_interpolation, channel_name)
     if waveform_type == "sine":
         return waveform_tools.make_sine(
-            config.freq_hz,
+            python_frequency_hz(config.freq_hz, rfdc_interpolation),
             config.phase_rad,
             config.amplitude,
             sample_rate_hz,
@@ -558,7 +598,7 @@ def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float,
         )
     if waveform_type == "burst":
         wave = waveform_tools.make_gaussian_burst(
-            config.freq_hz,
+            python_frequency_hz(config.freq_hz, rfdc_interpolation),
             config.phase_rad,
             config.amplitude,
             sample_rate_hz,
@@ -572,8 +612,8 @@ def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float,
     raise ValueError(f"Unsupported {channel_name} waveform type: {config.waveform_type}")
 
 
-def _make_channel_pulse(config: ChannelWaveformConfig, sample_rate_hz: float, channel_name: str) -> np.ndarray:
-    pulse = _channel_gaussian_burst(config, sample_rate_hz)
+def _make_channel_pulse(config: ChannelWaveformConfig, sample_rate_hz: float, rfdc_interpolation: int, channel_name: str) -> np.ndarray:
+    pulse = _channel_gaussian_burst(config, sample_rate_hz, rfdc_interpolation)
     preset = config.pulse_preset.lower()
     if preset in ("x", "y"):
         return pulse
@@ -584,12 +624,12 @@ def _make_channel_pulse(config: ChannelWaveformConfig, sample_rate_hz: float, ch
     raise ValueError("pulse preset must be one of: x, y, z")
 
 
-def _make_quantum_gate_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, channel_name: str) -> np.ndarray:
+def _make_quantum_gate_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, rfdc_interpolation: int, channel_name: str) -> np.ndarray:
     gate = config.quantum_gate.lower()
     if gate == "x":
-        return _channel_gaussian_burst(config, sample_rate_hz)
+        return _channel_gaussian_burst(config, sample_rate_hz, rfdc_interpolation)
     if gate == "y":
-        return _channel_gaussian_burst(config, sample_rate_hz, phase_offset_rad=np.pi / 2.0)
+        return _channel_gaussian_burst(config, sample_rate_hz, rfdc_interpolation, phase_offset_rad=np.pi / 2.0)
     if gate == "z":
         pulse = _channel_gaussian_window_pulse(config, sample_rate_hz)
         if channel_name == "ch1":
@@ -598,9 +638,9 @@ def _make_quantum_gate_waveform(config: ChannelWaveformConfig, sample_rate_hz: f
     raise ValueError("quantum gate must be one of: x, y, z")
 
 
-def _channel_gaussian_burst(config: ChannelWaveformConfig, sample_rate_hz: float, phase_offset_rad: float = 0.0) -> np.ndarray:
+def _channel_gaussian_burst(config: ChannelWaveformConfig, sample_rate_hz: float, rfdc_interpolation: int, phase_offset_rad: float = 0.0) -> np.ndarray:
     wave = waveform_tools.make_gaussian_burst(
-        config.freq_hz,
+        python_frequency_hz(config.freq_hz, rfdc_interpolation),
         config.phase_rad + phase_offset_rad,
         config.amplitude,
         sample_rate_hz,
@@ -626,7 +666,8 @@ def _channel_gaussian_window_pulse(config: ChannelWaveformConfig, sample_rate_hz
     return wave
 
 
-def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz: float) -> dict:
+def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz: float, rfdc_interpolation: int) -> dict:
+    python_freq_hz = python_frequency_hz(config.freq_hz, rfdc_interpolation)
     return {
         "label": CHANNEL_LABELS[channel],
         "upload_arg": CHANNEL_UPLOAD_ARGS[channel],
@@ -637,6 +678,8 @@ def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz:
         "semantics": _channel_semantics(config),
         "pulse_backend": _pulse_backend(config),
         "freq_hz": config.freq_hz,
+        "scope_freq_hz": config.freq_hz,
+        "python_freq_hz": python_freq_hz,
         "phase_rad": config.phase_rad,
         "amplitude": config.amplitude,
         "encoding": config.encoding,

@@ -52,7 +52,8 @@ CONTROL_PANEL_WIDTH_PX = 420
 WINDOW_MIN_WIDTH_PX = 1020
 WINDOW_MIN_HEIGHT_PX = 680
 SEND_CONFIRMATION_TITLE = "Confirm send to board"
-GLOBAL_SAMPLE_RATE_LABEL = "Sample rate (GS/s)"
+GLOBAL_SAMPLE_RATE_LABEL = "Python sample rate (GS/s)"
+GLOBAL_RFDC_INTERPOLATION_LABEL = "RFDC interpolation (x)"
 GLOBAL_AXIS_FREQ_LABEL = "AXIS clock (MHz)"
 ILA_CAPTURE_BUTTON_TEXT = "Run ILA Capture + Report"
 ILA_PROGRAM_MODES = ("never", "auto", "always")
@@ -74,7 +75,7 @@ LABELS = {
     "rotation_angle_rad": "Rotation angle (rad)",
     "pulse_sigma_s": "Pulse sigma (ns)",
     "pulse_center_s": "Pulse center (ns)",
-    "freq_hz": "Frequency (MHz)",
+    "freq_hz": "Scope target freq (MHz)",
     "phase_rad": "Phase (rad)",
     "amplitude": "Amplitude (DAC codes)",
     "encoding": "Sine encoding",
@@ -181,6 +182,7 @@ class WaveformSenderApp(ttk.Frame):
         self.timeout_s = tk.StringVar(value=str(connection.timeout_s))
         self.post_upload_sleep_s = tk.StringVar(value=str(connection.post_upload_sleep_s))
         self.sample_rate_hz = tk.StringVar(value=to_display_gsps(defaults.sample_rate_hz))
+        self.rfdc_interpolation = tk.StringVar(value=str(defaults.rfdc_interpolation))
         self.axis_freq_hz = tk.StringVar(value=to_display_mhz(defaults.axis_freq_hz))
         self.loop = tk.BooleanVar(value=defaults.loop)
         self.wait_for_trigger = tk.BooleanVar(value=defaults.wait_for_trigger)
@@ -360,15 +362,16 @@ class WaveformSenderApp(ttk.Frame):
 
         self._add_section_label(setup_controls, "Global Playback", 7)
         self._add_entry(setup_controls, GLOBAL_SAMPLE_RATE_LABEL, self.sample_rate_hz, 8)
-        self._add_entry(setup_controls, GLOBAL_AXIS_FREQ_LABEL, self.axis_freq_hz, 9)
-        ttk.Checkbutton(setup_controls, text="Loop playback", variable=self.loop).grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(setup_controls, text="Wait for trigger", variable=self.wait_for_trigger).grid(row=11, column=0, columnspan=2, sticky="w")
-        ttk.Checkbutton(setup_controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=12, column=0, columnspan=2, sticky="w")
+        self._add_entry(setup_controls, GLOBAL_RFDC_INTERPOLATION_LABEL, self.rfdc_interpolation, 9)
+        self._add_entry(setup_controls, GLOBAL_AXIS_FREQ_LABEL, self.axis_freq_hz, 10)
+        ttk.Checkbutton(setup_controls, text="Loop playback", variable=self.loop).grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(setup_controls, text="Wait for trigger", variable=self.wait_for_trigger).grid(row=12, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(setup_controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=13, column=0, columnspan=2, sticky="w")
 
-        self._add_section_label(setup_controls, "Artifacts", 13)
-        self._add_entry(setup_controls, "Output dir", self.output_dir, 14)
-        ttk.Button(setup_controls, text="Browse", command=self._browse_output_dir).grid(row=15, column=1, sticky="e", pady=(0, 8))
-        self._build_action_buttons(setup_controls, 16)
+        self._add_section_label(setup_controls, "Artifacts", 14)
+        self._add_entry(setup_controls, "Output dir", self.output_dir, 15)
+        ttk.Button(setup_controls, text="Browse", command=self._browse_output_dir).grid(row=16, column=1, sticky="e", pady=(0, 8))
+        self._build_action_buttons(setup_controls, 17)
 
         self.channel_frames = {}
         for index, channel in enumerate(CHANNELS):
@@ -629,6 +632,7 @@ class WaveformSenderApp(ttk.Frame):
             mode="per-channel",
             output_dir=Path(self.output_dir.get()).expanduser(),
             sample_rate_hz=from_display_gsps(self.sample_rate_hz.get()),
+            rfdc_interpolation=self._parse_int(self.rfdc_interpolation.get()),
             axis_freq_hz=from_display_mhz(self.axis_freq_hz.get()),
             loop=bool(self.loop.get()),
             wait_for_trigger=bool(self.wait_for_trigger.get()),
