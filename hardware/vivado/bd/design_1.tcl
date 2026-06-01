@@ -148,7 +148,6 @@ if { $bCheckIPs == 1 } {
    set list_check_ips "\
 xilinx.com:ip:zynq_ultra_ps_e:3.5\
 xilinx.com:ip:usp_rf_data_converter:2.6\
-xilinx.com:ip:proc_sys_reset:5.0\
 xilinx.com:ip:smartconnect:1.0\
 xilinx.com:ip:ddr4:2.2\
 xilinx.com:ip:util_vector_logic:2.0\
@@ -950,15 +949,9 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   set_property -dict $rfdc_config $usp_rf_data_converter_0
 
 
-  # Create instance: rst_ps8_0_99M, and set properties
-  set rst_ps8_0_99M [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps8_0_99M ]
-
-  # Create instance: rst_design_1_184M, and set properties
-  set rst_design_1_184M [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_design_1_184M ]
-  set_property -dict [list \
-    CONFIG.RESET_BOARD_INTERFACE {Custom} \
-    CONFIG.USE_BOARD_FLOW {true} \
-  ] $rst_design_1_184M
+  # Create Chisel reset synchronizer instances.
+  set rst_ps8_0_99M [ create_bd_cell -type module -reference ChiselProcSysReset rst_ps8_0_99M ]
+  set rst_design_1_184M [ create_bd_cell -type module -reference ChiselProcSysReset rst_design_1_184M ]
 
 
   # Create instance: smartconnect_0, and set properties
@@ -1010,8 +1003,20 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   ] $util_vector_logic_0
 
 
-  # Create instance: proc_sys_reset_0, and set properties
-  set proc_sys_reset_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0 ]
+  # Create instance: proc_sys_reset_0
+  set proc_sys_reset_0 [ create_bd_cell -type module -reference ChiselProcSysReset proc_sys_reset_0 ]
+
+  set reset_const_low [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 reset_const_low ]
+  set_property -dict [list \
+    CONFIG.CONST_VAL {0} \
+    CONFIG.CONST_WIDTH {1} \
+  ] $reset_const_low
+
+  set reset_const_high [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 reset_const_high ]
+  set_property -dict [list \
+    CONFIG.CONST_VAL {1} \
+    CONFIG.CONST_WIDTH {1} \
+  ] $reset_const_high
 
   if { $custom_target } {
     set dac_axis_dcm_locked [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 dac_axis_dcm_locked ]
@@ -1090,7 +1095,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     [get_bd_pins usp_rf_data_converter_0/s0_axis_aclk] \
     [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
     [get_bd_pins usp_rf_data_converter_0/s3_axis_aclk] \
-    [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
+    [get_bd_pins rst_design_1_184M/io_slowest_sync_clk] \
     [get_bd_ports clk_dac2] \
     [get_bd_ports dac_axis_clk]
   } else {
@@ -1099,7 +1104,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     [get_bd_ports clk_dac2]
     connect_bd_net -net dac_axis_clk_1 [get_bd_pins clk_wiz_dac_axis_0/clk_out1] \
     [get_bd_pins usp_rf_data_converter_0/s2_axis_aclk] \
-    [get_bd_pins rst_design_1_184M/slowest_sync_clk] \
+    [get_bd_pins rst_design_1_184M/io_slowest_sync_clk] \
     [get_bd_ports dac_axis_clk]
   }
   if { $target ne "custom_xczu47dr" } {
@@ -1111,48 +1116,56 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins smartconnect_2/aclk] \
   [get_bd_pins zynq_ultra_ps_e_0/saxihp1_fpd_aclk] \
   [get_bd_pins zynq_ultra_ps_e_0/maxihpm1_fpd_aclk] \
-  [get_bd_pins proc_sys_reset_0/slowest_sync_clk] \
+  [get_bd_pins proc_sys_reset_0/io_slowest_sync_clk] \
   [get_bd_ports ddr4_ui_clk]
   connect_bd_net -net ddr4_0_c0_ddr4_ui_clk_sync_rst  [get_bd_pins ddr4_0/c0_ddr4_ui_clk_sync_rst] \
-  [get_bd_pins proc_sys_reset_0/aux_reset_in]
+  [get_bd_pins proc_sys_reset_0/io_aux_reset_in]
+  connect_bd_net -net reset_const_low [get_bd_pins reset_const_low/dout] \
+  [get_bd_pins rst_ps8_0_99M/io_aux_reset_in] \
+  [get_bd_pins rst_design_1_184M/io_aux_reset_in]
+  connect_bd_net -net reset_const_high [get_bd_pins reset_const_high/dout] \
+  [get_bd_pins rst_ps8_0_99M/io_dcm_locked] \
+  [get_bd_pins proc_sys_reset_0/io_dcm_locked]
   connect_bd_net -net pl_ps_irq_1  [get_bd_ports pl_ps_irq] \
   [get_bd_pins zynq_ultra_ps_e_0/pl_ps_irq0]
-  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn  [get_bd_pins proc_sys_reset_0/peripheral_aresetn] \
+  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn  [get_bd_pins proc_sys_reset_0/io_peripheral_aresetn] \
   [get_bd_pins ddr4_0/c0_ddr4_aresetn] \
   [get_bd_pins smartconnect_2/aresetn] \
   [get_bd_ports ddr4_ui_aresetn]
-  connect_bd_net -net rst_design_1_184M_peripheral_aresetn  [get_bd_pins rst_design_1_184M/peripheral_aresetn] \
+  connect_bd_net -net rst_design_1_184M_peripheral_aresetn  [get_bd_pins rst_design_1_184M/io_peripheral_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s0_axis_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn] \
   [get_bd_ports clk104_aresetn]
   if { $custom_target } {
     connect_bd_net -net rst_design_1_184M_peripheral_aresetn [get_bd_pins usp_rf_data_converter_0/s3_axis_aresetn]
   }
-  connect_bd_net -net rst_ps8_0_99M_peripheral_aresetn  [get_bd_pins rst_ps8_0_99M/peripheral_aresetn] \
+  connect_bd_net -net rst_ps8_0_99M_peripheral_aresetn  [get_bd_pins rst_ps8_0_99M/io_peripheral_aresetn] \
   [get_bd_pins usp_rf_data_converter_0/s_axi_aresetn] \
   [get_bd_pins smartconnect_0/aresetn] \
   [get_bd_ports pl_aresetn]
   connect_bd_net -net util_vector_logic_0_Res  [get_bd_pins util_vector_logic_0/Res] \
   [get_bd_pins ddr4_0/sys_rst]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0  [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
-  [get_bd_pins rst_ps8_0_99M/slowest_sync_clk] \
+  [get_bd_pins rst_ps8_0_99M/io_slowest_sync_clk] \
   [get_bd_pins usp_rf_data_converter_0/s_axi_aclk] \
   [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk] \
   [get_bd_pins zynq_ultra_ps_e_0/saxihp0_fpd_aclk] \
   [get_bd_pins smartconnect_0/aclk] \
   [get_bd_ports pl_clk]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0  [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0] \
-  [get_bd_pins rst_ps8_0_99M/ext_reset_in] \
-  [get_bd_pins rst_design_1_184M/ext_reset_in] \
+  [get_bd_pins rst_ps8_0_99M/io_ext_reset_in] \
+  [get_bd_pins rst_design_1_184M/io_ext_reset_in] \
   [get_bd_pins util_vector_logic_0/Op1] \
-  [get_bd_pins proc_sys_reset_0/ext_reset_in]
+  [get_bd_pins proc_sys_reset_0/io_ext_reset_in]
   set rst_design_1_300M_ext_reset [get_bd_pins -quiet rst_design_1_300M/ext_reset_in]
   if { [llength $rst_design_1_300M_ext_reset] != 0 } {
     connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 $rst_design_1_300M_ext_reset
   }
   if { $target eq "custom_xczu47dr" } {
     connect_bd_net -net dac_axis_dcm_locked [get_bd_pins dac_axis_dcm_locked/dout] \
-    [get_bd_pins rst_design_1_184M/dcm_locked]
+    [get_bd_pins rst_design_1_184M/io_dcm_locked]
+  } else {
+    connect_bd_net -net reset_const_high [get_bd_pins rst_design_1_184M/io_dcm_locked]
   }
 
   # Create address segments
