@@ -116,9 +116,9 @@ Custom `TARGET=custom_xczu47dr` outputs:
 
 The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
 
-For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 120 MHz DAC refclk outputs used by the 4.8 GS/s RFDC configuration. Firmware bypasses the ZCU216 CLK104/LMK/LMX path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
+For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 120 MHz DAC refclk outputs used by the 2.4 GS/s RFDC configuration. Firmware bypasses the ZCU216 CLK104/LMK/LMX path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
 
-The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1.2 GS/s sample rate for the 4.8 GS/s RFDC interpolation path. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
+The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1.2 GS/s sample rate for the 2.4 GS/s RFDC interpolation path. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
 
 Deferred custom-board interfaces include PCIe, QSFP, SFP, Type-C, Aurora, and extra PL DDR unless later work requests them.
 

@@ -51,6 +51,23 @@ python3 software/send_waveform_udp.py golden \
   --udp-source-ip 192.168.1.10
 ```
 
+2 GHz Zone2 scope test on Tile2 DAC20/DAC22 with the 2.4 GS/s RFDC rate:
+
+```bash
+python3 software/send_waveform_udp.py sine \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --sample-rate-hz 1200000000 \
+  --ch1-freq-hz 400000000 \
+  --ch2-freq-hz 400000000 \
+  --ch3-mode off \
+  --ch4-mode off \
+  --loop
+```
+
+With DAC Fs = 2.4 GS/s and Tile2 DAC20/DAC22 in Zone2, a 400 MHz host tone appears as the second-Nyquist image near 2.0 GHz.
+
 Dry run without touching the board:
 
 ```bash
