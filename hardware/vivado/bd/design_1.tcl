@@ -150,7 +150,6 @@ xilinx.com:ip:zynq_ultra_ps_e:3.5\
 xilinx.com:ip:usp_rf_data_converter:2.6\
 xilinx.com:ip:smartconnect:1.0\
 xilinx.com:ip:ddr4:2.2\
-xilinx.com:ip:util_vector_logic:2.0\
 "
 
    set list_ips_missing ""
@@ -995,35 +994,18 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     CONFIG.NUM_SI {2} \
   ] $smartconnect_2
 
-  # Create instance: util_vector_logic_0, and set properties
-  set util_vector_logic_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 util_vector_logic_0 ]
-  set_property -dict [list \
-    CONFIG.C_OPERATION {not} \
-    CONFIG.C_SIZE {1} \
-  ] $util_vector_logic_0
+  # Create simple Chisel glue module instances.
+  set util_vector_logic_0 [ create_bd_cell -type module -reference ChiselInvert1 util_vector_logic_0 ]
 
 
   # Create instance: proc_sys_reset_0
   set proc_sys_reset_0 [ create_bd_cell -type module -reference ChiselProcSysReset proc_sys_reset_0 ]
 
-  set reset_const_low [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 reset_const_low ]
-  set_property -dict [list \
-    CONFIG.CONST_VAL {0} \
-    CONFIG.CONST_WIDTH {1} \
-  ] $reset_const_low
-
-  set reset_const_high [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 reset_const_high ]
-  set_property -dict [list \
-    CONFIG.CONST_VAL {1} \
-    CONFIG.CONST_WIDTH {1} \
-  ] $reset_const_high
+  set reset_const_low [ create_bd_cell -type module -reference ChiselConstLow reset_const_low ]
+  set reset_const_high [ create_bd_cell -type module -reference ChiselConstHigh reset_const_high ]
 
   if { $custom_target } {
-    set dac_axis_dcm_locked [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 dac_axis_dcm_locked ]
-    set_property -dict [ list \
-      CONFIG.CONST_VAL {1} \
-      CONFIG.CONST_WIDTH {1} \
-    ] $dac_axis_dcm_locked
+    set dac_axis_dcm_locked [ create_bd_cell -type module -reference ChiselConstHigh dac_axis_dcm_locked ]
   } else {
     # Create instance: clk_wiz_dac_axis_0, and set properties
     set clk_wiz_dac_axis_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_dac_axis_0 ]
@@ -1120,10 +1102,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_ports ddr4_ui_clk]
   connect_bd_net -net ddr4_0_c0_ddr4_ui_clk_sync_rst  [get_bd_pins ddr4_0/c0_ddr4_ui_clk_sync_rst] \
   [get_bd_pins proc_sys_reset_0/io_aux_reset_in]
-  connect_bd_net -net reset_const_low [get_bd_pins reset_const_low/dout] \
+  connect_bd_net -net reset_const_low [get_bd_pins reset_const_low/io_dout] \
   [get_bd_pins rst_ps8_0_99M/io_aux_reset_in] \
   [get_bd_pins rst_design_1_184M/io_aux_reset_in]
-  connect_bd_net -net reset_const_high [get_bd_pins reset_const_high/dout] \
+  connect_bd_net -net reset_const_high [get_bd_pins reset_const_high/io_dout] \
   [get_bd_pins rst_ps8_0_99M/io_dcm_locked] \
   [get_bd_pins proc_sys_reset_0/io_dcm_locked]
   connect_bd_net -net pl_ps_irq_1  [get_bd_ports pl_ps_irq] \
@@ -1143,7 +1125,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins usp_rf_data_converter_0/s_axi_aresetn] \
   [get_bd_pins smartconnect_0/aresetn] \
   [get_bd_ports pl_aresetn]
-  connect_bd_net -net util_vector_logic_0_Res  [get_bd_pins util_vector_logic_0/Res] \
+  connect_bd_net -net util_vector_logic_0_Res  [get_bd_pins util_vector_logic_0/io_Res] \
   [get_bd_pins ddr4_0/sys_rst]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0  [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
   [get_bd_pins rst_ps8_0_99M/io_slowest_sync_clk] \
@@ -1155,14 +1137,14 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0  [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0] \
   [get_bd_pins rst_ps8_0_99M/io_ext_reset_in] \
   [get_bd_pins rst_design_1_184M/io_ext_reset_in] \
-  [get_bd_pins util_vector_logic_0/Op1] \
+  [get_bd_pins util_vector_logic_0/io_Op1] \
   [get_bd_pins proc_sys_reset_0/io_ext_reset_in]
   set rst_design_1_300M_ext_reset [get_bd_pins -quiet rst_design_1_300M/ext_reset_in]
   if { [llength $rst_design_1_300M_ext_reset] != 0 } {
     connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 $rst_design_1_300M_ext_reset
   }
   if { $target eq "custom_xczu47dr" } {
-    connect_bd_net -net dac_axis_dcm_locked [get_bd_pins dac_axis_dcm_locked/dout] \
+    connect_bd_net -net dac_axis_dcm_locked [get_bd_pins dac_axis_dcm_locked/io_dout] \
     [get_bd_pins rst_design_1_184M/io_dcm_locked]
   } else {
     connect_bd_net -net reset_const_high [get_bd_pins rst_design_1_184M/io_dcm_locked]
