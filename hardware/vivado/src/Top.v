@@ -94,12 +94,39 @@ module Top (
   // ========== clocks / resets from design_1 ==========
   wire        pl_clk;
   wire        pl_aresetn;
+  wire        pl_resetn0;
   wire        pl_ps_irq;
   wire        clk_dac2;
   wire        dac_axis_clk;
   wire        clk104_aresetn;
   wire        ddr4_ui_clk;
   wire        ddr4_ui_aresetn;
+  wire        ddr4_ui_clk_sync_rst;
+  ChiselProcSysReset u_pl_reset (
+    .io_slowest_sync_clk(pl_clk),
+    .io_ext_reset_in(pl_resetn0),
+    .io_aux_reset_in(1'b0),
+    .io_dcm_locked(1'b1),
+    .io_peripheral_aresetn(pl_aresetn)
+  );
+
+  ChiselProcSysReset u_clk104_reset (
+    .io_slowest_sync_clk(dac_axis_clk),
+    .io_ext_reset_in(pl_resetn0),
+    .io_aux_reset_in(1'b0),
+    .io_dcm_locked(1'b1),
+    .io_peripheral_aresetn(clk104_aresetn)
+  );
+
+  ChiselProcSysReset u_ddr4_ui_reset (
+    .io_slowest_sync_clk(ddr4_ui_clk),
+    .io_ext_reset_in(pl_resetn0),
+    .io_aux_reset_in(ddr4_ui_clk_sync_rst),
+    .io_dcm_locked(1'b1),
+    .io_peripheral_aresetn(ddr4_ui_aresetn)
+  );
+
+
   reg  [1:0]  hmc7044_clk_div;
   wire        hmc7044_clk_25m;
   wire        hmc7044_set_finish;
@@ -965,12 +992,14 @@ module Top (
   design_1 design_1_i (
       .pl_clk(pl_clk),
       .pl_aresetn(pl_aresetn),
+      .pl_resetn0(pl_resetn0),
       .pl_ps_irq(pl_ps_irq),
       .clk_dac2(clk_dac2),
       .dac_axis_clk(dac_axis_clk),
       .clk104_aresetn(clk104_aresetn),
       .ddr4_ui_clk(ddr4_ui_clk),
       .ddr4_ui_aresetn(ddr4_ui_aresetn),
+      .ddr4_ui_clk_sync_rst(ddr4_ui_clk_sync_rst),
 
 `ifndef CUSTOM_XCZU47DR
       .adc2_clk_clk_n(adc2_clk_clk_n),
@@ -1206,6 +1235,23 @@ module Top (
   );
 
   assign M_AXI_GPIO_rdata = axigpio_rdata | {hmc7044_set_finish, 31'b0};
+
+
+  ila_s_axi_01 u_ila_s_axi_01 (
+    .clk(ddr4_ui_clk),
+    .probe0(M_AXI_DM_araddr),
+    .probe1(M_AXI_DM_arlen),
+    .probe2(M_AXI_DM_arsize),
+    .probe3({M_AXI_DM_arvalid, M_AXI_DM_arready, M_AXI_DM_rvalid, M_AXI_DM_rready}),
+    .probe4(M_AXI_DM_rdata),
+    .probe5(M_AXI_DM_rresp),
+    .probe6(M_AXI_WAVE_awaddr),
+    .probe7(M_AXI_WAVE_awlen),
+    .probe8(M_AXI_WAVE_awsize),
+    .probe9({M_AXI_WAVE_awvalid, M_AXI_WAVE_awready, M_AXI_WAVE_wvalid, M_AXI_WAVE_wready}),
+    .probe10(M_AXI_WAVE_wdata),
+    .probe11({M_AXI_WAVE_bvalid, M_AXI_WAVE_bready, M_AXI_WAVE_bresp})
+  );
 
   ila_udp_ddr u_ila_udp_ddr (
     .clk(ddr4_ui_clk),

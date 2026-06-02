@@ -171,6 +171,14 @@ if {[file exists ${ila_dac_axis_script}]} {
     puts "WARN: DAC-domain ILA script not found: ${ila_dac_axis_script}"
 }
 
+set ila_s_axi_01_script "${script_path}/ila_s_axi_01.tcl"
+if {[file exists ${ila_s_axi_01_script}]} {
+    source ${ila_s_axi_01_script}
+    puts "INFO: S_AXI_01 ILA IP created"
+} else {
+    puts "WARN: S_AXI_01 ILA script not found: ${ila_s_axi_01_script}"
+}
+
 # Create and configure Block Design
 puts "INFO: Creating Block Design..."
 set bd_script "${vivado_dir}/bd/design_1.tcl"
