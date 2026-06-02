@@ -100,7 +100,7 @@ done
 if [ "$CLEAN_FIRST" = true ]; then
     print_warn "Cleaning previous build..."
     rm -rf "${WORK_DIR}"
-    rm -rf "${OUTPUT_DIR}"/*.bit "${OUTPUT_DIR}"/*.ltx "${OUTPUT_DIR}"/*.xsa
+    rm -rf "${OUTPUT_DIR}"/*.bit "${OUTPUT_DIR}"/*.ltx "${OUTPUT_DIR}"/*.xsa "${OUTPUT_DIR}"/*.rpt
     mkdir -p "${OUTPUT_DIR}"
     print_info "Clean complete"
 fi
