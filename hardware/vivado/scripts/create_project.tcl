@@ -42,6 +42,31 @@ if {$target eq "custom_xczu47dr"} {
     set_property verilog_define {CUSTOM_XCZU47DR} [current_fileset]
 }
 
+set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
+if {$target eq "custom_xczu47dr"} {
+    if {![file exists ${rfdc_generated_config}]} {
+        puts "ERROR: Missing generated RFDC configuration: ${rfdc_generated_config}"
+        puts "ERROR: Run hardware/chisel/build.sh rfdc or make chisel TARGET=custom_xczu47dr first."
+        exit 1
+    }
+    source ${rfdc_generated_config}
+
+    puts "INFO: Creating project-level RFDC IP outside block design"
+    set rfdc_ip_dir "${vivado_dir}/ip"
+    file mkdir ${rfdc_ip_dir}
+    create_ip -force -name usp_rf_data_converter -vendor xilinx.com -library ip -version 2.6 \
+        -module_name rfdc_custom_xczu47dr_ip -dir ${rfdc_ip_dir}
+    set rfdc_ip [get_ips rfdc_custom_xczu47dr_ip]
+    set_property -dict [::rfdc_custom_xczu47dr::config] ${rfdc_ip}
+    set rfdc_ip_file [get_files -quiet "${rfdc_ip_dir}/rfdc_custom_xczu47dr_ip/rfdc_custom_xczu47dr_ip.xci"]
+    if {[llength ${rfdc_ip_file}] == 0} {
+        puts "ERROR: RFDC IP XCI not found after create_ip"
+        exit 1
+    }
+    set_property generate_synth_checkpoint true ${rfdc_ip_file}
+    generate_target all ${rfdc_ip_file}
+}
+
 # Add Chisel generated Verilog files
 set chisel_dir "${vivado_dir}/../chisel/generated"
 if {[file exists ${chisel_dir}]} {

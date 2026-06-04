@@ -48,7 +48,9 @@ if {[llength ${bd_file}] > 0} {
     puts "INFO: Regenerating Block Design targets before implementation"
     generate_target all ${bd_file}
 
-    set rfdc_runs [get_runs -quiet design_1_usp_rf_data_converter_0_0_synth_1]
+    set rfdc_runs [concat \
+        [get_runs -quiet design_1_usp_rf_data_converter_0_0_synth_1] \
+        [get_runs -quiet rfdc_custom_xczu47dr_ip_synth_1]]
     if {[llength ${rfdc_runs}] > 0} {
         puts "INFO: Ensuring RFDC OOC checkpoint is generated"
         foreach rfdc_run ${rfdc_runs} {

@@ -97,11 +97,19 @@ module Top (
   wire        pl_resetn0;
   wire        pl_ps_irq;
   wire        clk_dac2;
+  wire        clk_dac3;
   wire        dac_axis_clk;
+  wire        rfdc_irq;
   wire        clk104_aresetn;
   wire        ddr4_ui_clk;
   wire        ddr4_ui_aresetn;
   wire        ddr4_ui_clk_sync_rst;
+
+  assign pl_ps_irq = 1'b0;
+
+`ifdef CUSTOM_XCZU47DR
+  assign dac_axis_clk = clk_dac2;
+`endif
   ChiselProcSysReset u_pl_reset (
     .io_slowest_sync_clk(pl_clk),
     .io_ext_reset_in(pl_resetn0),
@@ -989,13 +997,39 @@ module Top (
   wire [3:0]  M_AXI_GPIO_wstrb;
   wire        M_AXI_GPIO_wvalid;
 
+`ifdef CUSTOM_XCZU47DR
+  wire [17:0] M_AXI_RFDC_araddr;
+  wire        M_AXI_RFDC_arready;
+  wire        M_AXI_RFDC_arvalid;
+
+  wire [17:0] M_AXI_RFDC_awaddr;
+  wire        M_AXI_RFDC_awready;
+  wire        M_AXI_RFDC_awvalid;
+
+  wire        M_AXI_RFDC_bready;
+  wire [1:0]  M_AXI_RFDC_bresp;
+  wire        M_AXI_RFDC_bvalid;
+
+  wire [31:0] M_AXI_RFDC_rdata;
+  wire        M_AXI_RFDC_rready;
+  wire [1:0]  M_AXI_RFDC_rresp;
+  wire        M_AXI_RFDC_rvalid;
+
+  wire [31:0] M_AXI_RFDC_wdata;
+  wire        M_AXI_RFDC_wready;
+  wire [3:0]  M_AXI_RFDC_wstrb;
+  wire        M_AXI_RFDC_wvalid;
+`endif
+
   design_1 design_1_i (
       .pl_clk(pl_clk),
       .pl_aresetn(pl_aresetn),
       .pl_resetn0(pl_resetn0),
       .pl_ps_irq(pl_ps_irq),
+`ifndef CUSTOM_XCZU47DR
       .clk_dac2(clk_dac2),
       .dac_axis_clk(dac_axis_clk),
+`endif
       .clk104_aresetn(clk104_aresetn),
       .ddr4_ui_clk(ddr4_ui_clk),
       .ddr4_ui_aresetn(ddr4_ui_aresetn),
@@ -1005,10 +1039,12 @@ module Top (
       .adc2_clk_clk_n(adc2_clk_clk_n),
       .adc2_clk_clk_p(adc2_clk_clk_p),
 `endif
+`ifndef CUSTOM_XCZU47DR
       .dac2_clk_clk_n(dac2_clk_clk_n),
       .dac2_clk_clk_p(dac2_clk_clk_p),
       .sysref_in_diff_n(sysref_in_diff_n),
       .sysref_in_diff_p(sysref_in_diff_p),
+`endif
 `ifndef CUSTOM_XCZU47DR
        .adc3_clk_clk_n(adc3_clk_clk_n),
       .adc3_clk_clk_p(adc3_clk_clk_p),
@@ -1022,15 +1058,13 @@ module Top (
       .vin30_v_n(vin30_v_n),
       .vin30_v_p(vin30_v_p),
 `endif
+`ifndef CUSTOM_XCZU47DR
       .vout20_v_n(vout20_v_n),
       .vout20_v_p(vout20_v_p),
       .vout22_v_n(vout22_v_n),
       .vout22_v_p(vout22_v_p),
       .vout30_v_n(vout30_v_n),
       .vout30_v_p(vout30_v_p),
-`ifdef CUSTOM_XCZU47DR
-      .vout32_v_n(vout32_v_n),
-      .vout32_v_p(vout32_v_p),
 `endif
 
       .c0_sys_clk_n(c0_sys_clk_n),
@@ -1127,6 +1161,27 @@ module Top (
       .M_AXI_INST_wstrb(M_AXI_INST_wstrb),
       .M_AXI_INST_wvalid(M_AXI_INST_wvalid),
 
+`ifdef CUSTOM_XCZU47DR
+      .M_AXI_RFDC_araddr(M_AXI_RFDC_araddr),
+      .M_AXI_RFDC_arready(M_AXI_RFDC_arready),
+      .M_AXI_RFDC_arvalid(M_AXI_RFDC_arvalid),
+      .M_AXI_RFDC_awaddr(M_AXI_RFDC_awaddr),
+      .M_AXI_RFDC_awready(M_AXI_RFDC_awready),
+      .M_AXI_RFDC_awvalid(M_AXI_RFDC_awvalid),
+      .M_AXI_RFDC_bready(M_AXI_RFDC_bready),
+      .M_AXI_RFDC_bresp(M_AXI_RFDC_bresp),
+      .M_AXI_RFDC_bvalid(M_AXI_RFDC_bvalid),
+      .M_AXI_RFDC_rdata(M_AXI_RFDC_rdata),
+      .M_AXI_RFDC_rready(M_AXI_RFDC_rready),
+      .M_AXI_RFDC_rresp(M_AXI_RFDC_rresp),
+      .M_AXI_RFDC_rvalid(M_AXI_RFDC_rvalid),
+      .M_AXI_RFDC_wdata(M_AXI_RFDC_wdata),
+      .M_AXI_RFDC_wready(M_AXI_RFDC_wready),
+      .M_AXI_RFDC_wstrb(M_AXI_RFDC_wstrb),
+      .M_AXI_RFDC_wvalid(M_AXI_RFDC_wvalid),
+`endif
+
+`ifndef CUSTOM_XCZU47DR
       .S_AXIS_20_tdata(dac_in_ch1_tdata),
       .S_AXIS_20_tvalid(dac_ch1_valid_gated),
       .S_AXIS_20_tready(dac_ch1_ready),
@@ -1138,10 +1193,6 @@ module Top (
       .S_AXIS_30_tdata(dac_in_ch3_tdata),
       .S_AXIS_30_tvalid(dac_ch3_valid_gated),
       .S_AXIS_30_tready(dac_ch3_ready),
-`ifdef CUSTOM_XCZU47DR
-      .S_AXIS_32_tdata(dac_in_ch4_tdata),
-      .S_AXIS_32_tvalid(dac_ch4_valid_gated),
-      .S_AXIS_32_tready(dac_ch4_ready),
 `endif
 
       // GPIO AXI master (M_AXI_GPIO) - stub pass-through in this file
@@ -1185,6 +1236,61 @@ module Top (
       .M_AXI_GPIO_wstrb  (M_AXI_GPIO_wstrb),
       .M_AXI_GPIO_wvalid (M_AXI_GPIO_wvalid)
   );
+
+`ifdef CUSTOM_XCZU47DR
+  RfdcCustomXczu47dr rfdc_custom_i (
+      .s_axi_aclk(pl_clk),
+      .s_axi_aresetn(pl_aresetn),
+      .s_axi_awaddr(M_AXI_RFDC_awaddr),
+      .s_axi_awvalid(M_AXI_RFDC_awvalid),
+      .s_axi_awready(M_AXI_RFDC_awready),
+      .s_axi_wdata(M_AXI_RFDC_wdata),
+      .s_axi_wstrb(M_AXI_RFDC_wstrb),
+      .s_axi_wvalid(M_AXI_RFDC_wvalid),
+      .s_axi_wready(M_AXI_RFDC_wready),
+      .s_axi_bresp(M_AXI_RFDC_bresp),
+      .s_axi_bvalid(M_AXI_RFDC_bvalid),
+      .s_axi_bready(M_AXI_RFDC_bready),
+      .s_axi_araddr(M_AXI_RFDC_araddr),
+      .s_axi_arvalid(M_AXI_RFDC_arvalid),
+      .s_axi_arready(M_AXI_RFDC_arready),
+      .s_axi_rdata(M_AXI_RFDC_rdata),
+      .s_axi_rresp(M_AXI_RFDC_rresp),
+      .s_axi_rvalid(M_AXI_RFDC_rvalid),
+      .s_axi_rready(M_AXI_RFDC_rready),
+      .sysref_in_p(sysref_in_diff_p),
+      .sysref_in_n(sysref_in_diff_n),
+      .dac2_clk_p(dac2_clk_clk_p),
+      .dac2_clk_n(dac2_clk_clk_n),
+      .clk_dac2(clk_dac2),
+      .s2_axis_aclk(dac_axis_clk),
+      .s2_axis_aresetn(clk104_aresetn),
+      .clk_dac3(clk_dac3),
+      .s3_axis_aclk(dac_axis_clk),
+      .s3_axis_aresetn(clk104_aresetn),
+      .vout20_p(vout20_v_p),
+      .vout20_n(vout20_v_n),
+      .vout22_p(vout22_v_p),
+      .vout22_n(vout22_v_n),
+      .vout30_p(vout30_v_p),
+      .vout30_n(vout30_v_n),
+      .vout32_p(vout32_v_p),
+      .vout32_n(vout32_v_n),
+      .s20_axis_tdata(dac_in_ch1_tdata),
+      .s20_axis_tvalid(dac_ch1_valid_gated),
+      .s20_axis_tready(dac_ch1_ready),
+      .s22_axis_tdata(dac_in_ch2_tdata),
+      .s22_axis_tvalid(dac_ch2_valid_gated),
+      .s22_axis_tready(dac_ch2_ready),
+      .s30_axis_tdata(dac_in_ch3_tdata),
+      .s30_axis_tvalid(dac_ch3_valid_gated),
+      .s30_axis_tready(dac_ch3_ready),
+      .s32_axis_tdata(dac_in_ch4_tdata),
+      .s32_axis_tvalid(dac_ch4_valid_gated),
+      .s32_axis_tready(dac_ch4_ready),
+      .irq(rfdc_irq)
+  );
+`endif
 
   // ==========================================================
   // GPIO IP（stub）—— 输出 gpio_out_reg
