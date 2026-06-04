@@ -63,6 +63,12 @@ case "$1" in
         print_info "Glue Verilog generated in ${OUTPUT_DIR}"
         ;;
 
+    rfdc)
+        print_info "Generating RFDC Vivado configuration..."
+        mill rfdc.run
+        print_info "RFDC Vivado configuration generated in ${OUTPUT_DIR}"
+        ;;
+
     all)
         print_info "Generating all modules..."
         print_info "Building LED module..."
@@ -73,25 +79,28 @@ case "$1" in
         mill reset.run
         print_info "Building glue modules..."
         mill glue.run
-        print_info "All Verilog files generated in ${OUTPUT_DIR}"
+        print_info "Building RFDC Vivado configuration..."
+        mill rfdc.run
+        print_info "All generated files written to ${OUTPUT_DIR}"
         ;;
 
     clean)
         print_warn "Cleaning build artifacts..."
         rm -rf out/
-        rm -rf "${OUTPUT_DIR}"/*.v "${OUTPUT_DIR}"/*.sv
+        rm -rf "${OUTPUT_DIR}"/*.v "${OUTPUT_DIR}"/*.sv "${OUTPUT_DIR}"/*.tcl
         print_info "Clean complete"
         ;;
 
     *)
-        echo "Usage: $0 {led|gpio|reset|glue|all|clean}"
+        echo "Usage: $0 {led|gpio|reset|glue|rfdc|all|clean}"
         echo ""
         echo "Commands:"
         echo "  led    - Generate LED module Verilog"
         echo "  gpio   - Generate GPIO module Verilog"
         echo "  reset  - Generate reset module Verilog"
         echo "  glue   - Generate glue module Verilog"
-        echo "  all    - Generate all modules"
+        echo "  rfdc   - Generate RFDC Vivado configuration Tcl"
+        echo "  all    - Generate all modules and RFDC Vivado configuration"
         echo "  clean  - Remove build artifacts"
         echo ""
         echo "Output directory: ${OUTPUT_DIR}"

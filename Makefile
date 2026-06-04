@@ -116,9 +116,9 @@ check-tools:
 	@command -v python3 >/dev/null || { echo "ERROR: python3 not found."; exit 1; }
 
 chisel:
-	$(MAKE) -C $(CHISEL_DIR) all
+	cd $(CHISEL_DIR) && ./build.sh all
 
-vivado-project:
+vivado-project: chisel
 	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/create_project.tcl -tclargs $(TARGET)
 
 synth: vivado-project

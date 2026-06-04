@@ -66,7 +66,7 @@ chisel/
 ./build.sh all
 ```
 
-This generates Verilog for all modules in the `generated/` directory.
+This generates Verilog modules and generated Vivado Tcl configuration files in the `generated/` directory.
 
 ### Generate Specific Modules
 
@@ -76,6 +76,9 @@ This generates Verilog for all modules in the `generated/` directory.
 
 # GPIO controller only
 ./build.sh gpio
+
+# RFDC Vivado IP configuration only
+./build.sh rfdc
 ```
 
 ### Clean Build Artifacts
@@ -87,12 +90,15 @@ This generates Verilog for all modules in the `generated/` directory.
 ## Build Script Usage
 
 ```bash
-./build.sh {led|gpio|all|clean}
+./build.sh {led|gpio|reset|glue|rfdc|all|clean}
 
 Commands:
   led    - Generate LED module Verilog
   gpio   - Generate GPIO module Verilog
-  all    - Generate all modules
+  reset  - Generate reset module Verilog
+  glue   - Generate glue module Verilog
+  rfdc   - Generate RFDC Vivado configuration Tcl
+  all    - Generate all modules and RFDC Vivado configuration
   clean  - Remove build artifacts
 
 Output directory: generated/
@@ -133,6 +139,17 @@ Extended GPIO functionality with interrupt support.
 **Parameters:**
 - `numPins`: Number of GPIO pins
 - `hasInterrupt`: Enable interrupt support
+
+### RFDC Vivado Configuration (`rfdc/`)
+
+Generates `generated/rfdc_custom_xczu47dr_config.tcl`, which is sourced by the
+Vivado block-design script for `TARGET=custom_xczu47dr`. This keeps the RFDC as
+the Xilinx `usp_rf_data_converter` hard IP while moving the custom-board RFDC
+parameter set into the Chisel/Scala generation flow.
+
+**Generated Files:**
+- `rfdc_custom_xczu47dr_config.tcl` - DAC tile/slice enables, 125 MHz refclk,
+  5.0 GS/s sampling, 312.5 MHz fabric clocks, and Zone2 settings.
 
 ### AXI DMA (`axidma/`)
 
