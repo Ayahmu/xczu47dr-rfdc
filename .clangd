@@ -1,0 +1,13 @@
+CompileFlags:
+  Add:
+    - --target=aarch64-none-elf
+    - --sysroot=/tools/Xilinx/Vitis/2024.2/gnu/aarch64/lin/aarch64-none/aarch64-xilinx-elf
+    - -DBOARD_CUSTOM_XCZU47DR
+    - -D__BAREMETAL__
+    - -isystem/tools/Xilinx/Vitis/2024.2/gnu/aarch64/lin/aarch64-none/aarch64-xilinx-elf/usr/include
+    - -isystem/tools/Xilinx/Vitis/2024.2/gnu/aarch64/lin/aarch64-none/lib/aarch64-xilinx-elf/gcc/aarch64-xilinx-elf/13.3.0/include
+    - -I/home/kyu/workspace/xczu47dr-rfdc/firmware/src
+    - -I/home/kyu/workspace/xczu47dr-rfdc/firmware/workspace/custom_xczu47dr/rfdc_app/src
+    - -I/home/kyu/workspace/xczu47dr-rfdc/firmware/workspace/custom_xczu47dr/hw_platform/export/hw_platform/sw/hw_platform/standalone_domain/bspinclude/include
+    - -I/home/kyu/workspace/xczu47dr-rfdc/firmware/workspace/custom_xczu47dr/hw_platform/psu_cortexa53_0/standalone_domain/bsp/psu_cortexa53_0/libsrc/standalone_v9_2/src/arm/ARMv8/64bit/armclang
+  Compiler: /tools/Xilinx/Vitis/2024.2/gnu/aarch64/lin/aarch64-none/bin/aarch64-none-elf-gcc
