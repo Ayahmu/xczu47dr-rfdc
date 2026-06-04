@@ -15,6 +15,12 @@
 
 /******************** Constant Definitions **********************************/
 
+#if defined(BOARD_CUSTOM_XCZU47DR) && !defined(XPAR_XRFDC_NUM_INSTANCES)
+#define XPAR_XRFDC_NUM_INSTANCES 1U
+#define XPAR_XRFDC_0_DEVICE_ID 0U
+#define XPAR_XRFDC_0_BASEADDR 0xA0040000U
+#endif
+
 // Necessary to use this define when using jtagterminal but not SDK jtaguart console
 //#define STRIP_CHAR_CR
 
