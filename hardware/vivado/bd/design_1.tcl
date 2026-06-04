@@ -187,9 +187,9 @@ proc create_root_design { parentCell } {
   variable script_folder
   variable target
   set custom_target [expr {$target eq "custom_xczu47dr"}]
-  set dac2_axis_freq_hz [expr {$custom_target ? 300000000 : 288000000}]
+  set dac2_axis_freq_hz [expr {$custom_target ? 312500000 : 288000000}]
   set dac2_refclk_freq_hz [expr {$custom_target ? 125000000 : 184320000}]
-  set dac2_outclk_freq_hz [expr {$custom_target ? 300000000 : 288000000}]
+  set dac2_outclk_freq_hz [expr {$custom_target ? 312500000 : 288000000}]
   set dac2_associated_busif [expr {$custom_target ? "S_AXIS_20:S_AXIS_22:S_AXIS_30:S_AXIS_32" : "S_AXIS_30:S_AXIS_20:S_AXIS_22"}]
   variable design_name
 
@@ -843,14 +843,17 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   set usp_rf_data_converter_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:usp_rf_data_converter:2.6 usp_rf_data_converter_0 ]
   if { $target eq "custom_xczu47dr" } {
     # Custom-board bring-up uses DAC tile 2 slices 20/22 and tile 3 slices 30/32.
-    # The host/PL stream is 1.2 GS/s: 300 MHz AXIS * 4 samples/cycle.
-    # RFDC 4x interpolation raises the analog DAC sample rate to 4.8 GS/s.
-    # The PL HMC7044 sequencer sets the DAC refclk outputs to 120 MHz.
+    # The host/PL stream is 1.25 GS/s: 312.5 MHz AXIS * 4 samples/cycle.
+    # RFDC 4x interpolation raises the analog DAC sample rate to 5.0 GS/s.
+    # The PL HMC7044 sequencer sets the DAC refclk outputs to 125 MHz.
     # The RFDC clk_dac2 output directly drives the DAC AXIS clock domain.
     # Vivado 2024.2 RFDC 2.6 GUI enum notes for these enabled DAC slices:
     #   DAC_Mixer_Mode=2 is Real->Real.
     #   DAC_Mixer_Type accepts 1=Coarse or 2=Fine; Bypassed/Off are rejected.
     #   DAC_Coarse_Mixer_Freq=3 is GUI "0", so this does not coarse-shift the tone.
+    #   DAC_Nyquist uses Vivado enum 0=Zone1, 1=Zone2.
+    # Keep real playback in R2R/coarse mode; Zone2 uses the 5.0 GS/s image
+    # path so a 500 MHz real waveform can be filtered at 4.5 GHz.
     set rfdc_config [list \
       CONFIG.ADC_Slice00_Enable {false} \
       CONFIG.ADC_Slice20_Enable {false} \
@@ -858,15 +861,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.ADC_Slice30_Enable {false} \
       CONFIG.DAC2_Clock_Dist {2} \
       CONFIG.DAC2_Clock_Source {6} \
-      CONFIG.DAC2_Outclk_Freq {300.000} \
+      CONFIG.DAC2_Outclk_Freq {312.500} \
       CONFIG.DAC2_PLL_Enable {true} \
-      CONFIG.DAC2_Refclk_Freq {120.000} \
-      CONFIG.DAC2_Sampling_Rate {4.8} \
+      CONFIG.DAC2_Refclk_Freq {125.000} \
+      CONFIG.DAC2_Sampling_Rate {5.0} \
       CONFIG.DAC3_Clock_Source {6} \
-      CONFIG.DAC3_Fabric_Freq {300.000} \
-      CONFIG.DAC3_Outclk_Freq {300.000} \
+      CONFIG.DAC3_Fabric_Freq {312.500} \
+      CONFIG.DAC3_Outclk_Freq {312.500} \
       CONFIG.DAC3_PLL_Enable {false} \
-      CONFIG.DAC3_Sampling_Rate {4.8} \
+      CONFIG.DAC3_Sampling_Rate {5.0} \
       CONFIG.DAC_Coarse_Mixer_Freq20 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq22 {3} \
       CONFIG.DAC_Coarse_Mixer_Freq30 {3} \
@@ -889,6 +892,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.DAC_Mixer_Type32 {1} \
       CONFIG.DAC_Nyquist20 {1} \
       CONFIG.DAC_Nyquist22 {1} \
+      CONFIG.DAC_Nyquist30 {1} \
+      CONFIG.DAC_Nyquist32 {1} \
       CONFIG.DAC_Slice00_Enable {false} \
       CONFIG.DAC_Slice20_Enable {true} \
       CONFIG.DAC_Slice22_Enable {true} \

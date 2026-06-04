@@ -50,6 +50,9 @@ void printCLK104_settings(void);
 #endif
 int rfdcStartup(void);
 int Configure_DAC_Output_Current(void);
+#if defined(BOARD_CUSTOM_XCZU47DR)
+int Configure_Custom_DAC_Nyquist(void);
+#endif
 
 /************************** Variable Definitions *****************************/
 
@@ -183,6 +186,40 @@ int Configure_DAC_Output_Current(void)
 
 	return XST_SUCCESS;
 }
+
+#if defined(BOARD_CUSTOM_XCZU47DR)
+int Configure_Custom_DAC_Nyquist(void)
+{
+	static const struct {
+		u32 Tile_Id;
+		u32 Block_Id;
+	} CustomDacBlocks[] = {
+		{2, 0},
+		{2, 2},
+		{3, 0},
+		{3, 2},
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(CustomDacBlocks) / sizeof(CustomDacBlocks[0]); i++)
+	{
+		u32 Tile_Id = CustomDacBlocks[i].Tile_Id;
+		u32 Block_Id = CustomDacBlocks[i].Block_Id;
+		int Status = XRFdc_SetNyquistZone(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, XRFDC_EVEN_NYQUIST_ZONE);
+
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_SetNyquistZone Zone2 failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		xil_printf("Success: DAC Tile%d Block%d Nyquist zone set to 2\r\n", Tile_Id, Block_Id);
+	}
+
+	return XST_SUCCESS;
+}
+#endif
 
 /*****************************************************************************/
 /**
@@ -323,6 +360,12 @@ int main(void)
 	{
 		return Status;
 	}
+#if defined(BOARD_CUSTOM_XCZU47DR)
+	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
+	{
+		return XST_FAILURE;
+	}
+#endif
 	if (Configure_DAC_Output_Current() != XST_SUCCESS)
 	{
 		return XST_FAILURE;

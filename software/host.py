@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 # ============================================================
 # 1. 硬件参数
 # ============================================================
-DAC_XY_FS = 1.2e9
-DAC_AXIS_HZ = 300e6
+DAC_XY_FS = 1.25e9
+DAC_AXIS_HZ = 312.5e6
 FIXED_DATA_BYTES = 4096
 NUM_SAMPLES = FIXED_DATA_BYTES // 2
 DELAY = 1

@@ -102,7 +102,7 @@ bring-up host link. Use `Send to Board` only after confirming the target IP, UDP
 port, NIC binding, source IP, loop mode, and trigger mode.
 
 For the current custom XCZU47DR build, keep the GUI/global sample rate at
-`1.2e9` unless the RFDC fabric/sample-rate configuration changes. The GUI sends
+`1.25e9` unless the RFDC fabric/sample-rate configuration changes. The GUI sends
 the same PL-side UDP waveform/control protocol as the CLI; it does not depend on
 the removed PS Ethernet/lwIP firmware server.
 
