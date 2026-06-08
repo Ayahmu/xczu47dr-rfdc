@@ -12,6 +12,7 @@ hardware/vivado/*.str
 hardware/vivado/*.zip
 hardware/vivado/*.backup.*
 hardware/vivado/ip/rfdc_custom_xczu47dr_ip/
+hardware/vivado/ip/ddr_custom_xczu47dr_ip/
 hardware/vivado/xsim.dir/
 xsim.dir/
 xvlog.log

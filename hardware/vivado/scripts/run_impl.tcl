@@ -68,6 +68,27 @@ if {[llength ${bd_file}] > 0} {
     } else {
         puts "INFO: No standalone RFDC OOC run found; relying on parent Block Design targets"
     }
+
+    set ddr_runs [concat \
+        [get_runs -quiet design_1_ddr4_0_0_synth_1] \
+        [get_runs -quiet ddr_custom_xczu47dr_ip_synth_1]]
+    if {[llength ${ddr_runs}] > 0} {
+        puts "INFO: Ensuring DDR4 OOC checkpoint is generated"
+        foreach ddr_run ${ddr_runs} {
+            reset_run ${ddr_run}
+            launch_runs ${ddr_run} -jobs 8
+            wait_on_run ${ddr_run}
+
+            set ddr_status [get_property STATUS ${ddr_run}]
+            set ddr_progress [get_property PROGRESS ${ddr_run}]
+            if {${ddr_status} != "synth_design Complete!" && ${ddr_progress} != "100%"} {
+                puts "ERROR: DDR4 OOC synthesis failed: ${ddr_status}"
+                exit 1
+            }
+        }
+    } else {
+        puts "INFO: No standalone DDR4 OOC run found; relying on parent Block Design targets"
+    }
 }
 
 puts "INFO: Starting implementation..."

@@ -69,6 +69,12 @@ case "$1" in
         print_info "RFDC Vivado configuration generated in ${OUTPUT_DIR}"
         ;;
 
+    ddr)
+        print_info "Generating DDR4 Vivado configuration..."
+        mill ddr.run
+        print_info "DDR4 Vivado configuration generated in ${OUTPUT_DIR}"
+        ;;
+
     all)
         print_info "Generating all modules..."
         print_info "Building LED module..."
@@ -81,6 +87,8 @@ case "$1" in
         mill glue.run
         print_info "Building RFDC Vivado configuration..."
         mill rfdc.run
+        print_info "Building DDR4 Vivado configuration..."
+        mill ddr.run
         print_info "All generated files written to ${OUTPUT_DIR}"
         ;;
 
@@ -92,7 +100,7 @@ case "$1" in
         ;;
 
     *)
-        echo "Usage: $0 {led|gpio|reset|glue|rfdc|all|clean}"
+        echo "Usage: $0 {led|gpio|reset|glue|rfdc|ddr|all|clean}"
         echo ""
         echo "Commands:"
         echo "  led    - Generate LED module Verilog"
@@ -100,7 +108,8 @@ case "$1" in
         echo "  reset  - Generate reset module Verilog"
         echo "  glue   - Generate glue module Verilog"
         echo "  rfdc   - Generate RFDC Vivado configuration Tcl"
-        echo "  all    - Generate all modules and RFDC Vivado configuration"
+        echo "  ddr    - Generate DDR4 Vivado configuration Tcl"
+        echo "  all    - Generate all modules and Vivado configurations"
         echo "  clean  - Remove build artifacts"
         echo ""
         echo "Output directory: ${OUTPUT_DIR}"

@@ -21,12 +21,24 @@
 #define XPAR_XRFDC_0_BASEADDR 0xA0040000U
 #endif
 
+#if defined(BOARD_CUSTOM_XCZU47DR) && !defined(XPAR_M_AXI_GPIO_BASEADDR)
+#if defined(XPAR_TOP_I_DESIGN_1_I_M_AXI_GPIO_BASEADDR)
+#define XPAR_M_AXI_GPIO_BASEADDR XPAR_TOP_I_DESIGN_1_I_M_AXI_GPIO_BASEADDR
+#else
+#define XPAR_M_AXI_GPIO_BASEADDR 0xA0010000U
+#endif
+#endif
+
 // Necessary to use this define when using jtagterminal but not SDK jtaguart console
 //#define STRIP_CHAR_CR
 
 // Memory and GPIO definitions
 #if defined(BOARD_CUSTOM_XCZU47DR) && defined(XPAR_DDR4_0_C0_DDR4_MEMORY_MAP_BASEADDR)
 #define DDR4_BASE ((UINTPTR)XPAR_DDR4_0_C0_DDR4_MEMORY_MAP_BASEADDR)
+#elif defined(BOARD_CUSTOM_XCZU47DR) && defined(XPAR_TOP_I_DESIGN_1_I_M_AXI_PS_DDR_BASEADDR)
+#define DDR4_BASE ((UINTPTR)XPAR_TOP_I_DESIGN_1_I_M_AXI_PS_DDR_BASEADDR)
+#elif defined(BOARD_CUSTOM_XCZU47DR)
+#define DDR4_BASE ((UINTPTR)0x0000000500000000ULL)
 #else
 #define DDR4_BASE ((UINTPTR)0x00000000U)  // ZynqMP PS DDR base address
 #endif

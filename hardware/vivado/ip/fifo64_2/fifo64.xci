@@ -4,7 +4,7 @@
     "xci_name": "fifo64",
     "component_reference": "xilinx.com:ip:fifo_generator:13.2",
     "ip_revision": "11",
-    "gen_directory": "../../../../test.gen/sources_1/ip/fifo64_2",
+    "gen_directory": "../../work/ip/fifo64_2",
     "parameters": {
       "component_parameters": {
         "Component_Name": [ { "value": "fifo64", "resolve_type": "user", "usage": "all" } ],
@@ -397,7 +397,7 @@
         "IPCONTEXT": [ { "value": "IP_Flow" } ],
         "IPREVISION": [ { "value": "11" } ],
         "MANAGED": [ { "value": "TRUE" } ],
-        "OUTPUTDIR": [ { "value": "../../../../test.gen/sources_1/ip/fifo64_2" } ],
+        "OUTPUTDIR": [ { "value": "../../work/ip/fifo64_2" } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],
         "SHAREDDIR": [ { "value": "." } ],
         "SWVERSION": [ { "value": "2024.2" } ],

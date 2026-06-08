@@ -295,6 +295,26 @@ proc create_root_design { parentCell } {
      ] $M_AXI_RFDC
   }
 
+  if { $custom_target } {
+    set M_AXI_PS_DDR [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_PS_DDR ]
+    set_property -dict [ list \
+     CONFIG.ADDR_WIDTH {35} \
+     CONFIG.DATA_WIDTH {128} \
+     CONFIG.HAS_BRESP {1} \
+     CONFIG.HAS_BURST {1} \
+     CONFIG.HAS_CACHE {1} \
+     CONFIG.HAS_LOCK {1} \
+     CONFIG.HAS_PROT {1} \
+     CONFIG.HAS_QOS {1} \
+     CONFIG.HAS_RRESP {1} \
+     CONFIG.HAS_WSTRB {1} \
+     CONFIG.NUM_READ_OUTSTANDING {8} \
+     CONFIG.NUM_WRITE_OUTSTANDING {8} \
+     CONFIG.PROTOCOL {AXI4} \
+     CONFIG.READ_WRITE_MODE {READ_WRITE} \
+      ] $M_AXI_PS_DDR
+  }
+
   if { !$custom_target } {
   set S_AXIS_30 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 S_AXIS_30 ]
   set_property -dict [ list \
@@ -355,12 +375,14 @@ proc create_root_design { parentCell } {
    ] $S_AXIS_22
   }
 
-  set c0_ddr4 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:ddr4_rtl:1.0 c0_ddr4 ]
+  if { !$custom_target } {
+    set c0_ddr4 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:ddr4_rtl:1.0 c0_ddr4 ]
 
-  set c0_sys [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 c0_sys ]
-  set_property -dict [ list \
-   CONFIG.FREQ_HZ {200080032} \
-   ] $c0_sys
+    set c0_sys [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 c0_sys ]
+    set_property -dict [ list \
+     CONFIG.FREQ_HZ {200080032} \
+     ] $c0_sys
+  }
 
   set M_AXI_DMA [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_DMA ]
   set_property -dict [ list \
@@ -376,36 +398,38 @@ proc create_root_design { parentCell } {
    CONFIG.PROTOCOL {AXI4LITE} \
    ] $M_AXI_DMA
 
-  set S_AXI_01 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 S_AXI_01 ]
-  set_property -dict [ list \
-   CONFIG.ADDR_WIDTH {64} \
-   CONFIG.ARUSER_WIDTH {0} \
-   CONFIG.AWUSER_WIDTH {0} \
-   CONFIG.BUSER_WIDTH {0} \
-   CONFIG.DATA_WIDTH {128} \
-   CONFIG.HAS_BRESP {1} \
-   CONFIG.HAS_BURST {1} \
-   CONFIG.HAS_CACHE {1} \
-   CONFIG.HAS_LOCK {1} \
-   CONFIG.HAS_PROT {1} \
-   CONFIG.HAS_QOS {1} \
-   CONFIG.HAS_REGION {1} \
-   CONFIG.HAS_RRESP {1} \
-   CONFIG.HAS_WSTRB {1} \
-   CONFIG.ID_WIDTH {0} \
-   CONFIG.MAX_BURST_LENGTH {256} \
-   CONFIG.NUM_READ_OUTSTANDING {1} \
-   CONFIG.NUM_READ_THREADS {1} \
-   CONFIG.NUM_WRITE_OUTSTANDING {1} \
-   CONFIG.NUM_WRITE_THREADS {1} \
-   CONFIG.PROTOCOL {AXI4} \
-   CONFIG.READ_WRITE_MODE {READ_WRITE} \
-   CONFIG.RUSER_BITS_PER_BYTE {0} \
-   CONFIG.RUSER_WIDTH {0} \
-   CONFIG.SUPPORTS_NARROW_BURST {1} \
-   CONFIG.WUSER_BITS_PER_BYTE {0} \
-   CONFIG.WUSER_WIDTH {0} \
-   ] $S_AXI_01
+  if { !$custom_target } {
+    set S_AXI_01 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 S_AXI_01 ]
+    set_property -dict [ list \
+     CONFIG.ADDR_WIDTH {64} \
+     CONFIG.ARUSER_WIDTH {0} \
+     CONFIG.AWUSER_WIDTH {0} \
+     CONFIG.BUSER_WIDTH {0} \
+     CONFIG.DATA_WIDTH {128} \
+     CONFIG.HAS_BRESP {1} \
+     CONFIG.HAS_BURST {1} \
+     CONFIG.HAS_CACHE {1} \
+     CONFIG.HAS_LOCK {1} \
+     CONFIG.HAS_PROT {1} \
+     CONFIG.HAS_QOS {1} \
+     CONFIG.HAS_REGION {1} \
+     CONFIG.HAS_RRESP {1} \
+     CONFIG.HAS_WSTRB {1} \
+     CONFIG.ID_WIDTH {0} \
+     CONFIG.MAX_BURST_LENGTH {256} \
+     CONFIG.NUM_READ_OUTSTANDING {1} \
+     CONFIG.NUM_READ_THREADS {1} \
+     CONFIG.NUM_WRITE_OUTSTANDING {1} \
+     CONFIG.NUM_WRITE_THREADS {1} \
+     CONFIG.PROTOCOL {AXI4} \
+     CONFIG.READ_WRITE_MODE {READ_WRITE} \
+     CONFIG.RUSER_BITS_PER_BYTE {0} \
+     CONFIG.RUSER_WIDTH {0} \
+     CONFIG.SUPPORTS_NARROW_BURST {1} \
+     CONFIG.WUSER_BITS_PER_BYTE {0} \
+     CONFIG.WUSER_WIDTH {0} \
+     ] $S_AXI_01
+  }
 
   if { !$custom_target } {
     set adc3_clk [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 adc3_clk ]
@@ -454,15 +478,21 @@ proc create_root_design { parentCell } {
      CONFIG.FREQ_HZ {138240000} \
    ] $clk_adc2
   }
-  set clk104_aresetn [ create_bd_port -dir I -from 0 -to 0 -type rst clk104_aresetn ]
-  set ddr4_ui_clk [ create_bd_port -dir O -type clk ddr4_ui_clk ]
+  if { !$custom_target } {
+    set clk104_aresetn [ create_bd_port -dir I -from 0 -to 0 -type rst clk104_aresetn ]
+  }
+  set ddr4_ui_clk [ create_bd_port -dir [expr {$custom_target ? "I" : "O"}] -type clk ddr4_ui_clk ]
   set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S_AXI_01} \
+   CONFIG.ASSOCIATED_BUSIF [expr {$custom_target ? "M_AXI_PS_DDR" : "S_AXI_01"}] \
    CONFIG.ASSOCIATED_RESET {ddr4_ui_aresetn} \
  ] $ddr4_ui_clk
-  set ddr4_ui_aresetn [ create_bd_port -dir I -from 0 -to 0 -type rst ddr4_ui_aresetn ]
+  if { !$custom_target } {
+    set ddr4_ui_aresetn [ create_bd_port -dir I -from 0 -to 0 -type rst ddr4_ui_aresetn ]
+  }
   set pl_resetn0 [ create_bd_port -dir O -from 0 -to 0 -type rst pl_resetn0 ]
-  set ddr4_ui_clk_sync_rst [ create_bd_port -dir O -from 0 -to 0 -type rst ddr4_ui_clk_sync_rst ]
+  if { !$custom_target } {
+    set ddr4_ui_clk_sync_rst [ create_bd_port -dir O -from 0 -to 0 -type rst ddr4_ui_clk_sync_rst ]
+  }
   set pl_ps_irq [ create_bd_port -dir I -from 0 -to 0 -type intr pl_ps_irq ]
   set_property -dict [ list \
    CONFIG.PortWidth {1} \
@@ -864,6 +894,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.PSU__DDRC__COMPONENTS {Components} \
       CONFIG.PSU__DDRC__DDR4_ADDR_MAPPING {1} \
     ] $zynq_ultra_ps_e_0
+    set_property CONFIG.PSU__USE__S_AXI_GP3 {0} $zynq_ultra_ps_e_0
   }
 
   if { !$custom_target } {
@@ -941,19 +972,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
 
 
   # Create instance: ddr4_0, and set properties
-  set ddr4_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:ddr4:2.2 ddr4_0 ]
-  if { $target eq "custom_xczu47dr" } {
-    set_property -dict [list \
-      CONFIG.C0_CLOCK_BOARD_INTERFACE {Custom} \
-      CONFIG.C0_DDR4_BOARD_INTERFACE {Custom} \
-      CONFIG.C0.DDR4_CLKOUT0_DIVIDE {5} \
-      CONFIG.C0.DDR4_InputClockPeriod {4998} \
-      CONFIG.C0.DDR4_MemoryPart {MT40A1G16RC-062E} \
-      CONFIG.C0.DDR4_DataWidth {64} \
-      CONFIG.C0.DDR4_AxiDataWidth {512} \
-      CONFIG.C0.DDR4_TimePeriod {833} \
-    ] $ddr4_0
-  } else {
+  if { !$custom_target } {
+    set ddr4_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:ddr4:2.2 ddr4_0 ]
     set_property -dict [list \
       CONFIG.C0_CLOCK_BOARD_INTERFACE {default_sysclk_c0_300mhz} \
       CONFIG.C0_DDR4_BOARD_INTERFACE {ddr4_sdram_c0} \
@@ -962,19 +982,18 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
 
 
   # Create instance: smartconnect_2, and set properties
-  set smartconnect_2 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_2 ]
-  if { $target eq "custom_xczu47dr" } {
-    set smartconnect_2_num_mi 1
-  } else {
-    set smartconnect_2_num_mi 2
+  if { !$custom_target } {
+    set smartconnect_2 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_2 ]
+    set_property -dict [list \
+      CONFIG.NUM_MI {2} \
+      CONFIG.NUM_SI {2} \
+    ] $smartconnect_2
   }
-  set_property -dict [list \
-    CONFIG.NUM_MI $smartconnect_2_num_mi \
-    CONFIG.NUM_SI {2} \
-  ] $smartconnect_2
 
   # Create simple Chisel glue module instances.
-  set util_vector_logic_0 [ create_bd_cell -type module -reference ChiselInvert1 util_vector_logic_0 ]
+  if { !$custom_target } {
+    set util_vector_logic_0 [ create_bd_cell -type module -reference ChiselInvert1 util_vector_logic_0 ]
+  }
 
 
   if { $custom_target } {
@@ -990,7 +1009,9 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   }
 
   # Create interface connections
-  connect_bd_intf_net -intf_net S01_AXI_0_1 [get_bd_intf_ports S_AXI_01] [get_bd_intf_pins smartconnect_2/S01_AXI]
+  if { !$custom_target } {
+    connect_bd_intf_net -intf_net S01_AXI_0_1 [get_bd_intf_ports S_AXI_01] [get_bd_intf_pins smartconnect_2/S01_AXI]
+  }
   if { !$custom_target } {
     connect_bd_intf_net -intf_net dac2_clk_1 [get_bd_intf_ports dac2_clk] [get_bd_intf_pins usp_rf_data_converter_0/dac2_clk]
     connect_bd_intf_net -intf_net sysref_in_1 [get_bd_intf_ports sysref_in] [get_bd_intf_pins usp_rf_data_converter_0/sysref_in]
@@ -1000,8 +1021,10 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     connect_bd_intf_net -intf_net adc3_clk_0_1 [get_bd_intf_ports adc3_clk] [get_bd_intf_pins usp_rf_data_converter_0/adc3_clk]
     connect_bd_intf_net -intf_net dac3_clk_0_1 [get_bd_intf_ports dac3_clk] [get_bd_intf_pins usp_rf_data_converter_0/dac3_clk]
   }
-  connect_bd_intf_net -intf_net ddr4_0_C0_DDR4 [get_bd_intf_ports c0_ddr4] [get_bd_intf_pins ddr4_0/C0_DDR4]
-  connect_bd_intf_net -intf_net default_sysclk_c0_300mhz_1 [get_bd_intf_ports c0_sys] [get_bd_intf_pins ddr4_0/C0_SYS_CLK]
+  if { !$custom_target } {
+    connect_bd_intf_net -intf_net ddr4_0_C0_DDR4 [get_bd_intf_ports c0_ddr4] [get_bd_intf_pins ddr4_0/C0_DDR4]
+    connect_bd_intf_net -intf_net default_sysclk_c0_300mhz_1 [get_bd_intf_ports c0_sys] [get_bd_intf_pins ddr4_0/C0_SYS_CLK]
+  }
   if { !$custom_target } {
     connect_bd_intf_net -intf_net s20_axis_0_1 [get_bd_intf_ports S_AXIS_20] [get_bd_intf_pins usp_rf_data_converter_0/s20_axis]
     connect_bd_intf_net -intf_net s22_axis_0_1 [get_bd_intf_ports S_AXIS_22] [get_bd_intf_pins usp_rf_data_converter_0/s22_axis]
@@ -1016,7 +1039,9 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   }
   connect_bd_intf_net -intf_net smartconnect_0_M03_AXI [get_bd_intf_ports M_AXI_DMA] [get_bd_intf_pins smartconnect_0/M03_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M04_AXI [get_bd_intf_ports M_AXI_INST] [get_bd_intf_pins smartconnect_0/M04_AXI]
-  connect_bd_intf_net -intf_net smartconnect_2_M00_AXI [get_bd_intf_pins smartconnect_2/M00_AXI] [get_bd_intf_pins ddr4_0/C0_DDR4_S_AXI]
+  if { !$custom_target } {
+    connect_bd_intf_net -intf_net smartconnect_2_M00_AXI [get_bd_intf_pins smartconnect_2/M00_AXI] [get_bd_intf_pins ddr4_0/C0_DDR4_S_AXI]
+  }
   if { $target ne "custom_xczu47dr" } {
     connect_bd_intf_net -intf_net smartconnect_2_M01_AXI [get_bd_intf_pins smartconnect_2/M01_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HP1_FPD]
   }
@@ -1031,7 +1056,11 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     connect_bd_intf_net -intf_net vin30_0_1 [get_bd_intf_ports vin30] [get_bd_intf_pins usp_rf_data_converter_0/vin30]
   }
   connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM0_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM0_FPD] [get_bd_intf_pins smartconnect_0/S00_AXI]
-  connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM1_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM1_FPD] [get_bd_intf_pins smartconnect_2/S00_AXI]
+  if { $custom_target } {
+    connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM1_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM1_FPD] [get_bd_intf_ports M_AXI_PS_DDR]
+  } else {
+    connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM1_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM1_FPD] [get_bd_intf_pins smartconnect_2/S00_AXI]
+  }
 
   # Create port connections
   if { !$custom_target } {
@@ -1047,52 +1076,69 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     connect_bd_net -net CLK_1  [get_bd_pins usp_rf_data_converter_0/clk_adc2] \
     [get_bd_ports clk_adc2]
   }
-  connect_bd_net -net ddr4_0_c0_ddr4_ui_clk  [get_bd_pins ddr4_0/c0_ddr4_ui_clk] \
-  [get_bd_pins smartconnect_2/aclk] \
-  [get_bd_pins zynq_ultra_ps_e_0/saxihp1_fpd_aclk] \
-  [get_bd_pins zynq_ultra_ps_e_0/maxihpm1_fpd_aclk] \
-  [get_bd_ports ddr4_ui_clk]
-  connect_bd_net -net ddr4_0_c0_ddr4_ui_clk_sync_rst  [get_bd_pins ddr4_0/c0_ddr4_ui_clk_sync_rst] \
-  [get_bd_ports ddr4_ui_clk_sync_rst]
+  if { $custom_target } {
+    connect_bd_net -net ddr4_0_c0_ddr4_ui_clk \
+    [get_bd_ports ddr4_ui_clk] \
+    [get_bd_pins zynq_ultra_ps_e_0/maxihpm1_fpd_aclk]
+  } else {
+    connect_bd_net -net ddr4_0_c0_ddr4_ui_clk  [get_bd_pins ddr4_0/c0_ddr4_ui_clk] \
+    [get_bd_pins smartconnect_2/aclk] \
+    [get_bd_pins zynq_ultra_ps_e_0/saxihp1_fpd_aclk] \
+    [get_bd_pins zynq_ultra_ps_e_0/maxihpm1_fpd_aclk] \
+    [get_bd_ports ddr4_ui_clk]
+    connect_bd_net -net ddr4_0_c0_ddr4_ui_clk_sync_rst  [get_bd_pins ddr4_0/c0_ddr4_ui_clk_sync_rst] \
+    [get_bd_ports ddr4_ui_clk_sync_rst]
+  }
   connect_bd_net -net pl_ps_irq_1  [get_bd_ports pl_ps_irq] \
   [get_bd_pins zynq_ultra_ps_e_0/pl_ps_irq0]
-  connect_bd_net -net ddr4_ui_aresetn \
-  [get_bd_ports ddr4_ui_aresetn] \
-  [get_bd_pins ddr4_0/c0_ddr4_aresetn] \
-  [get_bd_pins smartconnect_2/aresetn]
+  if { !$custom_target } {
+    connect_bd_net -net ddr4_ui_aresetn \
+    [get_bd_ports ddr4_ui_aresetn] \
+    [get_bd_pins ddr4_0/c0_ddr4_aresetn] \
+    [get_bd_pins smartconnect_2/aresetn]
+  }
   if { !$custom_target } {
     connect_bd_net -net clk104_aresetn \
     [get_bd_ports clk104_aresetn] \
     [get_bd_pins usp_rf_data_converter_0/s0_axis_aresetn] \
     [get_bd_pins usp_rf_data_converter_0/s2_axis_aresetn]
-  } else {
-    connect_bd_net -net clk104_aresetn [get_bd_ports clk104_aresetn]
   }
   connect_bd_net -net pl_aresetn \
   [get_bd_ports pl_aresetn] \
   [get_bd_pins smartconnect_0/aresetn]
-  connect_bd_net -net util_vector_logic_0_Res  [get_bd_pins util_vector_logic_0/io_Res] \
-  [get_bd_pins ddr4_0/sys_rst]
+  if { !$custom_target } {
+    connect_bd_net -net util_vector_logic_0_Res  [get_bd_pins util_vector_logic_0/io_Res] \
+    [get_bd_pins ddr4_0/sys_rst]
+  }
   connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0  [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
   [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk] \
   [get_bd_pins zynq_ultra_ps_e_0/saxihp0_fpd_aclk] \
   [get_bd_pins smartconnect_0/aclk] \
   [get_bd_ports pl_clk]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0  [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0] \
-  [get_bd_pins util_vector_logic_0/io_Op1] \
   [get_bd_ports pl_resetn0]
+  if { !$custom_target } {
+    connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 [get_bd_pins util_vector_logic_0/io_Op1]
+  }
 
   # Create address segments
   assign_bd_address -offset 0xA0000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_DMA/Reg] -force
   assign_bd_address -offset 0xA0010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_GPIO/Reg] -force
   assign_bd_address -offset 0xA0020000 -range 0x00008000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_INST/Reg] -force
-  assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
+  if { $custom_target } {
+    assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_PS_DDR/Reg] -force
+  }
+  if { !$custom_target } {
+    assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
+  }
   if { $custom_target } {
     assign_bd_address -offset 0xA0040000 -range 0x00040000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_RFDC/Reg] -force
   } else {
     assign_bd_address -offset 0xA0040000 -range 0x00040000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs usp_rf_data_converter_0/s_axi/Reg] -force
   }
-  assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_01] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
+  if { !$custom_target } {
+    assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_01] [get_bd_addr_segs ddr4_0/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK] -force
+  }
 
   # Exclude Address Segments
   exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP2/HP0_DDR_HIGH]

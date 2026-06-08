@@ -4,7 +4,7 @@
     "xci_name": "xxv_ethernet",
     "component_reference": "xilinx.com:ip:xxv_ethernet:4.1",
     "ip_revision": "13",
-    "gen_directory": "../../../../test.gen/sources_1/ip/xxv_ethernet_1",
+    "gen_directory": "../../work/ip/xxv_ethernet_1",
     "parameters": {
       "component_parameters": {
         "Component_Name": [ { "value": "xxv_ethernet", "resolve_type": "user", "usage": "all" } ],
@@ -134,7 +134,7 @@
         "IPCONTEXT": [ { "value": "IP_Flow" } ],
         "IPREVISION": [ { "value": "13" } ],
         "MANAGED": [ { "value": "TRUE" } ],
-        "OUTPUTDIR": [ { "value": "../../../../test.gen/sources_1/ip/xxv_ethernet_1" } ],
+        "OUTPUTDIR": [ { "value": "../../work/ip/xxv_ethernet_1" } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],
         "SHAREDDIR": [ { "value": "." } ],
         "SWVERSION": [ { "value": "2024.2" } ],

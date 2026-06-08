@@ -115,6 +115,16 @@ object rfdc extends ScalaModule {
   def mainClass = Some("rfdc.elaborate")
 }
 
+object ddr extends ScalaModule {
+  override def scalaVersion = "2.12.13"
+  override def scalacOptions = Setting.scalacOptions
+  override def scalacPluginIvyDeps = Setting.scalacPluginIvyDeps
+  override def ivyDeps = Agg(
+    ivy"edu.berkeley.cs::chisel3:3.4.4"
+  )
+  def mainClass = Some("ddr.elaborate")
+}
+
 object project_foo extends ScalaModule {
   override def scalaVersion = "2.12.13"
   override def scalacOptions = Setting.scalacOptions
@@ -122,6 +132,6 @@ object project_foo extends ScalaModule {
   override def ivyDeps = Agg(
     ivy"edu.berkeley.cs::chisel3:3.4.4"
   )
-  def moduleDeps = Seq(common, qdma, gpio, led, memory, axidma, reset, glue, rfdc)
+  def moduleDeps = Seq(common, qdma, gpio, led, memory, axidma, reset, glue, rfdc, ddr)
   def mainClass = Some("project_foo.elaborate")
 }

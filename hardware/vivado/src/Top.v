@@ -1019,6 +1019,90 @@ module Top (
   wire        M_AXI_RFDC_wready;
   wire [3:0]  M_AXI_RFDC_wstrb;
   wire        M_AXI_RFDC_wvalid;
+
+  wire [34:0]  M_AXI_DDR4_araddr;
+  wire [1:0]   M_AXI_DDR4_arburst;
+  wire [3:0]   M_AXI_DDR4_arcache;
+  wire [7:0]   M_AXI_DDR4_arlen;
+  wire [0:0]   M_AXI_DDR4_arlock;
+  wire [2:0]   M_AXI_DDR4_arprot;
+  wire [3:0]   M_AXI_DDR4_arqos;
+  wire         M_AXI_DDR4_arready;
+  wire [2:0]   M_AXI_DDR4_arsize;
+  wire         M_AXI_DDR4_arvalid;
+
+  wire [34:0]  M_AXI_DDR4_awaddr;
+  wire [1:0]   M_AXI_DDR4_awburst;
+  wire [3:0]   M_AXI_DDR4_awcache;
+  wire [7:0]   M_AXI_DDR4_awlen;
+  wire [0:0]   M_AXI_DDR4_awlock;
+  wire [2:0]   M_AXI_DDR4_awprot;
+  wire [3:0]   M_AXI_DDR4_awqos;
+  wire         M_AXI_DDR4_awready;
+  wire [2:0]   M_AXI_DDR4_awsize;
+  wire         M_AXI_DDR4_awvalid;
+
+  wire         M_AXI_DDR4_bready;
+  wire [1:0]   M_AXI_DDR4_bresp;
+  wire         M_AXI_DDR4_bvalid;
+
+  wire [511:0] M_AXI_DDR4_rdata;
+  wire         M_AXI_DDR4_rlast;
+  wire         M_AXI_DDR4_rready;
+  wire [1:0]   M_AXI_DDR4_rresp;
+  wire         M_AXI_DDR4_rvalid;
+
+  wire [511:0] M_AXI_DDR4_wdata;
+  wire         M_AXI_DDR4_wlast;
+  wire         M_AXI_DDR4_wready;
+  wire [63:0]  M_AXI_DDR4_wstrb;
+  wire         M_AXI_DDR4_wvalid;
+
+  wire [39:0]  M_AXI_PS_DDR_araddr;
+  wire [1:0]   M_AXI_PS_DDR_arburst;
+  wire [3:0]   M_AXI_PS_DDR_arcache;
+  wire [15:0]  M_AXI_PS_DDR_arid;
+  wire [7:0]   M_AXI_PS_DDR_arlen;
+  wire         M_AXI_PS_DDR_arlock;
+  wire [2:0]   M_AXI_PS_DDR_arprot;
+  wire [3:0]   M_AXI_PS_DDR_arqos;
+  wire         M_AXI_PS_DDR_arready;
+  wire [2:0]   M_AXI_PS_DDR_arsize;
+  wire [15:0]  M_AXI_PS_DDR_aruser;
+  wire         M_AXI_PS_DDR_arvalid;
+
+  wire [39:0]  M_AXI_PS_DDR_awaddr;
+  wire [1:0]   M_AXI_PS_DDR_awburst;
+  wire [3:0]   M_AXI_PS_DDR_awcache;
+  wire [15:0]  M_AXI_PS_DDR_awid;
+  wire [7:0]   M_AXI_PS_DDR_awlen;
+  wire         M_AXI_PS_DDR_awlock;
+  wire [2:0]   M_AXI_PS_DDR_awprot;
+  wire [3:0]   M_AXI_PS_DDR_awqos;
+  wire         M_AXI_PS_DDR_awready;
+  wire [2:0]   M_AXI_PS_DDR_awsize;
+  wire [15:0]  M_AXI_PS_DDR_awuser;
+  wire         M_AXI_PS_DDR_awvalid;
+
+  wire [15:0]  M_AXI_PS_DDR_bid;
+  wire         M_AXI_PS_DDR_bready;
+  wire [1:0]   M_AXI_PS_DDR_bresp;
+  wire         M_AXI_PS_DDR_bvalid;
+
+  wire [127:0] M_AXI_PS_DDR_rdata;
+  wire [15:0]  M_AXI_PS_DDR_rid;
+  wire         M_AXI_PS_DDR_rlast;
+  wire         M_AXI_PS_DDR_rready;
+  wire [1:0]   M_AXI_PS_DDR_rresp;
+  wire         M_AXI_PS_DDR_rvalid;
+
+  wire [127:0] M_AXI_PS_DDR_wdata;
+  wire         M_AXI_PS_DDR_wlast;
+  wire         M_AXI_PS_DDR_wready;
+  wire [15:0]  M_AXI_PS_DDR_wstrb;
+  wire         M_AXI_PS_DDR_wvalid;
+
+  wire         ddr4_init_calib_complete;
 `endif
 
   design_1 design_1_i (
@@ -1030,10 +1114,16 @@ module Top (
       .clk_dac2(clk_dac2),
       .dac_axis_clk(dac_axis_clk),
 `endif
+`ifndef CUSTOM_XCZU47DR
       .clk104_aresetn(clk104_aresetn),
+`endif
       .ddr4_ui_clk(ddr4_ui_clk),
+`ifndef CUSTOM_XCZU47DR
       .ddr4_ui_aresetn(ddr4_ui_aresetn),
+`endif
+`ifndef CUSTOM_XCZU47DR
       .ddr4_ui_clk_sync_rst(ddr4_ui_clk_sync_rst),
+`endif
 
 `ifndef CUSTOM_XCZU47DR
       .adc2_clk_clk_n(adc2_clk_clk_n),
@@ -1067,6 +1157,7 @@ module Top (
       .vout30_v_p(vout30_v_p),
 `endif
 
+`ifndef CUSTOM_XCZU47DR
       .c0_sys_clk_n(c0_sys_clk_n),
       .c0_sys_clk_p(c0_sys_clk_p),
       .c0_ddr4_act_n(c0_ddr4_act_n),
@@ -1083,7 +1174,9 @@ module Top (
       .c0_ddr4_dqs_t(c0_ddr4_dqs_t),
       .c0_ddr4_odt(c0_ddr4_odt),
       .c0_ddr4_reset_n(c0_ddr4_reset_n),
+`endif
 
+`ifndef CUSTOM_XCZU47DR
       // DDR AXI slave for DataMover read (S_AXI_01)
       .S_AXI_01_araddr(M_AXI_DM_araddr),
       .S_AXI_01_arburst(M_AXI_DM_arburst),
@@ -1119,6 +1212,7 @@ module Top (
       .S_AXI_01_bready(M_AXI_WAVE_bready),
       .S_AXI_01_bresp(M_AXI_WAVE_bresp),
       .S_AXI_01_bvalid(M_AXI_WAVE_bvalid),
+`endif
 
       // PS AXI master for instruction fifo (M_AXI_INST)
       .M_AXI_INST_araddr(M_AXI_INST_araddr),
@@ -1179,6 +1273,46 @@ module Top (
       .M_AXI_RFDC_wready(M_AXI_RFDC_wready),
       .M_AXI_RFDC_wstrb(M_AXI_RFDC_wstrb),
       .M_AXI_RFDC_wvalid(M_AXI_RFDC_wvalid),
+
+      .M_AXI_PS_DDR_araddr(M_AXI_PS_DDR_araddr),
+      .M_AXI_PS_DDR_arburst(M_AXI_PS_DDR_arburst),
+      .M_AXI_PS_DDR_arcache(M_AXI_PS_DDR_arcache),
+      .M_AXI_PS_DDR_arid(M_AXI_PS_DDR_arid),
+      .M_AXI_PS_DDR_arlen(M_AXI_PS_DDR_arlen),
+      .M_AXI_PS_DDR_arlock(M_AXI_PS_DDR_arlock),
+      .M_AXI_PS_DDR_arprot(M_AXI_PS_DDR_arprot),
+      .M_AXI_PS_DDR_arqos(M_AXI_PS_DDR_arqos),
+      .M_AXI_PS_DDR_arready(M_AXI_PS_DDR_arready),
+      .M_AXI_PS_DDR_arsize(M_AXI_PS_DDR_arsize),
+      .M_AXI_PS_DDR_aruser(M_AXI_PS_DDR_aruser),
+      .M_AXI_PS_DDR_arvalid(M_AXI_PS_DDR_arvalid),
+      .M_AXI_PS_DDR_awaddr(M_AXI_PS_DDR_awaddr),
+      .M_AXI_PS_DDR_awburst(M_AXI_PS_DDR_awburst),
+      .M_AXI_PS_DDR_awcache(M_AXI_PS_DDR_awcache),
+      .M_AXI_PS_DDR_awid(M_AXI_PS_DDR_awid),
+      .M_AXI_PS_DDR_awlen(M_AXI_PS_DDR_awlen),
+      .M_AXI_PS_DDR_awlock(M_AXI_PS_DDR_awlock),
+      .M_AXI_PS_DDR_awprot(M_AXI_PS_DDR_awprot),
+      .M_AXI_PS_DDR_awqos(M_AXI_PS_DDR_awqos),
+      .M_AXI_PS_DDR_awready(M_AXI_PS_DDR_awready),
+      .M_AXI_PS_DDR_awsize(M_AXI_PS_DDR_awsize),
+      .M_AXI_PS_DDR_awuser(M_AXI_PS_DDR_awuser),
+      .M_AXI_PS_DDR_awvalid(M_AXI_PS_DDR_awvalid),
+      .M_AXI_PS_DDR_bid(M_AXI_PS_DDR_bid),
+      .M_AXI_PS_DDR_bready(M_AXI_PS_DDR_bready),
+      .M_AXI_PS_DDR_bresp(M_AXI_PS_DDR_bresp),
+      .M_AXI_PS_DDR_bvalid(M_AXI_PS_DDR_bvalid),
+      .M_AXI_PS_DDR_rdata(M_AXI_PS_DDR_rdata),
+      .M_AXI_PS_DDR_rid(M_AXI_PS_DDR_rid),
+      .M_AXI_PS_DDR_rlast(M_AXI_PS_DDR_rlast),
+      .M_AXI_PS_DDR_rready(M_AXI_PS_DDR_rready),
+      .M_AXI_PS_DDR_rresp(M_AXI_PS_DDR_rresp),
+      .M_AXI_PS_DDR_rvalid(M_AXI_PS_DDR_rvalid),
+      .M_AXI_PS_DDR_wdata(M_AXI_PS_DDR_wdata),
+      .M_AXI_PS_DDR_wlast(M_AXI_PS_DDR_wlast),
+      .M_AXI_PS_DDR_wready(M_AXI_PS_DDR_wready),
+      .M_AXI_PS_DDR_wstrb(M_AXI_PS_DDR_wstrb),
+      .M_AXI_PS_DDR_wvalid(M_AXI_PS_DDR_wvalid),
 `endif
 
 `ifndef CUSTOM_XCZU47DR
@@ -1238,6 +1372,176 @@ module Top (
   );
 
 `ifdef CUSTOM_XCZU47DR
+  ddr_axi_smartconnect_wrapper ddr_axi_smartconnect_i (
+      .aclk(ddr4_ui_clk),
+      .aresetn(ddr4_ui_aresetn),
+
+      .S_AXI_PS_araddr(M_AXI_PS_DDR_araddr),
+      .S_AXI_PS_arburst(M_AXI_PS_DDR_arburst),
+      .S_AXI_PS_arcache(M_AXI_PS_DDR_arcache),
+      .S_AXI_PS_arid(M_AXI_PS_DDR_arid),
+      .S_AXI_PS_arlen(M_AXI_PS_DDR_arlen),
+      .S_AXI_PS_arlock(M_AXI_PS_DDR_arlock),
+      .S_AXI_PS_arprot(M_AXI_PS_DDR_arprot),
+      .S_AXI_PS_arqos(M_AXI_PS_DDR_arqos),
+      .S_AXI_PS_arready(M_AXI_PS_DDR_arready),
+      .S_AXI_PS_arsize(M_AXI_PS_DDR_arsize),
+      .S_AXI_PS_aruser(M_AXI_PS_DDR_aruser),
+      .S_AXI_PS_arvalid(M_AXI_PS_DDR_arvalid),
+      .S_AXI_PS_awaddr(M_AXI_PS_DDR_awaddr),
+      .S_AXI_PS_awburst(M_AXI_PS_DDR_awburst),
+      .S_AXI_PS_awcache(M_AXI_PS_DDR_awcache),
+      .S_AXI_PS_awid(M_AXI_PS_DDR_awid),
+      .S_AXI_PS_awlen(M_AXI_PS_DDR_awlen),
+      .S_AXI_PS_awlock(M_AXI_PS_DDR_awlock),
+      .S_AXI_PS_awprot(M_AXI_PS_DDR_awprot),
+      .S_AXI_PS_awqos(M_AXI_PS_DDR_awqos),
+      .S_AXI_PS_awready(M_AXI_PS_DDR_awready),
+      .S_AXI_PS_awsize(M_AXI_PS_DDR_awsize),
+      .S_AXI_PS_awuser(M_AXI_PS_DDR_awuser),
+      .S_AXI_PS_awvalid(M_AXI_PS_DDR_awvalid),
+      .S_AXI_PS_bid(M_AXI_PS_DDR_bid),
+      .S_AXI_PS_bready(M_AXI_PS_DDR_bready),
+      .S_AXI_PS_bresp(M_AXI_PS_DDR_bresp),
+      .S_AXI_PS_bvalid(M_AXI_PS_DDR_bvalid),
+      .S_AXI_PS_rdata(M_AXI_PS_DDR_rdata),
+      .S_AXI_PS_rid(M_AXI_PS_DDR_rid),
+      .S_AXI_PS_rlast(M_AXI_PS_DDR_rlast),
+      .S_AXI_PS_rready(M_AXI_PS_DDR_rready),
+      .S_AXI_PS_rresp(M_AXI_PS_DDR_rresp),
+      .S_AXI_PS_rvalid(M_AXI_PS_DDR_rvalid),
+      .S_AXI_PS_wdata(M_AXI_PS_DDR_wdata),
+      .S_AXI_PS_wlast(M_AXI_PS_DDR_wlast),
+      .S_AXI_PS_wready(M_AXI_PS_DDR_wready),
+      .S_AXI_PS_wstrb(M_AXI_PS_DDR_wstrb),
+      .S_AXI_PS_wvalid(M_AXI_PS_DDR_wvalid),
+
+      .S_AXI_PL_araddr(M_AXI_DM_araddr),
+      .S_AXI_PL_arburst(M_AXI_DM_arburst),
+      .S_AXI_PL_arcache(4'b0011),
+      .S_AXI_PL_arlen(M_AXI_DM_arlen),
+      .S_AXI_PL_arlock(1'b0),
+      .S_AXI_PL_arprot(3'b000),
+      .S_AXI_PL_arqos(4'b0000),
+      .S_AXI_PL_arready(M_AXI_DM_arready),
+      .S_AXI_PL_arsize(M_AXI_DM_arsize),
+      .S_AXI_PL_arvalid(M_AXI_DM_arvalid),
+      .S_AXI_PL_rdata(M_AXI_DM_rdata),
+      .S_AXI_PL_rlast(M_AXI_DM_rlast),
+      .S_AXI_PL_rready(M_AXI_DM_rready),
+      .S_AXI_PL_rresp(M_AXI_DM_rresp),
+      .S_AXI_PL_rvalid(M_AXI_DM_rvalid),
+      .S_AXI_PL_awaddr(M_AXI_WAVE_awaddr),
+      .S_AXI_PL_awburst(M_AXI_WAVE_awburst),
+      .S_AXI_PL_awcache(M_AXI_WAVE_awcache),
+      .S_AXI_PL_awlen(M_AXI_WAVE_awlen),
+      .S_AXI_PL_awlock(M_AXI_WAVE_awlock),
+      .S_AXI_PL_awprot(M_AXI_WAVE_awprot),
+      .S_AXI_PL_awqos(M_AXI_WAVE_awqos),
+      .S_AXI_PL_awready(M_AXI_WAVE_awready),
+      .S_AXI_PL_awsize(M_AXI_WAVE_awsize),
+      .S_AXI_PL_awvalid(M_AXI_WAVE_awvalid),
+      .S_AXI_PL_wdata(M_AXI_WAVE_wdata),
+      .S_AXI_PL_wlast(M_AXI_WAVE_wlast),
+      .S_AXI_PL_wready(M_AXI_WAVE_wready),
+      .S_AXI_PL_wstrb(M_AXI_WAVE_wstrb),
+      .S_AXI_PL_wvalid(M_AXI_WAVE_wvalid),
+      .S_AXI_PL_bready(M_AXI_WAVE_bready),
+      .S_AXI_PL_bresp(M_AXI_WAVE_bresp),
+      .S_AXI_PL_bvalid(M_AXI_WAVE_bvalid),
+
+      .M_AXI_DDR_araddr(M_AXI_DDR4_araddr),
+      .M_AXI_DDR_arburst(M_AXI_DDR4_arburst),
+      .M_AXI_DDR_arcache(M_AXI_DDR4_arcache),
+      .M_AXI_DDR_arlen(M_AXI_DDR4_arlen),
+      .M_AXI_DDR_arlock(M_AXI_DDR4_arlock),
+      .M_AXI_DDR_arprot(M_AXI_DDR4_arprot),
+      .M_AXI_DDR_arqos(M_AXI_DDR4_arqos),
+      .M_AXI_DDR_arready(M_AXI_DDR4_arready),
+      .M_AXI_DDR_arsize(M_AXI_DDR4_arsize),
+      .M_AXI_DDR_arvalid(M_AXI_DDR4_arvalid),
+      .M_AXI_DDR_awaddr(M_AXI_DDR4_awaddr),
+      .M_AXI_DDR_awburst(M_AXI_DDR4_awburst),
+      .M_AXI_DDR_awcache(M_AXI_DDR4_awcache),
+      .M_AXI_DDR_awlen(M_AXI_DDR4_awlen),
+      .M_AXI_DDR_awlock(M_AXI_DDR4_awlock),
+      .M_AXI_DDR_awprot(M_AXI_DDR4_awprot),
+      .M_AXI_DDR_awqos(M_AXI_DDR4_awqos),
+      .M_AXI_DDR_awready(M_AXI_DDR4_awready),
+      .M_AXI_DDR_awsize(M_AXI_DDR4_awsize),
+      .M_AXI_DDR_awvalid(M_AXI_DDR4_awvalid),
+      .M_AXI_DDR_bready(M_AXI_DDR4_bready),
+      .M_AXI_DDR_bresp(M_AXI_DDR4_bresp),
+      .M_AXI_DDR_bvalid(M_AXI_DDR4_bvalid),
+      .M_AXI_DDR_rdata(M_AXI_DDR4_rdata),
+      .M_AXI_DDR_rlast(M_AXI_DDR4_rlast),
+      .M_AXI_DDR_rready(M_AXI_DDR4_rready),
+      .M_AXI_DDR_rresp(M_AXI_DDR4_rresp),
+      .M_AXI_DDR_rvalid(M_AXI_DDR4_rvalid),
+      .M_AXI_DDR_wdata(M_AXI_DDR4_wdata),
+      .M_AXI_DDR_wlast(M_AXI_DDR4_wlast),
+      .M_AXI_DDR_wready(M_AXI_DDR4_wready),
+      .M_AXI_DDR_wstrb(M_AXI_DDR4_wstrb),
+      .M_AXI_DDR_wvalid(M_AXI_DDR4_wvalid)
+  );
+
+  Ddr4CustomXczu47dr ddr4_custom_i (
+      .sys_rst(~pl_resetn0),
+      .c0_sys_clk_p(c0_sys_clk_p),
+      .c0_sys_clk_n(c0_sys_clk_n),
+      .c0_ddr4_act_n(c0_ddr4_act_n),
+      .c0_ddr4_adr(c0_ddr4_adr),
+      .c0_ddr4_ba(c0_ddr4_ba),
+      .c0_ddr4_bg(c0_ddr4_bg),
+      .c0_ddr4_cke(c0_ddr4_cke),
+      .c0_ddr4_odt(c0_ddr4_odt),
+      .c0_ddr4_cs_n(c0_ddr4_cs_n),
+      .c0_ddr4_ck_t(c0_ddr4_ck_t),
+      .c0_ddr4_ck_c(c0_ddr4_ck_c),
+      .c0_ddr4_reset_n(c0_ddr4_reset_n),
+      .c0_ddr4_dm_n(c0_ddr4_dm_n),
+      .c0_ddr4_dq(c0_ddr4_dq),
+      .c0_ddr4_dqs_c(c0_ddr4_dqs_c),
+      .c0_ddr4_dqs_t(c0_ddr4_dqs_t),
+      .c0_init_calib_complete(ddr4_init_calib_complete),
+      .c0_ddr4_ui_clk(ddr4_ui_clk),
+      .c0_ddr4_ui_clk_sync_rst(ddr4_ui_clk_sync_rst),
+      .c0_ddr4_aresetn(ddr4_ui_aresetn),
+      .s_axi_awaddr(M_AXI_DDR4_awaddr),
+      .s_axi_awlen(M_AXI_DDR4_awlen),
+      .s_axi_awsize(M_AXI_DDR4_awsize),
+      .s_axi_awburst(M_AXI_DDR4_awburst),
+      .s_axi_awlock(M_AXI_DDR4_awlock),
+      .s_axi_awcache(M_AXI_DDR4_awcache),
+      .s_axi_awprot(M_AXI_DDR4_awprot),
+      .s_axi_awqos(M_AXI_DDR4_awqos),
+      .s_axi_awvalid(M_AXI_DDR4_awvalid),
+      .s_axi_awready(M_AXI_DDR4_awready),
+      .s_axi_wdata(M_AXI_DDR4_wdata),
+      .s_axi_wstrb(M_AXI_DDR4_wstrb),
+      .s_axi_wlast(M_AXI_DDR4_wlast),
+      .s_axi_wvalid(M_AXI_DDR4_wvalid),
+      .s_axi_wready(M_AXI_DDR4_wready),
+      .s_axi_bready(M_AXI_DDR4_bready),
+      .s_axi_bresp(M_AXI_DDR4_bresp),
+      .s_axi_bvalid(M_AXI_DDR4_bvalid),
+      .s_axi_araddr(M_AXI_DDR4_araddr),
+      .s_axi_arlen(M_AXI_DDR4_arlen),
+      .s_axi_arsize(M_AXI_DDR4_arsize),
+      .s_axi_arburst(M_AXI_DDR4_arburst),
+      .s_axi_arlock(M_AXI_DDR4_arlock),
+      .s_axi_arcache(M_AXI_DDR4_arcache),
+      .s_axi_arprot(M_AXI_DDR4_arprot),
+      .s_axi_arqos(M_AXI_DDR4_arqos),
+      .s_axi_arvalid(M_AXI_DDR4_arvalid),
+      .s_axi_arready(M_AXI_DDR4_arready),
+      .s_axi_rready(M_AXI_DDR4_rready),
+      .s_axi_rdata(M_AXI_DDR4_rdata),
+      .s_axi_rresp(M_AXI_DDR4_rresp),
+      .s_axi_rlast(M_AXI_DDR4_rlast),
+      .s_axi_rvalid(M_AXI_DDR4_rvalid)
+  );
+
   RfdcCustomXczu47dr rfdc_custom_i (
       .s_axi_aclk(pl_clk),
       .s_axi_aresetn(pl_aresetn),
