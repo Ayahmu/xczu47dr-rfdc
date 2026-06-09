@@ -118,6 +118,31 @@ module Waveform_System_Top #(
   localparam ST_WAITTRIG = 3'd2; // 预填完成后等待 trigger
   localparam ST_PLAYING  = 3'd3; // trigger 到，DAC 在放行读；等待 FIFO 读空
 
+  localparam CMD_DELAY = 4'd1;
+  localparam CMD_PLAY  = 4'd2;
+  localparam CMD_END   = 4'd3;
+
+  localparam CH1 = 4'd1;
+  localparam CH2 = 4'd2;
+  localparam CH3 = 4'd3;
+  localparam CH4 = 4'd4;
+  localparam CH_AUTO_START = 4'hF;
+
+  wire [3:0]  instr_cmd;
+  wire [3:0]  instr_ch;
+  wire        instr_loop;
+  wire [31:0] instr_value;
+  wire [63:0] instr_addr;
+
+  Waveform_Instruction_Decoder u_instr_decoder (
+    .instr       (main_tdata),
+    .cmd         (instr_cmd),
+    .channel     (instr_ch),
+    .loop_enable (instr_loop),
+    .value       (instr_value),
+    .addr        (instr_addr)
+  );
+
   (* MARK_DEBUG="TRUE" *) reg [2:0] st;
 
   // 当前波配置（在 BUILD 时由指令更新，END 后冻结直到波结束）
@@ -167,11 +192,10 @@ module Waveform_System_Top #(
 
   (* MARK_DEBUG="TRUE" *) reg [1:0] dm_st;
 
-  (* MARK_DEBUG="TRUE" *) reg [63:0] ch1_base_addr, ch2_base_addr, ch3_base_addr, ch4_base_addr;
-  (* MARK_DEBUG="TRUE" *) reg [31:0] ch1_bytes_left, ch2_bytes_left, ch3_bytes_left, ch4_bytes_left;
+  (* MARK_DEBUG="TRUE" *) wire [63:0] ch1_base_addr, ch2_base_addr, ch3_base_addr, ch4_base_addr;
+  (* MARK_DEBUG="TRUE" *) wire [31:0] ch1_bytes_left, ch2_bytes_left, ch3_bytes_left, ch4_bytes_left;
 
-  reg act_ch1_valid_dm, act_ch2_valid_dm, act_ch3_valid_dm, act_ch4_valid_dm;
-  reg ch1_load_tog_d, ch2_load_tog_d, ch3_load_tog_d, ch4_load_tog_d;
+  wire act_ch1_valid_dm, act_ch2_valid_dm, act_ch3_valid_dm, act_ch4_valid_dm;
 
   wire prefill_done = active_valid && (dm_st == DM_IDLE) &&
                       (!cur_ch1_have_play || (ch1_bytes_left == 0)) &&
@@ -194,9 +218,67 @@ module Waveform_System_Top #(
                                  (dm_sel == 2'd1) ? ch2_fifo_ready :
                                  (dm_sel == 2'd2) ? ch3_fifo_ready : ch4_fifo_ready;
   wire beat_fire = s_axis_dm_data_tvalid && s_axis_dm_data_tready;
+  wire dm_chunk_done = (dm_st == DM_STREAM) && beat_fire && ((dm_beats_sent + 1) == dm_chunk_beats);
+  wire [31:0] dm_chunk_bytes = dm_chunk_beats << 4;
 
   // 预取使能：只要 active_valid=1 就允许预取（即 PLAY 到就能预取）
   wire prefetch_en = active_valid;
+
+  Waveform_Channel_State u_ch1_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch1_load_tog),
+    .load_addr       (ch1_load_addr),
+    .load_bytes      (ch1_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 2'd0)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch1_base_addr),
+    .bytes_left      (ch1_bytes_left),
+    .active_valid_dm (act_ch1_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch2_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch2_load_tog),
+    .load_addr       (ch2_load_addr),
+    .load_bytes      (ch2_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 2'd1)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch2_base_addr),
+    .bytes_left      (ch2_bytes_left),
+    .active_valid_dm (act_ch2_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch3_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch3_load_tog),
+    .load_addr       (ch3_load_addr),
+    .load_bytes      (ch3_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 2'd2)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch3_base_addr),
+    .bytes_left      (ch3_bytes_left),
+    .active_valid_dm (act_ch3_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch4_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch4_load_tog),
+    .load_addr       (ch4_load_addr),
+    .load_bytes      (ch4_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 2'd3)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch4_base_addr),
+    .bytes_left      (ch4_bytes_left),
+    .active_valid_dm (act_ch4_valid_dm)
+  );
 
   // need：水位策略（避免溢出）
   wire ch1_need_hard  = (prefetch_en && act_ch1_valid_dm && (ch1_bytes_left != 0) && (ch1_fifo_level_beats < LOW_WM));
@@ -248,61 +330,61 @@ module Waveform_System_Top #(
   wire [31:0] ch3_chunk_bytes_w = ch3_chunk_beats_w << 4;
   wire [31:0] ch4_chunk_bytes_w = ch4_chunk_beats_w << 4;
 
-  function channel_need;
-    input [1:0] channel;
-    input hard;
-    input start;
-    begin
-      case(channel)
-        2'd0: channel_need = hard ? ch1_need_hard : (start ? ch1_need_start : ch1_need_soft);
-        2'd1: channel_need = hard ? ch2_need_hard : (start ? ch2_need_start : ch2_need_soft);
-        2'd2: channel_need = hard ? ch3_need_hard : (start ? ch3_need_start : ch3_need_soft);
-        2'd3: channel_need = hard ? ch4_need_hard : (start ? ch4_need_start : ch4_need_soft);
-      endcase
-    end
+  wire        dma_req_valid;
+  wire [1:0]  dma_req_sel;
+  wire [63:0] dma_req_addr;
+  wire [31:0] dma_req_chunk_beats;
+  wire [31:0] dma_req_chunk_bytes;
+
+  Waveform_Dma_Selector u_dma_selector (
+    .rr              (rr),
+
+    .ch1_need_hard   (ch1_need_hard),
+    .ch2_need_hard   (ch2_need_hard),
+    .ch3_need_hard   (ch3_need_hard),
+    .ch4_need_hard   (ch4_need_hard),
+    .ch1_need_start  (ch1_need_start),
+    .ch2_need_start  (ch2_need_start),
+    .ch3_need_start  (ch3_need_start),
+    .ch4_need_start  (ch4_need_start),
+    .ch1_need_soft   (ch1_need_soft),
+    .ch2_need_soft   (ch2_need_soft),
+    .ch3_need_soft   (ch3_need_soft),
+    .ch4_need_soft   (ch4_need_soft),
+
+    .ch1_base_addr   (ch1_base_addr),
+    .ch2_base_addr   (ch2_base_addr),
+    .ch3_base_addr   (ch3_base_addr),
+    .ch4_base_addr   (ch4_base_addr),
+    .ch1_chunk_beats (ch1_chunk_beats_w),
+    .ch2_chunk_beats (ch2_chunk_beats_w),
+    .ch3_chunk_beats (ch3_chunk_beats_w),
+    .ch4_chunk_beats (ch4_chunk_beats_w),
+    .ch1_chunk_bytes (ch1_chunk_bytes_w),
+    .ch2_chunk_bytes (ch2_chunk_bytes_w),
+    .ch3_chunk_bytes (ch3_chunk_bytes_w),
+    .ch4_chunk_bytes (ch4_chunk_bytes_w),
+
+    .req_valid       (dma_req_valid),
+    .req_sel         (dma_req_sel),
+    .req_addr        (dma_req_addr),
+    .req_chunk_beats (dma_req_chunk_beats),
+    .req_chunk_bytes (dma_req_chunk_bytes)
+  );
+
+  function [31:0] max2;
+    input [31:0] a;
+    input [31:0] b;
+    begin max2 = (a > b) ? a : b; end
   endfunction
 
-  function [1:0] rr_add;
-    input [1:0] base;
-    input [1:0] offset;
-    begin rr_add = base + offset; end
+  function [31:0] max4;
+    input [31:0] a;
+    input [31:0] b;
+    input [31:0] c;
+    input [31:0] d;
+    begin max4 = max2(max2(a, b), max2(c, d)); end
   endfunction
-
-  reg [1:0] sel_next;
-  reg [1:0] sel_candidate;
-  always @* begin
-    sel_next = dm_sel;
-    sel_candidate = rr_add(rr, 2'd3);
-    if(channel_need(sel_candidate, 1'b1, 1'b0)) sel_next = sel_candidate;
-    sel_candidate = rr_add(rr, 2'd2);
-    if(channel_need(sel_candidate, 1'b1, 1'b0)) sel_next = sel_candidate;
-    sel_candidate = rr_add(rr, 2'd1);
-    if(channel_need(sel_candidate, 1'b1, 1'b0)) sel_next = sel_candidate;
-    sel_candidate = rr_add(rr, 2'd0);
-    if(channel_need(sel_candidate, 1'b1, 1'b0)) sel_next = sel_candidate;
-
-    if(!channel_need(sel_next, 1'b1, 1'b0)) begin
-      sel_candidate = rr_add(rr, 2'd3);
-      if(channel_need(sel_candidate, 1'b0, 1'b1)) sel_next = sel_candidate;
-      sel_candidate = rr_add(rr, 2'd2);
-      if(channel_need(sel_candidate, 1'b0, 1'b1)) sel_next = sel_candidate;
-      sel_candidate = rr_add(rr, 2'd1);
-      if(channel_need(sel_candidate, 1'b0, 1'b1)) sel_next = sel_candidate;
-      sel_candidate = rr_add(rr, 2'd0);
-      if(channel_need(sel_candidate, 1'b0, 1'b1)) sel_next = sel_candidate;
-    end
-
-    if(!channel_need(sel_next, 1'b1, 1'b0) && !channel_need(sel_next, 1'b0, 1'b1)) begin
-      sel_candidate = rr_add(rr, 2'd3);
-      if(channel_need(sel_candidate, 1'b0, 1'b0)) sel_next = sel_candidate;
-      sel_candidate = rr_add(rr, 2'd2);
-      if(channel_need(sel_candidate, 1'b0, 1'b0)) sel_next = sel_candidate;
-      sel_candidate = rr_add(rr, 2'd1);
-      if(channel_need(sel_candidate, 1'b0, 1'b0)) sel_next = sel_candidate;
-      sel_candidate = rr_add(rr, 2'd0);
-      if(channel_need(sel_candidate, 1'b0, 1'b0)) sel_next = sel_candidate;
-    end
-  end
 
   // =========================================================
   // 5) wave_done：只在 PLAYING 状态判断结束
@@ -388,61 +470,61 @@ module Waveform_System_Top #(
           // 来指令就处理；PLAY 立刻启动预取
           if(main_tvalid && main_tready) begin
             // IDLE
-            if(main_tdata[3:0] == 4'd1) begin
-              if(main_tdata[7:4] == 4'd1) cur_ch1_delay <= main_tdata[63:32];
-              if(main_tdata[7:4] == 4'd2) cur_ch2_delay <= main_tdata[63:32];
-              if(main_tdata[7:4] == 4'd3) cur_ch3_delay <= main_tdata[63:32];
-              if(main_tdata[7:4] == 4'd4) cur_ch4_delay <= main_tdata[63:32];
+            if(instr_cmd == CMD_DELAY) begin
+              if(instr_ch == CH1) cur_ch1_delay <= instr_value;
+              if(instr_ch == CH2) cur_ch2_delay <= instr_value;
+              if(instr_ch == CH3) cur_ch3_delay <= instr_value;
+              if(instr_ch == CH4) cur_ch4_delay <= instr_value;
 
             end
             // PLAY
-            else if(main_tdata[3:0] == 4'd2) begin
-              if(main_tdata[7:4] == 4'd1) begin
+            else if(instr_cmd == CMD_PLAY) begin
+              if(instr_ch == CH1) begin
                 // 只允许本波第一次 PLAY 配置 ch1（避免覆盖已预取的数据）
                 if(!cur_ch1_have_play) begin
                   cur_ch1_have_play <= 1'b1;
-                  ch1_len_beats <= (main_tdata[63:32] >> 4);
+                  ch1_len_beats <= (instr_value >> 4);
 
                   // 发 load 请求给 DMA（toggle + payload）
-                  ch1_load_addr  <= main_tdata[127:64];
-                  ch1_load_bytes <= main_tdata[63:32];
+                  ch1_load_addr  <= instr_addr;
+                  ch1_load_bytes <= instr_value;
                   ch1_load_tog   <= ~ch1_load_tog;
 
                   // 有 PLAY 就 active_valid=1（允许预取）
                   active_valid <= 1'b1;
                 end
               end
-              if(main_tdata[7:4] == 4'd2) begin
+              if(instr_ch == CH2) begin
                 if(!cur_ch2_have_play) begin
                   cur_ch2_have_play <= 1'b1;
-                  ch2_len_beats <= (main_tdata[63:32] >> 4);
+                  ch2_len_beats <= (instr_value >> 4);
 
-                  ch2_load_addr  <= main_tdata[127:64];
-                  ch2_load_bytes <= main_tdata[63:32];
+                  ch2_load_addr  <= instr_addr;
+                  ch2_load_bytes <= instr_value;
                   ch2_load_tog   <= ~ch2_load_tog;
 
                   active_valid <= 1'b1;
                 end
               end
-              if(main_tdata[7:4] == 4'd3) begin
+              if(instr_ch == CH3) begin
                 if(!cur_ch3_have_play) begin
                   cur_ch3_have_play <= 1'b1;
-                  ch3_len_beats <= (main_tdata[63:32] >> 4);
+                  ch3_len_beats <= (instr_value >> 4);
 
-                  ch3_load_addr  <= main_tdata[127:64];
-                  ch3_load_bytes <= main_tdata[63:32];
+                  ch3_load_addr  <= instr_addr;
+                  ch3_load_bytes <= instr_value;
                   ch3_load_tog   <= ~ch3_load_tog;
 
                   active_valid <= 1'b1;
                 end
               end
-              if(main_tdata[7:4] == 4'd4) begin
+              if(instr_ch == CH4) begin
                 if(!cur_ch4_have_play) begin
                   cur_ch4_have_play <= 1'b1;
-                  ch4_len_beats <= (main_tdata[63:32] >> 4);
+                  ch4_len_beats <= (instr_value >> 4);
 
-                  ch4_load_addr  <= main_tdata[127:64];
-                  ch4_load_bytes <= main_tdata[63:32];
+                  ch4_load_addr  <= instr_addr;
+                  ch4_load_bytes <= instr_value;
                   ch4_load_tog   <= ~ch4_load_tog;
 
                   active_valid <= 1'b1;
@@ -450,13 +532,13 @@ module Waveform_System_Top #(
               end
             end
             // END
-            else if(main_tdata[3:0] == 4'd3) begin
+            else if(instr_cmd == CMD_END) begin
               // 如果本波没有任何 PLAY，则忽略（不进入等待触发）
               if(cur_ch1_have_play || cur_ch2_have_play || cur_ch3_have_play || cur_ch4_have_play) begin
                 st <= ST_PREFILL;
-                pending_valid <= (main_tdata[7:4] != 4'hF);
-                prefill_auto_start <= (main_tdata[7:4] == 4'hF);
-                loop_enable <= main_tdata[8];
+                pending_valid <= (instr_ch != CH_AUTO_START);
+                prefill_auto_start <= (instr_ch == CH_AUTO_START);
+                loop_enable <= instr_loop;
                 cfg_auto_start <= 1'b0;
 
                 // END 时冻结最终 delay/arm，等预填完成后再写 DAC cfg FIFO
@@ -470,9 +552,7 @@ module Waveform_System_Top #(
                 ch3_arm <= cur_ch3_have_play;
                 ch4_arm <= cur_ch4_have_play;
 
-                run_delay_cnt <= (cur_ch1_delay > cur_ch2_delay) ?
-                                 ((cur_ch1_delay > cur_ch3_delay) ? ((cur_ch1_delay > cur_ch4_delay) ? cur_ch1_delay : cur_ch4_delay) : ((cur_ch3_delay > cur_ch4_delay) ? cur_ch3_delay : cur_ch4_delay)) :
-                                 ((cur_ch2_delay > cur_ch3_delay) ? ((cur_ch2_delay > cur_ch4_delay) ? cur_ch2_delay : cur_ch4_delay) : ((cur_ch3_delay > cur_ch4_delay) ? cur_ch3_delay : cur_ch4_delay));
+                run_delay_cnt <= max4(cur_ch1_delay, cur_ch2_delay, cur_ch3_delay, cur_ch4_delay);
               end
             end
           end
@@ -524,24 +604,6 @@ module Waveform_System_Top #(
       dm_chunk_beats <= 32'd0;
       dm_beats_sent  <= 32'd0;
 
-      ch1_base_addr  <= 64'd0;
-      ch2_base_addr  <= 64'd0;
-      ch3_base_addr  <= 64'd0;
-      ch4_base_addr  <= 64'd0;
-      ch1_bytes_left <= 32'd0;
-      ch2_bytes_left <= 32'd0;
-      ch3_bytes_left <= 32'd0;
-      ch4_bytes_left <= 32'd0;
-
-      act_ch1_valid_dm <= 1'b0;
-      act_ch2_valid_dm <= 1'b0;
-      act_ch3_valid_dm <= 1'b0;
-      act_ch4_valid_dm <= 1'b0;
-
-      ch1_load_tog_d <= 1'b0;
-      ch2_load_tog_d <= 1'b0;
-      ch3_load_tog_d <= 1'b0;
-      ch4_load_tog_d <= 1'b0;
     end else begin
       // active_valid=0：清空 DMA 段状态
       if(!prefetch_en) begin
@@ -550,77 +612,17 @@ module Waveform_System_Top #(
         m_axis_dm_cmd_tdata  <= 104'd0;
         dm_beats_sent <= 0;
 
-        ch1_base_addr  <= 64'd0;
-        ch2_base_addr  <= 64'd0;
-        ch3_base_addr  <= 64'd0;
-        ch4_base_addr  <= 64'd0;
-        ch1_bytes_left <= 32'd0;
-        ch2_bytes_left <= 32'd0;
-        ch3_bytes_left <= 32'd0;
-        ch4_bytes_left <= 32'd0;
-
-        act_ch1_valid_dm <= 1'b0;
-        act_ch2_valid_dm <= 1'b0;
-        act_ch3_valid_dm <= 1'b0;
-        act_ch4_valid_dm <= 1'b0;
-
-        ch1_load_tog_d <= ch1_load_tog;
-        ch2_load_tog_d <= ch2_load_tog;
-        ch3_load_tog_d <= ch3_load_tog;
-        ch4_load_tog_d <= ch4_load_tog;
       end else begin
-        // 捕获 PLAY load 请求（toggle edge detect）
-        if(ch1_load_tog_d != ch1_load_tog) begin
-          ch1_load_tog_d <= ch1_load_tog;
-          ch1_base_addr  <= ch1_load_addr;
-          ch1_bytes_left <= ch1_load_bytes;
-          act_ch1_valid_dm <= (ch1_load_bytes != 0);
-        end
-        if(ch2_load_tog_d != ch2_load_tog) begin
-          ch2_load_tog_d <= ch2_load_tog;
-          ch2_base_addr  <= ch2_load_addr;
-          ch2_bytes_left <= ch2_load_bytes;
-          act_ch2_valid_dm <= (ch2_load_bytes != 0);
-        end
-        if(ch3_load_tog_d != ch3_load_tog) begin
-          ch3_load_tog_d <= ch3_load_tog;
-          ch3_base_addr  <= ch3_load_addr;
-          ch3_bytes_left <= ch3_load_bytes;
-          act_ch3_valid_dm <= (ch3_load_bytes != 0);
-        end
-        if(ch4_load_tog_d != ch4_load_tog) begin
-          ch4_load_tog_d <= ch4_load_tog;
-          ch4_base_addr  <= ch4_load_addr;
-          ch4_bytes_left <= ch4_load_bytes;
-          act_ch4_valid_dm <= (ch4_load_bytes != 0);
-        end
-
         // DMA 状态机
         case(dm_st)
           DM_IDLE: begin
             m_axis_dm_cmd_tvalid <= 1'b0;
             dm_beats_sent <= 0;
 
-            dm_sel <= sel_next;
-
-            if((sel_next == 2'd0) && ch1_need_soft) begin
-              dm_chunk_beats       <= ch1_chunk_beats_w;
-              m_axis_dm_cmd_tdata  <= make_dm_cmd(ch1_base_addr, ch1_chunk_bytes_w);
-              m_axis_dm_cmd_tvalid <= 1'b1;
-              dm_st <= DM_SENDCMD;
-            end else if((sel_next == 2'd1) && ch2_need_soft) begin
-              dm_chunk_beats       <= ch2_chunk_beats_w;
-              m_axis_dm_cmd_tdata  <= make_dm_cmd(ch2_base_addr, ch2_chunk_bytes_w);
-              m_axis_dm_cmd_tvalid <= 1'b1;
-              dm_st <= DM_SENDCMD;
-            end else if((sel_next == 2'd2) && ch3_need_soft) begin
-              dm_chunk_beats       <= ch3_chunk_beats_w;
-              m_axis_dm_cmd_tdata  <= make_dm_cmd(ch3_base_addr, ch3_chunk_bytes_w);
-              m_axis_dm_cmd_tvalid <= 1'b1;
-              dm_st <= DM_SENDCMD;
-            end else if((sel_next == 2'd3) && ch4_need_soft) begin
-              dm_chunk_beats       <= ch4_chunk_beats_w;
-              m_axis_dm_cmd_tdata  <= make_dm_cmd(ch4_base_addr, ch4_chunk_bytes_w);
+            if(dma_req_valid) begin
+              dm_sel               <= dma_req_sel;
+              dm_chunk_beats       <= dma_req_chunk_beats;
+              m_axis_dm_cmd_tdata  <= make_dm_cmd(dma_req_addr, dma_req_chunk_bytes);
               m_axis_dm_cmd_tvalid <= 1'b1;
               dm_st <= DM_SENDCMD;
             end else begin
@@ -640,21 +642,7 @@ module Waveform_System_Top #(
             if(beat_fire) begin
               dm_beats_sent <= dm_beats_sent + 1;
 
-              if(dm_beats_sent + 1 == dm_chunk_beats) begin
-                // chunk 完成：更新 base/left（方案A）
-                if(dm_sel == 2'd0) begin
-                  ch1_base_addr  <= ch1_base_addr  + (dm_chunk_beats << 4);
-                  ch1_bytes_left <= ch1_bytes_left - (dm_chunk_beats << 4);
-                end else if(dm_sel == 2'd1) begin
-                  ch2_base_addr  <= ch2_base_addr  + (dm_chunk_beats << 4);
-                  ch2_bytes_left <= ch2_bytes_left - (dm_chunk_beats << 4);
-                end else if(dm_sel == 2'd2) begin
-                  ch3_base_addr  <= ch3_base_addr  + (dm_chunk_beats << 4);
-                  ch3_bytes_left <= ch3_bytes_left - (dm_chunk_beats << 4);
-                end else begin
-                  ch4_base_addr  <= ch4_base_addr  + (dm_chunk_beats << 4);
-                  ch4_bytes_left <= ch4_bytes_left - (dm_chunk_beats << 4);
-                end
+              if(dm_chunk_done) begin
                 dm_st <= DM_IDLE;
               end
             end
@@ -696,5 +684,188 @@ module Waveform_System_Top #(
   assign dbg_pending_valid = pending_valid;
   assign dbg_active_valid  = active_valid;
   assign dbg_run_delay_cnt = run_delay_cnt;
+
+endmodule
+
+module Waveform_Instruction_Decoder (
+    input  wire [127:0] instr,
+    output wire [3:0]   cmd,
+    output wire [3:0]   channel,
+    output wire         loop_enable,
+    output wire [31:0]  value,
+    output wire [63:0]  addr
+);
+
+  assign cmd         = instr[3:0];
+  assign channel     = instr[7:4];
+  assign loop_enable = instr[8];
+  assign value       = instr[63:32];
+  assign addr        = instr[127:64];
+
+endmodule
+
+module Waveform_Channel_State (
+    input  wire        aclk,
+    input  wire        aresetn,
+    input  wire        prefetch_en,
+    input  wire        load_tog,
+    input  wire [63:0] load_addr,
+    input  wire [31:0] load_bytes,
+    input  wire        chunk_done,
+    input  wire [31:0] chunk_bytes,
+
+    output reg  [63:0] base_addr,
+    output reg  [31:0] bytes_left,
+    output reg         active_valid_dm
+);
+
+  reg load_tog_d;
+
+  always @(posedge aclk or negedge aresetn) begin
+    if(!aresetn) begin
+      base_addr       <= 64'd0;
+      bytes_left      <= 32'd0;
+      active_valid_dm <= 1'b0;
+      load_tog_d      <= 1'b0;
+    end else if(!prefetch_en) begin
+      base_addr       <= 64'd0;
+      bytes_left      <= 32'd0;
+      active_valid_dm <= 1'b0;
+      load_tog_d      <= load_tog;
+    end else begin
+      if(load_tog_d != load_tog) begin
+        load_tog_d      <= load_tog;
+        base_addr       <= load_addr;
+        bytes_left      <= load_bytes;
+        active_valid_dm <= (load_bytes != 0);
+      end
+
+      if(chunk_done) begin
+        base_addr  <= base_addr + chunk_bytes;
+        bytes_left <= bytes_left - chunk_bytes;
+      end
+    end
+  end
+
+endmodule
+
+module Waveform_Dma_Selector (
+    input  wire [1:0]  rr,
+
+    input  wire        ch1_need_hard,
+    input  wire        ch2_need_hard,
+    input  wire        ch3_need_hard,
+    input  wire        ch4_need_hard,
+    input  wire        ch1_need_start,
+    input  wire        ch2_need_start,
+    input  wire        ch3_need_start,
+    input  wire        ch4_need_start,
+    input  wire        ch1_need_soft,
+    input  wire        ch2_need_soft,
+    input  wire        ch3_need_soft,
+    input  wire        ch4_need_soft,
+
+    input  wire [63:0] ch1_base_addr,
+    input  wire [63:0] ch2_base_addr,
+    input  wire [63:0] ch3_base_addr,
+    input  wire [63:0] ch4_base_addr,
+    input  wire [31:0] ch1_chunk_beats,
+    input  wire [31:0] ch2_chunk_beats,
+    input  wire [31:0] ch3_chunk_beats,
+    input  wire [31:0] ch4_chunk_beats,
+    input  wire [31:0] ch1_chunk_bytes,
+    input  wire [31:0] ch2_chunk_bytes,
+    input  wire [31:0] ch3_chunk_bytes,
+    input  wire [31:0] ch4_chunk_bytes,
+
+    output reg         req_valid,
+    output reg  [1:0]  req_sel,
+    output reg  [63:0] req_addr,
+    output reg  [31:0] req_chunk_beats,
+    output reg  [31:0] req_chunk_bytes
+);
+
+  function channel_need;
+    input [1:0] channel;
+    input       need_ch1;
+    input       need_ch2;
+    input       need_ch3;
+    input       need_ch4;
+    begin
+      case(channel)
+        2'd0: channel_need = need_ch1;
+        2'd1: channel_need = need_ch2;
+        2'd2: channel_need = need_ch3;
+        2'd3: channel_need = need_ch4;
+      endcase
+    end
+  endfunction
+
+  function [2:0] select_priority;
+    input [1:0] base;
+    input       need_ch1;
+    input       need_ch2;
+    input       need_ch3;
+    input       need_ch4;
+    integer index;
+    reg [1:0] candidate;
+    begin
+      select_priority = {1'b0, base};
+      for(index = 0; index < 4; index = index + 1) begin
+        candidate = base + index[1:0];
+        if(!select_priority[2] && channel_need(candidate, need_ch1, need_ch2, need_ch3, need_ch4)) begin
+          select_priority = {1'b1, candidate};
+        end
+      end
+    end
+  endfunction
+
+  reg [2:0] hard_sel;
+  reg [2:0] start_sel;
+  reg [2:0] soft_sel;
+  reg [2:0] selected;
+
+  always @* begin
+    hard_sel  = select_priority(rr, ch1_need_hard,  ch2_need_hard,  ch3_need_hard,  ch4_need_hard);
+    start_sel = select_priority(rr, ch1_need_start, ch2_need_start, ch3_need_start, ch4_need_start);
+    soft_sel  = select_priority(rr, ch1_need_soft,  ch2_need_soft,  ch3_need_soft,  ch4_need_soft);
+
+    if(hard_sel[2]) begin
+      selected = hard_sel;
+    end else if(start_sel[2]) begin
+      selected = start_sel;
+    end else begin
+      selected = soft_sel;
+    end
+
+    req_valid       = selected[2];
+    req_sel         = selected[1:0];
+    req_addr        = 64'd0;
+    req_chunk_beats = 32'd0;
+    req_chunk_bytes = 32'd0;
+
+    case(selected[1:0])
+      2'd0: begin
+        req_addr        = ch1_base_addr;
+        req_chunk_beats = ch1_chunk_beats;
+        req_chunk_bytes = ch1_chunk_bytes;
+      end
+      2'd1: begin
+        req_addr        = ch2_base_addr;
+        req_chunk_beats = ch2_chunk_beats;
+        req_chunk_bytes = ch2_chunk_bytes;
+      end
+      2'd2: begin
+        req_addr        = ch3_base_addr;
+        req_chunk_beats = ch3_chunk_beats;
+        req_chunk_bytes = ch3_chunk_bytes;
+      end
+      2'd3: begin
+        req_addr        = ch4_base_addr;
+        req_chunk_beats = ch4_chunk_beats;
+        req_chunk_bytes = ch4_chunk_bytes;
+      end
+    endcase
+  end
 
 endmodule
