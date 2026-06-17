@@ -5,7 +5,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 
-set target "zcu216"
+set target "custom_xczu47dr"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -20,24 +20,7 @@ set proj_file "${proj_dir}/${proj_name}.xpr"
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 
-set xxv_xci "${vivado_dir}/ip/xxv_ethernet_1/xxv_ethernet.xci"
-set xxv_file [get_files -quiet ${xxv_xci}]
-if {$target eq "custom_xczu47dr"} {
-    puts "INFO: Skipping XXV Ethernet OOC synthesis for ${target}; using reference DCP"
-} elseif {[llength ${xxv_file}] > 0} {
-    puts "INFO: Ensuring XXV Ethernet OOC checkpoint is generated"
-    set_property generate_synth_checkpoint true ${xxv_file}
-    generate_target all ${xxv_file}
-    set xxv_runs [get_runs -quiet xxv_ethernet_synth_1]
-    if {[llength ${xxv_runs}] == 0} {
-        set xxv_runs [create_ip_run ${xxv_file}]
-    }
-    foreach xxv_run ${xxv_runs} {
-        reset_run ${xxv_run}
-        launch_runs ${xxv_run} -jobs 8
-        wait_on_run ${xxv_run}
-    }
-}
+puts "INFO: Skipping XXV Ethernet OOC synthesis; using reference DCP"
 
 restore_reference_xxv_dcp ${vivado_dir} ${target}
 

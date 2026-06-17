@@ -1,6 +1,6 @@
 # Chisel Hardware Design
 
-This directory contains Chisel (Constructing Hardware in a Scala Embedded Language) sources for custom hardware modules used in the ZCU216 RFDC project.
+This directory contains Chisel (Constructing Hardware in a Scala Embedded Language) sources for custom hardware modules used in the XCZU47DR RFDC project.
 
 ## Overview
 

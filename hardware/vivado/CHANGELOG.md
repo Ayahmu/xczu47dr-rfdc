@@ -104,7 +104,7 @@ fi
 - ILA debug probes for AXI memory-mapped transactions
 
 **Workaround if debugging is needed**:
-1. Open project in Vivado GUI: `vivado work/zcu216_rfdc.xpr`
+1. Open project in Vivado GUI: `vivado work/custom_xczu47dr_rfdc.xpr`
 2. Manually add ILA IP cores as needed
 3. Configure debug probes
 4. Run synthesis/implementation from GUI

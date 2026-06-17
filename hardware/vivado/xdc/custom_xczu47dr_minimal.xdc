@@ -191,7 +191,7 @@ set_property PACKAGE_PIN AF19 [get_ports {c0_ddr4_dq[63]}]
 
 
 # The PS PL clock, DDR UI clock, and RFDC DAC fabric clock are independent
-# domains. Match the original ZCU216 timing intent for the custom target so
+# domains. Keep these as asynchronous clock groups for the custom target so
 # async FIFO/CDC crossings are not timed as synchronous paths.
 set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet clk_pl_0] \

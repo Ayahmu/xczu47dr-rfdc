@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${TARGET:-zcu216}"
+TARGET="${TARGET:-custom_xczu47dr}"
 WORK_DIR="${SCRIPT_DIR}/work"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 

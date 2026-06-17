@@ -1,6 +1,6 @@
 # XCZU47DR RFDC
 
-FPGA, bare-metal firmware, and host-control project for custom XCZU47DR RFDC waveform playback, migrated from the ZCU216 RFDC baseline.
+FPGA, bare-metal firmware, and host-control project for custom XCZU47DR RFDC waveform playback.
 
 ## Project Layout
 
@@ -21,42 +21,31 @@ xczu47dr-rfdc/
 
 ## Top-Level Workflow
 
-Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The default target is `TARGET=zcu216`. Use `TARGET=custom_xczu47dr` for the custom XCZU47DR four-DAC bring-up flow.
+Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The only supported target is `custom_xczu47dr`, and it is the default.
 
 ```bash
-# Full default ZCU216 hardware and firmware build
-make all
-TARGET=zcu216 make all
-
 # Full custom XCZU47DR hardware and firmware build
-TARGET=custom_xczu47dr make all
+make all
 
 # Build only FPGA artifacts: Chisel RTL, Vivado project, synth, impl, bitstream, XSA
 make hardware
-TARGET=zcu216 make hardware
-TARGET=custom_xczu47dr make hardware
 
 # Build only firmware from the current XSA
 make firmware
-TARGET=zcu216 make firmware
-TARGET=custom_xczu47dr make firmware
 
 # Verify expected handoff artifacts exist
 make artifacts
-TARGET=custom_xczu47dr make artifacts
 
-# Program the ZCU216 over JTAG with the default target bitstream and ELF
+# Program the custom board over JTAG with the default bitstream and ELF
 make run
-TARGET=zcu216 make run
 
-# Select the custom target, or program with explicit artifacts
-TARGET=custom_xczu47dr make run
+# Or program with explicit artifacts
 make run BIT=/path/to/top.bit ELF=/path/to/app.elf PSU_INIT=/path/to/psu_init.tcl
 
-# Preview custom firmware create and program paths without XSCT or JTAG actions
+# Preview firmware create and program paths without XSCT or JTAG actions
 cd firmware
-DRY_RUN=1 TARGET=custom_xczu47dr ./build.sh create
-DRY_RUN=1 TARGET=custom_xczu47dr ./build.sh program
+DRY_RUN=1 ./build.sh create
+DRY_RUN=1 ./build.sh program
 
 # Offline host validation without board access
 make host-dry-run
@@ -65,15 +54,7 @@ make host-dry-run
 python3 software/waveform_gui.py
 ```
 
-Default `TARGET=zcu216` handoff artifacts:
-
-- Bitstream: `hardware/vivado/output/zcu216_rfdc.bit`
-- Debug probes: `hardware/vivado/output/zcu216_rfdc.ltx`
-- Hardware handoff: `hardware/vivado/output/zcu216_rfdc.xsa`
-- Firmware ELF: `firmware/workspace/rfdc_app/Debug/rfdc_app.elf`
-- PS init script: `firmware/workspace/hw_platform/hw/psu_init.tcl`
-
-Custom `TARGET=custom_xczu47dr` handoff artifacts:
+Default handoff artifacts:
 
 - Bitstream: `hardware/vivado/output/custom_xczu47dr_rfdc.bit`
 - Debug probes: `hardware/vivado/output/custom_xczu47dr_rfdc.ltx`
@@ -81,11 +62,11 @@ Custom `TARGET=custom_xczu47dr` handoff artifacts:
 - Firmware ELF: `firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
 - PS init script: `firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl`
 
-`make run` programs the selected target over JTAG with the `.bit`, runs PS initialization from `psu_init.tcl`, downloads the ELF to `Cortex-A53 #0`, and starts execution. Use UART at 115200 baud to inspect firmware output. For `TARGET=custom_xczu47dr`, verify the HMC7044 sequencer done bit, RFDC DAC tile startup messages, and per-channel analog output before treating a bitstream as hardware-qualified.
+`make run` programs the custom board over JTAG with the `.bit`, runs PS initialization from `psu_init.tcl`, downloads the ELF to `Cortex-A53 #0`, and starts execution. Use UART at 115200 baud to inspect firmware output. Verify the HMC7044 sequencer done bit, RFDC DAC tile startup messages, and per-channel analog output before treating a bitstream as hardware-qualified.
 
 ## Custom XCZU47DR Bring-Up Scope
 
-`TARGET=custom_xczu47dr` selects the `xczu47dr-ffvg1517-2-i` part without a Vivado `board_part`, uses `hardware/vivado/xdc/custom_xczu47dr_minimal.xdc`, and selects the `TopCustomXczu47dr` wrapper. The wrapper drives the XS18 `TRIG_1` MMCX output from package ball A6 as an END-after-commit trigger/debug pulse.
+The build selects the `xczu47dr-ffvg1517-2-i` part without a Vivado `board_part`, uses `hardware/vivado/xdc/custom_xczu47dr_minimal.xdc`, and selects the `TopCustomXczu47dr` wrapper. The wrapper drives the XS18 `TRIG_1` MMCX output from package ball A6 as an END-after-commit trigger/debug pulse.
 
 The current custom scope is four-channel DAC playback on the custom XCZU47DR board. CH1/CH2/CH3/CH4 map to RFDC DAC20/DAC22/DAC30/DAC32 and DDR offsets `0x0`/`0x1000`/`0x2000`/`0x3000`. PCIe, QSFP, Type-C, Aurora, ADC capture, LEDs, and unrelated board interfaces remain outside this bring-up scope unless requested later.
 
@@ -101,7 +82,6 @@ Generated custom bitstream, XSA, and firmware ELF artifacts exist, but hardware 
 
 - Vivado 2024.2
 - Vitis/XSCT 2024.2
-- ZCU216 board files
 - Mill 0.11.6 and Java for Chisel generation
 - Python 3 with packages from `software/requirements.txt`
 

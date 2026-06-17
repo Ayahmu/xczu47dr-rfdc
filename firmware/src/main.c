@@ -11,11 +11,6 @@
 #include "xil_cache.h"
 
 #include "xrfdc.h"
-#include "modules/rf/LMK_display.h"
-#include "modules/rf/LMX_display.h"
-#if defined(BOARD_ZCU216)
-#include "modules/rf/xrfclk.h"
-#endif
 
 #include "platform/platform.h"
 #include "modules/dma/dma_ctrl.h"
@@ -26,33 +21,21 @@
 /******************** Constant Definitions **********************************/
 #define ENABLE_METAL_PRINTS
 
-#if defined(BOARD_ZCU216) == defined(BOARD_CUSTOM_XCZU47DR)
-#error "Define exactly one firmware board: BOARD_ZCU216 or BOARD_CUSTOM_XCZU47DR"
+#if !defined(BOARD_CUSTOM_XCZU47DR)
+#error "Define BOARD_CUSTOM_XCZU47DR"
 #endif
 
 #define URAM_PLAY_BASE XPAR_HIER_PLAY_AXI_BRAM_CTRL_0_S_AXI_BASEADDR
-
-// PLL debug defines. Will print all calculated values
-#undef LMK_DEBUG
-#undef LMX_DEBUG
 
 // XAxiDma AxiDma;
 
 void my_metal_default_log_handler(enum metal_log_level level,
 								  const char *format, ...);
 
-#if defined(BOARD_ZCU216)
-static int resetAllClk104(void);
-#endif
 void reverse32bArray(u32 *src, int size);
-#if defined(BOARD_ZCU216)
-void printCLK104_settings(void);
-#endif
 int rfdcStartup(void);
 int Configure_DAC_Output_Current(void);
-#if defined(BOARD_CUSTOM_XCZU47DR)
 int Configure_Custom_DAC_Nyquist(void);
-#endif
 
 /************************** Variable Definitions *****************************/
 
@@ -64,42 +47,11 @@ char BLINK_ON[5] = "\x1B[5m";
 char REVERSE_ON[5] = "\x1B[5m";
 char CLR_SCREEN[5] = "\x1B[2J";
 
-#if defined(BOARD_ZCU216)
-// data buffer used for reading PLL registers
-static u32 data[256];
-#endif
-
-const char clkoutBrdNames[][18] = {
-	"RFIN_RF1",
-	"RF1_ADC_SYNC",
-	"NC",
-	"AMS_SYSREF",
-	"RFIN_RF2",
-	"RF2_DAC_SYNC",
-	"DAC_REFCLK",
-	"DDR_PL_CAP_SYNC",
-	"PL_CLK",
-	"PL_SYSREF",
-	"NC",
-	"J10 SINGLE END",
-	"ADC_REFCLK",
-	"NC",
-};
-
-lmk_config_t lmkConfig;
-lmx_config_t lmxConfig;
-
-#if defined(BOARD_ZCU216)
-extern const u32 LMK_CKin[LMK_FREQ_NUM][LMK_COUNT];
-extern const u32 LMX2594[][LMX2594_COUNT];
-#endif
-
 #include "xtime_l.h"
 #define TEST_LENGTH (32 * 1024 * 1024)
 
 XRFdc RFdcInst; /* RFdc driver instance */
 
-#if defined(BOARD_CUSTOM_XCZU47DR)
 #define DEBUG_WAVEFORM_BYTES 4096U
 #define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
 #define HMC7044_POLL_COUNT 50
@@ -126,7 +78,6 @@ static void preload_debug_waveforms(void)
 		   (unsigned long)(((u64)(UINTPTR)ch2) & 0xffffffffU),
 		   (unsigned long)DEBUG_WAVEFORM_BYTES);
 }
-#endif
 
 int Init_GPIO(void)
 {
@@ -187,7 +138,6 @@ int Configure_DAC_Output_Current(void)
 	return XST_SUCCESS;
 }
 
-#if defined(BOARD_CUSTOM_XCZU47DR)
 int Configure_Custom_DAC_Nyquist(void)
 {
 	static const struct {
@@ -219,7 +169,6 @@ int Configure_Custom_DAC_Nyquist(void)
 
 	return XST_SUCCESS;
 }
-#endif
 
 /*****************************************************************************/
 /**
@@ -244,10 +193,6 @@ int main(void)
 	u32 Major;
 	int Status;
 	XRFdc_Config *ConfigPtr;
-	#if defined(BOARD_ZCU216)
-	int lmkConfigIndex;
-	#endif
-
 	init_platform();
 
 	// Initialize CLI commands structure
@@ -265,34 +210,6 @@ int main(void)
 	// Configure board clocks
 	xil_printf("\nConfiguring the data converter clocks...\r\n");
 
-#if defined(BOARD_ZCU216)
-	// initialize and reset CLK104 devices on i2c and i2c muxes
-	XRFClk_Init();
-
-	if (resetAllClk104() == EXIT_FAILURE)
-	{
-		xil_printf("resetAllClk104() failed\n\r");
-		return XST_FAILURE;
-	}
-
-	xil_printf("Configuring CLK104 LMK and LMX devices\r\n");
-
-	/* Set config on all chips */
-	// using below LMK config index
-	lmkConfigIndex = 7;
-
-	// LMX2594_FREQ_300M00_PD	if (XST_FAILURE == XRFClk_SetConfigOnAllChipsFromConfigId(lmkConfigIndex, LMX2594_FREQ_8192M00, LMX2594_FREQ_7864M32)) {
-	if (XST_FAILURE == XRFClk_SetConfigOnAllChipsFromConfigId(lmkConfigIndex, LMX2594_FREQ_1474M56, LMX2594_FREQ_1474M56))
-	{
-		printf("Failure in XRFClk_SetConfigOnAllChipsFromConfigId()\n\r");
-		return XST_FAILURE;
-	}
-
-	// Print clock settings to the terminal
-	printCLK104_settings();
-	/* Close spi connections to clk104 */
-	XRFClk_Close();
-#elif defined(BOARD_CUSTOM_XCZU47DR)
 	xil_printf("Custom XCZU47DR clock policy: HMC7044 is programmed by PL sequencer.\r\n");
 	xil_printf("HMC7044 reset policy: PL drives RESET_H7044_H_0 low to release the active-high reset net.\r\n");
 	u32 hmcStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
@@ -309,7 +226,6 @@ int main(void)
 		xil_printf("ERROR: HMC7044 PL sequencer did not finish before RFDC startup.\r\n");
 		return XST_FAILURE;
 	}
-#endif
 
 	sleep(2);
 
@@ -360,12 +276,10 @@ int main(void)
 	{
 		return Status;
 	}
-#if defined(BOARD_CUSTOM_XCZU47DR)
 	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
 	{
 		return XST_FAILURE;
 	}
-#endif
 	if (Configure_DAC_Output_Current() != XST_SUCCESS)
 	{
 		return XST_FAILURE;
@@ -376,7 +290,7 @@ int main(void)
 	if (Init_GPIO() != XST_SUCCESS)
 		return XST_FAILURE;
 
-#if defined(BOARD_CUSTOM_XCZU47DR) && defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
+#if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
 	// DDR offsets 0/0x1000 are host-uploaded PL regions; firmware must not preload them.
 	preload_debug_waveforms();
 #endif
@@ -464,233 +378,6 @@ void my_metal_default_log_handler(enum metal_log_level level,
 
 	xil_printf("%s%s", level_strs[level], msgOut);
 }
-
-/****************************************************************************/
-/**
- *
- * This function resets all CLK_104 PLL I2C devices.
- *
- * @param	None
- *
- * @return
- *	- XST_SUCCESS if successful.
- *	- XST_FAILURE if failed.
- *
- * @note		None
- *
- ****************************************************************************/
-#if defined(BOARD_ZCU216)
-static int resetAllClk104(void)
-{
-	int ret = EXIT_FAILURE;
-	//	printf("Reset LMK\n\r");
-	if (XST_FAILURE == XRFClk_ResetChip(RFCLK_LMK))
-	{
-		printf("Failure in XRFClk_ResetChip(RFCLK_LMK)\n\r");
-		return ret;
-	}
-
-	//	printf("Reset LMX2594_1\n\r");
-	if (XST_FAILURE == XRFClk_ResetChip(RFCLK_LMX2594_1))
-	{
-		printf("Failure in XRFClk_ResetChip(RFCLK_LMX2594_1)\n\r");
-		return ret;
-	}
-
-	//	printf("Reset LMX2594_2\n\r");
-	if (XST_FAILURE == XRFClk_ResetChip(RFCLK_LMX2594_2))
-	{
-		printf("Failure in XRFClk_ResetChip(RFCLK_LMX2594_2)\n\r");
-		return ret;
-	}
-
-#ifdef XPS_BOARD_ZCU111
-	//	printf("Reset LMX2594_3\n\r");
-	if (XST_FAILURE == XRFClk_ResetChip(RFCLK_LMX2594_3))
-	{
-		printf("Failure in XRFClk_ResetChip(RFCLK_LMX2594_3)\n\r");
-		return ret;
-	}
-#endif
-
-	return EXIT_SUCCESS;
-}
-#endif
-
-#if defined(BOARD_ZCU216)
-/****************************************************************************/
-/**
- *
- * Print LMK PLL device settings such as input and output clk frequencies.
- * The instance structure is initialized by calling LMK_init()
- *
- * @param
- *	- lmkInstPtr a pointer to the LMK instance structure
- *
- * @return
- *	- void
- *
- * @note		None
- *
- ****************************************************************************/
-void printLMKsettings(lmk_config_t *lmkInstPtr)
-{
-
-#ifdef LMK_DEBUG
-	LMK_intermediateDump(lmkInstPtr);
-#endif
-
-	// Print LMK CLKin frequencies
-	if (lmkInstPtr->clkin_sel_mode == LMK_CLKin_SEL_MODE_AUTO_MODE)
-	{
-		xil_printf("CLKin Auto Mode Enabled\n\r");
-	}
-	for (int i = 0; i < 3; i++)
-	{
-		if (lmkInstPtr->clkin[i].freq != -1)
-		{
-			xil_printf("CLKin%d_freq: %12ldKHz\n\r", i, lmkInstPtr->clkin[i].freq / 1000);
-		}
-	}
-
-	// Print LMK CLKout frequencies
-	for (int i = 0; i < 7; i++)
-	{
-		xil_printf("DCLKout%02d(%-10s):", i * 2, clkoutBrdNames[i * 2]);
-		if (lmkInstPtr->clkout[i].dclk_freq == -1)
-		{
-			xil_printf("%12s", "-----");
-		}
-		else
-		{
-			xil_printf("%9ldKHz", lmkInstPtr->clkout[i].dclk_freq / 1000);
-		}
-
-		xil_printf(" SDCLKout%02d(%-15s):", i * 2 + 1, clkoutBrdNames[i * 2 + 1]);
-		if (lmkInstPtr->clkout[i].sclk_freq == -1)
-		{
-			xil_printf("%12s\n\r", "-----");
-		}
-		else
-		{
-			xil_printf("%9ldKHz\n\r", lmkInstPtr->clkout[i].sclk_freq / 1000);
-		}
-	}
-}
-
-/****************************************************************************/
-/**
- *
- * Print LMX PLL device output clk frequencies.
- * The instance structure is initialized by calling LMX_SettingsInit()
- *
- * @param
- * 	- clkin is the clk freq fed into the LMX PLL. This value is used to
- * 	  calculate and display the output frequencies
- *	- lmxInstPtr a pointer to the LMX instance structure
- *
- * @return
- *	- void
- *
- * @note		None
- *
- ****************************************************************************/
-void printLMXsettings(long int clkin, lmx_config_t *lmxInstPtr)
-{
-
-#ifdef LMX_DEBUG
-	LMX_intermediateDump(lmxInstPtr);
-#endif
-
-	// Print LMX CLKin freq
-	xil_printf("CLKin_freq: %10ldKHz\n\r", clkin / 1000);
-
-	// Print LMX CLKout frequencies
-	xil_printf("RFoutA Freq:");
-	if (lmxInstPtr->RFoutA_freq == -1)
-	{
-		xil_printf("%13s\n\r", "-----");
-	}
-	else
-	{
-		xil_printf("%10ldKHz\n\r", lmxInstPtr->RFoutA_freq / 1000);
-	}
-
-	xil_printf("RFoutB Freq:");
-	if (lmxInstPtr->RFoutB_freq == -1)
-	{
-		xil_printf("%13s\n\r", "-----");
-	}
-	else
-	{
-		xil_printf("%10ldKHz\n\r", lmxInstPtr->RFoutB_freq / 1000);
-	}
-}
-
-/****************************************************************************/
-/**
- *
- * Reads the configuration of LMK and LMX PLL then calculates and displays
- * the PLL frequencies and settings.
- * The instance structures ar initialized by calling LMK_init() or
- * LMX_SettingsInit()
- *
- * @param
- * 	- nil
- *
- * @return
- *	- void
- *
- * @note		None
- *
- ****************************************************************************/
-void printCLK104_settings(void)
-{
-	char pllNames[3][9] = {"LMK ----", "LMX_RF1", "LMX_RF2"};
-	u32 chipIds[3] = {RFCLK_LMK, RFCLK_LMX2594_1, RFCLK_LMX2594_2};
-
-	for (int i = 0; i < 3; i++)
-	{
-		if (XST_FAILURE == XRFClk_GetConfigFromOneChip(chipIds[i], data))
-		{
-			printf("Failure in XRFClk_GetConfigFromOneChip()\n\r");
-			return;
-		}
-
-		// For LMX, reverse readback data to match exported register sets and
-		// order of LMX2594[][]
-		if (chipIds[i] != RFCLK_LMK)
-		{
-			reverse32bArray(data, LMX2594_COUNT - 3);
-		}
-
-#if 0
-		// Dump raw data read from device
-		printf("Config data is:\n\r");
-		for (int j = 0; j < ((chipIds[i]==RFCLK_LMK) ? LMK_COUNT : LMX2594_COUNT-3); j++) {
-			printf("%08X, ", data[j]);
-			if( !(j % 6) ) printf("\n\r");
-		}
-		printf("\n\r");
-#endif
-
-		// Display clock values of device
-		printf("Clk settings read from %s ---------------------\n\r", pllNames[i]);
-		if (chipIds[i] == RFCLK_LMK)
-		{
-			LMK_init(data, &lmkConfig);
-			printLMKsettings(&lmkConfig);
-		}
-		else
-		{
-			// clkout index is i=1 idx = 0, i=2 idx=2. i&2 meets this alg
-			LMX_SettingsInit(lmkConfig.clkout[(i & 2)].dclk_freq, data, &lmxConfig);
-			printLMXsettings(lmkConfig.clkout[(i & 2)].dclk_freq, &lmxConfig);
-		}
-		xil_printf("\n\r");
-	}
-}
-#endif
 
 void reverse32bArray(u32 *src, int size)
 {

@@ -13,7 +13,7 @@ set bit_file [file normalize [lindex $argv 0]]
 set elf_file [file normalize [lindex $argv 1]]
 set script_dir [file dirname [file normalize [info script]]]
 set firmware_dir [file normalize [file join $script_dir ".."]]
-set target zcu216
+set target custom_xczu47dr
 if {[info exists ::env(TARGET)]} {
     set target $::env(TARGET)
 }
@@ -32,8 +32,6 @@ proc board_target_filter {target role} {
         set serial $::env(JTAG_CABLE_SERIAL)
     } elseif {$target eq "custom_xczu47dr"} {
         set serial "210512180081"
-    } elseif {$target eq "zcu216"} {
-        set serial "74243309093A"
     } else {
         set serial ""
     }

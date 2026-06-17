@@ -1,11 +1,4 @@
 module Top (
-`ifndef CUSTOM_XCZU47DR
-    output [0:0] LED0,
-    output [0:0] LED1,
-
-    output [0:0] trigger_out_sma,
-    output [0:0] trigger_out_loop,
-`endif
 
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
@@ -33,37 +26,19 @@ module Top (
     output sfp_txn,
     output SFP_TX_DIS,
 
-`ifndef CUSTOM_XCZU47DR
-    input  adc2_clk_clk_n,
-    input  adc2_clk_clk_p,
-`endif
     input  dac2_clk_clk_n,
     input  dac2_clk_clk_p,
     input  sysref_in_diff_n,
     input  sysref_in_diff_p,
-`ifndef CUSTOM_XCZU47DR
-    input  adc3_clk_clk_n,
-    input  adc3_clk_clk_p,
-    input  dac3_clk_clk_n,
-    input  dac3_clk_clk_p,
-    input  vin20_v_n,
-    input  vin20_v_p,
-    input  vin22_v_n,
-    input  vin22_v_p,
-    input  vin30_v_n,
-    input  vin30_v_p,
-`endif
     output vout20_v_n,
     output vout20_v_p,
     output vout22_v_n,
     output vout22_v_p,
     output vout30_v_n,
     output vout30_v_p,
-`ifdef CUSTOM_XCZU47DR
     output vout32_v_n,
     output vout32_v_p,
     output TRIG_1,
-`endif
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -74,19 +49,11 @@ module Top (
     output [0:0]    c0_ddr4_ck_c,
     output [0:0]    c0_ddr4_ck_t,
     output [0:0]    c0_ddr4_cke,
-`ifdef CUSTOM_XCZU47DR
     output [0:0]    c0_ddr4_cs_n,
     inout  [7:0]    c0_ddr4_dm_n,
     inout  [63:0]   c0_ddr4_dq,
     inout  [7:0]    c0_ddr4_dqs_c,
     inout  [7:0]    c0_ddr4_dqs_t,
-`else
-    output [1:0]    c0_ddr4_cs_n,
-    inout  [3:0]    c0_ddr4_dm_n,
-    inout  [31:0]   c0_ddr4_dq,
-    inout  [3:0]    c0_ddr4_dqs_c,
-    inout  [3:0]    c0_ddr4_dqs_t,
-`endif
     output [0:0]    c0_ddr4_odt,
     output          c0_ddr4_reset_n
 );
@@ -107,9 +74,7 @@ module Top (
 
   assign pl_ps_irq = 1'b0;
 
-`ifdef CUSTOM_XCZU47DR
   assign dac_axis_clk = clk_dac2;
-`endif
   ChiselProcSysReset u_pl_reset (
     .io_slowest_sync_clk(pl_clk),
     .io_ext_reset_in(pl_resetn0),
@@ -173,11 +138,7 @@ module Top (
   assign udp_instr_tready = udp_instr_tvalid && instr_tready;
   assign ps_instr_tready  = !udp_instr_tvalid && instr_tready;
 
-`ifdef CUSTOM_XCZU47DR
   localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0005_0000_0000;
-`else
-  localparam [63:0] EXT_DDR_ADDR_BASE = 64'd0;
-`endif
 
   // ========== Reference 10G UDP receiver ==========
   wire        udp64_rcv_vld;
@@ -342,10 +303,6 @@ module Top (
   end
   wire ps_trigger_dac_sync = trigger_dac_sync_ff[2];
 
-`ifndef CUSTOM_XCZU47DR
-  assign trigger_out_sma  = ps_trigger_raw;
-  assign trigger_out_loop = ps_trigger_raw;
-`endif
 
   // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========
   // M_AXI_INST signals
@@ -433,7 +390,6 @@ module Top (
   wire        cfg_auto_start;
   wire        cfg_commit; // 每次 END 提交一帧配置
 
-`ifdef CUSTOM_XCZU47DR
   localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
   reg [15:0] trig_1_count;
 
@@ -449,7 +405,6 @@ module Top (
 
   wire trig_1_ddr = (trig_1_count != 16'd0);
   assign TRIG_1 = trig_1_ddr;
-`endif
 
   wire [2:0]  ex_dbg_st;
   wire [1:0]  ex_dbg_dm_st;
@@ -558,7 +513,6 @@ module Top (
   end
   wire dac_rst_n = dac_rstff[2];
 
-`ifdef CUSTOM_XCZU47DR
   (* ASYNC_REG="TRUE" *) reg [2:0] trig_1_dac_sync_ff;
   reg trig_1_dac_sync_d;
 
@@ -574,10 +528,6 @@ module Top (
 
   wire trig_1_dac_sync  = trig_1_dac_sync_ff[2];
   wire trig_1_dac_pulse = trig_1_dac_sync & ~trig_1_dac_sync_d;
-`else
-  wire trig_1_dac_sync  = 1'b0;
-  wire trig_1_dac_pulse = 1'b0;
-`endif
 
   // ==========================================================
   // DDR 域：配置帧（160-bit）打包，commit 时写入 cfg FIFO
@@ -997,7 +947,6 @@ module Top (
   wire [3:0]  M_AXI_GPIO_wstrb;
   wire        M_AXI_GPIO_wvalid;
 
-`ifdef CUSTOM_XCZU47DR
   wire [17:0] M_AXI_RFDC_araddr;
   wire        M_AXI_RFDC_arready;
   wire        M_AXI_RFDC_arvalid;
@@ -1103,116 +1052,16 @@ module Top (
   wire         M_AXI_PS_DDR_wvalid;
 
   wire         ddr4_init_calib_complete;
-`endif
 
   design_1 design_1_i (
       .pl_clk(pl_clk),
       .pl_aresetn(pl_aresetn),
       .pl_resetn0(pl_resetn0),
       .pl_ps_irq(pl_ps_irq),
-`ifndef CUSTOM_XCZU47DR
-      .clk_dac2(clk_dac2),
-      .dac_axis_clk(dac_axis_clk),
-`endif
-`ifndef CUSTOM_XCZU47DR
-      .clk104_aresetn(clk104_aresetn),
-`endif
       .ddr4_ui_clk(ddr4_ui_clk),
-`ifndef CUSTOM_XCZU47DR
-      .ddr4_ui_aresetn(ddr4_ui_aresetn),
-`endif
-`ifndef CUSTOM_XCZU47DR
-      .ddr4_ui_clk_sync_rst(ddr4_ui_clk_sync_rst),
-`endif
 
-`ifndef CUSTOM_XCZU47DR
-      .adc2_clk_clk_n(adc2_clk_clk_n),
-      .adc2_clk_clk_p(adc2_clk_clk_p),
-`endif
-`ifndef CUSTOM_XCZU47DR
-      .dac2_clk_clk_n(dac2_clk_clk_n),
-      .dac2_clk_clk_p(dac2_clk_clk_p),
-      .sysref_in_diff_n(sysref_in_diff_n),
-      .sysref_in_diff_p(sysref_in_diff_p),
-`endif
-`ifndef CUSTOM_XCZU47DR
-       .adc3_clk_clk_n(adc3_clk_clk_n),
-      .adc3_clk_clk_p(adc3_clk_clk_p),
-      .dac3_clk_clk_n(dac3_clk_clk_n),
-      .dac3_clk_clk_p(dac3_clk_clk_p),
 
-      .vin20_v_n(vin20_v_n),
-      .vin20_v_p(vin20_v_p),
-      .vin22_v_n(vin22_v_n),
-      .vin22_v_p(vin22_v_p),
-      .vin30_v_n(vin30_v_n),
-      .vin30_v_p(vin30_v_p),
-`endif
-`ifndef CUSTOM_XCZU47DR
-      .vout20_v_n(vout20_v_n),
-      .vout20_v_p(vout20_v_p),
-      .vout22_v_n(vout22_v_n),
-      .vout22_v_p(vout22_v_p),
-      .vout30_v_n(vout30_v_n),
-      .vout30_v_p(vout30_v_p),
-`endif
 
-`ifndef CUSTOM_XCZU47DR
-      .c0_sys_clk_n(c0_sys_clk_n),
-      .c0_sys_clk_p(c0_sys_clk_p),
-      .c0_ddr4_act_n(c0_ddr4_act_n),
-      .c0_ddr4_adr(c0_ddr4_adr),
-      .c0_ddr4_ba(c0_ddr4_ba),
-      .c0_ddr4_bg(c0_ddr4_bg),
-      .c0_ddr4_ck_c(c0_ddr4_ck_c),
-      .c0_ddr4_ck_t(c0_ddr4_ck_t),
-      .c0_ddr4_cke(c0_ddr4_cke),
-      .c0_ddr4_cs_n(c0_ddr4_cs_n),
-      .c0_ddr4_dm_n(c0_ddr4_dm_n),
-      .c0_ddr4_dq(c0_ddr4_dq),
-      .c0_ddr4_dqs_c(c0_ddr4_dqs_c),
-      .c0_ddr4_dqs_t(c0_ddr4_dqs_t),
-      .c0_ddr4_odt(c0_ddr4_odt),
-      .c0_ddr4_reset_n(c0_ddr4_reset_n),
-`endif
-
-`ifndef CUSTOM_XCZU47DR
-      // DDR AXI slave for DataMover read (S_AXI_01)
-      .S_AXI_01_araddr(M_AXI_DM_araddr),
-      .S_AXI_01_arburst(M_AXI_DM_arburst),
-      .S_AXI_01_arcache(4'b0011),
-      .S_AXI_01_arlen(M_AXI_DM_arlen),
-      .S_AXI_01_arlock(1'b0),
-      .S_AXI_01_arprot(3'b000),
-      .S_AXI_01_arqos(4'b0000),
-      .S_AXI_01_arready(M_AXI_DM_arready),
-      .S_AXI_01_arsize(M_AXI_DM_arsize),
-      .S_AXI_01_arvalid(M_AXI_DM_arvalid),
-      .S_AXI_01_rdata(M_AXI_DM_rdata),
-      .S_AXI_01_rlast(M_AXI_DM_rlast),
-      .S_AXI_01_rready(M_AXI_DM_rready),
-      .S_AXI_01_rresp(M_AXI_DM_rresp),
-      .S_AXI_01_rvalid(M_AXI_DM_rvalid),
-
-      .S_AXI_01_awaddr(M_AXI_WAVE_awaddr),
-      .S_AXI_01_awburst(M_AXI_WAVE_awburst),
-      .S_AXI_01_awcache(M_AXI_WAVE_awcache),
-      .S_AXI_01_awlen(M_AXI_WAVE_awlen),
-      .S_AXI_01_awlock(M_AXI_WAVE_awlock),
-      .S_AXI_01_awprot(M_AXI_WAVE_awprot),
-      .S_AXI_01_awqos(M_AXI_WAVE_awqos),
-      .S_AXI_01_awready(M_AXI_WAVE_awready),
-      .S_AXI_01_awsize(M_AXI_WAVE_awsize),
-      .S_AXI_01_awvalid(M_AXI_WAVE_awvalid),
-      .S_AXI_01_wdata(M_AXI_WAVE_wdata),
-      .S_AXI_01_wlast(M_AXI_WAVE_wlast),
-      .S_AXI_01_wready(M_AXI_WAVE_wready),
-      .S_AXI_01_wstrb(M_AXI_WAVE_wstrb),
-      .S_AXI_01_wvalid(M_AXI_WAVE_wvalid),
-      .S_AXI_01_bready(M_AXI_WAVE_bready),
-      .S_AXI_01_bresp(M_AXI_WAVE_bresp),
-      .S_AXI_01_bvalid(M_AXI_WAVE_bvalid),
-`endif
 
       // PS AXI master for instruction fifo (M_AXI_INST)
       .M_AXI_INST_araddr(M_AXI_INST_araddr),
@@ -1255,7 +1104,6 @@ module Top (
       .M_AXI_INST_wstrb(M_AXI_INST_wstrb),
       .M_AXI_INST_wvalid(M_AXI_INST_wvalid),
 
-`ifdef CUSTOM_XCZU47DR
       .M_AXI_RFDC_araddr(M_AXI_RFDC_araddr),
       .M_AXI_RFDC_arready(M_AXI_RFDC_arready),
       .M_AXI_RFDC_arvalid(M_AXI_RFDC_arvalid),
@@ -1313,21 +1161,7 @@ module Top (
       .M_AXI_PS_DDR_wready(M_AXI_PS_DDR_wready),
       .M_AXI_PS_DDR_wstrb(M_AXI_PS_DDR_wstrb),
       .M_AXI_PS_DDR_wvalid(M_AXI_PS_DDR_wvalid),
-`endif
 
-`ifndef CUSTOM_XCZU47DR
-      .S_AXIS_20_tdata(dac_in_ch1_tdata),
-      .S_AXIS_20_tvalid(dac_ch1_valid_gated),
-      .S_AXIS_20_tready(dac_ch1_ready),
-
-      .S_AXIS_22_tdata(dac_in_ch2_tdata),
-      .S_AXIS_22_tvalid(dac_ch2_valid_gated),
-      .S_AXIS_22_tready(dac_ch2_ready),
-
-      .S_AXIS_30_tdata(dac_in_ch3_tdata),
-      .S_AXIS_30_tvalid(dac_ch3_valid_gated),
-      .S_AXIS_30_tready(dac_ch3_ready),
-`endif
 
       // GPIO AXI master (M_AXI_GPIO) - stub pass-through in this file
       .M_AXI_GPIO_araddr (M_AXI_GPIO_araddr),
@@ -1371,7 +1205,6 @@ module Top (
       .M_AXI_GPIO_wvalid (M_AXI_GPIO_wvalid)
   );
 
-`ifdef CUSTOM_XCZU47DR
   ddr_axi_smartconnect_wrapper ddr_axi_smartconnect_i (
       .aclk(ddr4_ui_clk),
       .aresetn(ddr4_ui_aresetn),
@@ -1594,7 +1427,6 @@ module Top (
       .s32_axis_tready(dac_ch4_ready),
       .irq(rfdc_irq)
   );
-`endif
 
   // ==========================================================
   // GPIO IP（stub）—— 输出 gpio_out_reg

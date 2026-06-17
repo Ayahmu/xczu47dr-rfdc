@@ -1,6 +1,6 @@
 # Vivado FPGA Project
 
-This directory contains the Vivado project for implementing the ZCU216 RFDC design on the Zynq UltraScale+ FPGA.
+This directory contains the Vivado project for implementing the XCZU47DR RFDC design on the Zynq UltraScale+ RFSoC FPGA.
 
 ## Overview
 
@@ -26,13 +26,12 @@ vivado/
 │   └── design_1.tcl      # Main block design
 ├── src/                  # Additional RTL sources
 ├── xdc/                  # Constraint files
-│   ├── pin.xdc           # ZCU216 board and timing constraints
 │   └── custom_xczu47dr_minimal.xdc  # Custom XCZU47DR bring-up constraints
 ├── work/                 # Vivado project workspace (auto-generated, ignored)
 └── output/               # Build outputs (auto-generated, ignored)
-    ├── zcu216_rfdc.bit   # FPGA bitstream
-    ├── zcu216_rfdc.ltx   # Debug probes
-    └── zcu216_rfdc.xsa   # Hardware platform
+    ├── custom_xczu47dr_rfdc.bit   # FPGA bitstream
+    ├── custom_xczu47dr_rfdc.ltx   # Debug probes
+    └── custom_xczu47dr_rfdc.xsa   # Hardware platform
 ```
 
 ## Prerequisites
@@ -50,8 +49,8 @@ vivado/
 
 ### Target Hardware
 
-- **Device**: xczu49dr-ffvf1760-2-e
-- **Board**: Xilinx ZCU216 Evaluation Board
+- **Device**: xczu47dr-ffvg1517-2-i
+- **Board**: Custom XCZU47DR board
 - **Speed Grade**: -2
 
 ### Disk Space Requirements
@@ -115,7 +114,7 @@ vivado -mode batch -source scripts/create_project.tcl
 - Creates Block Design from `bd/design_1.tcl`
 - Generates HDL wrapper
 
-**Output**: `work/zcu216_rfdc.xpr`
+**Output**: `work/custom_xczu47dr_rfdc.xpr`
 
 ### Step 3: Run Synthesis
 
@@ -131,8 +130,8 @@ vivado -mode batch -source scripts/run_synth.tcl
 - Generates timing report
 
 **Output**: 
-- Synthesized design in `work/zcu216_rfdc.runs/synth_1/`
-- Reports in `work/zcu216_rfdc.runs/synth_1/reports/`
+- Synthesized design in `work/custom_xczu47dr_rfdc.runs/synth_1/`
+- Reports in `work/custom_xczu47dr_rfdc.runs/synth_1/reports/`
 
 **Typical synthesis time**: 10-15 minutes
 
@@ -149,8 +148,8 @@ vivado -mode batch -source scripts/run_impl.tcl
 - Generates detailed reports
 
 **Output**:
-- Implemented design in `work/zcu216_rfdc.runs/impl_1/`
-- Reports in `work/zcu216_rfdc.runs/impl_1/reports/`
+- Implemented design in `work/custom_xczu47dr_rfdc.runs/impl_1/`
+- Reports in `work/custom_xczu47dr_rfdc.runs/impl_1/reports/`
 
 **Typical implementation time**: 15-30 minutes
 
@@ -165,7 +164,7 @@ vivado -mode batch -source scripts/run_bitstream.tcl
 - Copies bitstream to `output/`
 - Copies debug probes (if ILA/VIO used)
 
-**Output**: `output/zcu216_rfdc.bit` (~30 MB)
+**Output**: `output/custom_xczu47dr_rfdc.bit` (~30 MB)
 
 **Typical bitstream time**: 5-10 minutes
 
@@ -180,7 +179,7 @@ vivado -mode batch -source scripts/export_xsa.tcl
 - Includes PS configuration
 - Includes address map
 
-**Output**: `output/zcu216_rfdc.xsa` (~12 MB)
+**Output**: `output/custom_xczu47dr_rfdc.xsa` (~12 MB)
 
 This XSA file is used by Vitis to build ARM firmware.
 
@@ -190,9 +189,9 @@ After successful build:
 
 ```
 output/
-├── zcu216_rfdc.bit      # FPGA bitstream (~30 MB)
-├── zcu216_rfdc.ltx      # Debug probes (if ILA/VIO used)
-└── zcu216_rfdc.xsa      # Hardware platform (~12 MB)
+├── custom_xczu47dr_rfdc.bit      # FPGA bitstream (~30 MB)
+├── custom_xczu47dr_rfdc.ltx      # Debug probes (if ILA/VIO used)
+└── custom_xczu47dr_rfdc.xsa      # Hardware platform (~12 MB)
 ```
 
 ### Bitstream (.bit)
@@ -272,7 +271,7 @@ The main block design (`bd/design_1.tcl`) includes:
 
 ### Synthesis Reports
 
-Located in `work/zcu216_rfdc.runs/synth_1/reports/`:
+Located in `work/custom_xczu47dr_rfdc.runs/synth_1/reports/`:
 
 - **post_synth_util.rpt**: Resource utilization
   - LUT, FF, BRAM, DSP usage
@@ -285,7 +284,7 @@ Located in `work/zcu216_rfdc.runs/synth_1/reports/`:
 
 ### Implementation Reports
 
-Located in `work/zcu216_rfdc.runs/impl_1/reports/`:
+Located in `work/custom_xczu47dr_rfdc.runs/impl_1/reports/`:
 
 - **post_impl_util.rpt**: Final resource utilization
 - **post_impl_timing.rpt**: Final timing analysis
@@ -313,7 +312,7 @@ Located in `work/zcu216_rfdc.runs/impl_1/reports/`:
 For interactive development, open the project in Vivado GUI:
 
 ```bash
-vivado work/zcu216_rfdc.xpr &
+vivado work/custom_xczu47dr_rfdc.xpr &
 ```
 
 ### Common GUI Tasks
@@ -344,7 +343,6 @@ vivado work/zcu216_rfdc.xpr &
 
 Vivado constraints are selected per target by `scripts/target_config.tcl` and loaded by `scripts/create_project.tcl`.
 
-- `TARGET=zcu216` uses `xdc/pin.xdc`.
 - `TARGET=custom_xczu47dr` uses `xdc/custom_xczu47dr_minimal.xdc`.
 
 Key conventions:
@@ -369,7 +367,7 @@ echo 'source /tools/Xilinx/Vivado/2024.2/settings64.sh' >> ~/.bashrc
 
 **Check synthesis log**:
 ```bash
-cat work/zcu216_rfdc.runs/synth_1/runme.log
+cat work/custom_xczu47dr_rfdc.runs/synth_1/runme.log
 ```
 
 **Common issues**:
@@ -381,7 +379,7 @@ cat work/zcu216_rfdc.runs/synth_1/runme.log
 
 **View timing report**:
 ```bash
-cat work/zcu216_rfdc.runs/impl_1/reports/post_impl_timing.rpt
+cat work/custom_xczu47dr_rfdc.runs/impl_1/reports/post_impl_timing.rpt
 ```
 
 **Solutions**:
@@ -394,7 +392,7 @@ cat work/zcu216_rfdc.runs/impl_1/reports/post_impl_timing.rpt
 
 **View utilization report**:
 ```bash
-cat work/zcu216_rfdc.runs/impl_1/reports/post_impl_util.rpt
+cat work/custom_xczu47dr_rfdc.runs/impl_1/reports/post_impl_util.rpt
 ```
 
 **Solutions**:
@@ -480,6 +478,6 @@ After successful hardware build:
 ## References
 
 - [Vivado Design Suite User Guide](https://www.xilinx.com/support/documentation/sw_manuals/xilinx2024_2/ug892-vivado-design-flows-overview.pdf)
-- [ZCU216 Board User Guide](https://www.xilinx.com/support/documentation/boards_and_kits/zcu216/ug1390-zcu216-eval-bd.pdf)
+- [Zynq UltraScale+ RFSoC Data Converter (PG269)](https://docs.amd.com/r/en-US/pg269-rf-data-converter)
 - [Zynq UltraScale+ Technical Reference](https://www.xilinx.com/support/documentation/user_guides/ug1085-zynq-ultrascale-trm.pdf)
 - [Vivado TCL Commands](https://www.xilinx.com/support/documentation/sw_manuals/xilinx2024_2/ug835-vivado-tcl-commands.pdf)

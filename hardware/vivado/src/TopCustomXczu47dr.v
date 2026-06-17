@@ -51,19 +51,11 @@ module TopCustomXczu47dr (
     output [0:0]    c0_ddr4_ck_c,
     output [0:0]    c0_ddr4_ck_t,
     output [0:0]    c0_ddr4_cke,
-`ifdef CUSTOM_XCZU47DR
     output [0:0]    c0_ddr4_cs_n,
     inout  [7:0]    c0_ddr4_dm_n,
     inout  [63:0]   c0_ddr4_dq,
     inout  [7:0]    c0_ddr4_dqs_c,
     inout  [7:0]    c0_ddr4_dqs_t,
-`else
-    output [1:0]    c0_ddr4_cs_n,
-    inout  [3:0]    c0_ddr4_dm_n,
-    inout  [31:0]   c0_ddr4_dq,
-    inout  [3:0]    c0_ddr4_dqs_c,
-    inout  [3:0]    c0_ddr4_dqs_t,
-`endif
     output [0:0]    c0_ddr4_odt,
     output          c0_ddr4_reset_n
 );

@@ -5,7 +5,7 @@
 
 if {$argc != 5} {
     puts "Usage: xsct create_app.tcl <xsa_file> <app_name> <src_dir> <workspace_dir> <board_define>"
-    puts "Example: xsct create_app.tcl ../hardware/vivado/output/zcu216_rfdc.xsa rfdc_app src ../workspace BOARD_ZCU216"
+    puts "Example: xsct create_app.tcl ../hardware/vivado/output/custom_xczu47dr_rfdc.xsa rfdc_app src ../workspace/custom_xczu47dr BOARD_CUSTOM_XCZU47DR"
     exit 1
 }
 

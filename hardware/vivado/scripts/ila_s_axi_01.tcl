@@ -5,7 +5,7 @@ if {![llength [info commands target_config_get]]} {
 
 set list_projs [get_projects -quiet]
 if { $list_projs eq "" } {
-  set target "zcu216"
+  set target "custom_xczu47dr"
   if {[info exists argc] && $argc > 0} {
     set target [lindex $argv 0]
   }

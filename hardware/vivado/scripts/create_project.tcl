@@ -4,7 +4,7 @@ set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 
-set target "zcu216"
+set target "custom_xczu47dr"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -37,57 +37,53 @@ if {$target_board_part ne ""} {
 }
 set_property target_language Verilog [current_project]
 set_property simulator_language Mixed [current_project]
-if {$target eq "custom_xczu47dr"} {
-    puts "INFO: Enabling CUSTOM_XCZU47DR Verilog define"
-    set_property verilog_define {CUSTOM_XCZU47DR} [current_fileset]
-}
+puts "INFO: Enabling CUSTOM_XCZU47DR Verilog define"
+set_property verilog_define {CUSTOM_XCZU47DR} [current_fileset]
 
 set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
 set ddr_generated_config "${vivado_dir}/../chisel/generated/ddr_custom_xczu47dr_config.tcl"
-if {$target eq "custom_xczu47dr"} {
-    if {![file exists ${rfdc_generated_config}]} {
-        puts "ERROR: Missing generated RFDC configuration: ${rfdc_generated_config}"
-        puts "ERROR: Run hardware/chisel/build.sh rfdc or make chisel TARGET=custom_xczu47dr first."
-        exit 1
-    }
-    if {![file exists ${ddr_generated_config}]} {
-        puts "ERROR: Missing generated DDR4 configuration: ${ddr_generated_config}"
-        puts "ERROR: Run hardware/chisel/build.sh ddr or make chisel TARGET=custom_xczu47dr first."
-        exit 1
-    }
-    source ${rfdc_generated_config}
-    source ${ddr_generated_config}
-
-    puts "INFO: Creating project-level RFDC IP outside block design"
-    set rfdc_ip_dir "${vivado_dir}/ip"
-    file mkdir ${rfdc_ip_dir}
-    create_ip -force -name usp_rf_data_converter -vendor xilinx.com -library ip -version 2.6 \
-        -module_name rfdc_custom_xczu47dr_ip -dir ${rfdc_ip_dir}
-    set rfdc_ip [get_ips rfdc_custom_xczu47dr_ip]
-    set_property -dict [::rfdc_custom_xczu47dr::config] ${rfdc_ip}
-    set rfdc_ip_file [get_files -quiet "${rfdc_ip_dir}/rfdc_custom_xczu47dr_ip/rfdc_custom_xczu47dr_ip.xci"]
-    if {[llength ${rfdc_ip_file}] == 0} {
-        puts "ERROR: RFDC IP XCI not found after create_ip"
-        exit 1
-    }
-    set_property generate_synth_checkpoint true ${rfdc_ip_file}
-    generate_target all ${rfdc_ip_file}
-
-    puts "INFO: Creating project-level DDR4 IP outside block design"
-    set ddr_ip_dir "${vivado_dir}/ip"
-    file mkdir ${ddr_ip_dir}
-    create_ip -force -name ddr4 -vendor xilinx.com -library ip -version 2.2 \
-        -module_name ddr_custom_xczu47dr_ip -dir ${ddr_ip_dir}
-    set ddr_ip [get_ips ddr_custom_xczu47dr_ip]
-    set_property -dict [::ddr_custom_xczu47dr::config] ${ddr_ip}
-    set ddr_ip_file [get_files -quiet "${ddr_ip_dir}/ddr_custom_xczu47dr_ip/ddr_custom_xczu47dr_ip.xci"]
-    if {[llength ${ddr_ip_file}] == 0} {
-        puts "ERROR: DDR4 IP XCI not found after create_ip"
-        exit 1
-    }
-    set_property generate_synth_checkpoint true ${ddr_ip_file}
-    generate_target all ${ddr_ip_file}
+if {![file exists ${rfdc_generated_config}]} {
+    puts "ERROR: Missing generated RFDC configuration: ${rfdc_generated_config}"
+    puts "ERROR: Run hardware/chisel/build.sh rfdc or make chisel first."
+    exit 1
 }
+if {![file exists ${ddr_generated_config}]} {
+    puts "ERROR: Missing generated DDR4 configuration: ${ddr_generated_config}"
+    puts "ERROR: Run hardware/chisel/build.sh ddr or make chisel first."
+    exit 1
+}
+source ${rfdc_generated_config}
+source ${ddr_generated_config}
+
+puts "INFO: Creating project-level RFDC IP outside block design"
+set rfdc_ip_dir "${vivado_dir}/ip"
+file mkdir ${rfdc_ip_dir}
+create_ip -force -name usp_rf_data_converter -vendor xilinx.com -library ip -version 2.6 \
+    -module_name rfdc_custom_xczu47dr_ip -dir ${rfdc_ip_dir}
+set rfdc_ip [get_ips rfdc_custom_xczu47dr_ip]
+set_property -dict [::rfdc_custom_xczu47dr::config] ${rfdc_ip}
+set rfdc_ip_file [get_files -quiet "${rfdc_ip_dir}/rfdc_custom_xczu47dr_ip/rfdc_custom_xczu47dr_ip.xci"]
+if {[llength ${rfdc_ip_file}] == 0} {
+    puts "ERROR: RFDC IP XCI not found after create_ip"
+    exit 1
+}
+set_property generate_synth_checkpoint true ${rfdc_ip_file}
+generate_target all ${rfdc_ip_file}
+
+puts "INFO: Creating project-level DDR4 IP outside block design"
+set ddr_ip_dir "${vivado_dir}/ip"
+file mkdir ${ddr_ip_dir}
+create_ip -force -name ddr4 -vendor xilinx.com -library ip -version 2.2 \
+    -module_name ddr_custom_xczu47dr_ip -dir ${ddr_ip_dir}
+set ddr_ip [get_ips ddr_custom_xczu47dr_ip]
+set_property -dict [::ddr_custom_xczu47dr::config] ${ddr_ip}
+set ddr_ip_file [get_files -quiet "${ddr_ip_dir}/ddr_custom_xczu47dr_ip/ddr_custom_xczu47dr_ip.xci"]
+if {[llength ${ddr_ip_file}] == 0} {
+    puts "ERROR: DDR4 IP XCI not found after create_ip"
+    exit 1
+}
+set_property generate_synth_checkpoint true ${ddr_ip_file}
+generate_target all ${ddr_ip_file}
 
 # Add Chisel generated Verilog files
 set chisel_dir "${vivado_dir}/../chisel/generated"
@@ -140,7 +136,6 @@ set xxv_xci "${vivado_dir}/ip/xxv_ethernet_1/xxv_ethernet.xci"
 if {[file exists ${xxv_xci}]} {
     puts "INFO: Adding reference XXV Ethernet IP: ${xxv_xci}"
     add_files -norecurse ${xxv_xci}
-    set_property generate_synth_checkpoint true [get_files ${xxv_xci}]
 } else {
     puts "WARN: Reference XXV Ethernet IP not found: ${xxv_xci}"
 }
@@ -263,32 +258,30 @@ if {[file exists ${bd_script}]} {
     puts "WARN: Block Design script not found: ${bd_script}"
 }
 
-if {$target eq "custom_xczu47dr"} {
-    puts "INFO: Creating external DDR AXI SmartConnect Block Design..."
-    set ddr_axi_bd_script "${vivado_dir}/bd/ddr_axi_smartconnect.tcl"
-    if {[file exists ${ddr_axi_bd_script}]} {
-        source ${ddr_axi_bd_script}
+puts "INFO: Creating external DDR AXI SmartConnect Block Design..."
+set ddr_axi_bd_script "${vivado_dir}/bd/ddr_axi_smartconnect.tcl"
+if {[file exists ${ddr_axi_bd_script}]} {
+    source ${ddr_axi_bd_script}
 
-        set ddr_axi_bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/ddr_axi_smartconnect/ddr_axi_smartconnect.bd]
-        if {$ddr_axi_bd_file eq ""} {
-            puts "ERROR: DDR AXI SmartConnect Block Design file not found"
-            exit 1
-        }
-
-        generate_target all $ddr_axi_bd_file
-        make_wrapper -files $ddr_axi_bd_file -top
-        set ddr_axi_wrapper_file [file normalize "${proj_dir}/${proj_name}.gen/sources_1/bd/ddr_axi_smartconnect/hdl/ddr_axi_smartconnect_wrapper.v"]
-        if {[file exists $ddr_axi_wrapper_file]} {
-            add_files -norecurse $ddr_axi_wrapper_file
-            puts "INFO: External DDR AXI SmartConnect wrapper added"
-        } else {
-            puts "ERROR: DDR AXI SmartConnect wrapper file not found"
-            exit 1
-        }
-    } else {
-        puts "ERROR: DDR AXI SmartConnect script not found: ${ddr_axi_bd_script}"
+    set ddr_axi_bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/ddr_axi_smartconnect/ddr_axi_smartconnect.bd]
+    if {$ddr_axi_bd_file eq ""} {
+        puts "ERROR: DDR AXI SmartConnect Block Design file not found"
         exit 1
     }
+
+    generate_target all $ddr_axi_bd_file
+    make_wrapper -files $ddr_axi_bd_file -top
+    set ddr_axi_wrapper_file [file normalize "${proj_dir}/${proj_name}.gen/sources_1/bd/ddr_axi_smartconnect/hdl/ddr_axi_smartconnect_wrapper.v"]
+    if {[file exists $ddr_axi_wrapper_file]} {
+        add_files -norecurse $ddr_axi_wrapper_file
+        puts "INFO: External DDR AXI SmartConnect wrapper added"
+    } else {
+        puts "ERROR: DDR AXI SmartConnect wrapper file not found"
+        exit 1
+    }
+} else {
+    puts "ERROR: DDR AXI SmartConnect script not found: ${ddr_axi_bd_script}"
+    exit 1
 }
 
 # Update compile order

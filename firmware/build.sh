@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIRMWARE_DIR="${SCRIPT_DIR}"
 PROJECT_ROOT="$(dirname "${FIRMWARE_DIR}")"
-TARGET="${TARGET:-zcu216}"
+TARGET="${TARGET:-custom_xczu47dr}"
 SRC_DIR="${FIRMWARE_DIR}/src"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -45,9 +45,6 @@ ELF_FILE="${PROJECT_ROOT}/${ELF_RELATIVE}"
 PSU_INIT_FILE="${PROJECT_ROOT}/${PSU_INIT_RELATIVE}"
 
 case "${TARGET}" in
-    zcu216)
-        BOARD_DEFINE="BOARD_ZCU216"
-        ;;
     custom_xczu47dr)
         BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR"
         ;;

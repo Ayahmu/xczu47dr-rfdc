@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-TARGET ?= zcu216
-ALLOWED_TARGETS := zcu216 custom_xczu47dr
+TARGET ?= custom_xczu47dr
+ALLOWED_TARGETS := custom_xczu47dr
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -66,7 +66,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 .PHONY: help all hardware hardware-clean chisel vivado-project synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
-	@echo "ZCU216 RFDC top-level build"
+	@echo "XCZU47DR RFDC top-level build"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make all              Build hardware and firmware"
@@ -86,7 +86,7 @@ help:
 	@echo ""
 	@echo "Board/host targets:"
 	@echo "  make run              Program FPGA with BIT and download ELF over JTAG"
-	@echo "  make run TARGET=custom_xczu47dr"
+	@echo "  make run"
 	@echo "  make run ELF=/path/app.elf BIT=/path/top.bit PSU_INIT=/path/psu_init.tcl"
 	@echo "  make host             Run host.py against board IP/PORT"
 	@echo "  make host IP=10.87.5.241 PORT=7"

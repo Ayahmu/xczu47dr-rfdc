@@ -1,6 +1,6 @@
 # Firmware - Embedded Software
 
-This directory contains the embedded firmware (PS code) for the ZCU216 RFDC project.
+This directory contains the embedded firmware (PS code) for the XCZU47DR RFDC project.
 
 ## Directory Structure
 
@@ -39,33 +39,32 @@ source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
 ### Build Commands
 
-The default firmware target is `TARGET=zcu216`. Set `TARGET=custom_xczu47dr` for the custom XCZU47DR four-DAC bring-up flow.
+The only supported firmware target is `TARGET=custom_xczu47dr`, which is also the
+default, for the custom XCZU47DR four-DAC bring-up flow.
 
 ```bash
-# Create application from XSA, first time, default ZCU216
+# Create application from XSA, first time
 ./build.sh create
-TARGET=zcu216 ./build.sh create
 
-# Build application after source changes, default ZCU216
+# Build application after source changes
 ./build.sh build
-TARGET=zcu216 ./build.sh build
 
-# Rebuild from scratch, default ZCU216
+# Rebuild from scratch
 ./build.sh rebuild
 
-# Program FPGA and run, default ZCU216
+# Program FPGA and run
 ./build.sh program
 
-# Clean default workspace
+# Clean workspace
 ./build.sh clean
 
-# Preview custom target create and program paths without XSCT or JTAG actions
-DRY_RUN=1 TARGET=custom_xczu47dr ./build.sh create
-DRY_RUN=1 TARGET=custom_xczu47dr ./build.sh program
+# Preview create and program paths without XSCT or JTAG actions
+DRY_RUN=1 ./build.sh create
+DRY_RUN=1 ./build.sh program
 
-# Build the custom target when its XSA is present
-TARGET=custom_xczu47dr ./build.sh create
-TARGET=custom_xczu47dr ./build.sh build
+# Build when the XSA is present
+./build.sh create
+./build.sh build
 ```
 
 ## Build Flow
@@ -76,13 +75,7 @@ TARGET=custom_xczu47dr ./build.sh build
 
 ## Build Outputs
 
-Default `TARGET=zcu216` outputs:
-
-- **ELF file**: `workspace/rfdc_app/Debug/rfdc_app.elf`
-- **Map file**: `workspace/rfdc_app/Debug/rfdc_app.elf.map`
-- **PS init script**: `workspace/hw_platform/hw/psu_init.tcl`
-
-Custom `TARGET=custom_xczu47dr` outputs:
+`TARGET=custom_xczu47dr` outputs:
 
 - **ELF file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
 - **Map file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf.map`
@@ -116,9 +109,9 @@ Custom `TARGET=custom_xczu47dr` outputs:
 
 The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
 
-For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 120 MHz DAC refclk outputs used by the 2.4 GS/s RFDC configuration. Firmware bypasses the ZCU216 CLK104/LMK/LMX path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
+For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 125 MHz DAC refclk outputs used by the 5.0 GS/s RFDC configuration. Firmware does not drive any CLK104/LMK/LMX clock path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
 
-The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1.2 GS/s sample rate for the 2.4 GS/s RFDC interpolation path. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
+The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1.25 GS/s sample rate for the 5.0 GS/s RFDC interpolation path. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
 
 Deferred custom-board interfaces include PCIe, QSFP, SFP, Type-C, Aurora, and extra PL DDR unless later work requests them.
 

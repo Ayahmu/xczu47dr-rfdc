@@ -1,6 +1,6 @@
 # Hardware Design
 
-This directory contains the complete hardware design for the ZCU216 RFDC project, including Chisel HDL sources and Vivado FPGA implementation.
+This directory contains the complete hardware design for the XCZU47DR RFDC project, including Chisel HDL sources and Vivado FPGA implementation.
 
 ## Directory Structure
 
@@ -57,8 +57,8 @@ hardware/
   source /tools/Xilinx/Vivado/2024.2/settings64.sh
   ```
 
-- **Target Device**: Zynq UltraScale+ xczu49dr-ffvf1760-2-e
-- **Board**: Xilinx ZCU216 Evaluation Board
+- **Target Device**: Zynq UltraScale+ RFSoC xczu47dr-ffvg1517-2-i
+- **Board**: Custom XCZU47DR board
 
 ## Quick Start
 
@@ -124,7 +124,7 @@ cd hardware/vivado
 vivado -mode batch -source scripts/create_project.tcl
 ```
 
-**Output**: Vivado project in `vivado/work/zcu216_rfdc.xpr`
+**Output**: Vivado project in `vivado/work/custom_xczu47dr_rfdc.xpr`
 
 ### 3. Run Synthesis
 
@@ -132,7 +132,7 @@ vivado -mode batch -source scripts/create_project.tcl
 vivado -mode batch -source scripts/run_synth.tcl
 ```
 
-**Output**: Synthesis reports in `work/zcu216_rfdc.runs/synth_1/reports/`
+**Output**: Synthesis reports in `work/custom_xczu47dr_rfdc.runs/synth_1/reports/`
 
 ### 4. Run Implementation
 
@@ -140,7 +140,7 @@ vivado -mode batch -source scripts/run_synth.tcl
 vivado -mode batch -source scripts/run_impl.tcl
 ```
 
-**Output**: Implementation reports in `work/zcu216_rfdc.runs/impl_1/reports/`
+**Output**: Implementation reports in `work/custom_xczu47dr_rfdc.runs/impl_1/reports/`
 
 ### 5. Generate Bitstream
 
@@ -148,7 +148,7 @@ vivado -mode batch -source scripts/run_impl.tcl
 vivado -mode batch -source scripts/run_bitstream.tcl
 ```
 
-**Output**: `output/zcu216_rfdc.bit`
+**Output**: `output/custom_xczu47dr_rfdc.bit`
 
 ### 6. Export XSA
 
@@ -156,7 +156,7 @@ vivado -mode batch -source scripts/run_bitstream.tcl
 vivado -mode batch -source scripts/export_xsa.tcl
 ```
 
-**Output**: `output/zcu216_rfdc.xsa` (used by firmware build)
+**Output**: `output/custom_xczu47dr_rfdc.xsa` (used by firmware build)
 
 ## Hardware Architecture
 
@@ -200,9 +200,9 @@ After a successful build, you will find:
 
 ```
 vivado/output/
-├── zcu216_rfdc.bit      # FPGA bitstream (~30MB)
-├── zcu216_rfdc.ltx      # Debug probes (if ILA/VIO used)
-└── zcu216_rfdc.xsa      # Hardware platform for Vitis (~12MB)
+├── custom_xczu47dr_rfdc.bit      # FPGA bitstream (~30MB)
+├── custom_xczu47dr_rfdc.ltx      # Debug probes (if ILA/VIO used)
+└── custom_xczu47dr_rfdc.xsa      # Hardware platform for Vitis (~12MB)
 ```
 
 ## Troubleshooting
@@ -235,8 +235,8 @@ source /tools/Xilinx/Vivado/2024.2/settings64.sh
 **Problem**: Synthesis/Implementation fails
 ```bash
 # Solution: Check reports for errors
-cat vivado/work/zcu216_rfdc.runs/synth_1/reports/post_synth_timing.rpt
-cat vivado/work/zcu216_rfdc.runs/impl_1/reports/post_impl_timing.rpt
+cat vivado/work/custom_xczu47dr_rfdc.runs/synth_1/reports/post_synth_timing.rpt
+cat vivado/work/custom_xczu47dr_rfdc.runs/impl_1/reports/post_impl_timing.rpt
 ```
 
 **Problem**: Timing not met
@@ -266,7 +266,7 @@ For interactive development, open the project in Vivado GUI:
 
 ```bash
 cd hardware/vivado
-vivado work/zcu216_rfdc.xpr
+vivado work/custom_xczu47dr_rfdc.xpr
 ```
 
 ## Performance Metrics
@@ -290,7 +290,7 @@ Timing (typical):
 
 After hardware build completes:
 
-1. **Firmware Development**: Use `output/zcu216_rfdc.xsa` to build ARM firmware
+1. **Firmware Development**: Use `output/custom_xczu47dr_rfdc.xsa` to build ARM firmware
    ```bash
    cd ../../firmware
    ./build.sh
@@ -313,5 +313,5 @@ After hardware build completes:
 - [Chisel Documentation](https://www.chisel-lang.org/)
 - [Mill Build Tool](https://mill-build.com/)
 - [Vivado Design Suite User Guide](https://www.xilinx.com/support/documentation/sw_manuals/xilinx2024_2/ug892-vivado-design-flows-overview.pdf)
-- [ZCU216 Evaluation Board User Guide](https://www.xilinx.com/support/documentation/boards_and_kits/zcu216/ug1390-zcu216-eval-bd.pdf)
+- [Zynq UltraScale+ RFSoC Data Converter (PG269)](https://docs.amd.com/r/en-US/pg269-rf-data-converter)
 - [Zynq UltraScale+ Device Technical Reference Manual](https://www.xilinx.com/support/documentation/user_guides/ug1085-zynq-ultrascale-trm.pdf)

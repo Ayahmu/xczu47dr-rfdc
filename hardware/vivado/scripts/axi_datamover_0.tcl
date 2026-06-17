@@ -25,7 +25,7 @@ if {![llength [info commands target_config_get]]} {
   source "${script_folder}/target_config.tcl"
 }
 if {![info exists target]} {
-  set target "zcu216"
+  set target "custom_xczu47dr"
   if {[info exists argc] && $argc > 0} {
     set target [lindex $argv 0]
   }
@@ -94,4 +94,3 @@ set_property -dict {
 } $axi_datamover_0
 
 ##################################################################
-
