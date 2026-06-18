@@ -186,13 +186,16 @@ int Configure_Custom_DAC_Nyquist(void)
 /*
  * Fine NCO digital up-conversion. Baseband is at DC (the PL streams a constant
  * I level with Q=0), so the C2R fine mixer translates the tone entirely by the
- * NCO frequency. With Fs = 6.0 GS/s the NCO baseband image lands in Nyquist
- * Zone 2, so a +1.5 GHz NCO produces a tone at 6.0 - 1.5 = 4.5 GHz.
+ * NCO frequency. Because the baseband is a real DC level, the C2R real output
+ * is cos(2*pi*f*t), which is identical for +f and -f: the sign of the NCO
+ * frequency does not change the emitted tone. With Fs = 6.0 GS/s the |f| = 1.5
+ * GHz fundamental aliases into Nyquist Zone 2 at 6.0 - 1.5 = 4.5 GHz, which the
+ * analog front end selects.
  *
- * NcoFreqGHz is the signed baseband NCO frequency in GHz. Pass the desired
- * RF target minus 6.0 GHz (e.g. -1.5 for 4.5 GHz, -2.0 for 4.0 GHz, -1.0 for
- * 5.0 GHz). This wrapper lets firmware retune the output across 4-5 GHz at
- * runtime without rebuilding the bitstream.
+ * NcoFreqGHz is the signed baseband NCO frequency in GHz; the emitted Zone 2
+ * tone is 6.0 - |NcoFreqGHz| (e.g. -1.5 or +1.5 -> 4.5 GHz, -2.0 -> 4.0 GHz,
+ * -1.0 -> 5.0 GHz). This wrapper lets firmware retune the output across 4-5 GHz
+ * at runtime without rebuilding the bitstream.
  */
 int Configure_Custom_DAC_NCO(double NcoFreqGHz)
 {
