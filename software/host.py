@@ -39,6 +39,20 @@ DDR_BASE = 0x0000000000000000
 DDR_CH_STRIDE = 0x0000000000200000  # 每通道间隔 2 MiB，避免缓冲重叠
 DDR_CH_ADDR = [DDR_BASE + i * DDR_CH_STRIDE for i in range(4)]
 
+# 兼容旧 GUI/工具子系统的共享常量与别名。
+DDR_CH1_ADDR = DDR_CH_ADDR[0]
+DDR_CH2_ADDR = DDR_CH_ADDR[1]
+DDR_CH3_ADDR = DDR_CH_ADDR[2]
+DDR_CH4_ADDR = DDR_CH_ADDR[3]
+DDR_X_ADDR = DDR_CH1_ADDR
+DDR_Y_ADDR = DDR_CH2_ADDR
+# DAC tile 采样率与织物时钟（供 GUI 时间轴/速率换算使用）。
+DAC_XY_FS = DAC_TILE_FS                  # 6.0 GS/s
+DAC_AXIS_HZ = DAC_FABRIC_HZ              # 93.75 MHz
+# 单帧固定字节数 / 样本数：一个 256-bit DAC 字 = 32B = 16 个 int16 lane。
+FIXED_DATA_BYTES = 4096
+NUM_SAMPLES = FIXED_DATA_BYTES // 2
+
 DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "192.168.1.128")
 DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "1234"))
 DEFAULT_UDP_WRITE_SETTLE_S = float(os.environ.get("RFSOC_UDP_WRITE_SETTLE_S", "0.25"))
@@ -46,6 +60,16 @@ DEFAULT_UDP_INTERFACE = os.environ.get("RFSOC_UDP_INTERFACE", "")
 DEFAULT_UDP_SOURCE_IP = os.environ.get("RFSOC_UDP_SOURCE_IP", "")
 SO_BINDTODEVICE = 25
 UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
+
+
+def _normalize_waveform_int16(data_int16: np.ndarray, sample_count: int = NUM_SAMPLES) -> np.ndarray:
+    """把 int16 波形裁剪/补零到 sample_count 个样本（供 GUI/工具子系统使用）。"""
+    if data_int16.dtype != np.int16:
+        data_int16 = data_int16.astype(np.int16)
+    if len(data_int16) >= sample_count:
+        return data_int16[:sample_count]
+    pad = np.zeros(sample_count - len(data_int16), dtype=np.int16)
+    return np.concatenate([data_int16, pad])
 
 
 def iter_udp_waveform_packets(wave_bytes: bytes, ddr_addr: int):
