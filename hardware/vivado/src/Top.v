@@ -30,6 +30,14 @@ module Top (
     input  dac2_clk_clk_p,
     input  sysref_in_diff_n,
     input  sysref_in_diff_p,
+    output vout00_v_n,
+    output vout00_v_p,
+    output vout02_v_n,
+    output vout02_v_p,
+    output vout10_v_n,
+    output vout10_v_p,
+    output vout12_v_n,
+    output vout12_v_p,
     output vout20_v_n,
     output vout20_v_p,
     output vout22_v_n,
@@ -63,6 +71,8 @@ module Top (
   wire        pl_aresetn;
   wire        pl_resetn0;
   wire        pl_ps_irq;
+  wire        clk_dac0;
+  wire        clk_dac1;
   wire        clk_dac2;
   wire        clk_dac3;
   wire        dac_axis_clk;
@@ -606,12 +616,13 @@ module Top (
   reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
   reg [15:0] seq_id_dac;
 
-  // The executor counts 128-bit DataMover/FIFO beats. RFDC S_AXIS_20/22 are
-  // 64-bit AXIS ports, so the DAC gate must count twice as many output beats.
-  wire [31:0] ch1_len_dac64 = {ch1_len_dac[30:0], 1'b0};
-  wire [31:0] ch2_len_dac64 = {ch2_len_dac[30:0], 1'b0};
-  wire [31:0] ch3_len_dac64 = {ch3_len_dac[30:0], 1'b0};
-  wire [31:0] ch4_len_dac64 = {ch4_len_dac[30:0], 1'b0};
+  // The executor counts 128-bit DataMover/FIFO beats. Each RFDC tile AXIS port
+  // is 256-bit, so the 128->256 gearbox emits one DAC beat per two FIFO beats;
+  // the DAC gate therefore counts half as many output beats.
+  wire [31:0] ch1_len_dac256 = {1'b0, ch1_len_dac[31:1]};
+  wire [31:0] ch2_len_dac256 = {1'b0, ch2_len_dac[31:1]};
+  wire [31:0] ch3_len_dac256 = {1'b0, ch3_len_dac[31:1]};
+  wire [31:0] ch4_len_dac256 = {1'b0, ch4_len_dac[31:1]};
 
   always @(posedge dac_axis_clk or negedge dac_rst_n) begin
     if(!dac_rst_n) begin
@@ -683,12 +694,16 @@ module Top (
   );
 
   // ==========================================================
-  // Wave async FIFO (DDR 128-bit AXIS -> DAC 64-bit RFDC AXIS)
+  // Wave async FIFO (DDR 128-bit AXIS -> DAC 128-bit) then a
+  // 128->256 gearbox feeding each RFDC tile's 256-bit IQ AXIS port.
+  // Each executor channel maps to one DAC tile (2 physical DACs):
+  //   ch1 -> tile0 (s00, vout00/02)   ch2 -> tile1 (s10, vout10/12)
+  //   ch3 -> tile2 (s20, vout20/22)   ch4 -> tile3 (s30, vout30/32)
   // ==========================================================
   wire [127:0] dac_fifo_ch1_tdata, dac_fifo_ch2_tdata, dac_fifo_ch3_tdata, dac_fifo_ch4_tdata;
   wire         dac_fifo_ch1_tvalid, dac_fifo_ch2_tvalid, dac_fifo_ch3_tvalid, dac_fifo_ch4_tvalid;
   wire         dac_fifo_ch1_tready, dac_fifo_ch2_tready, dac_fifo_ch3_tready, dac_fifo_ch4_tready;
-  wire [63:0]  dac_in_ch1_tdata, dac_in_ch2_tdata, dac_in_ch3_tdata, dac_in_ch4_tdata;
+  wire [255:0] dac_in_ch1_tdata, dac_in_ch2_tdata, dac_in_ch3_tdata, dac_in_ch4_tdata;
   wire         dac_in_ch1_tvalid, dac_in_ch2_tvalid, dac_in_ch3_tvalid, dac_in_ch4_tvalid;
   wire         dac_ch1_ready_gated, dac_ch2_ready_gated, dac_ch3_ready_gated, dac_ch4_ready_gated;
   wire         dac_ch1_valid_gated, dac_ch2_valid_gated, dac_ch3_valid_gated, dac_ch4_valid_gated;
@@ -704,7 +719,7 @@ module Top (
   wire [15:0] pc_last_seq_id;
 
   dac_play_ctrl #(
-    .BEAT_BYTES(16)
+    .BEAT_BYTES(32)
   ) u_play_ctrl (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
@@ -717,10 +732,10 @@ module Top (
     .ch2_delay_cycles(ch2_delay_dac),
     .ch3_delay_cycles(ch3_delay_dac),
     .ch4_delay_cycles(ch4_delay_dac),
-    .ch1_len_beats(ch1_len_dac64),
-    .ch2_len_beats(ch2_len_dac64),
-    .ch3_len_beats(ch3_len_dac64),
-    .ch4_len_beats(ch4_len_dac64),
+    .ch1_len_beats(ch1_len_dac256),
+    .ch2_len_beats(ch2_len_dac256),
+    .ch3_len_beats(ch3_len_dac256),
+    .ch4_len_beats(ch4_len_dac256),
     .ch1_arm(ch1_arm_dac),
     .ch2_arm(ch2_arm_dac),
     .ch3_arm(ch3_arm_dac),
@@ -856,7 +871,7 @@ module Top (
     .prog_full         (ch4_prog_full)
   );
 
-  axis_128_to_64 dac_ch1_width_i (
+  axis_128_to_256 dac_ch1_width_i (
     .clk      (dac_axis_clk),
     .rst_n    (dac_rst_n),
     .s_tdata  (dac_fifo_ch1_tdata),
@@ -867,7 +882,7 @@ module Top (
     .m_tready (dac_ch1_ready_gated)
   );
 
-  axis_128_to_64 dac_ch2_width_i (
+  axis_128_to_256 dac_ch2_width_i (
     .clk      (dac_axis_clk),
     .rst_n    (dac_rst_n),
     .s_tdata  (dac_fifo_ch2_tdata),
@@ -879,7 +894,7 @@ module Top (
   );
 
 
-  axis_128_to_64 dac_ch3_width_i (
+  axis_128_to_256 dac_ch3_width_i (
     .clk      (dac_axis_clk),
     .rst_n    (dac_rst_n),
     .s_tdata  (dac_fifo_ch3_tdata),
@@ -890,7 +905,7 @@ module Top (
     .m_tready (dac_ch3_ready_gated)
   );
 
-  axis_128_to_64 dac_ch4_width_i (
+  axis_128_to_256 dac_ch4_width_i (
     .clk      (dac_axis_clk),
     .rst_n    (dac_rst_n),
     .s_tdata  (dac_fifo_ch4_tdata),
@@ -1399,12 +1414,26 @@ module Top (
       .sysref_in_n(sysref_in_diff_n),
       .dac2_clk_p(dac2_clk_clk_p),
       .dac2_clk_n(dac2_clk_clk_n),
+      .clk_dac0(clk_dac0),
+      .s0_axis_aclk(dac_axis_clk),
+      .s0_axis_aresetn(clk104_aresetn),
+      .clk_dac1(clk_dac1),
+      .s1_axis_aclk(dac_axis_clk),
+      .s1_axis_aresetn(clk104_aresetn),
       .clk_dac2(clk_dac2),
       .s2_axis_aclk(dac_axis_clk),
       .s2_axis_aresetn(clk104_aresetn),
       .clk_dac3(clk_dac3),
       .s3_axis_aclk(dac_axis_clk),
       .s3_axis_aresetn(clk104_aresetn),
+      .vout00_p(vout00_v_p),
+      .vout00_n(vout00_v_n),
+      .vout02_p(vout02_v_p),
+      .vout02_n(vout02_v_n),
+      .vout10_p(vout10_v_p),
+      .vout10_n(vout10_v_n),
+      .vout12_p(vout12_v_p),
+      .vout12_n(vout12_v_n),
       .vout20_p(vout20_v_p),
       .vout20_n(vout20_v_n),
       .vout22_p(vout22_v_p),
@@ -1413,18 +1442,18 @@ module Top (
       .vout30_n(vout30_v_n),
       .vout32_p(vout32_v_p),
       .vout32_n(vout32_v_n),
-      .s20_axis_tdata(dac_in_ch1_tdata),
-      .s20_axis_tvalid(dac_ch1_valid_gated),
-      .s20_axis_tready(dac_ch1_ready),
-      .s22_axis_tdata(dac_in_ch2_tdata),
-      .s22_axis_tvalid(dac_ch2_valid_gated),
-      .s22_axis_tready(dac_ch2_ready),
-      .s30_axis_tdata(dac_in_ch3_tdata),
-      .s30_axis_tvalid(dac_ch3_valid_gated),
-      .s30_axis_tready(dac_ch3_ready),
-      .s32_axis_tdata(dac_in_ch4_tdata),
-      .s32_axis_tvalid(dac_ch4_valid_gated),
-      .s32_axis_tready(dac_ch4_ready),
+      .s00_axis_tdata(dac_in_ch1_tdata),
+      .s00_axis_tvalid(dac_ch1_valid_gated),
+      .s00_axis_tready(dac_ch1_ready),
+      .s10_axis_tdata(dac_in_ch2_tdata),
+      .s10_axis_tvalid(dac_ch2_valid_gated),
+      .s10_axis_tready(dac_ch2_ready),
+      .s20_axis_tdata(dac_in_ch3_tdata),
+      .s20_axis_tvalid(dac_ch3_valid_gated),
+      .s20_axis_tready(dac_ch3_ready),
+      .s30_axis_tdata(dac_in_ch4_tdata),
+      .s30_axis_tvalid(dac_ch4_valid_gated),
+      .s30_axis_tready(dac_ch4_ready),
       .irq(rfdc_irq)
   );
 
@@ -1582,8 +1611,8 @@ module Top (
       pc_new_cfg,
       ch4_allow,
       ch3_allow,
-      ch2_len_dac64[13:0],
-      ch1_len_dac64[13:0],
+      ch2_len_dac256[13:0],
+      ch1_len_dac256[13:0],
       pc_last_seq_id,
       seq_id_dac,
       ch4_arm_dac,
@@ -1615,8 +1644,8 @@ module Top (
       ps_trigger_dac_sync,
       dac_rst_n
     }),
-    .probe1({dac_in_ch2_tdata, dac_in_ch1_tdata}),
-    .probe2({dac_in_ch4_tdata, dac_in_ch3_tdata}),
+    .probe1(dac_in_ch1_tdata),
+    .probe2(dac_in_ch2_tdata),
     .probe3(cfg_rd_data[127:0]),
     .probe4({ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count}),
     .probe5({ch1_delay_dac, ch2_delay_dac, ch3_delay_dac, ch4_delay_dac})

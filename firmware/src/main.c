@@ -36,6 +36,11 @@ void reverse32bArray(u32 *src, int size);
 int rfdcStartup(void);
 int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
+int Configure_Custom_DAC_NCO(double NcoFreqGHz);
+
+/* Default baseband NCO frequency in GHz. Fs=6.0 GS/s Zone2 image:
+ * RF = 6.0 + NcoFreqGHz. -1.5 GHz NCO => 4.5 GHz RF output. */
+#define CUSTOM_DAC_NCO_DEFAULT_GHZ (-1.5)
 
 /************************** Variable Definitions *****************************/
 
@@ -120,6 +125,10 @@ int Configure_DAC_Output_Current(void)
 		u32 Tile_Id;
 		u32 Block_Id;
 	} CustomDacBlocks[] = {
+		{0, 0},
+		{0, 2},
+		{1, 0},
+		{1, 2},
 		{2, 0},
 		{2, 2},
 		{3, 0},
@@ -144,6 +153,10 @@ int Configure_Custom_DAC_Nyquist(void)
 		u32 Tile_Id;
 		u32 Block_Id;
 	} CustomDacBlocks[] = {
+		{0, 0},
+		{0, 2},
+		{1, 0},
+		{1, 2},
 		{2, 0},
 		{2, 2},
 		{3, 0},
@@ -165,6 +178,74 @@ int Configure_Custom_DAC_Nyquist(void)
 		}
 
 		xil_printf("Success: DAC Tile%d Block%d Nyquist zone set to 2\r\n", Tile_Id, Block_Id);
+	}
+
+	return XST_SUCCESS;
+}
+
+/*
+ * Fine NCO digital up-conversion. Baseband is at DC (the PL streams a constant
+ * I level with Q=0), so the C2R fine mixer translates the tone entirely by the
+ * NCO frequency. With Fs = 6.0 GS/s the NCO baseband image lands in Nyquist
+ * Zone 2, so a +1.5 GHz NCO produces a tone at 6.0 - 1.5 = 4.5 GHz.
+ *
+ * NcoFreqGHz is the signed baseband NCO frequency in GHz. Pass the desired
+ * RF target minus 6.0 GHz (e.g. -1.5 for 4.5 GHz, -2.0 for 4.0 GHz, -1.0 for
+ * 5.0 GHz). This wrapper lets firmware retune the output across 4-5 GHz at
+ * runtime without rebuilding the bitstream.
+ */
+int Configure_Custom_DAC_NCO(double NcoFreqGHz)
+{
+	static const struct {
+		u32 Tile_Id;
+		u32 Block_Id;
+	} CustomDacBlocks[] = {
+		{0, 0},
+		{0, 2},
+		{1, 0},
+		{1, 2},
+		{2, 0},
+		{2, 2},
+		{3, 0},
+		{3, 2},
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(CustomDacBlocks) / sizeof(CustomDacBlocks[0]); i++)
+	{
+		u32 Tile_Id = CustomDacBlocks[i].Tile_Id;
+		u32 Block_Id = CustomDacBlocks[i].Block_Id;
+		XRFdc_Mixer_Settings MixerSettings;
+		int Status;
+
+		Status = XRFdc_GetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_GetMixerSettings failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		MixerSettings.Freq = NcoFreqGHz * 1000.0; /* driver expects MHz */
+		MixerSettings.PhaseOffset = 0.0;
+		MixerSettings.EventSource = XRFDC_EVNT_SRC_IMMEDIATE;
+		MixerSettings.CoarseMixFreq = XRFDC_COARSE_MIX_BYPASS;
+		MixerSettings.MixerMode = XRFDC_MIXER_MODE_C2R;
+		MixerSettings.FineMixerScale = XRFDC_MIXER_SCALE_1P0;
+		MixerSettings.MixerType = XRFDC_MIXER_TYPE_FINE;
+
+		Status = XRFdc_SetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_SetMixerSettings failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		XRFdc_UpdateEvent(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, XRFDC_EVENT_MIXER);
+
+		xil_printf("Success: DAC Tile%d Block%d NCO set to %d MHz (baseband)\r\n",
+			   Tile_Id, Block_Id, (int)(NcoFreqGHz * 1000.0));
 	}
 
 	return XST_SUCCESS;
@@ -277,6 +358,10 @@ int main(void)
 		return Status;
 	}
 	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
+	{
+		return XST_FAILURE;
+	}
+	if (Configure_Custom_DAC_NCO(CUSTOM_DAC_NCO_DEFAULT_GHZ) != XST_SUCCESS)
 	{
 		return XST_FAILURE;
 	}

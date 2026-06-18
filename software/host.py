@@ -15,19 +15,30 @@ import matplotlib.pyplot as plt
 # ============================================================
 # 1. 硬件参数
 # ============================================================
-DAC_XY_FS = 1.25e9
-DAC_AXIS_HZ = 312.5e6
-FIXED_DATA_BYTES = 4096
-NUM_SAMPLES = FIXED_DATA_BYTES // 2
-DELAY = 1
+# 8 通道 NCO 数字上变频（IQ -> Real / C2R）配置：
+#   每个 DAC tile 采样率 Fs = 6.0 GSPS，8 倍内插，
+#   PL/AXIS 织物时钟 = Fs / interp / 8 = 93.75 MHz。
+#   每个 256-bit tile 字 = 该 tile 两个物理 DAC（slice0 + slice2）
+#   的复数样本；DDR 侧仍按 128-bit beat 组织，gearbox 把
+#   相邻两 beat 合成一个 256-bit 字（beat0->slice0, beat1->slice2）。
+#   NCO 频率由固件在启动时设置（默认 -1.5 GHz，Zone2 -> 4.5 GHz RF）。
+DAC_TILE_FS = 6.0e9
+DAC_INTERP = 8
+DAC_FABRIC_HZ = DAC_TILE_FS / DAC_INTERP / 8  # 93.75 MHz
+NCO_FREQ_GHZ = 4.5  # 仅作记录，实际由固件配置
+
+# 单频 CW 的复基带置于 DC：I/Q 两路均为常数。
+# 用「整片常数填充」的方式生成 DDR 数据，对 I/Q lane 的具体
+# 排布（交织 or 分块）完全不敏感——无论哪种排布，常数填充都
+# 等价于一个 DC 复基带矢量，经 NCO 上变频后在每个 DAC 上输出
+# 唯一一根 NCO 频率的单频波，确保准确无误。
+TONE_AMP = 0.5  # 每路 lane 占满量程的比例（C = round(amp*32767)）
+TONE_BYTES_DEFAULT = 256 * 1024  # 每通道 DDR 缓冲字节数（32B 对齐）
 
 DDR_BASE = 0x0000000000000000
-DDR_CH1_ADDR = DDR_BASE
-DDR_CH2_ADDR = DDR_BASE + 0x1000
-DDR_CH3_ADDR = DDR_BASE + 0x2000
-DDR_CH4_ADDR = DDR_BASE + 0x3000
-DDR_X_ADDR = DDR_CH1_ADDR
-DDR_Y_ADDR = DDR_CH2_ADDR  # 4096 aligned legacy alias
+DDR_CH_STRIDE = 0x0000000000200000  # 每通道间隔 2 MiB，避免缓冲重叠
+DDR_CH_ADDR = [DDR_BASE + i * DDR_CH_STRIDE for i in range(4)]
+
 DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "192.168.1.128")
 DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "1234"))
 DEFAULT_UDP_WRITE_SETTLE_S = float(os.environ.get("RFSOC_UDP_WRITE_SETTLE_S", "0.25"))
@@ -37,21 +48,11 @@ SO_BINDTODEVICE = 25
 UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
 
 
-def _normalize_waveform_int16(data_int16: np.ndarray, sample_count: int = NUM_SAMPLES) -> np.ndarray:
-    if data_int16.dtype != np.int16:
-        data_int16 = data_int16.astype(np.int16)
+def iter_udp_waveform_packets(wave_bytes: bytes, ddr_addr: int):
+    """把任意长度的波形字节流切成 16B 一组，封装成 UDP DDR 写包。
 
-    if len(data_int16) >= sample_count:
-        return data_int16[:sample_count]
-
-    pad = np.zeros(sample_count - len(data_int16), dtype=np.int16)
-    return np.concatenate([data_int16, pad])
-
-
-def iter_udp_waveform_packets(data_int16: np.ndarray, ddr_addr: int, sample_count: int = NUM_SAMPLES):
-    data_int16 = _normalize_waveform_int16(data_int16, sample_count=sample_count)
-    wave_bytes = data_int16.astype("<i2").tobytes()
-
+    每包：[magic(u64), ddr_addr(u64), low(u64), high(u64)] 小端。
+    长度补齐到 16B。"""
     if len(wave_bytes) % 16 != 0:
         wave_bytes += b"\x00" * (16 - (len(wave_bytes) % 16))
 
@@ -62,34 +63,20 @@ def iter_udp_waveform_packets(data_int16: np.ndarray, ddr_addr: int, sample_coun
 
 
 # ============================================================
-# 2. 波形生成
+# 2. 波形生成（DC 复基带，单频 CW）
 # ============================================================
-def time_to_samples(duration_s, fs):
-    return int(np.round(duration_s * fs))
+def build_dc_iq_tone(n_bytes: int, amp: float = TONE_AMP) -> np.ndarray:
+    """生成一段「常数填充」的 IQ DDR 缓冲。
 
-def gaussian_env(duration_s, fs, amp):
-    length = time_to_samples(duration_s, fs)
-    n = np.arange(length)
-    sigma = length / 6
-    env = amp * np.exp(-(n - length / 2) ** 2 / (2 * sigma ** 2))
-    return env
-
-def add_timing(signal, delay_s, fs):
-    delay_samples = time_to_samples(delay_s, fs)
-    out = np.zeros(NUM_SAMPLES, dtype=np.float32)
-    end = min(delay_samples + len(signal), NUM_SAMPLES)
-    out[delay_samples:end] = signal[:end - delay_samples]
-    return out
-
-def generate_rf_burst(freq, duration_s, delay_s, fs, interpolation, amp=0.8):
-    env = gaussian_env(duration_s / interpolation, fs, amp)
-    t_local = np.arange(len(env)) / fs
-    rf = env * np.cos(2 * np.pi * freq * interpolation * t_local)
-    return add_timing(rf, delay_s / interpolation, fs)
-
-def quantize_to_int16_array(signal):
-    signal = np.clip(signal, -1.0, 1.0)
-    return np.round(signal * 32767).astype(np.int16)
+    n_bytes 必须为 32 的倍数（一个 256-bit DAC 字 = 32B）。
+    返回 int16 数组（小端写入 DDR），每个 lane 都是同一常数 C。
+    经 NCO 上变频后等价于 DC 复基带 -> 单一 NCO 频率的 CW。"""
+    if n_bytes % 32 != 0:
+        n_bytes += 32 - (n_bytes % 32)
+    c = int(round(float(amp) * 32767))
+    c = max(-32768, min(32767, c))
+    n_samples = n_bytes // 2
+    return np.full(n_samples, c, dtype=np.int16)
 
 
 # ============================================================
@@ -151,32 +138,22 @@ class RFSocController:
 
     def upload_waveform(self, data_int16: np.ndarray, ddr_addr: int,
                         dump_path: str, dump_style: str = "hexdump"):
-        """
-        type=0 payload 格式：
-          [uint64 ddr_addr (little endian)] + [wave bytes...]
-        wave bytes 固定对齐到 4096B (2048 samples of int16)
-        """
-        data_int16 = _normalize_waveform_int16(data_int16)
-
-        wave_bytes = data_int16.astype("<i2").tobytes()
-
-        # dump 仅 dump 波形本体（不含 addr 头），更直观对比 DDR 内容
+        """TCP 路径：type=0 payload = [uint64 ddr_addr] + [wave bytes...]"""
+        wave_bytes = np.ascontiguousarray(data_int16, dtype="<i2").tobytes()
         self._save_hex_text(wave_bytes, dump_path, bytes_per_line=16, style=dump_style)
         print(f"[dump] {dump_path}  ({len(wave_bytes)} bytes)")
 
         payload = struct.pack("<Q", int(ddr_addr) & 0xFFFFFFFFFFFFFFFF) + wave_bytes
         print(f"[upload] addr=0x{ddr_addr:016X}, payload={len(payload)} bytes (8+{len(wave_bytes)})")
-
         return self._send_packet(0, payload)
 
     def upload_waveform_udp(self, data_int16: np.ndarray, ddr_addr: int,
                             dump_path: str, dump_style: str = "hexdump"):
-        data_int16 = _normalize_waveform_int16(data_int16)
-        wave_bytes = data_int16.astype("<i2").tobytes()
+        wave_bytes = np.ascontiguousarray(data_int16, dtype="<i2").tobytes()
         self._save_hex_text(wave_bytes, dump_path, bytes_per_line=16, style=dump_style)
 
         packet_count = 0
-        for packet in iter_udp_waveform_packets(data_int16, ddr_addr):
+        for packet in iter_udp_waveform_packets(wave_bytes, ddr_addr):
             self.sock.sendto(packet, (self.ip, self.port))
             packet_count += 1
             if packet_count % 8 == 0:
@@ -212,68 +189,37 @@ class RFSocController:
 # ============================================================
 # 4. Plot 工具
 # ============================================================
-def plot_waveforms(qx: np.ndarray, qy: np.ndarray, n_preview: int = 400, title_prefix: str = ""):
+def plot_tone(ch_int16, n_preview: int = 256, title_prefix: str = ""):
     plt.figure(figsize=(12, 5))
-    plt.plot(qx[:n_preview], label="X (CH1) int16")
-    plt.plot(qy[:n_preview], label="Y (CH2) int16")
-    plt.title(f"{title_prefix}Waveform Preview (first {n_preview} samples)")
-    plt.xlabel("Sample")
+    for idx, q in enumerate(ch_int16):
+        plt.plot(q[:n_preview], label=f"CH{idx + 1} int16")
+    plt.title(f"{title_prefix}DC-IQ Tone Preview (first {n_preview} int16 lanes)")
+    plt.xlabel("int16 lane index")
     plt.ylabel("Amplitude (int16)")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.savefig("wave_preview_firstN.png", dpi=150)
     plt.close()
-
-    plt.figure(figsize=(12, 5))
-    plt.plot(qx, label="X (CH1) int16")
-    plt.plot(qy, label="Y (CH2) int16")
-    plt.title(f"{title_prefix}Waveform Full Length ({len(qx)} samples)")
-    plt.xlabel("Sample")
-    plt.ylabel("Amplitude (int16)")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig("wave_preview_full.png", dpi=150)
-    plt.close()
-
-    print("[plot] saved: wave_preview_firstN.png, wave_preview_full.png")
+    print("[plot] saved: wave_preview_firstN.png")
 
 
 # ============================================================
 # 5. 主程序
 # ============================================================
-def build_default_waveforms():
-    interpolation = 4
-    rf_freq = 0.300e9
-
-    x_wave = generate_rf_burst(
-        freq=rf_freq, duration_s=100e-9, delay_s=0,
-        fs=DAC_XY_FS, interpolation=interpolation, amp=0.8
-    )
-    y_wave = generate_rf_burst(
-        freq=rf_freq, duration_s=20e-9, delay_s=15e-9,
-        fs=DAC_XY_FS, interpolation=interpolation, amp=0.8
-    )
-
-    qx = quantize_to_int16_array(x_wave)
-    qy = quantize_to_int16_array(y_wave)
-
-    qx = (np.concatenate([qx, np.zeros(NUM_SAMPLES - len(qx), dtype=np.int16)])
-          if len(qx) < NUM_SAMPLES else qx[:NUM_SAMPLES])
-    qy = (np.concatenate([qy, np.zeros(NUM_SAMPLES - len(qy), dtype=np.int16)])
-          if len(qy) < NUM_SAMPLES else qy[:NUM_SAMPLES])
-
-    return qx, qy
-
-
 def parse_args():
-    parser = argparse.ArgumentParser(description="XCZU47DR RFSoC host controller")
+    parser = argparse.ArgumentParser(description="XCZU47DR RFSoC host controller (8-ch NCO C2R CW)")
     parser.add_argument("--ip", default=DEFAULT_BOARD_IP, help="Board IPv4 address")
     parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT, help="Board UDP/TCP port")
     parser.add_argument("--transport", choices=("udp", "tcp"), default="udp",
                         help="Transport for instructions; UDP is the 10G PL path")
     parser.add_argument("--timeout", type=float, default=5.0, help="Socket timeout in seconds")
+    parser.add_argument("--tone-bytes", type=int, default=TONE_BYTES_DEFAULT,
+                        help="Per-channel DDR buffer size in bytes (32B aligned)")
+    parser.add_argument("--tone-amp", type=float, default=TONE_AMP,
+                        help="Per-lane amplitude as a fraction of full scale (0..1)")
+    parser.add_argument("--channels", default="1,2,3,4",
+                        help="Comma-separated executor channels to play (1..4 -> DAC tiles 0..3)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate plots and waveform dumps without connecting to hardware")
     parser.add_argument("--output-dir", default=".", help="Directory for generated plots and dumps")
@@ -293,16 +239,30 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    qx, qy = build_default_waveforms()
+    channels = sorted({int(c) for c in args.channels.split(",") if c.strip()})
+    for ch in channels:
+        if ch < 1 or ch > 4:
+            raise SystemExit(f"channel {ch} out of range (1..4)")
+
+    tone_bytes = int(args.tone_bytes)
+    if tone_bytes % 32 != 0:
+        tone_bytes += 32 - (tone_bytes % 32)
+
+    tone = build_dc_iq_tone(tone_bytes, amp=args.tone_amp)
+    print(f"[wave] DC-IQ CW, per-ch {tone_bytes} bytes "
+          f"({tone_bytes // 32} x 256-bit DAC words), amp={args.tone_amp}, "
+          f"const={int(tone[0])}, channels={channels}")
+    print(f"[wave] fabric/AXIS clock = {DAC_FABRIC_HZ/1e6:.3f} MHz, "
+          f"Fs={DAC_TILE_FS/1e9:.1f} GSPS, interp={DAC_INTERP}, NCO~{NCO_FREQ_GHZ} GHz (firmware-set)")
 
     old_cwd = Path.cwd()
     os.chdir(output_dir)
     try:
-        plot_waveforms(qx, qy, n_preview=400, title_prefix="Before Send: ")
+        plot_tone([tone for _ in channels], n_preview=256, title_prefix="Before Send: ")
 
         if args.dry_run:
-            RFSocController._save_hex_text(qx.astype("<i2").tobytes(), "x_waveform_hex.txt")
-            RFSocController._save_hex_text(qy.astype("<i2").tobytes(), "y_waveform_hex.txt")
+            RFSocController._save_hex_text(
+                np.ascontiguousarray(tone, dtype="<i2").tobytes(), "tone_waveform_hex.txt")
             print(f"[dry-run] generated waveform artifacts in {output_dir.resolve()}")
             return 0
 
@@ -322,27 +282,26 @@ def main():
             ) from exc
 
         try:
-            RFSocController._save_hex_text(qx.astype("<i2").tobytes(), "x_waveform_hex.txt")
-            RFSocController._save_hex_text(qy.astype("<i2").tobytes(), "y_waveform_hex.txt")
-
             end_channel = 0 if (args.transport == "tcp" or args.wait_for_trigger) else 15
-            cmds = [
-                [1, 1, 0, 0],
-                [2, 1, FIXED_DATA_BYTES, DDR_X_ADDR],
-                [1, 2, 0, 0],
-                [2, 2, FIXED_DATA_BYTES, DDR_Y_ADDR],
-                [3, end_channel, 0, 0]
-            ]
 
-            if args.transport == "tcp":
-                ctrl.upload_waveform(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
-                ctrl.upload_waveform(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
-            else:
-                ctrl.upload_waveform_udp(qx, ddr_addr=DDR_X_ADDR, dump_path="x_waveform_hex.txt")
-                ctrl.upload_waveform_udp(qy, ddr_addr=DDR_Y_ADDR, dump_path="y_waveform_hex.txt")
-                if args.udp_write_settle_s > 0:
-                    print(f"[udp-upload] waiting {args.udp_write_settle_s:.3f}s for DDR write completion")
-                    time.sleep(args.udp_write_settle_s)
+            # 每个使能通道：DELAY 0 + PLAY(tone_bytes, ddr_addr)
+            cmds = []
+            for ch in channels:
+                cmds.append([1, ch, 0, 0])
+                cmds.append([2, ch, tone_bytes, DDR_CH_ADDR[ch - 1]])
+            cmds.append([3, end_channel, 0, 0])
+
+            for ch in channels:
+                addr = DDR_CH_ADDR[ch - 1]
+                dump = f"ch{ch}_waveform_hex.txt"
+                if args.transport == "tcp":
+                    ctrl.upload_waveform(tone, ddr_addr=addr, dump_path=dump)
+                else:
+                    ctrl.upload_waveform_udp(tone, ddr_addr=addr, dump_path=dump)
+
+            if args.transport != "tcp" and args.udp_write_settle_s > 0:
+                print(f"[udp-upload] waiting {args.udp_write_settle_s:.3f}s for DDR write completion")
+                time.sleep(args.udp_write_settle_s)
 
             ctrl.send_instructions(cmds)
             if args.transport == "tcp":
