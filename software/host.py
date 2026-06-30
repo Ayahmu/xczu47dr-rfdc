@@ -20,8 +20,8 @@ import matplotlib.pyplot as plt
 #   PL/AXIS 织物时钟 = Fs / interp / 8 = 93.75 MHz。
 #   每个 256-bit AXIS 字 = 一个物理 DAC slice 的复数 I/Q 样本；顶层
 #   将 8 个执行器通道分别送到 8 个物理 DAC slice。
-#   DDR 播放侧按 256-bit / 32B beat 组织，DataMover 每 beat 直接输出一个
-#   256-bit RFDC AXIS 字。
+#   DDR 播放侧按 256-bit / 32B RFDC beat 组织。DataMover 的 AXI-MM 读口
+#   使用 512-bit DDR 宽度补水，MM2S stream 仍输出 256-bit RFDC AXIS 字。
 #   NCO 频率由固件在启动时设置（默认 -1.5 GHz，Zone2 -> 4.5 GHz RF）。
 DAC_TILE_FS = 6.0e9
 DAC_INTERP = 8

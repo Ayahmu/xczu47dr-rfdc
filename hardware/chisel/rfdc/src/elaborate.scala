@@ -22,11 +22,11 @@ object RfdcCustomXczu47drConfig {
   // 8-channel DAC playback: 4 DAC tiles (228..231) x 2 DAC blocks each.
   // C2R (IQ -> Real) with fine NCO digital up-conversion to 4-5 GHz.
   // Fs = 6.0 GSPS, 8x interpolation => fabric/AXIS clock 93.75 MHz.
-  // The high interpolation keeps the per-tile 256-bit AXIS consumption rate
-  // (256b x 93.75 MHz = 24 Gbit/s) below the sustainable 128-bit DDR read
-  // bandwidth, so a single active tile can stream a continuous CW tone without
-  // FIFO underflow. The fine NCO sits after interpolation, so its 4-5 GHz tune
-  // range is unaffected, and the narrow single-tone images are cleaner.
+  // The high interpolation keeps each slice's 256-bit AXIS consumption rate
+  // (256b x 93.75 MHz = 24 Gbit/s) below the 512-bit DDR read replenishment
+  // path used by the top-level DataMover scheduler. The fine NCO sits after
+  // interpolation, so its 4-5 GHz tune range is unaffected, and the narrow
+  // single-tone images are cleaner.
   // DAC2 (tile 230) owns the PLL from a 125 MHz refclk and distributes the
   // sampling clock to all four tiles (Clock_Source=6 on every tile).
   private val axisFreqHz = 93750000

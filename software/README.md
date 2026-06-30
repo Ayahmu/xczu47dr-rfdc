@@ -4,7 +4,8 @@ Use `send_waveform_udp.py` as the main waveform sender. It generates CH1-CH8
 waveforms locally, saves the exact samples under `--output-dir`, uploads them to
 the PL-side DDR offsets expected by the FPGA design, then sends BEGIN/PLAY pairs
 for channels 1-8 followed by END. Each channel uses a 32B-aligned 256 KiB DDR
-slot by default. The current custom hardware mapping drives one independent
+slot by default; 32B is the RFDC stream beat size, while the hardware reads DDR
+through a wider 512-bit AXI-MM DataMover port. The current custom hardware mapping drives one independent
 physical DAC output per channel: CH1 -> DDR `0x0` -> `vout00`, CH2 -> DDR
 `0x40000` -> `vout02`, CH3 -> DDR `0x80000` -> `vout10`, CH4 -> DDR `0xC0000`
 -> `vout12`, CH5 -> DDR `0x100000` -> `vout20`, CH6 -> DDR `0x140000` ->
