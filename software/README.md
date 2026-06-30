@@ -1,11 +1,15 @@
 # Software - RFSoC Waveform Sender
 
-Use `send_waveform_udp.py` as the main waveform sender. It generates CH1-CH4
+Use `send_waveform_udp.py` as the main waveform sender. It generates CH1-CH8
 waveforms locally, saves the exact samples under `--output-dir`, uploads them to
 the PL-side DDR offsets expected by the FPGA design, then sends BEGIN/PLAY pairs
-for channels 1-4 followed by END. The current custom hardware mapping is CH1 ->
-DDR `0x0` / DAC20, CH2 -> DDR `0x1000` / DAC22, CH3 -> DDR `0x2000` / DAC30,
-and CH4 -> DDR `0x3000` / DAC32.
+for channels 1-8 followed by END. Each channel uses a 32B-aligned 256 KiB DDR
+slot by default. The current custom hardware mapping drives one independent
+physical DAC output per channel: CH1 -> DDR `0x0` -> `vout00`, CH2 -> DDR
+`0x40000` -> `vout02`, CH3 -> DDR `0x80000` -> `vout10`, CH4 -> DDR `0xC0000`
+-> `vout12`, CH5 -> DDR `0x100000` -> `vout20`, CH6 -> DDR `0x140000` ->
+`vout22`, CH7 -> DDR `0x180000` -> `vout30`, and CH8 -> DDR `0x1C0000` ->
+`vout32`.
 
 ## Quick Start
 
@@ -16,11 +20,15 @@ python3 software/send_waveform_udp.py sine \
   --ip 192.168.1.128 \
   --udp-interface enp225s0f0 \
   --udp-source-ip 192.168.1.10 \
-  --sample-rate-hz 1200000000 \
+  --sample-rate-hz 6000000000 \
   --ch1-freq-hz 20000000 \
   --ch2-freq-hz 20000000 \
   --ch3-freq-hz 30000000 \
   --ch4-freq-hz 30000000 \
+  --ch5-freq-hz 40000000 \
+  --ch6-freq-hz 40000000 \
+  --ch7-freq-hz 50000000 \
+  --ch8-freq-hz 50000000 \
   --loop
 ```
 
@@ -34,11 +42,15 @@ python3 software/send_waveform_udp.py burst \
   --ip 192.168.1.128 \
   --udp-interface enp225s0f0 \
   --udp-source-ip 192.168.1.10 \
-  --sample-rate-hz 1200000000 \
+  --sample-rate-hz 6000000000 \
   --ch1-freq-hz 80000000 \
   --ch2-freq-hz 120000000 \
   --ch3-freq-hz 80000000 \
   --ch4-freq-hz 120000000 \
+  --ch5-freq-hz 80000000 \
+  --ch6-freq-hz 120000000 \
+  --ch7-freq-hz 80000000 \
+  --ch8-freq-hz 120000000 \
   --duration-s 120e-9
 ```
 
@@ -51,22 +63,44 @@ python3 software/send_waveform_udp.py golden \
   --udp-source-ip 192.168.1.10
 ```
 
-2 GHz Zone2 scope test on Tile2 DAC20/DAC22 with the 2.4 GS/s RFDC rate:
+PyPulse-style XY/Z/readout bundle with RFDC C2R I/Q lane packing:
+
+```bash
+python3 software/send_waveform_udp.py pypulse \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --sample-rate-hz 6000000000 \
+  --xy-freq-hz 90000000 \
+  --readout-freq-hz 140000000 \
+  --duration-s 120e-9 \
+  --loop
+```
+
+In `pypulse` mode CH1/CH5 carry XY I/Q, CH2/CH6 carry Z with Q held at zero,
+and CH3/CH4/CH7/CH8 carry readout I/Q buffers. Within every 256-bit RFDC AXIS word,
+the 16 little-endian int16 lanes are interleaved as
+`I0,Q0,I1,Q1,...,I7,Q7`. Each generated channel is uploaded to a separate DDR
+buffer and sent to one physical DAC output.
+
+Scope test with all eight physical DAC outputs enabled:
 
 ```bash
 python3 software/send_waveform_udp.py sine \
   --ip 192.168.1.128 \
   --udp-interface enp225s0f0 \
   --udp-source-ip 192.168.1.10 \
-  --sample-rate-hz 1200000000 \
+  --sample-rate-hz 6000000000 \
   --ch1-freq-hz 400000000 \
   --ch2-freq-hz 400000000 \
-  --ch3-mode off \
-  --ch4-mode off \
+  --ch3-freq-hz 400000000 \
+  --ch4-freq-hz 400000000 \
+  --ch5-freq-hz 400000000 \
+  --ch6-freq-hz 400000000 \
+  --ch7-freq-hz 400000000 \
+  --ch8-freq-hz 400000000 \
   --loop
 ```
-
-With DAC Fs = 2.4 GS/s and Tile2 DAC20/DAC22 in Zone2, a 400 MHz host tone appears as the second-Nyquist image near 2.0 GHz.
 
 Dry run without touching the board:
 
@@ -91,9 +125,9 @@ python3 -m pip install -r software/requirements.txt
 
 The GUI uses only standard-library `tkinter` plus the existing `matplotlib`
 dependency. It provides separate panels for target connection settings, global
-playback settings, independent CH1-CH4 waveform controls, artifact output, a
-four-channel waveform preview, and a status log. Each channel can
-choose `off`, `quantum`, `pulse`, `sine`, `burst`, or `golden` independently, and
+playback settings, independent CH1-CH8 waveform controls, artifact output, an
+eight-channel waveform preview, and a status log. Each channel can
+choose `dc-iq-cw`, `pypulse`, `quantum`, or `sine` independently, and
 the right-side preview refreshes automatically after a short debounce when
 relevant fields change. Dry run is enabled by default, so `Save / Dry Run` writes
 the same artifact bundle as the CLI without sending UDP packets. The default NIC
@@ -102,16 +136,16 @@ bring-up host link. Use `Send to Board` only after confirming the target IP, UDP
 port, NIC binding, source IP, loop mode, and trigger mode.
 
 For the current custom XCZU47DR build, keep the GUI/global sample rate at
-`1.25e9` unless the RFDC fabric/sample-rate configuration changes. The GUI sends
+`6.0e9` and the AXIS/fabric rate at `93.75e6` unless the RFDC configuration
+changes. The GUI sends
 the same PL-side UDP waveform/control protocol as the CLI; it does not depend on
 the removed PS Ethernet/lwIP firmware server.
 
-For quantum-domain pulses, use the `quantum` channel type. The GUI follows the
-usual two-quadrature control convention for CH1/CH2 while CH3/CH4 remain
-independently configurable physical DAC records. An `x` gate emits a Gaussian
-drive on CH1, a `y` gate emits a +90 degree quadrature drive on CH2, and a `z`
-gate produces a paired positive/negative phase pulse. CH1 still maps to legacy
-upload argument `x`; CH2 maps to `y`; CH3/CH4 map to `ch3`/`ch4`.
+For pypulse-domain pulses, use the `pypulse` channel type and choose `xy`, `z`,
+or `readout`. The GUI generates the same RFDC C2R interleaved I/Q buffers as the
+CLI: XY and readout use quadrature I/Q, while Z uses an I envelope with Q set to
+zero. CH1 still maps to legacy upload argument `x`; CH2 maps to `y`; CH3-CH8 map
+to `ch3` through `ch8`.
 
 If launching from SSH or a non-desktop shell, `tkinter` needs a graphical display
 (`DISPLAY`) or X11 forwarding. Without one, the GUI exits with a clear message
@@ -128,7 +162,7 @@ python3 software/waveform_gui.py --smoke
 - `--sample-rate-hz`: the DAC sample rate used to synthesize the sample array.
   This must match the actual RFDC output sample rate for the oscilloscope
   frequency to match `--chN-freq-hz`.
-- `--ch1-freq-hz` through `--ch4-freq-hz`: tone/carrier frequencies in Hz.
+- `--ch1-freq-hz` through `--ch8-freq-hz`: tone/carrier frequencies in Hz.
 - `--amplitude`: raw DAC code amplitude, from `0` to `32767`.
 - `--loop`: sets the END instruction loop bit. The hardware then refills and
   replays the same DDR waveform continuously.
@@ -145,7 +179,7 @@ have no effect.
 ## ILA Capture Report
 
 After sending or saving a waveform bundle, use `ila_capture_report.py` to capture
-the Vivado ILA and compare the RFDC-facing CH1-CH4 stream against the exact
+the Vivado ILA and compare the RFDC-facing CH1-CH8 stream against the exact
 Python artifacts. The script checks the trigger-to-valid delay, valid cycle
 count, and every int16 sample carried by `dac_in_chN_tdata` while the channel's
 gated valid signal is asserted.
@@ -172,7 +206,7 @@ design and you only want to attach the LTX. Use `--program-mode auto --yes` for
 non-interactive lab runs where the script may program the board whenever the ILA
 preflight check does not find this design. Add `--wait-for-trigger` when you want
 the END instruction to wait for a host trigger packet instead of auto-starting.
-If `software/waveform_out` is empty, the script automatically creates a four-channel
+If `software/waveform_out` is empty, the script automatically creates an eight-channel
 golden/incrementing artifact bundle there before arming the ILA; pass
 `--no-generate-default-artifacts` to require pre-existing artifacts instead.
 
@@ -191,27 +225,33 @@ The default trigger reference is `top_i/pc_trig_start`, falling back to
 `top_i/dac_in_chN_tdata`. If your regenerated ILA uses different probe names,
 pass a flat JSON map with keys such as `trigger`, `ch1_valid`, and `ch1_data`
 through `--probe-map`. To make delay checks strict, add
-`--expected-delay-cycles ch1=0,ch2=0,ch3=0,ch4=0`; otherwise the report still
+`--expected-delay-cycles ch1=0,ch2=0,ch3=0,ch4=0,ch5=0,ch6=0,ch7=0,ch8=0`; otherwise the report still
 prints the observed delay but marks the expected-delay check as not evaluated.
 
 The outputs are a Markdown report and a JSON detail file under `--out-dir`.
 
 ## Fixed Hardware Contract
 
-Current hardware uses a fixed 4096-byte record per channel:
+Current GUI/CLI artifacts use a fixed 4096-byte record per channel by default.
+The host reserves 256 KiB DDR slots per channel so longer CW uploads remain
+non-overlapping:
 
 - `samples_per_channel = 2048` int16 samples
-- `ch1_ddr_offset = 0x0000000000000000` / DAC20
-- `ch2_ddr_offset = 0x0000000000001000` / DAC22
-- `ch3_ddr_offset = 0x0000000000002000` / DAC30
-- `ch4_ddr_offset = 0x0000000000003000` / DAC32
+- `ch1_ddr_offset = 0x0000000000000000` → `vout00`
+- `ch2_ddr_offset = 0x0000000000040000` → `vout02`
+- `ch3_ddr_offset = 0x0000000000080000` → `vout10`
+- `ch4_ddr_offset = 0x00000000000C0000` → `vout12`
+- `ch5_ddr_offset = 0x0000000000100000` → `vout20`
+- `ch6_ddr_offset = 0x0000000000140000` → `vout22`
+- `ch7_ddr_offset = 0x0000000000180000` → `vout30`
+- `ch8_ddr_offset = 0x00000000001C0000` → `vout32`
 - PLAY length = `4096` bytes per channel
 
 Instruction word 0 is encoded as:
 
 ```text
 bits [3:0]  opcode: 1=BEGIN/IDLE, 2=PLAY, 3=END
-bits [7:4]  channel: 1=CH1, 2=CH2, 3=CH3, 4=CH4, 15=END auto-start
+bits [7:4]  channel: 1=CH1 ... 8=CH8, 15=END auto-start
 bit  [8]    loop enable on END
 ```
 

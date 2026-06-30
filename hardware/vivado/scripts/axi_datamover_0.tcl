@@ -84,8 +84,9 @@ set axi_datamover_0 [create_ip -name axi_datamover -vendor xilinx.com -library i
 set_property -dict [list \
   CONFIG.c_addr_width {64} \
   CONFIG.c_enable_s2mm {0} \
-  CONFIG.c_m_axis_mm2s_tdata_width {128} \
-  CONFIG.c_mm2s_burst_size {256} \
+  CONFIG.c_m_axi_mm2s_data_width {256} \
+  CONFIG.c_m_axis_mm2s_tdata_width {256} \
+  CONFIG.c_mm2s_burst_size {128} \
 ] [get_ips axi_datamover_0]
 
 # Runtime Parameters

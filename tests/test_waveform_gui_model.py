@@ -18,13 +18,13 @@ import waveform_gui_model  # type: ignore[import-not-found]  # noqa: E402
 
 class WaveformGuiModelTests(unittest.TestCase):
     def test_default_sample_rate_matches_custom_rfdc_config(self):
-        self.assertEqual(waveform_gui_model.WaveformConfig().sample_rate_hz, 1_200_000_000.0)
+        self.assertEqual(waveform_gui_model.WaveformConfig().sample_rate_hz, 6_000_000_000.0)
 
     def test_default_axis_frequency_matches_custom_rfdc_axis_clock(self):
-        self.assertEqual(waveform_gui_model.WaveformConfig().axis_freq_hz, 300_000_000.0)
+        self.assertEqual(waveform_gui_model.WaveformConfig().axis_freq_hz, 93_750_000.0)
 
     def test_default_rfdc_interpolation_matches_custom_rfdc_config(self):
-        self.assertEqual(waveform_gui_model.WaveformConfig().rfdc_interpolation, 2)
+        self.assertEqual(waveform_gui_model.WaveformConfig().rfdc_interpolation, 8)
 
     def test_rfdc_interpolation_scales_scope_frequency_to_python_frequency(self):
         config = waveform_gui_model.WaveformConfig(
@@ -68,10 +68,12 @@ class WaveformGuiModelTests(unittest.TestCase):
                     loop=True,
                     wait_for_trigger=True,
                     dry_run=False,
-                    ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, delay_s=12e-9),
+                    ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=80e6, delay_s=12e-9),
                     ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=120e6, phase_rad=0.25),
                     ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", amplitude=21000),
                     ch4=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", encoding="offset-binary"),
+                    ch5=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=host.DDR_CH5_ADDR),
+                    ch8=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=180e6),
                 ),
                 connection=waveform_gui_model.ConnectionConfig(
                     ip="192.0.2.44",
@@ -99,11 +101,13 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(loaded.waveform.output_dir, Path("/tmp/custom-waveforms"))
             self.assertTrue(loaded.waveform.loop)
             self.assertFalse(loaded.waveform.dry_run)
-            self.assertEqual(loaded.waveform.ch1.waveform_type, "quantum")
-            self.assertEqual(loaded.waveform.ch1.quantum_gate, "x")
+            self.assertEqual(loaded.waveform.ch1.waveform_type, "pypulse")
+            self.assertEqual(loaded.waveform.ch1.pypulse_waveform, "xy")
             self.assertEqual(loaded.waveform.ch2.waveform_type, "sine")
             self.assertEqual(loaded.waveform.ch3.quantum_gate, "y")
             self.assertEqual(loaded.waveform.ch4.encoding, "offset-binary")
+            self.assertEqual(loaded.waveform.ch5.start, host.DDR_CH5_ADDR)
+            self.assertEqual(loaded.waveform.ch8.freq_hz, 180e6)
             self.assertEqual(loaded.ila.bitstream_path, Path("build/custom.bit"))
             self.assertEqual(loaded.ila.program_mode, "auto")
 
@@ -114,6 +118,19 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(settings.connection.ip, host.DEFAULT_BOARD_IP)
         self.assertEqual(settings.waveform.sample_rate_hz, host.DAC_XY_FS)
         self.assertEqual(settings.ila.program_mode, "never")
+
+    def test_legacy_hls_channel_settings_load_as_pypulse(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings_path = Path(temp_dir) / "waveform_gui_settings.json"
+            settings_path.write_text(
+                '{"waveform":{"mode":"per-channel","ch1":{"waveform_type":"hls","freq_hz":90000000}}}',
+                encoding="utf-8",
+            )
+
+            settings = waveform_gui_model.load_gui_settings(settings_path)
+
+        self.assertEqual(settings.waveform.ch1.waveform_type, "pypulse")
+        self.assertEqual(settings.waveform.ch1.pypulse_waveform, "xy")
 
     def test_ila_capture_command_uses_current_python_connection_and_artifacts(self):
         connection = waveform_gui_model.ConnectionConfig(
@@ -267,8 +284,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 self.assertGreater(peak_sum, 1000)
                 self.assertEqual(result.metadata["mode"], "pulse")
                 self.assertEqual(result.metadata["pulse_preset"], preset)
-                self.assertEqual(result.metadata["ch1_label"], "CH1 / DDR 0x0 / DAC20")
-                self.assertEqual(result.metadata["ch2_label"], "CH2 / DDR 0x1000 / DAC22")
+                self.assertEqual(result.metadata["ch1_label"], f"CH1 / DDR 0x{host.DDR_CH1_ADDR:X} / vout00")
+                self.assertEqual(result.metadata["ch2_label"], f"CH2 / DDR 0x{host.DDR_CH2_ADDR:X} / vout02")
 
         x_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="x"))
         y_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="y"))
@@ -297,6 +314,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 amplitude=7000,
                 encoding="signed",
             ),
+            ch5=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=0x4000),
+            ch8=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=90e6, amplitude=6000),
         )
 
         result = waveform_gui_model.generate_waveforms(config)
@@ -305,21 +324,80 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.y.dtype, np.int16)
         self.assertEqual(result.ch3.dtype, np.int16)
         self.assertEqual(result.ch4.dtype, np.int16)
+        self.assertEqual(result.ch5.dtype, np.int16)
+        self.assertEqual(result.ch8.dtype, np.int16)
         self.assertEqual(len(result.x), host.NUM_SAMPLES)
         self.assertEqual(len(result.y), host.NUM_SAMPLES)
         self.assertEqual(len(result.ch3), host.NUM_SAMPLES)
         self.assertEqual(len(result.ch4), host.NUM_SAMPLES)
+        self.assertEqual(len(result.ch5), host.NUM_SAMPLES)
+        self.assertEqual(len(result.ch8), host.NUM_SAMPLES)
         self.assertGreater(np.max(np.abs(result.x)), 1000)
         self.assertFalse(np.any(result.y))
         self.assertEqual(result.ch3[:4].view(np.uint16).tolist(), [0x2000, 0x2001, 0x2002, 0x2003])
         self.assertGreater(np.max(np.abs(result.ch4)), 1000)
+        self.assertEqual(result.ch5[:4].view(np.uint16).tolist(), [0x4000, 0x4001, 0x4002, 0x4003])
+        self.assertGreater(np.max(np.abs(result.ch8)), 1000)
         self.assertEqual(result.metadata["mode"], "per-channel")
         self.assertEqual(result.metadata["ch1"]["type"], "sine")
         self.assertEqual(result.metadata["ch2"]["type"], "off")
         self.assertEqual(result.metadata["ch3"]["type"], "golden")
         self.assertEqual(result.metadata["ch4"]["type"], "sine")
+        self.assertEqual(result.metadata["ch5"]["type"], "golden")
+        self.assertEqual(result.metadata["ch8"]["type"], "sine")
         self.assertEqual(result.metadata["ch3"]["upload_arg"], "ch3")
         self.assertEqual(result.metadata["ch4"]["upload_arg"], "ch4")
+        self.assertEqual(result.metadata["ch5"]["upload_arg"], "ch5")
+        self.assertEqual(result.metadata["ch8"]["upload_arg"], "ch8")
+
+    def test_pypulse_channel_generation_packs_interleaved_iq_and_metadata(self):
+        config = waveform_gui_model.WaveformConfig(
+            sample_rate_hz=host.DAC_XY_FS,
+            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=90e6),
+            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="z", freq_hz=90e6),
+            ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="readout", freq_hz=140e6),
+        )
+
+        result = waveform_gui_model.generate_waveforms(config)
+
+        self.assertEqual(result.ch1.dtype, np.int16)
+        self.assertEqual(len(result.ch1), host.NUM_SAMPLES)
+        self.assertEqual(result.metadata["ch1"]["type"], "pypulse")
+        self.assertEqual(result.metadata["ch1"]["pypulse_waveform"], "xy")
+        self.assertEqual(result.metadata["ch1"]["i_signal"], "xy_i")
+        self.assertEqual(result.metadata["ch1"]["q_signal"], "xy_q")
+        self.assertEqual(result.metadata["ch2"]["q_signal"], "zero_q")
+        self.assertEqual(result.metadata["ch3"]["pypulse_waveform"], "readout")
+        self.assertFalse(np.any(result.ch2[1::2]))
+
+    def test_dc_iq_cw_channel_generation_uses_interleaved_i_and_zero_q(self):
+        config = waveform_gui_model.WaveformConfig(
+            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="dc-iq-cw", amplitude=12345),
+            ch5=waveform_gui_model.ChannelWaveformConfig(waveform_type="dc-iq-cw", amplitude=23456),
+        )
+
+        result = waveform_gui_model.generate_waveforms(config)
+
+        self.assertTrue(np.all(result.ch1[0::2] == 12345))
+        self.assertFalse(np.any(result.ch1[1::2]))
+        self.assertTrue(np.all(result.ch5[0::2] == 23456))
+        self.assertFalse(np.any(result.ch5[1::2]))
+        self.assertEqual(result.metadata["ch1"]["encoding"], "signed-iq-interleaved")
+        self.assertEqual(result.metadata["ch5"]["encoding"], "signed-iq-interleaved")
+        self.assertEqual(result.metadata["ch1"]["semantics"], "DC complex baseband with interleaved I/Q lanes")
+
+    def test_iq_sine_channel_generation_uses_varying_interleaved_iq(self):
+        config = waveform_gui_model.WaveformConfig(
+            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="iq-sine", freq_hz=80e6, amplitude=16000),
+        )
+
+        result = waveform_gui_model.generate_waveforms(config)
+
+        self.assertGreater(len(set(result.ch1[0:64:2].tolist())), 4)
+        self.assertGreater(len(set(result.ch1[1:64:2].tolist())), 4)
+        self.assertEqual(result.metadata["ch1"]["type"], "iq-sine")
+        self.assertEqual(result.metadata["ch1"]["encoding"], "signed-iq-interleaved")
+        self.assertEqual(result.metadata["ch1"]["semantics"], "continuous complex sine with interleaved I/Q lanes")
 
     def test_channel_delay_cycles_use_axis_frequency_not_waveform_samples(self):
         config = waveform_gui_model.WaveformConfig(
@@ -368,8 +446,8 @@ class WaveformGuiModelTests(unittest.TestCase):
 
         self.assertEqual(result.x[:4].view(np.uint16).tolist(), [0x20, 0x21, 0x22, 0x23])
         self.assertLess(int(np.min(result.y)), -1000)
-        self.assertEqual(result.metadata["ch1_label"], "CH1 / DDR 0x0 / DAC20")
-        self.assertEqual(result.metadata["ch2_label"], "CH2 / DDR 0x1000 / DAC22")
+        self.assertEqual(result.metadata["ch1_label"], f"CH1 / DDR 0x{host.DDR_CH1_ADDR:X} / vout00")
+        self.assertEqual(result.metadata["ch2_label"], f"CH2 / DDR 0x{host.DDR_CH2_ADDR:X} / vout02")
         self.assertEqual(result.metadata["ch1"]["upload_arg"], "x")
         self.assertEqual(result.metadata["ch2"]["upload_arg"], "y")
 
@@ -379,7 +457,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
         )
-        expected = waveform_tools.make_gaussian_burst(160e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
+        expected = waveform_tools.make_gaussian_burst(640e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
 
         result = waveform_gui_model.generate_waveforms(config)
 
@@ -398,7 +476,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
-        expected = waveform_tools.make_gaussian_burst(240e6, np.pi / 2.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
+        expected = waveform_tools.make_gaussian_burst(960e6, np.pi / 2.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
 
         result = waveform_gui_model.generate_waveforms(config)
 
@@ -418,8 +496,8 @@ class WaveformGuiModelTests(unittest.TestCase):
             ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
             ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
-        expected_x = waveform_tools.make_gaussian_burst(160e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
-        expected_y = waveform_tools.make_gaussian_burst(240e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
+        expected_x = waveform_tools.make_gaussian_burst(640e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
+        expected_y = waveform_tools.make_gaussian_burst(960e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
 
         result = waveform_gui_model.generate_waveforms(config)
 
@@ -481,7 +559,7 @@ class WaveformGuiModelTests(unittest.TestCase):
 
         np.testing.assert_array_equal(result.ch1, result.ch2)
         self.assertEqual(result.metadata["ch1"]["delay_cycles"], 0)
-        self.assertEqual(result.metadata["ch2"]["delay_cycles"], 24)
+        self.assertEqual(result.metadata["ch2"]["delay_cycles"], 8)
 
     def test_dry_run_saves_artifacts_without_uploading(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -498,6 +576,10 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / "ch2_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "ch3_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "ch4_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch5_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch6_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch7_waveform.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch8_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "sine_metadata.json").exists())
             controller.uploader.assert_not_called()
 
@@ -536,8 +618,12 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertFalse(kwargs["auto_start"])
             self.assertIn("ch3", kwargs)
             self.assertIn("ch4", kwargs)
+            self.assertIn("extra_channels", kwargs)
             self.assertEqual(kwargs["ch3"].dtype, np.int16)
             self.assertEqual(kwargs["ch4"].dtype, np.int16)
+            self.assertEqual(sorted(kwargs["extra_channels"]), [5, 6, 7, 8])
+            self.assertEqual(kwargs["extra_channels"][5].dtype, np.int16)
+            self.assertEqual(kwargs["extra_channels"][8].dtype, np.int16)
 
     def test_build_send_summary_includes_target_and_channel_plan(self):
         config = waveform_gui_model.WaveformConfig(
@@ -556,10 +642,12 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertIn("Source IP: 192.0.2.2", summary)
         self.assertIn("Loop playback: yes", summary)
         self.assertIn("Auto start: no, wait for trigger", summary)
-        self.assertIn("CH1 / DDR 0x0 / DAC20: quantum x", summary)
-        self.assertIn("CH2 / DDR 0x1000 / DAC22: sine", summary)
-        self.assertIn("CH3 / DDR 0x2000 / DAC30: off", summary)
-        self.assertIn("CH4 / DDR 0x3000 / DAC32: off", summary)
+        self.assertIn(f"CH1 / DDR 0x{host.DDR_CH1_ADDR:X} / vout00: quantum x", summary)
+        self.assertIn(f"CH2 / DDR 0x{host.DDR_CH2_ADDR:X} / vout02: sine", summary)
+        self.assertIn(f"CH3 / DDR 0x{host.DDR_CH3_ADDR:X} / vout10: off", summary)
+        self.assertIn(f"CH4 / DDR 0x{host.DDR_CH4_ADDR:X} / vout12: off", summary)
+        self.assertIn(f"CH5 / DDR 0x{host.DDR_CH5_ADDR:X} / vout20: off", summary)
+        self.assertIn(f"CH8 / DDR 0x{host.DDR_CH8_ADDR:X} / vout32: off", summary)
 
     def test_connection_tester_sends_minimal_udp_probe(self):
         calls = []

@@ -25,6 +25,23 @@ puts "INFO: Project directory: ${proj_dir}"
 puts "INFO: Part: ${target_part}"
 puts "INFO: Top module: ${target_top_module}"
 
+# Avoid stale file references when the IP/RTL set changes between runs.
+foreach stale_path [list \
+    "${proj_dir}/${proj_name}.xpr" \
+    "${proj_dir}/${proj_name}.srcs" \
+    "${proj_dir}/${proj_name}.gen" \
+    "${proj_dir}/${proj_name}.runs" \
+    "${proj_dir}/${proj_name}.cache" \
+    "${proj_dir}/${proj_name}.hw" \
+    "${proj_dir}/${proj_name}.ip_user_files" \
+    "${proj_dir}/${proj_name}.sim" \
+] {
+    if {[file exists ${stale_path}]} {
+        puts "INFO: Removing stale project artifact: ${stale_path}"
+        file delete -force ${stale_path}
+    }
+}
+
 # Create project
 create_project -force ${proj_name} ${proj_dir} -part ${target_part}
 
@@ -108,7 +125,7 @@ if {[file exists ${src_dir}]} {
     set filtered_rtl_files [list]
     foreach rtl_file $rtl_files {
         set rtl_tail [file tail $rtl_file]
-        if {$rtl_tail ne "design_1_wrapper.v"} {
+        if {$rtl_tail ne "design_1_wrapper.v" && $rtl_tail ne "axis_128_to_256.v"} {
             lappend filtered_rtl_files $rtl_file
         }
     }
@@ -188,7 +205,7 @@ if {[file exists ${instr_fifo_script}]} {
 }
 
 # Create AXIS Async FIFO IP
-set async_fifo_script "${script_path}/axis_async_fifo_128.tcl"
+set async_fifo_script "${script_path}/axis_async_fifo_256.tcl"
 if {[file exists ${async_fifo_script}]} {
     source ${async_fifo_script}
     puts "INFO: AXIS Async FIFO IP created"

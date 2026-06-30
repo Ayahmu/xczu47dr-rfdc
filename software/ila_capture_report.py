@@ -24,32 +24,12 @@ import host  # noqa: E402
 import waveform_tools  # noqa: E402
 
 
-CHANNELS = (1, 2, 3, 4)
+CHANNELS = (1, 2, 3, 4, 5, 6, 7, 8)
 DEFAULT_TRIGGER_PROBES = ("top_i/pc_trig_start", "top_i/pc_trig_pulse")
-DEFAULT_VALID_PROBES = {
-    1: ("top_i/dac_ch1_valid_gated", "top_i/dac_in_ch1_tvalid"),
-    2: ("top_i/dac_ch2_valid_gated", "top_i/dac_in_ch2_tvalid"),
-    3: ("top_i/dac_ch3_valid_gated", "top_i/dac_in_ch3_tvalid"),
-    4: ("top_i/dac_ch4_valid_gated", "top_i/dac_in_ch4_tvalid"),
-}
-DEFAULT_DATA_PROBES = {
-    1: ("top_i/dac_in_ch1_tdata",),
-    2: ("top_i/dac_in_ch2_tdata",),
-    3: ("top_i/dac_in_ch3_tdata",),
-    4: ("top_i/dac_in_ch4_tdata",),
-}
-DEFAULT_DELAY_PROBES = {
-    1: ("top_i/ch1_delay_dac", "top_i/ch1_delay_cycles"),
-    2: ("top_i/ch2_delay_dac", "top_i/ch2_delay_cycles"),
-    3: ("top_i/ch3_delay_dac", "top_i/ch3_delay_cycles"),
-    4: ("top_i/ch4_delay_dac", "top_i/ch4_delay_cycles"),
-}
-DEFAULT_LEN_PROBES = {
-    1: ("top_i/ch1_len_dac64",),
-    2: ("top_i/ch2_len_dac64",),
-    3: ("top_i/ch3_len_dac64",),
-    4: ("top_i/ch4_len_dac64",),
-}
+DEFAULT_VALID_PROBES = {channel: (f"top_i/dac_ch{channel}_valid_gated", f"top_i/dac_in_ch{channel}_tvalid") for channel in CHANNELS}
+DEFAULT_DATA_PROBES = {channel: (f"top_i/dac_in_ch{channel}_tdata",) for channel in CHANNELS}
+DEFAULT_DELAY_PROBES = {channel: (f"top_i/ch{channel}_delay_dac", f"top_i/ch{channel}_delay_cycles") for channel in CHANNELS}
+DEFAULT_LEN_PROBES = {channel: (f"top_i/ch{channel}_len_dac",) for channel in CHANNELS}
 
 
 @dataclass
@@ -96,9 +76,9 @@ class ChannelReport:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Capture Vivado ILA data and compare CH1-CH4 RFDC stream data against saved Python waveform artifacts.",
+        description="Capture Vivado ILA data and compare CH1-CH8 RFDC stream data against saved Python waveform artifacts.",
     )
-    parser.add_argument("--artifact-dir", type=Path, default=Path("software/waveform_out"), help="Directory containing ch1..ch4 waveform artifacts and metadata.")
+    parser.add_argument("--artifact-dir", type=Path, default=Path("software/waveform_out"), help="Directory containing ch1..ch8 waveform artifacts and metadata.")
     parser.add_argument("--csv", dest="csv_file", type=Path, help="Analyze an existing Vivado ILA CSV instead of running capture.")
     parser.add_argument("--capture", action="store_true", help="Run Vivado hardware-manager capture before analysis.")
     parser.add_argument("--out-dir", type=Path, default=Path("software/ila_reports"), help="Directory for generated Tcl, CSV, JSON, and Markdown reports.")
@@ -118,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--post-upload-sleep-s", type=float, default=host.DEFAULT_UDP_WRITE_SETTLE_S, help="Delay between waveform upload and playback instructions.")
     parser.add_argument("--loop", action="store_true", help="Set the hardware loop bit in playback instructions.")
     parser.add_argument("--wait-for-trigger", action="store_true", help="Send a non-auto-start END instruction, then issue the host trigger packet.")
-    parser.add_argument("--no-generate-default-artifacts", action="store_true", help="Fail instead of generating a default CH1-CH4 golden artifact bundle when --send-after-arm has no artifacts.")
+    parser.add_argument("--no-generate-default-artifacts", action="store_true", help="Fail instead of generating a default CH1-CH8 golden artifact bundle when --send-after-arm has no artifacts.")
     parser.add_argument("--capture-depth", type=int, default=4096, help="Requested ILA capture depth when the core supports CONTROL.DATA_DEPTH.")
     parser.add_argument("--trigger-position", type=int, default=1024, help="Requested ILA trigger position when the core supports CONTROL.TRIGGER_POSITION.")
     parser.add_argument("--timeout-s", type=int, default=120, help="Vivado capture process timeout in seconds.")
@@ -615,15 +595,28 @@ def generate_default_artifacts(args: argparse.Namespace) -> None:
     ch2 = waveform_tools.make_incrementing_pattern(start=0x1000)
     ch3 = waveform_tools.make_incrementing_pattern(start=0x2000)
     ch4 = waveform_tools.make_incrementing_pattern(start=0x3000)
+    ch5 = waveform_tools.make_incrementing_pattern(start=0x4000)
+    ch6 = waveform_tools.make_incrementing_pattern(start=0x5000)
+    ch7 = waveform_tools.make_incrementing_pattern(start=0x6000)
+    ch8 = waveform_tools.make_incrementing_pattern(start=0x7000)
     metadata = waveform_tools.build_metadata(
         mode="ila-golden",
         sample_rate_hz=host.DAC_XY_FS,
         encoding="signed",
         loop=args.loop,
         generated_by="ila_capture_report.py",
-        notes="Auto-generated because --send-after-arm had no CH1-CH4 waveform artifacts.",
+        notes="Auto-generated because --send-after-arm had no CH1-CH8 waveform artifacts.",
     )
-    waveform_tools.save_waveform_bundle(args.artifact_dir, ch1, ch2, metadata, stem="waveform", ch3=ch3, ch4=ch4)
+    waveform_tools.save_waveform_bundle(
+        args.artifact_dir,
+        ch1,
+        ch2,
+        metadata,
+        stem="waveform",
+        ch3=ch3,
+        ch4=ch4,
+        extra_channels={5: ch5, 6: ch6, 7: ch7, 8: ch8},
+    )
 
 
 def ensure_send_artifacts(args: argparse.Namespace) -> None:
@@ -632,7 +625,7 @@ def ensure_send_artifacts(args: argparse.Namespace) -> None:
         return
     if not found and not args.no_generate_default_artifacts:
         generate_default_artifacts(args)
-        print(f"[artifact] Generated default CH1-CH4 golden waveform bundle in {args.artifact_dir}")
+        print(f"[artifact] Generated default CH1-CH8 golden waveform bundle in {args.artifact_dir}")
         return
     missing = ", ".join(f"CH{channel}" for channel in CHANNELS if channel not in found)
     raise FileNotFoundError(
@@ -644,7 +637,8 @@ def ensure_send_artifacts(args: argparse.Namespace) -> None:
 def samples_from_words(words: list[int]) -> np.ndarray:
     data = bytearray()
     for word in words:
-        data.extend((int(word) & 0xFFFFFFFFFFFFFFFF).to_bytes(8, byteorder="little", signed=False))
+        width_bytes = 32 if int(word).bit_length() > 64 else 8
+        data.extend((int(word) & ((1 << (width_bytes * 8)) - 1)).to_bytes(width_bytes, byteorder="little", signed=False))
     return np.frombuffer(bytes(data), dtype="<i2").astype(np.int16)
 
 
@@ -663,12 +657,23 @@ def compare_samples(captured: np.ndarray, expected: np.ndarray) -> tuple[int, in
     return limit - int(len(mismatch_indices)), mismatch_count, first
 
 
+def compare_loop_samples(captured: np.ndarray, expected: np.ndarray) -> tuple[int, int, dict[str, Any] | None]:
+    if expected.size == 0:
+        return compare_samples(captured, expected)
+    for offset in range(expected.size):
+        tiled = np.resize(np.roll(expected, -offset), captured.size)
+        if np.array_equal(captured, tiled):
+            return int(captured.size), 0, None
+    tiled = np.resize(expected, captured.size)
+    return compare_samples(captured, tiled)
+
+
 def expected_valid_cycles(metadata: dict[str, Any], expected: np.ndarray, channel: int) -> int:
     bytes_key = f"ch{channel}_bytes_per_channel"
     raw_bytes = metadata.get(bytes_key, metadata.get("bytes_per_channel"))
     if raw_bytes is None:
         raw_bytes = int(expected.size) * 2
-    return int(math.ceil(int(raw_bytes) / 8.0))
+    return int(math.ceil(int(raw_bytes) / 32.0))
 
 
 def metadata_delay(metadata: dict[str, Any], channel: int) -> int | None:
@@ -696,8 +701,9 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
 
     channels: list[ChannelReport] = []
     missing_probes: list[str] = []
+    hardware_cw_mode = bool(metadata.get("hardware_cw_mode"))
     for channel in CHANNELS:
-        expected = load_waveform(args.artifact_dir, channel)
+        expected = np.zeros(0, dtype=np.int16) if hardware_cw_mode else load_waveform(args.artifact_dir, channel)
         valid_probe = resolve_probe(header, f"ch{channel}_valid", DEFAULT_VALID_PROBES[channel], probe_map)
         data_probe = resolve_probe(header, f"ch{channel}_data", DEFAULT_DATA_PROBES[channel], probe_map)
         delay_probe = resolve_probe(header, f"ch{channel}_delay", DEFAULT_DELAY_PROBES[channel], probe_map)
@@ -717,8 +723,15 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
         valid_indices = [idx for idx, value in enumerate(valid_values) if value]
         words = [data_values[idx] for idx in valid_indices if idx < len(data_values)]
         captured = samples_from_words(words)
-        expected_cycles = expected_valid_cycles(metadata, expected, channel)
-        matched, mismatches, first_mismatch = compare_samples(captured[: expected.size], expected)
+        expected_cycles = len(valid_indices) if hardware_cw_mode or metadata.get("loop") else expected_valid_cycles(metadata, expected, channel)
+        if hardware_cw_mode:
+            matched, mismatches, first_mismatch = len(valid_indices), 0, None
+        elif metadata.get("loop"):
+            expected_size = len(valid_indices) * host.INT16_PER_DACWORD
+            matched, mismatches, first_mismatch = compare_loop_samples(captured[:expected_size], expected)
+        else:
+            expected_size = expected.size
+            matched, mismatches, first_mismatch = compare_samples(captured[: expected.size], expected)
 
         observed_delay = None
         first_valid = valid_indices[0] if valid_indices else None
@@ -738,7 +751,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
             if trigger_index < len(len_values):
                 notes.append(f"captured len probe near trigger={len_values[trigger_index]}")
 
-        checks_ok = bool(valid_probe.resolved and data_probe.resolved)
+        checks_ok = bool(valid_probe.resolved and (hardware_cw_mode or data_probe.resolved))
         checks_ok = checks_ok and len(valid_indices) == expected_cycles and mismatches == 0
         if expected_delay is not None:
             checks_ok = checks_ok and observed_delay == expected_delay
@@ -757,7 +770,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
                 expected_valid_cycles=expected_cycles,
                 valid_windows=windows,
                 captured_samples=int(captured.size),
-                expected_samples=int(expected.size),
+                expected_samples=int(len(valid_indices) if hardware_cw_mode else expected_size),
                 matched_samples=matched,
                 mismatch_count=mismatches,
                 first_mismatch=first_mismatch,
@@ -776,6 +789,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
         "trigger_index": trigger_index,
         "missing_probes": missing_probes + ([] if trigger_probe.resolved else ["trigger"]),
         "metadata": metadata,
+        "hardware_cw_mode": hardware_cw_mode,
         "channels": [c.__dict__ for c in channels],
     }
     return details, render_markdown(details)
@@ -812,6 +826,10 @@ def render_markdown(details: dict[str, Any]) -> str:
     ]
     if details["missing_probes"]:
         lines.append(f"- 缺失 probes：`{', '.join(details['missing_probes'])}`")
+    if details.get("hardware_cw_mode"):
+        lines.append("- hardware CW mode: valid/allow probes are checked without waveform artifact comparison")
+    if details.get("metadata", {}).get("loop"):
+        lines.append("- loop mode: captured windows are matched against repeated waveform records")
     lines.extend(["", "## 通道检查", ""])
     for c in details["channels"]:
         lines.extend([
@@ -836,7 +854,7 @@ def render_markdown(details: dict[str, Any]) -> str:
     lines.extend([
         "## 结果解释",
         "",
-        "PASS 表示脚本找到了触发/参考事件，所有通道都产生了期望数量的 RFDC-facing 64-bit valid 周期，并且 valid 窗口内采集到的每个 int16 样本都与 Python 侧波形文件完全一致。若未显式提供期望延迟周期，报告只展示观测到的延迟，不会仅因缺少期望延迟而判定失败。",
+        "PASS 表示脚本找到了触发/参考事件，所有通道都产生了期望数量的 RFDC-facing 256-bit valid 周期，并且 valid 窗口内采集到的每个 int16 样本都与 Python 侧波形文件完全一致。若未显式提供期望延迟周期，报告只展示观测到的延迟，不会仅因缺少期望延迟而判定失败。",
         "",
     ])
     return "\n".join(lines)

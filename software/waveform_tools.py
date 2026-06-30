@@ -19,13 +19,32 @@ DEFAULT_CHANNEL_ADDRS = {
     2: host.DDR_CH2_ADDR,
     3: host.DDR_CH3_ADDR,
     4: host.DDR_CH4_ADDR,
+    5: host.DDR_CH5_ADDR,
+    6: host.DDR_CH6_ADDR,
+    7: host.DDR_CH7_ADDR,
+    8: host.DDR_CH8_ADDR,
 }
 
 DEFAULT_DAC_PORTS = {
-    1: 20,
-    2: 22,
-    3: 30,
-    4: 32,
+    1: "s00_axis",
+    2: "s02_axis",
+    3: "s10_axis",
+    4: "s12_axis",
+    5: "s20_axis",
+    6: "s22_axis",
+    7: "s30_axis",
+    8: "s32_axis",
+}
+
+DEFAULT_DAC_OUTPUTS = {
+    1: ("vout00",),
+    2: ("vout02",),
+    3: ("vout10",),
+    4: ("vout12",),
+    5: ("vout20",),
+    6: ("vout22",),
+    7: ("vout30",),
+    8: ("vout32",),
 }
 
 
@@ -69,25 +88,167 @@ def make_gaussian_burst(
     return np.round(np.clip(signal * float(amplitude), -32767.0, 32767.0)).astype(np.int16)
 
 
+def pack_iq_tile_buffer(i_wave: np.ndarray, q_wave: np.ndarray, sample_count: int = host.NUM_SAMPLES) -> np.ndarray:
+    if sample_count % host.INT16_PER_DACWORD != 0:
+        raise ValueError("sample_count must be a whole number of 256-bit DAC words")
+    complex_samples = int(sample_count) // 2
+    i_samples = host._normalize_waveform_int16(i_wave, sample_count=complex_samples)
+    q_samples = host._normalize_waveform_int16(q_wave, sample_count=complex_samples)
+    packed = np.zeros(sample_count, dtype=np.int16)
+    packed[0::2] = i_samples
+    packed[1::2] = q_samples
+    return packed
+
+
+def make_iq_sine_tile_waveform(
+    freq_hz: float,
+    phase_rad: float,
+    amplitude: int,
+    sample_rate_hz: float,
+    sample_count: int = host.NUM_SAMPLES,
+) -> np.ndarray:
+    complex_sample_count = int(sample_count) // 2
+    n = np.arange(complex_sample_count, dtype=np.float64)
+    angle = (2.0 * np.pi * float(freq_hz) * n / float(sample_rate_hz)) + float(phase_rad)
+    i_wave = np.cos(angle) * float(amplitude)
+    q_wave = np.sin(angle) * float(amplitude)
+    return pack_iq_tile_buffer(
+        np.round(np.clip(i_wave, -32767.0, 32767.0)).astype(np.int16),
+        np.round(np.clip(q_wave, -32767.0, 32767.0)).astype(np.int16),
+        sample_count=sample_count,
+    )
+
+
+def _pypulse_iq_burst(
+    freq_hz: float,
+    phase_rad: float,
+    amplitude: int,
+    sample_rate_hz: float,
+    duration_s: float,
+    sample_count: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    n = np.arange(sample_count, dtype=np.float64)
+    t = n / float(sample_rate_hz)
+    sigma = float(duration_s) / 6.0
+    center = float(duration_s) / 2.0
+    env = np.exp(-0.5 * ((t - center) / sigma) ** 2)
+    angle = (2.0 * np.pi * float(freq_hz) * t) + float(phase_rad)
+    i_wave = env * np.cos(angle) * float(amplitude)
+    q_wave = env * np.sin(angle) * float(amplitude)
+    return (
+        np.round(np.clip(i_wave, -32767.0, 32767.0)).astype(np.int16),
+        np.round(np.clip(q_wave, -32767.0, 32767.0)).astype(np.int16),
+    )
+
+
+def _pypulse_z_envelope(amplitude: int, sample_rate_hz: float, duration_s: float, sample_count: int) -> np.ndarray:
+    n = np.arange(sample_count, dtype=np.float64)
+    t = n / float(sample_rate_hz)
+    sigma = float(duration_s) / 6.0
+    center = float(duration_s) / 2.0
+    env = np.exp(-0.5 * ((t - center) / sigma) ** 2)
+    return np.round(np.clip(env * float(amplitude), -32767.0, 32767.0)).astype(np.int16)
+
+
+def make_pypulse_tile_waveform(
+    waveform: str,
+    freq_hz: float,
+    phase_rad: float,
+    amplitude: int,
+    sample_rate_hz: float,
+    duration_s: float,
+    sample_count: int = host.NUM_SAMPLES,
+) -> tuple[np.ndarray, dict[str, str]]:
+    waveform_key = waveform.lower()
+    complex_sample_count = sample_count // 2
+    if waveform_key == "xy":
+        i_wave, q_wave = _pypulse_iq_burst(freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s, complex_sample_count)
+        return pack_iq_tile_buffer(i_wave, q_wave, sample_count=sample_count), {"waveform": "xy", "i_signal": "xy_i", "q_signal": "xy_q"}
+    if waveform_key == "readout":
+        i_wave, q_wave = _pypulse_iq_burst(freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s, complex_sample_count)
+        return pack_iq_tile_buffer(i_wave, q_wave, sample_count=sample_count), {"waveform": "readout", "i_signal": "readout_i", "q_signal": "readout_q"}
+    if waveform_key == "z":
+        i_wave = _pypulse_z_envelope(amplitude, sample_rate_hz, duration_s, complex_sample_count)
+        q_wave = np.zeros(complex_sample_count, dtype=np.int16)
+        return pack_iq_tile_buffer(i_wave, q_wave, sample_count=sample_count), {"waveform": "z", "i_signal": "z_i", "q_signal": "zero_q"}
+    raise ValueError("pypulse waveform must be one of: xy, z, readout")
+
+
+def make_pypulse_waveform_bundle(
+    sample_rate_hz: float,
+    loop: bool,
+    amplitude: int = 24000,
+    duration_s: float = 120e-9,
+    xy_freq_hz: float = 80e6,
+    z_freq_hz: float = 0.0,
+    readout_freq_hz: float = 120e6,
+    phase_rad: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    ch1, ch1_meta = make_pypulse_tile_waveform("xy", xy_freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s)
+    ch2, ch2_meta = make_pypulse_tile_waveform("z", z_freq_hz, 0.0, amplitude, sample_rate_hz, duration_s)
+    ch3, ch3_meta = make_pypulse_tile_waveform("readout", readout_freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s)
+    ch4, ch4_meta = make_pypulse_tile_waveform("readout", readout_freq_hz, phase_rad + np.pi / 2.0, amplitude, sample_rate_hz, duration_s)
+    ch5, ch5_meta = make_pypulse_tile_waveform("xy", xy_freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s)
+    ch6, ch6_meta = make_pypulse_tile_waveform("z", z_freq_hz, 0.0, amplitude, sample_rate_hz, duration_s)
+    ch7, ch7_meta = make_pypulse_tile_waveform("readout", readout_freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s)
+    ch8, ch8_meta = make_pypulse_tile_waveform("readout", readout_freq_hz, phase_rad + np.pi / 2.0, amplitude, sample_rate_hz, duration_s)
+    metadata = build_metadata(
+        mode="pypulse",
+        sample_rate_hz=sample_rate_hz,
+        encoding="signed-iq-interleaved",
+        loop=loop,
+        amplitude=amplitude,
+        duration_s=duration_s,
+        xy_freq_hz=xy_freq_hz,
+        z_freq_hz=z_freq_hz,
+        readout_freq_hz=readout_freq_hz,
+        ch1_pypulse_waveform=ch1_meta["waveform"],
+        ch1_i_signal=ch1_meta["i_signal"],
+        ch1_q_signal=ch1_meta["q_signal"],
+        ch2_pypulse_waveform=ch2_meta["waveform"],
+        ch2_i_signal=ch2_meta["i_signal"],
+        ch2_q_signal=ch2_meta["q_signal"],
+        ch3_pypulse_waveform=ch3_meta["waveform"],
+        ch3_i_signal=ch3_meta["i_signal"],
+        ch3_q_signal=ch3_meta["q_signal"],
+        ch4_pypulse_waveform=ch4_meta["waveform"],
+        ch4_i_signal=ch4_meta["i_signal"],
+        ch4_q_signal=ch4_meta["q_signal"],
+        ch5_pypulse_waveform=ch5_meta["waveform"],
+        ch5_i_signal=ch5_meta["i_signal"],
+        ch5_q_signal=ch5_meta["q_signal"],
+        ch6_pypulse_waveform=ch6_meta["waveform"],
+        ch6_i_signal=ch6_meta["i_signal"],
+        ch6_q_signal=ch6_meta["q_signal"],
+        ch7_pypulse_waveform=ch7_meta["waveform"],
+        ch7_i_signal=ch7_meta["i_signal"],
+        ch7_q_signal=ch7_meta["q_signal"],
+        ch8_pypulse_waveform=ch8_meta["waveform"],
+        ch8_i_signal=ch8_meta["i_signal"],
+        ch8_q_signal=ch8_meta["q_signal"],
+    )
+    return ch1, ch2, ch3, ch4, ch5, ch6, ch7, ch8, metadata
+
+
 def make_incrementing_pattern(sample_count: int = host.NUM_SAMPLES, start: int = 0) -> np.ndarray:
     values = (np.arange(sample_count, dtype=np.int32) + int(start)) & 0xFFFF
     return values.astype(np.uint16).view(np.int16)
 
 
-def _first_two_u64(samples: np.ndarray) -> tuple[int, int]:
-    normalized = host._normalize_waveform_int16(samples, sample_count=8)
+def _first_four_u64(samples: np.ndarray) -> tuple[int, int, int, int]:
+    normalized = host._normalize_waveform_int16(samples, sample_count=16)
     wave_bytes = normalized.astype("<i2").tobytes()
-    return struct.unpack("<QQ", wave_bytes[:16])
+    return struct.unpack("<QQQQ", wave_bytes[:32])
 
 
 def expected_axi_wdata_hex(samples: np.ndarray) -> str:
-    low, high = _first_two_u64(samples)
-    return f"0x{high:016x}{low:016x}"
+    word0, word1, word2, word3 = _first_four_u64(samples)
+    return f"0x{word3:016x}{word2:016x}{word1:016x}{word0:016x}"
 
 
 def lane_bytes_hex(samples: np.ndarray) -> str:
-    normalized = host._normalize_waveform_int16(samples, sample_count=8)
-    return normalized.astype("<i2").tobytes()[:16].hex(" ")
+    normalized = host._normalize_waveform_int16(samples, sample_count=16)
+    return normalized.astype("<i2").tobytes()[:32].hex(" ")
 
 
 def play_instruction_words(channel: int, length_bytes: int, ddr_addr: int) -> tuple[int, int]:
@@ -107,7 +268,11 @@ def rtl_instruction_tdata_hex(words: tuple[int, int]) -> str:
     return f"0x{second:016x}{first:016x}"
 
 
-def delay_seconds_to_axis_cycles(delay_s: float, sample_rate_hz: float = host.DAC_XY_FS, samples_per_axis_cycle: int = 4) -> int:
+def delay_seconds_to_axis_cycles(
+    delay_s: float,
+    sample_rate_hz: float = host.DAC_XY_FS,
+    samples_per_axis_cycle: int = host.RFDC_INTERPOLATION * 8,
+) -> int:
     axis_hz = float(sample_rate_hz) / int(samples_per_axis_cycle)
     return max(0, int(round(float(delay_s) * axis_hz)))
 
@@ -161,18 +326,14 @@ def build_metadata(
         "record_duration_s": record_duration_s,
         "samples_per_channel": int(host.NUM_SAMPLES),
         "bytes_per_channel": int(host.FIXED_DATA_BYTES),
-        "ch1_ddr_offset": f"0x{host.DDR_CH1_ADDR:016X}",
-        "ch2_ddr_offset": f"0x{host.DDR_CH2_ADDR:016X}",
-        "ch3_ddr_offset": f"0x{host.DDR_CH3_ADDR:016X}",
-        "ch4_ddr_offset": f"0x{host.DDR_CH4_ADDR:016X}",
-        "ch1_dac_port": DEFAULT_DAC_PORTS[1],
-        "ch2_dac_port": DEFAULT_DAC_PORTS[2],
-        "ch3_dac_port": DEFAULT_DAC_PORTS[3],
-        "ch4_dac_port": DEFAULT_DAC_PORTS[4],
         "x_ddr_offset": f"0x{host.DDR_X_ADDR:016X}",
         "y_ddr_offset": f"0x{host.DDR_Y_ADDR:016X}",
         "loop": bool(loop),
     }
+    for channel, ddr_addr in DEFAULT_CHANNEL_ADDRS.items():
+        metadata[f"ch{channel}_ddr_offset"] = f"0x{ddr_addr:016X}"
+        metadata[f"ch{channel}_dac_port"] = DEFAULT_DAC_PORTS[channel]
+        metadata[f"ch{channel}_dac_outputs"] = list(DEFAULT_DAC_OUTPUTS[channel])
     if x_freq_hz is not None:
         metadata["x_freq_hz"] = float(x_freq_hz)
         metadata["x_cycles_in_record"] = float(x_freq_hz) * record_duration_s
@@ -199,6 +360,7 @@ def save_waveform_bundle(
     stem: str = "waveform",
     ch3: np.ndarray | None = None,
     ch4: np.ndarray | None = None,
+    extra_channels: dict[int, np.ndarray] | None = None,
     channel_delays: dict[int, int] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +372,9 @@ def save_waveform_bundle(
         _save_named_waveform(out_dir, "ch3", ch3)
     if ch4 is not None:
         _save_named_waveform(out_dir, "ch4", ch4)
+    if extra_channels is not None:
+        for channel, samples in sorted(extra_channels.items()):
+            _save_named_waveform(out_dir, f"ch{int(channel)}", samples)
     (out_dir / f"{stem}_metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
@@ -239,6 +404,7 @@ def upload_and_play(
     auto_start: bool = True,
     ch3: np.ndarray | None = None,
     ch4: np.ndarray | None = None,
+    extra_channels: dict[int, np.ndarray] | None = None,
     channel_delays: dict[int, int] | None = None,
 ) -> None:
     ctrl = host.RFSocController(
@@ -257,6 +423,9 @@ def upload_and_play(
         uploads.append((3, ch3, host.DDR_CH3_ADDR, "ch3_upload_hex.txt"))
     if ch4 is not None:
         uploads.append((4, ch4, host.DDR_CH4_ADDR, "ch4_upload_hex.txt"))
+    if extra_channels is not None:
+        for channel, samples in sorted(extra_channels.items()):
+            uploads.append((int(channel), samples, DEFAULT_CHANNEL_ADDRS[int(channel)], f"ch{int(channel)}_upload_hex.txt"))
 
     try:
         for _, samples, ddr_addr, filename in uploads:

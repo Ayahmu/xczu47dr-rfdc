@@ -26,21 +26,23 @@ waveform_tools = load_software_module("waveform_tools", "waveform_tools.py")
 
 class GoldenPatternTests(unittest.TestCase):
     def test_incrementing_pattern_has_unambiguous_first_axi_word(self):
-        samples = waveform_tools.make_incrementing_pattern(sample_count=8, start=0)
+        samples = waveform_tools.make_incrementing_pattern(sample_count=16, start=0)
 
-        np.testing.assert_array_equal(samples, np.arange(8, dtype=np.int16))
-        self.assertEqual(waveform_tools.expected_axi_wdata_hex(samples), "0x00070006000500040003000200010000")
-        self.assertEqual(waveform_tools.lane_bytes_hex(samples), "00 00 01 00 02 00 03 00 04 00 05 00 06 00 07 00")
+        np.testing.assert_array_equal(samples, np.arange(16, dtype=np.int16))
+        self.assertEqual(waveform_tools.expected_axi_wdata_hex(samples), "0x000f000e000d000c000b000a0009000800070006000500040003000200010000")
+        self.assertEqual(waveform_tools.lane_bytes_hex(samples), "00 00 01 00 02 00 03 00 04 00 05 00 06 00 07 00 08 00 09 00 0a 00 0b 00 0c 00 0d 00 0e 00 0f 00")
 
     def test_first_waveform_packet_matches_rtl_parser_contract(self):
-        samples = waveform_tools.make_incrementing_pattern(sample_count=8, start=0)
-        packet = next(host.iter_udp_waveform_packets(samples, host.DDR_X_ADDR, sample_count=8))
+        samples = waveform_tools.make_incrementing_pattern(sample_count=16, start=0)
+        packet = next(host.iter_udp_waveform_packets(samples, host.DDR_X_ADDR, sample_count=16))
 
-        magic, addr, low, high = struct.unpack("<QQQQ", packet)
+        magic, addr, word0, word1, word2, word3 = struct.unpack("<QQQQQQ", packet)
         self.assertEqual(magic, host.UDP_WAVE_DDR_MAGIC)
         self.assertEqual(addr, 0x0000000000000000)
-        self.assertEqual(low, 0x0003000200010000)
-        self.assertEqual(high, 0x0007000600050004)
+        self.assertEqual(word0, 0x0003000200010000)
+        self.assertEqual(word1, 0x0007000600050004)
+        self.assertEqual(word2, 0x000b000a00090008)
+        self.assertEqual(word3, 0x000f000e000d000c)
 
     def test_play_instruction_hex_matches_executor_decode(self):
         instruction = waveform_tools.play_instruction_words(channel=1, length_bytes=host.FIXED_DATA_BYTES, ddr_addr=host.DDR_X_ADDR)

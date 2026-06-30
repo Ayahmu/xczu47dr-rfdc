@@ -52,7 +52,8 @@ class ConnectionConfig:
 
 @dataclass(slots=True)
 class ChannelWaveformConfig:
-    waveform_type: str = "sine"
+    waveform_type: str = "iq-sine"
+    pypulse_waveform: str = "xy"
     quantum_gate: str = "x"
     rotation_angle_rad: float = np.pi
     virtual_z_phase_rad: float = 0.0
@@ -70,10 +71,10 @@ class ChannelWaveformConfig:
 
 @dataclass(slots=True)
 class WaveformConfig:
-    mode: str = "sine"
+    mode: str = "iq-sine"
     output_dir: Path = Path("/tmp/opencode/rfsoc_waveform_gui")
     sample_rate_hz: float = host.DAC_XY_FS
-    rfdc_interpolation: int = 2
+    rfdc_interpolation: int = host.RFDC_INTERPOLATION
     axis_freq_hz: float = host.DAC_AXIS_HZ
     loop: bool = False
     wait_for_trigger: bool = False
@@ -84,8 +85,8 @@ class WaveformConfig:
     ch2_phase_rad: float = 0.0
     ch1_delay_s: float = 80e-9
     ch2_delay_s: float = 120e-9
-    ch1_start: int = 0
-    ch2_start: int = 0x1000
+    ch1_start: int = host.DDR_CH1_ADDR
+    ch2_start: int = host.DDR_CH2_ADDR
     x_freq_hz: float = 80e6
     y_freq_hz: float = 120e6
     x_phase_rad: float = 0.0
@@ -98,12 +99,16 @@ class WaveformConfig:
     pulse_preset: str = "x"
     pulse_sigma_s: float = 20e-9
     pulse_center_s: float = 80e-9
-    x_start: int = 0
-    y_start: int = 0x1000
+    x_start: int = host.DDR_CH1_ADDR
+    y_start: int = host.DDR_CH2_ADDR
     ch1: ChannelWaveformConfig | None = None
     ch2: ChannelWaveformConfig | None = None
     ch3: ChannelWaveformConfig | None = None
     ch4: ChannelWaveformConfig | None = None
+    ch5: ChannelWaveformConfig | None = None
+    ch6: ChannelWaveformConfig | None = None
+    ch7: ChannelWaveformConfig | None = None
+    ch8: ChannelWaveformConfig | None = None
 
 
 @dataclass(slots=True)
@@ -113,6 +118,10 @@ class GeneratedWaveforms:
     metadata: dict
     ch3: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
     ch4: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
+    ch5: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
+    ch6: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
+    ch7: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
+    ch8: np.ndarray = field(default_factory=lambda: np.zeros(host.NUM_SAMPLES, dtype=np.int16))
 
     @property
     def x(self) -> np.ndarray:
@@ -123,7 +132,16 @@ class GeneratedWaveforms:
         return self.ch2
 
     def channel_items(self) -> tuple[tuple[str, np.ndarray], ...]:
-        return (("CH1", self.ch1), ("CH2", self.ch2), ("CH3", self.ch3), ("CH4", self.ch4))
+        return (
+            ("CH1", self.ch1),
+            ("CH2", self.ch2),
+            ("CH3", self.ch3),
+            ("CH4", self.ch4),
+            ("CH5", self.ch5),
+            ("CH6", self.ch6),
+            ("CH7", self.ch7),
+            ("CH8", self.ch8),
+        )
 
 
 @dataclass(slots=True)
@@ -208,6 +226,7 @@ def _channel_config_to_dict(config: ChannelWaveformConfig | None) -> dict[str, o
         return None
     return {
         "waveform_type": config.waveform_type,
+        "pypulse_waveform": config.pypulse_waveform,
         "quantum_gate": config.quantum_gate,
         "rotation_angle_rad": config.rotation_angle_rad,
         "virtual_z_phase_rad": config.virtual_z_phase_rad,
@@ -231,6 +250,7 @@ def _channel_config_from_dict(data: object) -> ChannelWaveformConfig | None:
         raise ValueError("channel settings must be a JSON object or null")
     allowed = {
         "waveform_type",
+        "pypulse_waveform",
         "quantum_gate",
         "rotation_angle_rad",
         "virtual_z_phase_rad",
@@ -245,7 +265,12 @@ def _channel_config_from_dict(data: object) -> ChannelWaveformConfig | None:
         "pulse_center_s",
         "start",
     }
-    return ChannelWaveformConfig(**{key: value for key, value in data.items() if key in allowed})
+    kwargs = {key: value for key, value in data.items() if key in allowed}
+    waveform_type = str(kwargs.get("waveform_type", "iq-sine")).lower()
+    if waveform_type not in {"sine", "iq-sine", "dc-iq-cw", "pypulse", "quantum", "off", "pulse", "burst", "golden"}:
+        kwargs["waveform_type"] = "pypulse"
+        kwargs.setdefault("pypulse_waveform", "xy")
+    return ChannelWaveformConfig(**kwargs)
 
 
 def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
@@ -284,6 +309,10 @@ def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
         "ch2": _channel_config_to_dict(config.ch2),
         "ch3": _channel_config_to_dict(config.ch3),
         "ch4": _channel_config_to_dict(config.ch4),
+        "ch5": _channel_config_to_dict(config.ch5),
+        "ch6": _channel_config_to_dict(config.ch6),
+        "ch7": _channel_config_to_dict(config.ch7),
+        "ch8": _channel_config_to_dict(config.ch8),
     }
 
 
@@ -324,7 +353,7 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
     kwargs: dict[str, Any] = {key: value for key, value in data.items() if key in allowed}
     if "output_dir" in data:
         kwargs["output_dir"] = Path(str(data["output_dir"]))
-    for channel in ("ch1", "ch2", "ch3", "ch4"):
+    for channel in ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"):
         if channel in data:
             kwargs[channel] = _channel_config_from_dict(data[channel])
     return WaveformConfig(**kwargs)
@@ -403,10 +432,14 @@ def save_gui_settings(settings: GuiSettings, path: Path = DEFAULT_GUI_SETTINGS_P
 
 
 CHANNEL_LABELS = {
-    "ch1": "CH1 / DDR 0x0 / DAC20",
-    "ch2": "CH2 / DDR 0x1000 / DAC22",
-    "ch3": "CH3 / DDR 0x2000 / DAC30",
-    "ch4": "CH4 / DDR 0x3000 / DAC32",
+    "ch1": f"CH1 / DDR 0x{host.DDR_CH1_ADDR:X} / vout00",
+    "ch2": f"CH2 / DDR 0x{host.DDR_CH2_ADDR:X} / vout02",
+    "ch3": f"CH3 / DDR 0x{host.DDR_CH3_ADDR:X} / vout10",
+    "ch4": f"CH4 / DDR 0x{host.DDR_CH4_ADDR:X} / vout12",
+    "ch5": f"CH5 / DDR 0x{host.DDR_CH5_ADDR:X} / vout20",
+    "ch6": f"CH6 / DDR 0x{host.DDR_CH6_ADDR:X} / vout22",
+    "ch7": f"CH7 / DDR 0x{host.DDR_CH7_ADDR:X} / vout30",
+    "ch8": f"CH8 / DDR 0x{host.DDR_CH8_ADDR:X} / vout32",
 }
 
 CHANNEL_UPLOAD_ARGS = {
@@ -414,6 +447,10 @@ CHANNEL_UPLOAD_ARGS = {
     "ch2": "y",
     "ch3": "ch3",
     "ch4": "ch4",
+    "ch5": "ch5",
+    "ch6": "ch6",
+    "ch7": "ch7",
+    "ch8": "ch8",
 }
 
 
@@ -433,7 +470,7 @@ def _metadata_base(config: WaveformConfig) -> MetadataBase:
 
 
 def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
-    if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4)):
+    if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4, config.ch5, config.ch6, config.ch7, config.ch8)):
         return _generate_independent_waveforms(config)
 
     mode = config.mode.lower()
@@ -458,27 +495,25 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
         )
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
-    if mode == "sine":
+    if mode in ("sine", "iq-sine"):
         x_python_freq_hz = python_frequency_hz(config.x_freq_hz, config.rfdc_interpolation)
         y_python_freq_hz = python_frequency_hz(config.y_freq_hz, config.rfdc_interpolation)
-        x = waveform_tools.make_sine(
+        x = waveform_tools.make_iq_sine_tile_waveform(
             x_python_freq_hz,
             config.x_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
-            encoding=config.encoding,
         )
-        y = waveform_tools.make_sine(
+        y = waveform_tools.make_iq_sine_tile_waveform(
             y_python_freq_hz,
             config.y_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
-            encoding=config.encoding,
         )
         metadata = waveform_tools.build_metadata(
-            mode="sine",
+            mode=mode,
             sample_rate_hz=config.sample_rate_hz,
-            encoding=config.encoding,
+            encoding="signed-iq-interleaved",
             loop=config.loop,
             ch1_freq_hz=config.x_freq_hz,
             ch2_freq_hz=config.y_freq_hz,
@@ -558,10 +593,18 @@ def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveform
     ch2_config = config.ch2 or ChannelWaveformConfig(waveform_type="off")
     ch3_config = config.ch3 or ChannelWaveformConfig(waveform_type="off")
     ch4_config = config.ch4 or ChannelWaveformConfig(waveform_type="off")
+    ch5_config = config.ch5 or ChannelWaveformConfig(waveform_type="off")
+    ch6_config = config.ch6 or ChannelWaveformConfig(waveform_type="off")
+    ch7_config = config.ch7 or ChannelWaveformConfig(waveform_type="off")
+    ch8_config = config.ch8 or ChannelWaveformConfig(waveform_type="off")
     x = _make_channel_waveform(ch1_config, config.sample_rate_hz, config.rfdc_interpolation, "ch1")
     y = _make_channel_waveform(ch2_config, config.sample_rate_hz, config.rfdc_interpolation, "ch2")
     ch3 = _make_channel_waveform(ch3_config, config.sample_rate_hz, config.rfdc_interpolation, "ch3")
     ch4 = _make_channel_waveform(ch4_config, config.sample_rate_hz, config.rfdc_interpolation, "ch4")
+    ch5 = _make_channel_waveform(ch5_config, config.sample_rate_hz, config.rfdc_interpolation, "ch5")
+    ch6 = _make_channel_waveform(ch6_config, config.sample_rate_hz, config.rfdc_interpolation, "ch6")
+    ch7 = _make_channel_waveform(ch7_config, config.sample_rate_hz, config.rfdc_interpolation, "ch7")
+    ch8 = _make_channel_waveform(ch8_config, config.sample_rate_hz, config.rfdc_interpolation, "ch8")
     metadata = waveform_tools.build_metadata(
         mode="per-channel",
         sample_rate_hz=config.sample_rate_hz,
@@ -571,30 +614,56 @@ def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveform
         ch2_label=CHANNEL_LABELS["ch2"],
         ch3_label=CHANNEL_LABELS["ch3"],
         ch4_label=CHANNEL_LABELS["ch4"],
+        ch5_label=CHANNEL_LABELS["ch5"],
+        ch6_label=CHANNEL_LABELS["ch6"],
+        ch7_label=CHANNEL_LABELS["ch7"],
+        ch8_label=CHANNEL_LABELS["ch8"],
         ch1=_channel_metadata(ch1_config, "ch1", config.axis_freq_hz, config.rfdc_interpolation),
         ch2=_channel_metadata(ch2_config, "ch2", config.axis_freq_hz, config.rfdc_interpolation),
         ch3=_channel_metadata(ch3_config, "ch3", config.axis_freq_hz, config.rfdc_interpolation),
         ch4=_channel_metadata(ch4_config, "ch4", config.axis_freq_hz, config.rfdc_interpolation),
+        ch5=_channel_metadata(ch5_config, "ch5", config.axis_freq_hz, config.rfdc_interpolation),
+        ch6=_channel_metadata(ch6_config, "ch6", config.axis_freq_hz, config.rfdc_interpolation),
+        ch7=_channel_metadata(ch7_config, "ch7", config.axis_freq_hz, config.rfdc_interpolation),
+        ch8=_channel_metadata(ch8_config, "ch8", config.axis_freq_hz, config.rfdc_interpolation),
         **_metadata_base(config),
     )
-    return GeneratedWaveforms(ch1=x, ch2=y, ch3=ch3, ch4=ch4, metadata=metadata)
+    return GeneratedWaveforms(ch1=x, ch2=y, ch3=ch3, ch4=ch4, ch5=ch5, ch6=ch6, ch7=ch7, ch8=ch8, metadata=metadata)
 
 
 def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, rfdc_interpolation: int, channel_name: str) -> np.ndarray:
     waveform_type = config.waveform_type.lower()
     if waveform_type == "off":
         return np.zeros(host.NUM_SAMPLES, dtype=np.int16)
+    if waveform_type == "dc-iq-cw":
+        return host.build_dc_iq_tone(host.FIXED_DATA_BYTES, amp=float(config.amplitude) / 32767.0)
+    if waveform_type == "iq-sine":
+        return waveform_tools.make_iq_sine_tile_waveform(
+            python_frequency_hz(config.freq_hz, rfdc_interpolation),
+            config.phase_rad,
+            config.amplitude,
+            sample_rate_hz,
+        )
+    if waveform_type == "pypulse":
+        wave, _metadata = waveform_tools.make_pypulse_tile_waveform(
+            config.pypulse_waveform,
+            python_frequency_hz(config.freq_hz, rfdc_interpolation),
+            config.phase_rad,
+            config.amplitude,
+            sample_rate_hz,
+            config.duration_s,
+        )
+        return wave
     if waveform_type == "pulse":
         return _make_channel_pulse(config, sample_rate_hz, rfdc_interpolation, channel_name)
     if waveform_type == "quantum":
         return _make_quantum_gate_waveform(config, sample_rate_hz, rfdc_interpolation, channel_name)
     if waveform_type == "sine":
-        return waveform_tools.make_sine(
+        return waveform_tools.make_iq_sine_tile_waveform(
             python_frequency_hz(config.freq_hz, rfdc_interpolation),
             config.phase_rad,
             config.amplitude,
             sample_rate_hz,
-            encoding=config.encoding,
         )
     if waveform_type == "burst":
         wave = waveform_tools.make_gaussian_burst(
@@ -668,10 +737,15 @@ def _channel_gaussian_window_pulse(config: ChannelWaveformConfig, sample_rate_hz
 
 def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz: float, rfdc_interpolation: int) -> dict:
     python_freq_hz = python_frequency_hz(config.freq_hz, rfdc_interpolation)
+    pypulse_info = _pypulse_metadata(config)
+    waveform_type = config.waveform_type.lower()
     return {
         "label": CHANNEL_LABELS[channel],
         "upload_arg": CHANNEL_UPLOAD_ARGS[channel],
-        "type": config.waveform_type.lower(),
+        "type": waveform_type,
+        "pypulse_waveform": pypulse_info["pypulse_waveform"],
+        "i_signal": pypulse_info["i_signal"],
+        "q_signal": pypulse_info["q_signal"],
         "quantum_gate": config.quantum_gate.lower(),
         "rotation_angle_rad": config.rotation_angle_rad,
         "virtual_z_phase_rad": config.virtual_z_phase_rad,
@@ -682,7 +756,7 @@ def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz:
         "python_freq_hz": python_freq_hz,
         "phase_rad": config.phase_rad,
         "amplitude": config.amplitude,
-        "encoding": config.encoding,
+        "encoding": "signed-iq-interleaved" if waveform_type in ("iq-sine", "sine", "dc-iq-cw", "pypulse") else config.encoding,
         "delay_s": config.delay_s,
         "delay_cycles": waveform_tools.delay_seconds_to_axis_cycles_by_freq(config.delay_s, axis_freq_hz),
         "duration_s": config.duration_s,
@@ -694,7 +768,16 @@ def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz:
 
 
 def _channel_semantics(config: ChannelWaveformConfig) -> str:
-    if config.waveform_type.lower() != "quantum":
+    waveform_type = config.waveform_type.lower()
+    if waveform_type == "dc-iq-cw":
+        return "DC complex baseband with interleaved I/Q lanes"
+    if waveform_type == "iq-sine":
+        return "continuous complex sine with interleaved I/Q lanes"
+    if waveform_type == "sine":
+        return "continuous complex sine with interleaved I/Q lanes"
+    if waveform_type == "pypulse":
+        return f"PyPulse {config.pypulse_waveform.upper()} I/Q tile waveform"
+    if waveform_type != "quantum":
         return "hardware waveform"
     gate = config.quantum_gate.lower()
     if gate == "x":
@@ -704,6 +787,19 @@ def _channel_semantics(config: ChannelWaveformConfig) -> str:
     if gate == "z":
         return "Z detuning-style phase pulse on DAC pair"
     return "unknown quantum operation"
+
+
+def _pypulse_metadata(config: ChannelWaveformConfig) -> dict[str, str]:
+    if config.waveform_type.lower() != "pypulse":
+        return {"pypulse_waveform": "", "i_signal": "", "q_signal": ""}
+    waveform_key = config.pypulse_waveform.lower()
+    if waveform_key == "xy":
+        return {"pypulse_waveform": "xy", "i_signal": "xy_i", "q_signal": "xy_q"}
+    if waveform_key == "readout":
+        return {"pypulse_waveform": "readout", "i_signal": "readout_i", "q_signal": "readout_q"}
+    if waveform_key == "z":
+        return {"pypulse_waveform": "z", "i_signal": "z_i", "q_signal": "zero_q"}
+    raise ValueError("pypulse waveform must be one of: xy, z, readout")
 
 
 def _pulse_backend(config: ChannelWaveformConfig) -> str:
@@ -740,10 +836,16 @@ def summarize_waveform(name: str, wave: np.ndarray) -> str:
 
 
 def build_send_summary(config: WaveformConfig, connection: ConnectionConfig) -> str:
-    ch1 = config.ch1 or ChannelWaveformConfig(waveform_type=config.mode)
-    ch2 = config.ch2 or ChannelWaveformConfig(waveform_type=config.mode)
-    ch3 = config.ch3 or ChannelWaveformConfig(waveform_type="off")
-    ch4 = config.ch4 or ChannelWaveformConfig(waveform_type="off")
+    channel_configs = {
+        "ch1": config.ch1 or ChannelWaveformConfig(waveform_type=config.mode),
+        "ch2": config.ch2 or ChannelWaveformConfig(waveform_type=config.mode),
+        "ch3": config.ch3 or ChannelWaveformConfig(waveform_type="off"),
+        "ch4": config.ch4 or ChannelWaveformConfig(waveform_type="off"),
+        "ch5": config.ch5 or ChannelWaveformConfig(waveform_type="off"),
+        "ch6": config.ch6 or ChannelWaveformConfig(waveform_type="off"),
+        "ch7": config.ch7 or ChannelWaveformConfig(waveform_type="off"),
+        "ch8": config.ch8 or ChannelWaveformConfig(waveform_type="off"),
+    }
     auto_start = "no, wait for trigger" if config.wait_for_trigger else "yes"
     return "\n".join(
         [
@@ -754,10 +856,7 @@ def build_send_summary(config: WaveformConfig, connection: ConnectionConfig) -> 
             f"Loop playback: {'yes' if config.loop else 'no'}",
             f"Auto start: {auto_start}",
             f"Output dir: {Path(config.output_dir)}",
-            f"{CHANNEL_LABELS['ch1']}: {_summarize_channel(ch1)}",
-            f"{CHANNEL_LABELS['ch2']}: {_summarize_channel(ch2)}",
-            f"{CHANNEL_LABELS['ch3']}: {_summarize_channel(ch3)}",
-            f"{CHANNEL_LABELS['ch4']}: {_summarize_channel(ch4)}",
+            *(f"{CHANNEL_LABELS[channel]}: {_summarize_channel(channel_config)}" for channel, channel_config in channel_configs.items()),
         ]
     )
 
@@ -766,6 +865,8 @@ def _summarize_channel(config: ChannelWaveformConfig) -> str:
     waveform_type = config.waveform_type.lower()
     if waveform_type == "quantum":
         return f"quantum {config.quantum_gate.lower()}"
+    if waveform_type == "iq-sine":
+        return f"IQ sine {config.freq_hz:g} Hz"
     if waveform_type == "sine":
         return f"sine {config.freq_hz:g} Hz"
     if waveform_type == "burst":
@@ -901,8 +1002,17 @@ def _build_ila_log_lines(
 
 
 def channel_delay_cycles(config: WaveformConfig) -> dict[int, int]:
-    if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4)):
-        channel_configs = {1: config.ch1, 2: config.ch2, 3: config.ch3, 4: config.ch4}
+    if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4, config.ch5, config.ch6, config.ch7, config.ch8)):
+        channel_configs = {
+            1: config.ch1,
+            2: config.ch2,
+            3: config.ch3,
+            4: config.ch4,
+            5: config.ch5,
+            6: config.ch6,
+            7: config.ch7,
+            8: config.ch8,
+        }
         return {
             channel: waveform_tools.delay_seconds_to_axis_cycles_by_freq(channel_config.delay_s, config.axis_freq_hz)
             for channel, channel_config in channel_configs.items()
@@ -942,6 +1052,7 @@ class WaveformController:
             stem=config.mode,
             ch3=generated.ch3,
             ch4=generated.ch4,
+            extra_channels={5: generated.ch5, 6: generated.ch6, 7: generated.ch7, 8: generated.ch8},
         )
 
         log_lines = [
@@ -951,6 +1062,10 @@ class WaveformController:
             summarize_waveform("Y", generated.y),
             summarize_waveform("CH3", generated.ch3),
             summarize_waveform("CH4", generated.ch4),
+            summarize_waveform("CH5", generated.ch5),
+            summarize_waveform("CH6", generated.ch6),
+            summarize_waveform("CH7", generated.ch7),
+            summarize_waveform("CH8", generated.ch8),
             "progress: saved artifacts",
             f"saved artifacts to {output_dir}",
         ]
@@ -974,6 +1089,7 @@ class WaveformController:
             auto_start=not config.wait_for_trigger,
             ch3=generated.ch3,
             ch4=generated.ch4,
+            extra_channels={5: generated.ch5, 6: generated.ch6, 7: generated.ch7, 8: generated.ch8},
             channel_delays=channel_delay_cycles(config),
         )
         log_lines.append("progress: send complete")

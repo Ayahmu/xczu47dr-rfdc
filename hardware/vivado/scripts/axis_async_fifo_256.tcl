@@ -15,7 +15,7 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 ##################################################################
 
 # To test this script, run the following commands from Vivado Tcl console:
-# source axis_async_fifo_128.tcl
+# source axis_async_fifo_256.tcl
 # If there is no project opened, this script will create a
 # project, but make sure you do not have an existing project
 # in the current working folder.
@@ -75,10 +75,10 @@ if { $bCheckIPsPassed != 1 } {
 }
 
 ##################################################################
-# CREATE IP axis_async_fifo_128
+# CREATE IP axis_async_fifo_256
 ##################################################################
 
-set axis_async_fifo_128 [create_ip -name axis_data_fifo -vendor xilinx.com -library ip -version 2.0 -module_name axis_async_fifo_128]
+set axis_async_fifo_256 [create_ip -name axis_data_fifo -vendor xilinx.com -library ip -version 2.0 -module_name axis_async_fifo_256]
 
 # User Parameters
 set_property -dict [list \
@@ -91,12 +91,12 @@ set_property -dict [list \
   CONFIG.IS_ACLK_ASYNC {1} \
   CONFIG.PROG_EMPTY_THRESH {128} \
   CONFIG.PROG_FULL_THRESH {1536} \
-  CONFIG.TDATA_NUM_BYTES {16} \
-] [get_ips axis_async_fifo_128]
+  CONFIG.TDATA_NUM_BYTES {32} \
+] [get_ips axis_async_fifo_256]
 
 # Runtime Parameters
 set_property -dict {
   GENERATE_SYNTH_CHECKPOINT {0}
-} $axis_async_fifo_128
+} $axis_async_fifo_256
 
 ##################################################################

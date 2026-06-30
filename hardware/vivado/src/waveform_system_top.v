@@ -1,5 +1,7 @@
+`timescale 1ns / 1ps
+
 module Waveform_System_Top #(
-  parameter integer BEAT_BYTES   = 16,
+  parameter integer BEAT_BYTES   = 32,
   parameter integer CHUNK_BEATS  = 256,
   parameter integer LOW_WM       = 128,
   parameter integer HIGH_WM      = 512,
@@ -18,7 +20,7 @@ module Waveform_System_Top #(
     output reg          m_axis_dm_cmd_tvalid,
     input  wire         m_axis_dm_cmd_tready,
 
-    input  wire [127:0] s_axis_dm_data_tdata,
+    input  wire [255:0] s_axis_dm_data_tdata,
     input  wire         s_axis_dm_data_tvalid,
     output wire         s_axis_dm_data_tready,
 
@@ -26,33 +28,61 @@ module Waveform_System_Top #(
     input  wire         ch2_fifo_ready,
     input  wire         ch3_fifo_ready,
     input  wire         ch4_fifo_ready,
+    input  wire         ch5_fifo_ready,
+    input  wire         ch6_fifo_ready,
+    input  wire         ch7_fifo_ready,
+    input  wire         ch8_fifo_ready,
 
     input  wire [15:0]  ch1_fifo_level_beats,
     input  wire [15:0]  ch2_fifo_level_beats,
     input  wire [15:0]  ch3_fifo_level_beats,
     input  wire [15:0]  ch4_fifo_level_beats,
+    input  wire [15:0]  ch5_fifo_level_beats,
+    input  wire [15:0]  ch6_fifo_level_beats,
+    input  wire [15:0]  ch7_fifo_level_beats,
+    input  wire [15:0]  ch8_fifo_level_beats,
 
-    output wire [127:0] m_axis_ch1_tdata,
+    output wire [255:0] m_axis_ch1_tdata,
     output wire         m_axis_ch1_tvalid,
-    output wire [127:0] m_axis_ch2_tdata,
+    output wire [255:0] m_axis_ch2_tdata,
     output wire         m_axis_ch2_tvalid,
-    output wire [127:0] m_axis_ch3_tdata,
+    output wire [255:0] m_axis_ch3_tdata,
     output wire         m_axis_ch3_tvalid,
-    output wire [127:0] m_axis_ch4_tdata,
+    output wire [255:0] m_axis_ch4_tdata,
     output wire         m_axis_ch4_tvalid,
+    output wire [255:0] m_axis_ch5_tdata,
+    output wire         m_axis_ch5_tvalid,
+    output wire [255:0] m_axis_ch6_tdata,
+    output wire         m_axis_ch6_tvalid,
+    output wire [255:0] m_axis_ch7_tdata,
+    output wire         m_axis_ch7_tvalid,
+    output wire [255:0] m_axis_ch8_tdata,
+    output wire         m_axis_ch8_tvalid,
 
     output reg  [31:0]  ch1_delay_cycles,
     output reg  [31:0]  ch2_delay_cycles,
     output reg  [31:0]  ch3_delay_cycles,
     output reg  [31:0]  ch4_delay_cycles,
+    output reg  [31:0]  ch5_delay_cycles,
+    output reg  [31:0]  ch6_delay_cycles,
+    output reg  [31:0]  ch7_delay_cycles,
+    output reg  [31:0]  ch8_delay_cycles,
     output reg  [31:0]  ch1_len_beats,
     output reg  [31:0]  ch2_len_beats,
     output reg  [31:0]  ch3_len_beats,
     output reg  [31:0]  ch4_len_beats,
+    output reg  [31:0]  ch5_len_beats,
+    output reg  [31:0]  ch6_len_beats,
+    output reg  [31:0]  ch7_len_beats,
+    output reg  [31:0]  ch8_len_beats,
     output reg          ch1_arm,        // 本波通道是否有效（PLAY过）；供 DAC 域门控使用
     output reg          ch2_arm,
     output reg          ch3_arm,
     output reg          ch4_arm,
+    output reg          ch5_arm,
+    output reg          ch6_arm,
+    output reg          ch7_arm,
+    output reg          ch8_arm,
     output reg          cfg_auto_start, // END ch=15：无需 GPIO trigger，DAC 域收到配置后直接放行
     output reg          cfg_commit,     // END 时 pulse（提交一帧配置到 DAC 域）
 
@@ -126,6 +156,10 @@ module Waveform_System_Top #(
   localparam CH2 = 4'd2;
   localparam CH3 = 4'd3;
   localparam CH4 = 4'd4;
+  localparam CH5 = 4'd5;
+  localparam CH6 = 4'd6;
+  localparam CH7 = 4'd7;
+  localparam CH8 = 4'd8;
   localparam CH_AUTO_START = 4'hF;
 
   wire [3:0]  instr_cmd;
@@ -147,7 +181,9 @@ module Waveform_System_Top #(
 
   // 当前波配置（在 BUILD 时由指令更新，END 后冻结直到波结束）
   reg [31:0] cur_ch1_delay, cur_ch2_delay, cur_ch3_delay, cur_ch4_delay;
+  reg [31:0] cur_ch5_delay, cur_ch6_delay, cur_ch7_delay, cur_ch8_delay;
   reg        cur_ch1_have_play, cur_ch2_have_play, cur_ch3_have_play, cur_ch4_have_play;
+  reg        cur_ch5_have_play, cur_ch6_have_play, cur_ch7_have_play, cur_ch8_have_play;
 
   // 仅用于 ILA 观察
   reg [127:0] inst_dbg;
@@ -175,51 +211,74 @@ module Waveform_System_Top #(
   // 3) 给 DMA 的“PLAY load 请求”（toggle 方式，保证 DMA 单写者）
   // =========================================================
   reg        ch1_load_tog, ch2_load_tog, ch3_load_tog, ch4_load_tog;
+  reg        ch5_load_tog, ch6_load_tog, ch7_load_tog, ch8_load_tog;
   reg [63:0] ch1_load_addr, ch2_load_addr, ch3_load_addr, ch4_load_addr;
+  reg [63:0] ch5_load_addr, ch6_load_addr, ch7_load_addr, ch8_load_addr;
   reg [31:0] ch1_load_bytes, ch2_load_bytes, ch3_load_bytes, ch4_load_bytes;
+  reg [31:0] ch5_load_bytes, ch6_load_bytes, ch7_load_bytes, ch8_load_bytes;
 
   // =========================================================
   // 4) DMA 调度器（单 DataMover，分块搬运）
   // =========================================================
-  (* MARK_DEBUG="TRUE" *) reg [1:0]  dm_sel;
-  wire dm_sel_ch1 = (dm_sel == 2'd0);
+  (* MARK_DEBUG="TRUE" *) reg [2:0]  dm_sel;
+  wire dm_sel_ch1 = (dm_sel == 3'd0);
   (* MARK_DEBUG="TRUE" *) reg [31:0] dm_chunk_beats;
   (* MARK_DEBUG="TRUE" *) reg [31:0] dm_beats_sent;
 
   localparam DM_IDLE    = 2'd0;
   localparam DM_SENDCMD = 2'd1;
   localparam DM_STREAM  = 2'd2;
+  localparam DM_PREP    = 2'd3;
 
   (* MARK_DEBUG="TRUE" *) reg [1:0] dm_st;
 
-  (* MARK_DEBUG="TRUE" *) wire [63:0] ch1_base_addr, ch2_base_addr, ch3_base_addr, ch4_base_addr;
-  (* MARK_DEBUG="TRUE" *) wire [31:0] ch1_bytes_left, ch2_bytes_left, ch3_bytes_left, ch4_bytes_left;
+  wire [63:0] ch1_base_addr, ch2_base_addr, ch3_base_addr, ch4_base_addr;
+  wire [63:0] ch5_base_addr, ch6_base_addr, ch7_base_addr, ch8_base_addr;
+  wire [31:0] ch1_bytes_left, ch2_bytes_left, ch3_bytes_left, ch4_bytes_left;
+  wire [31:0] ch5_bytes_left, ch6_bytes_left, ch7_bytes_left, ch8_bytes_left;
 
   wire act_ch1_valid_dm, act_ch2_valid_dm, act_ch3_valid_dm, act_ch4_valid_dm;
+  wire act_ch5_valid_dm, act_ch6_valid_dm, act_ch7_valid_dm, act_ch8_valid_dm;
 
   wire prefill_done = active_valid && (dm_st == DM_IDLE) &&
                       (!cur_ch1_have_play || (ch1_bytes_left == 0)) &&
                       (!cur_ch2_have_play || (ch2_bytes_left == 0)) &&
                       (!cur_ch3_have_play || (ch3_bytes_left == 0)) &&
-                      (!cur_ch4_have_play || (ch4_bytes_left == 0));
+                      (!cur_ch4_have_play || (ch4_bytes_left == 0)) &&
+                      (!cur_ch5_have_play || (ch5_bytes_left == 0)) &&
+                      (!cur_ch6_have_play || (ch6_bytes_left == 0)) &&
+                      (!cur_ch7_have_play || (ch7_bytes_left == 0)) &&
+                      (!cur_ch8_have_play || (ch8_bytes_left == 0));
 
   // Data routing（写 FIFO）
   assign m_axis_ch1_tdata  = s_axis_dm_data_tdata;
   assign m_axis_ch2_tdata  = s_axis_dm_data_tdata;
   assign m_axis_ch3_tdata  = s_axis_dm_data_tdata;
   assign m_axis_ch4_tdata  = s_axis_dm_data_tdata;
+  assign m_axis_ch5_tdata  = s_axis_dm_data_tdata;
+  assign m_axis_ch6_tdata  = s_axis_dm_data_tdata;
+  assign m_axis_ch7_tdata  = s_axis_dm_data_tdata;
+  assign m_axis_ch8_tdata  = s_axis_dm_data_tdata;
 
-  assign m_axis_ch1_tvalid = s_axis_dm_data_tvalid && (dm_sel == 2'd0);
-  assign m_axis_ch2_tvalid = s_axis_dm_data_tvalid && (dm_sel == 2'd1);
-  assign m_axis_ch3_tvalid = s_axis_dm_data_tvalid && (dm_sel == 2'd2);
-  assign m_axis_ch4_tvalid = s_axis_dm_data_tvalid && (dm_sel == 2'd3);
+  assign m_axis_ch1_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd0);
+  assign m_axis_ch2_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd1);
+  assign m_axis_ch3_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd2);
+  assign m_axis_ch4_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd3);
+  assign m_axis_ch5_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd4);
+  assign m_axis_ch6_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd5);
+  assign m_axis_ch7_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd6);
+  assign m_axis_ch8_tvalid = s_axis_dm_data_tvalid && (dm_sel == 3'd7);
 
-  assign s_axis_dm_data_tready = (dm_sel == 2'd0) ? ch1_fifo_ready :
-                                 (dm_sel == 2'd1) ? ch2_fifo_ready :
-                                 (dm_sel == 2'd2) ? ch3_fifo_ready : ch4_fifo_ready;
+  assign s_axis_dm_data_tready = (dm_sel == 3'd0) ? ch1_fifo_ready :
+                                 (dm_sel == 3'd1) ? ch2_fifo_ready :
+                                 (dm_sel == 3'd2) ? ch3_fifo_ready :
+                                 (dm_sel == 3'd3) ? ch4_fifo_ready :
+                                 (dm_sel == 3'd4) ? ch5_fifo_ready :
+                                 (dm_sel == 3'd5) ? ch6_fifo_ready :
+                                 (dm_sel == 3'd6) ? ch7_fifo_ready : ch8_fifo_ready;
   wire beat_fire = s_axis_dm_data_tvalid && s_axis_dm_data_tready;
   wire dm_chunk_done = (dm_st == DM_STREAM) && beat_fire && ((dm_beats_sent + 1) == dm_chunk_beats);
-  wire [31:0] dm_chunk_bytes = dm_chunk_beats << 4;
+  wire [31:0] dm_chunk_bytes = beats_to_bytes(dm_chunk_beats);
 
   // 预取使能：只要 active_valid=1 就允许预取（即 PLAY 到就能预取）
   wire prefetch_en = active_valid;
@@ -231,7 +290,7 @@ module Waveform_System_Top #(
     .load_tog        (ch1_load_tog),
     .load_addr       (ch1_load_addr),
     .load_bytes      (ch1_load_bytes),
-    .chunk_done      (dm_chunk_done && (dm_sel == 2'd0)),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd0)),
     .chunk_bytes     (dm_chunk_bytes),
     .base_addr       (ch1_base_addr),
     .bytes_left      (ch1_bytes_left),
@@ -245,7 +304,7 @@ module Waveform_System_Top #(
     .load_tog        (ch2_load_tog),
     .load_addr       (ch2_load_addr),
     .load_bytes      (ch2_load_bytes),
-    .chunk_done      (dm_chunk_done && (dm_sel == 2'd1)),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd1)),
     .chunk_bytes     (dm_chunk_bytes),
     .base_addr       (ch2_base_addr),
     .bytes_left      (ch2_bytes_left),
@@ -259,7 +318,7 @@ module Waveform_System_Top #(
     .load_tog        (ch3_load_tog),
     .load_addr       (ch3_load_addr),
     .load_bytes      (ch3_load_bytes),
-    .chunk_done      (dm_chunk_done && (dm_sel == 2'd2)),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd2)),
     .chunk_bytes     (dm_chunk_bytes),
     .base_addr       (ch3_base_addr),
     .bytes_left      (ch3_bytes_left),
@@ -273,11 +332,67 @@ module Waveform_System_Top #(
     .load_tog        (ch4_load_tog),
     .load_addr       (ch4_load_addr),
     .load_bytes      (ch4_load_bytes),
-    .chunk_done      (dm_chunk_done && (dm_sel == 2'd3)),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd3)),
     .chunk_bytes     (dm_chunk_bytes),
     .base_addr       (ch4_base_addr),
     .bytes_left      (ch4_bytes_left),
     .active_valid_dm (act_ch4_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch5_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch5_load_tog),
+    .load_addr       (ch5_load_addr),
+    .load_bytes      (ch5_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd4)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch5_base_addr),
+    .bytes_left      (ch5_bytes_left),
+    .active_valid_dm (act_ch5_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch6_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch6_load_tog),
+    .load_addr       (ch6_load_addr),
+    .load_bytes      (ch6_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd5)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch6_base_addr),
+    .bytes_left      (ch6_bytes_left),
+    .active_valid_dm (act_ch6_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch7_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch7_load_tog),
+    .load_addr       (ch7_load_addr),
+    .load_bytes      (ch7_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd6)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch7_base_addr),
+    .bytes_left      (ch7_bytes_left),
+    .active_valid_dm (act_ch7_valid_dm)
+  );
+
+  Waveform_Channel_State u_ch8_state (
+    .aclk            (aclk),
+    .aresetn         (aresetn),
+    .prefetch_en     (prefetch_en),
+    .load_tog        (ch8_load_tog),
+    .load_addr       (ch8_load_addr),
+    .load_bytes      (ch8_load_bytes),
+    .chunk_done      (dm_chunk_done && (dm_sel == 3'd7)),
+    .chunk_bytes     (dm_chunk_bytes),
+    .base_addr       (ch8_base_addr),
+    .bytes_left      (ch8_bytes_left),
+    .active_valid_dm (act_ch8_valid_dm)
   );
 
   // need：水位策略（避免溢出）
@@ -285,22 +400,34 @@ module Waveform_System_Top #(
   wire ch2_need_hard  = (prefetch_en && act_ch2_valid_dm && (ch2_bytes_left != 0) && (ch2_fifo_level_beats < LOW_WM));
   wire ch3_need_hard  = (prefetch_en && act_ch3_valid_dm && (ch3_bytes_left != 0) && (ch3_fifo_level_beats < LOW_WM));
   wire ch4_need_hard  = (prefetch_en && act_ch4_valid_dm && (ch4_bytes_left != 0) && (ch4_fifo_level_beats < LOW_WM));
+  wire ch5_need_hard  = (prefetch_en && act_ch5_valid_dm && (ch5_bytes_left != 0) && (ch5_fifo_level_beats < LOW_WM));
+  wire ch6_need_hard  = (prefetch_en && act_ch6_valid_dm && (ch6_bytes_left != 0) && (ch6_fifo_level_beats < LOW_WM));
+  wire ch7_need_hard  = (prefetch_en && act_ch7_valid_dm && (ch7_bytes_left != 0) && (ch7_fifo_level_beats < LOW_WM));
+  wire ch8_need_hard  = (prefetch_en && act_ch8_valid_dm && (ch8_bytes_left != 0) && (ch8_fifo_level_beats < LOW_WM));
 
   wire ch1_need_soft  = (prefetch_en && act_ch1_valid_dm && (ch1_bytes_left != 0) && (ch1_fifo_level_beats < HIGH_WM));
   wire ch2_need_soft  = (prefetch_en && act_ch2_valid_dm && (ch2_bytes_left != 0) && (ch2_fifo_level_beats < HIGH_WM));
   wire ch3_need_soft  = (prefetch_en && act_ch3_valid_dm && (ch3_bytes_left != 0) && (ch3_fifo_level_beats < HIGH_WM));
   wire ch4_need_soft  = (prefetch_en && act_ch4_valid_dm && (ch4_bytes_left != 0) && (ch4_fifo_level_beats < HIGH_WM));
+  wire ch5_need_soft  = (prefetch_en && act_ch5_valid_dm && (ch5_bytes_left != 0) && (ch5_fifo_level_beats < HIGH_WM));
+  wire ch6_need_soft  = (prefetch_en && act_ch6_valid_dm && (ch6_bytes_left != 0) && (ch6_fifo_level_beats < HIGH_WM));
+  wire ch7_need_soft  = (prefetch_en && act_ch7_valid_dm && (ch7_bytes_left != 0) && (ch7_fifo_level_beats < HIGH_WM));
+  wire ch8_need_soft  = (prefetch_en && act_ch8_valid_dm && (ch8_bytes_left != 0) && (ch8_fifo_level_beats < HIGH_WM));
 
   wire ch1_need_start = (prefetch_en && act_ch1_valid_dm && (ch1_bytes_left != 0) && (ch1_fifo_level_beats < START_WM));
   wire ch2_need_start = (prefetch_en && act_ch2_valid_dm && (ch2_bytes_left != 0) && (ch2_fifo_level_beats < START_WM));
   wire ch3_need_start = (prefetch_en && act_ch3_valid_dm && (ch3_bytes_left != 0) && (ch3_fifo_level_beats < START_WM));
   wire ch4_need_start = (prefetch_en && act_ch4_valid_dm && (ch4_bytes_left != 0) && (ch4_fifo_level_beats < START_WM));
+  wire ch5_need_start = (prefetch_en && act_ch5_valid_dm && (ch5_bytes_left != 0) && (ch5_fifo_level_beats < START_WM));
+  wire ch6_need_start = (prefetch_en && act_ch6_valid_dm && (ch6_bytes_left != 0) && (ch6_fifo_level_beats < START_WM));
+  wire ch7_need_start = (prefetch_en && act_ch7_valid_dm && (ch7_bytes_left != 0) && (ch7_fifo_level_beats < START_WM));
+  wire ch8_need_start = (prefetch_en && act_ch8_valid_dm && (ch8_bytes_left != 0) && (ch8_fifo_level_beats < START_WM));
 
   // round-robin
-  reg [1:0] rr;
+  reg [2:0] rr;
   always @(posedge aclk or negedge aresetn) begin
-    if(!aresetn) rr <= 2'd0;
-    else if(dm_st == DM_IDLE) rr <= rr + 2'd1;
+    if(!aresetn) rr <= 3'd0;
+    else if(dm_st == DM_IDLE) rr <= rr + 3'd1;
   end
 
   function [31:0] min_u32;
@@ -310,7 +437,17 @@ module Waveform_System_Top #(
 
   function [31:0] bytes_to_beats;
     input [31:0] bytes;
-    begin bytes_to_beats = bytes >> 4; end
+    begin bytes_to_beats = (bytes + (BEAT_BYTES - 1)) / BEAT_BYTES; end
+  endfunction
+
+  function [31:0] beats_to_bytes;
+    input [31:0] beats;
+    begin beats_to_bytes = beats * BEAT_BYTES; end
+  endfunction
+
+  function [31:0] align_bytes_to_beat;
+    input [31:0] bytes;
+    begin align_bytes_to_beat = beats_to_bytes(bytes_to_beats(bytes)); end
   endfunction
 
   function [103:0] make_dm_cmd;
@@ -325,16 +462,29 @@ module Waveform_System_Top #(
   wire [31:0] ch2_chunk_beats_w = min_u32(bytes_to_beats(ch2_bytes_left), CHUNK_BEATS);
   wire [31:0] ch3_chunk_beats_w = min_u32(bytes_to_beats(ch3_bytes_left), CHUNK_BEATS);
   wire [31:0] ch4_chunk_beats_w = min_u32(bytes_to_beats(ch4_bytes_left), CHUNK_BEATS);
-  wire [31:0] ch1_chunk_bytes_w = ch1_chunk_beats_w << 4;
-  wire [31:0] ch2_chunk_bytes_w = ch2_chunk_beats_w << 4;
-  wire [31:0] ch3_chunk_bytes_w = ch3_chunk_beats_w << 4;
-  wire [31:0] ch4_chunk_bytes_w = ch4_chunk_beats_w << 4;
+  wire [31:0] ch5_chunk_beats_w = min_u32(bytes_to_beats(ch5_bytes_left), CHUNK_BEATS);
+  wire [31:0] ch6_chunk_beats_w = min_u32(bytes_to_beats(ch6_bytes_left), CHUNK_BEATS);
+  wire [31:0] ch7_chunk_beats_w = min_u32(bytes_to_beats(ch7_bytes_left), CHUNK_BEATS);
+  wire [31:0] ch8_chunk_beats_w = min_u32(bytes_to_beats(ch8_bytes_left), CHUNK_BEATS);
+  wire [31:0] ch1_chunk_bytes_w = beats_to_bytes(ch1_chunk_beats_w);
+  wire [31:0] ch2_chunk_bytes_w = beats_to_bytes(ch2_chunk_beats_w);
+  wire [31:0] ch3_chunk_bytes_w = beats_to_bytes(ch3_chunk_beats_w);
+  wire [31:0] ch4_chunk_bytes_w = beats_to_bytes(ch4_chunk_beats_w);
+  wire [31:0] ch5_chunk_bytes_w = beats_to_bytes(ch5_chunk_beats_w);
+  wire [31:0] ch6_chunk_bytes_w = beats_to_bytes(ch6_chunk_beats_w);
+  wire [31:0] ch7_chunk_bytes_w = beats_to_bytes(ch7_chunk_beats_w);
+  wire [31:0] ch8_chunk_bytes_w = beats_to_bytes(ch8_chunk_beats_w);
 
   wire        dma_req_valid;
-  wire [1:0]  dma_req_sel;
+  wire [2:0]  dma_req_sel;
   wire [63:0] dma_req_addr;
   wire [31:0] dma_req_chunk_beats;
   wire [31:0] dma_req_chunk_bytes;
+
+  reg [2:0]  dma_req_sel_r;
+  reg [63:0] dma_req_addr_r;
+  reg [31:0] dma_req_chunk_beats_r;
+  reg [31:0] dma_req_chunk_bytes_r;
 
   Waveform_Dma_Selector u_dma_selector (
     .rr              (rr),
@@ -343,27 +493,51 @@ module Waveform_System_Top #(
     .ch2_need_hard   (ch2_need_hard),
     .ch3_need_hard   (ch3_need_hard),
     .ch4_need_hard   (ch4_need_hard),
+    .ch5_need_hard   (ch5_need_hard),
+    .ch6_need_hard   (ch6_need_hard),
+    .ch7_need_hard   (ch7_need_hard),
+    .ch8_need_hard   (ch8_need_hard),
     .ch1_need_start  (ch1_need_start),
     .ch2_need_start  (ch2_need_start),
     .ch3_need_start  (ch3_need_start),
     .ch4_need_start  (ch4_need_start),
+    .ch5_need_start  (ch5_need_start),
+    .ch6_need_start  (ch6_need_start),
+    .ch7_need_start  (ch7_need_start),
+    .ch8_need_start  (ch8_need_start),
     .ch1_need_soft   (ch1_need_soft),
     .ch2_need_soft   (ch2_need_soft),
     .ch3_need_soft   (ch3_need_soft),
     .ch4_need_soft   (ch4_need_soft),
+    .ch5_need_soft   (ch5_need_soft),
+    .ch6_need_soft   (ch6_need_soft),
+    .ch7_need_soft   (ch7_need_soft),
+    .ch8_need_soft   (ch8_need_soft),
 
     .ch1_base_addr   (ch1_base_addr),
     .ch2_base_addr   (ch2_base_addr),
     .ch3_base_addr   (ch3_base_addr),
     .ch4_base_addr   (ch4_base_addr),
+    .ch5_base_addr   (ch5_base_addr),
+    .ch6_base_addr   (ch6_base_addr),
+    .ch7_base_addr   (ch7_base_addr),
+    .ch8_base_addr   (ch8_base_addr),
     .ch1_chunk_beats (ch1_chunk_beats_w),
     .ch2_chunk_beats (ch2_chunk_beats_w),
     .ch3_chunk_beats (ch3_chunk_beats_w),
     .ch4_chunk_beats (ch4_chunk_beats_w),
+    .ch5_chunk_beats (ch5_chunk_beats_w),
+    .ch6_chunk_beats (ch6_chunk_beats_w),
+    .ch7_chunk_beats (ch7_chunk_beats_w),
+    .ch8_chunk_beats (ch8_chunk_beats_w),
     .ch1_chunk_bytes (ch1_chunk_bytes_w),
     .ch2_chunk_bytes (ch2_chunk_bytes_w),
     .ch3_chunk_bytes (ch3_chunk_bytes_w),
     .ch4_chunk_bytes (ch4_chunk_bytes_w),
+    .ch5_chunk_bytes (ch5_chunk_bytes_w),
+    .ch6_chunk_bytes (ch6_chunk_bytes_w),
+    .ch7_chunk_bytes (ch7_chunk_bytes_w),
+    .ch8_chunk_bytes (ch8_chunk_bytes_w),
 
     .req_valid       (dma_req_valid),
     .req_sel         (dma_req_sel),
@@ -393,7 +567,11 @@ module Waveform_System_Top #(
   wire ch2_done = (!act_ch2_valid_dm) || ((ch2_bytes_left == 0) && (ch2_fifo_level_beats == 0));
   wire ch3_done = (!act_ch3_valid_dm) || ((ch3_bytes_left == 0) && (ch3_fifo_level_beats == 0));
   wire ch4_done = (!act_ch4_valid_dm) || ((ch4_bytes_left == 0) && (ch4_fifo_level_beats == 0));
-  wire wave_done = (st == ST_PLAYING) && ch1_done && ch2_done && ch3_done && ch4_done;
+  wire ch5_done = (!act_ch5_valid_dm) || ((ch5_bytes_left == 0) && (ch5_fifo_level_beats == 0));
+  wire ch6_done = (!act_ch6_valid_dm) || ((ch6_bytes_left == 0) && (ch6_fifo_level_beats == 0));
+  wire ch7_done = (!act_ch7_valid_dm) || ((ch7_bytes_left == 0) && (ch7_fifo_level_beats == 0));
+  wire ch8_done = (!act_ch8_valid_dm) || ((ch8_bytes_left == 0) && (ch8_fifo_level_beats == 0));
+  wire wave_done = (st == ST_PLAYING) && ch1_done && ch2_done && ch3_done && ch4_done && ch5_done && ch6_done && ch7_done && ch8_done;
 
   // =========================================================
   // 6) 控制器：解析指令 + END 锁住 + trigger 切换 + done 复位
@@ -408,24 +586,38 @@ module Waveform_System_Top #(
       run_delay_cnt <= 32'd0;
 
       cur_ch1_delay <= 0; cur_ch2_delay <= 0; cur_ch3_delay <= 0; cur_ch4_delay <= 0;
+      cur_ch5_delay <= 0; cur_ch6_delay <= 0; cur_ch7_delay <= 0; cur_ch8_delay <= 0;
       cur_ch1_have_play <= 1'b0;
       cur_ch2_have_play <= 1'b0;
       cur_ch3_have_play <= 1'b0;
       cur_ch4_have_play <= 1'b0;
+      cur_ch5_have_play <= 1'b0;
+      cur_ch6_have_play <= 1'b0;
+      cur_ch7_have_play <= 1'b0;
+      cur_ch8_have_play <= 1'b0;
 
       ch1_delay_cycles <= 0; ch2_delay_cycles <= 0; ch3_delay_cycles <= 0; ch4_delay_cycles <= 0;
+      ch5_delay_cycles <= 0; ch6_delay_cycles <= 0; ch7_delay_cycles <= 0; ch8_delay_cycles <= 0;
       ch1_len_beats    <= 0; ch2_len_beats    <= 0; ch3_len_beats <= 0; ch4_len_beats <= 0;
+      ch5_len_beats    <= 0; ch6_len_beats    <= 0; ch7_len_beats <= 0; ch8_len_beats <= 0;
       ch1_arm          <= 1'b0;
       ch2_arm          <= 1'b0;
       ch3_arm          <= 1'b0;
       ch4_arm          <= 1'b0;
+      ch5_arm          <= 1'b0;
+      ch6_arm          <= 1'b0;
+      ch7_arm          <= 1'b0;
+      ch8_arm          <= 1'b0;
       cfg_auto_start   <= 1'b0;
       cfg_commit       <= 1'b0;
       cfg_commit_pending <= 1'b0;
 
       ch1_load_tog <= 1'b0; ch2_load_tog <= 1'b0; ch3_load_tog <= 1'b0; ch4_load_tog <= 1'b0;
+      ch5_load_tog <= 1'b0; ch6_load_tog <= 1'b0; ch7_load_tog <= 1'b0; ch8_load_tog <= 1'b0;
       ch1_load_addr <= 64'd0; ch2_load_addr <= 64'd0; ch3_load_addr <= 64'd0; ch4_load_addr <= 64'd0;
+      ch5_load_addr <= 64'd0; ch6_load_addr <= 64'd0; ch7_load_addr <= 64'd0; ch8_load_addr <= 64'd0;
       ch1_load_bytes<= 32'd0; ch2_load_bytes<= 32'd0; ch3_load_bytes <= 32'd0; ch4_load_bytes <= 32'd0;
+      ch5_load_bytes<= 32'd0; ch6_load_bytes<= 32'd0; ch7_load_bytes <= 32'd0; ch8_load_bytes <= 32'd0;
     end else begin
       cfg_commit <= cfg_commit_pending;
       cfg_commit_pending <= 1'b0;
@@ -443,6 +635,10 @@ module Waveform_System_Top #(
           if(cur_ch2_have_play) ch2_load_tog <= ~ch2_load_tog;
           if(cur_ch3_have_play) ch3_load_tog <= ~ch3_load_tog;
           if(cur_ch4_have_play) ch4_load_tog <= ~ch4_load_tog;
+          if(cur_ch5_have_play) ch5_load_tog <= ~ch5_load_tog;
+          if(cur_ch6_have_play) ch6_load_tog <= ~ch6_load_tog;
+          if(cur_ch7_have_play) ch7_load_tog <= ~ch7_load_tog;
+          if(cur_ch8_have_play) ch8_load_tog <= ~ch8_load_tog;
         end else begin
           st <= ST_BUILD;
           pending_valid <= 1'b0;
@@ -452,15 +648,24 @@ module Waveform_System_Top #(
           run_delay_cnt <= 32'd0;
 
           cur_ch1_delay <= 0; cur_ch2_delay <= 0; cur_ch3_delay <= 0; cur_ch4_delay <= 0;
+          cur_ch5_delay <= 0; cur_ch6_delay <= 0; cur_ch7_delay <= 0; cur_ch8_delay <= 0;
           cur_ch1_have_play <= 1'b0;
           cur_ch2_have_play <= 1'b0;
           cur_ch3_have_play <= 1'b0;
           cur_ch4_have_play <= 1'b0;
+          cur_ch5_have_play <= 1'b0;
+          cur_ch6_have_play <= 1'b0;
+          cur_ch7_have_play <= 1'b0;
+          cur_ch8_have_play <= 1'b0;
 
           ch1_arm <= 1'b0;
           ch2_arm <= 1'b0;
           ch3_arm <= 1'b0;
           ch4_arm <= 1'b0;
+          ch5_arm <= 1'b0;
+          ch6_arm <= 1'b0;
+          ch7_arm <= 1'b0;
+          ch8_arm <= 1'b0;
           cfg_auto_start <= 1'b0;
         end
       end
@@ -475,6 +680,10 @@ module Waveform_System_Top #(
               if(instr_ch == CH2) cur_ch2_delay <= instr_value;
               if(instr_ch == CH3) cur_ch3_delay <= instr_value;
               if(instr_ch == CH4) cur_ch4_delay <= instr_value;
+              if(instr_ch == CH5) cur_ch5_delay <= instr_value;
+              if(instr_ch == CH6) cur_ch6_delay <= instr_value;
+              if(instr_ch == CH7) cur_ch7_delay <= instr_value;
+              if(instr_ch == CH8) cur_ch8_delay <= instr_value;
 
             end
             // PLAY
@@ -483,11 +692,11 @@ module Waveform_System_Top #(
                 // 只允许本波第一次 PLAY 配置 ch1（避免覆盖已预取的数据）
                 if(!cur_ch1_have_play) begin
                   cur_ch1_have_play <= 1'b1;
-                  ch1_len_beats <= (instr_value >> 4);
+                  ch1_len_beats <= bytes_to_beats(instr_value);
 
                   // 发 load 请求给 DMA（toggle + payload）
                   ch1_load_addr  <= instr_addr;
-                  ch1_load_bytes <= instr_value;
+                  ch1_load_bytes <= align_bytes_to_beat(instr_value);
                   ch1_load_tog   <= ~ch1_load_tog;
 
                   // 有 PLAY 就 active_valid=1（允许预取）
@@ -497,10 +706,10 @@ module Waveform_System_Top #(
               if(instr_ch == CH2) begin
                 if(!cur_ch2_have_play) begin
                   cur_ch2_have_play <= 1'b1;
-                  ch2_len_beats <= (instr_value >> 4);
+                  ch2_len_beats <= bytes_to_beats(instr_value);
 
                   ch2_load_addr  <= instr_addr;
-                  ch2_load_bytes <= instr_value;
+                  ch2_load_bytes <= align_bytes_to_beat(instr_value);
                   ch2_load_tog   <= ~ch2_load_tog;
 
                   active_valid <= 1'b1;
@@ -509,10 +718,10 @@ module Waveform_System_Top #(
               if(instr_ch == CH3) begin
                 if(!cur_ch3_have_play) begin
                   cur_ch3_have_play <= 1'b1;
-                  ch3_len_beats <= (instr_value >> 4);
+                  ch3_len_beats <= bytes_to_beats(instr_value);
 
                   ch3_load_addr  <= instr_addr;
-                  ch3_load_bytes <= instr_value;
+                  ch3_load_bytes <= align_bytes_to_beat(instr_value);
                   ch3_load_tog   <= ~ch3_load_tog;
 
                   active_valid <= 1'b1;
@@ -521,12 +730,52 @@ module Waveform_System_Top #(
               if(instr_ch == CH4) begin
                 if(!cur_ch4_have_play) begin
                   cur_ch4_have_play <= 1'b1;
-                  ch4_len_beats <= (instr_value >> 4);
+                  ch4_len_beats <= bytes_to_beats(instr_value);
 
                   ch4_load_addr  <= instr_addr;
-                  ch4_load_bytes <= instr_value;
+                  ch4_load_bytes <= align_bytes_to_beat(instr_value);
                   ch4_load_tog   <= ~ch4_load_tog;
 
+                  active_valid <= 1'b1;
+                end
+              end
+              if(instr_ch == CH5) begin
+                if(!cur_ch5_have_play) begin
+                  cur_ch5_have_play <= 1'b1;
+                  ch5_len_beats <= bytes_to_beats(instr_value);
+                  ch5_load_addr  <= instr_addr;
+                  ch5_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch5_load_tog   <= ~ch5_load_tog;
+                  active_valid <= 1'b1;
+                end
+              end
+              if(instr_ch == CH6) begin
+                if(!cur_ch6_have_play) begin
+                  cur_ch6_have_play <= 1'b1;
+                  ch6_len_beats <= bytes_to_beats(instr_value);
+                  ch6_load_addr  <= instr_addr;
+                  ch6_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch6_load_tog   <= ~ch6_load_tog;
+                  active_valid <= 1'b1;
+                end
+              end
+              if(instr_ch == CH7) begin
+                if(!cur_ch7_have_play) begin
+                  cur_ch7_have_play <= 1'b1;
+                  ch7_len_beats <= bytes_to_beats(instr_value);
+                  ch7_load_addr  <= instr_addr;
+                  ch7_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch7_load_tog   <= ~ch7_load_tog;
+                  active_valid <= 1'b1;
+                end
+              end
+              if(instr_ch == CH8) begin
+                if(!cur_ch8_have_play) begin
+                  cur_ch8_have_play <= 1'b1;
+                  ch8_len_beats <= bytes_to_beats(instr_value);
+                  ch8_load_addr  <= instr_addr;
+                  ch8_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch8_load_tog   <= ~ch8_load_tog;
                   active_valid <= 1'b1;
                 end
               end
@@ -534,7 +783,7 @@ module Waveform_System_Top #(
             // END
             else if(instr_cmd == CMD_END) begin
               // 如果本波没有任何 PLAY，则忽略（不进入等待触发）
-              if(cur_ch1_have_play || cur_ch2_have_play || cur_ch3_have_play || cur_ch4_have_play) begin
+              if(cur_ch1_have_play || cur_ch2_have_play || cur_ch3_have_play || cur_ch4_have_play || cur_ch5_have_play || cur_ch6_have_play || cur_ch7_have_play || cur_ch8_have_play) begin
                 st <= ST_PREFILL;
                 pending_valid <= (instr_ch != CH_AUTO_START);
                 prefill_auto_start <= (instr_ch == CH_AUTO_START);
@@ -546,13 +795,21 @@ module Waveform_System_Top #(
                 ch2_delay_cycles <= cur_ch2_delay;
                 ch3_delay_cycles <= cur_ch3_delay;
                 ch4_delay_cycles <= cur_ch4_delay;
+                ch5_delay_cycles <= cur_ch5_delay;
+                ch6_delay_cycles <= cur_ch6_delay;
+                ch7_delay_cycles <= cur_ch7_delay;
+                ch8_delay_cycles <= cur_ch8_delay;
 
                 ch1_arm <= cur_ch1_have_play;
                 ch2_arm <= cur_ch2_have_play;
                 ch3_arm <= cur_ch3_have_play;
                 ch4_arm <= cur_ch4_have_play;
+                ch5_arm <= cur_ch5_have_play;
+                ch6_arm <= cur_ch6_have_play;
+                ch7_arm <= cur_ch7_have_play;
+                ch8_arm <= cur_ch8_have_play;
 
-                run_delay_cnt <= max4(cur_ch1_delay, cur_ch2_delay, cur_ch3_delay, cur_ch4_delay);
+                run_delay_cnt <= max4(max4(cur_ch1_delay, cur_ch2_delay, cur_ch3_delay, cur_ch4_delay), max4(cur_ch5_delay, cur_ch6_delay, cur_ch7_delay, cur_ch8_delay), 32'd0, 32'd0);
               end
             end
           end
@@ -600,9 +857,13 @@ module Waveform_System_Top #(
       m_axis_dm_cmd_tvalid <= 1'b0;
       m_axis_dm_cmd_tdata  <= 104'd0;
 
-      dm_sel         <= 2'd0;
+      dm_sel         <= 3'd0;
       dm_chunk_beats <= 32'd0;
       dm_beats_sent  <= 32'd0;
+      dma_req_sel_r         <= 3'd0;
+      dma_req_addr_r        <= 64'd0;
+      dma_req_chunk_beats_r <= 32'd0;
+      dma_req_chunk_bytes_r <= 32'd0;
 
     end else begin
       // active_valid=0：清空 DMA 段状态
@@ -611,6 +872,10 @@ module Waveform_System_Top #(
         m_axis_dm_cmd_tvalid <= 1'b0;
         m_axis_dm_cmd_tdata  <= 104'd0;
         dm_beats_sent <= 0;
+        dma_req_sel_r         <= 3'd0;
+        dma_req_addr_r        <= 64'd0;
+        dma_req_chunk_beats_r <= 32'd0;
+        dma_req_chunk_bytes_r <= 32'd0;
 
       end else begin
         // DMA 状态机
@@ -620,14 +885,22 @@ module Waveform_System_Top #(
             dm_beats_sent <= 0;
 
             if(dma_req_valid) begin
-              dm_sel               <= dma_req_sel;
-              dm_chunk_beats       <= dma_req_chunk_beats;
-              m_axis_dm_cmd_tdata  <= make_dm_cmd(dma_req_addr, dma_req_chunk_bytes);
-              m_axis_dm_cmd_tvalid <= 1'b1;
-              dm_st <= DM_SENDCMD;
+              dma_req_sel_r         <= dma_req_sel;
+              dma_req_addr_r        <= dma_req_addr;
+              dma_req_chunk_beats_r <= dma_req_chunk_beats;
+              dma_req_chunk_bytes_r <= dma_req_chunk_bytes;
+              dm_st <= DM_PREP;
             end else begin
               m_axis_dm_cmd_tdata <= 104'd0;
             end
+          end
+
+          DM_PREP: begin
+            dm_sel               <= dma_req_sel_r;
+            dm_chunk_beats       <= dma_req_chunk_beats_r;
+            m_axis_dm_cmd_tdata  <= make_dm_cmd(dma_req_addr_r, dma_req_chunk_bytes_r);
+            m_axis_dm_cmd_tvalid <= 1'b1;
+            dm_st <= DM_SENDCMD;
           end
 
           DM_SENDCMD: begin
@@ -750,120 +1023,176 @@ module Waveform_Channel_State (
 endmodule
 
 module Waveform_Dma_Selector (
-    input  wire [1:0]  rr,
+    input  wire [2:0]  rr,
 
     input  wire        ch1_need_hard,
     input  wire        ch2_need_hard,
     input  wire        ch3_need_hard,
     input  wire        ch4_need_hard,
+    input  wire        ch5_need_hard,
+    input  wire        ch6_need_hard,
+    input  wire        ch7_need_hard,
+    input  wire        ch8_need_hard,
     input  wire        ch1_need_start,
     input  wire        ch2_need_start,
     input  wire        ch3_need_start,
     input  wire        ch4_need_start,
+    input  wire        ch5_need_start,
+    input  wire        ch6_need_start,
+    input  wire        ch7_need_start,
+    input  wire        ch8_need_start,
     input  wire        ch1_need_soft,
     input  wire        ch2_need_soft,
     input  wire        ch3_need_soft,
     input  wire        ch4_need_soft,
+    input  wire        ch5_need_soft,
+    input  wire        ch6_need_soft,
+    input  wire        ch7_need_soft,
+    input  wire        ch8_need_soft,
 
     input  wire [63:0] ch1_base_addr,
     input  wire [63:0] ch2_base_addr,
     input  wire [63:0] ch3_base_addr,
     input  wire [63:0] ch4_base_addr,
+    input  wire [63:0] ch5_base_addr,
+    input  wire [63:0] ch6_base_addr,
+    input  wire [63:0] ch7_base_addr,
+    input  wire [63:0] ch8_base_addr,
     input  wire [31:0] ch1_chunk_beats,
     input  wire [31:0] ch2_chunk_beats,
     input  wire [31:0] ch3_chunk_beats,
     input  wire [31:0] ch4_chunk_beats,
+    input  wire [31:0] ch5_chunk_beats,
+    input  wire [31:0] ch6_chunk_beats,
+    input  wire [31:0] ch7_chunk_beats,
+    input  wire [31:0] ch8_chunk_beats,
     input  wire [31:0] ch1_chunk_bytes,
     input  wire [31:0] ch2_chunk_bytes,
     input  wire [31:0] ch3_chunk_bytes,
     input  wire [31:0] ch4_chunk_bytes,
+    input  wire [31:0] ch5_chunk_bytes,
+    input  wire [31:0] ch6_chunk_bytes,
+    input  wire [31:0] ch7_chunk_bytes,
+    input  wire [31:0] ch8_chunk_bytes,
 
     output reg         req_valid,
-    output reg  [1:0]  req_sel,
+    output reg  [2:0]  req_sel,
     output reg  [63:0] req_addr,
     output reg  [31:0] req_chunk_beats,
     output reg  [31:0] req_chunk_bytes
 );
 
   function channel_need;
-    input [1:0] channel;
+    input [2:0] channel;
     input       need_ch1;
     input       need_ch2;
     input       need_ch3;
     input       need_ch4;
+    input       need_ch5;
+    input       need_ch6;
+    input       need_ch7;
+    input       need_ch8;
     begin
       case(channel)
-        2'd0: channel_need = need_ch1;
-        2'd1: channel_need = need_ch2;
-        2'd2: channel_need = need_ch3;
-        2'd3: channel_need = need_ch4;
+        3'd0: channel_need = need_ch1;
+        3'd1: channel_need = need_ch2;
+        3'd2: channel_need = need_ch3;
+        3'd3: channel_need = need_ch4;
+        3'd4: channel_need = need_ch5;
+        3'd5: channel_need = need_ch6;
+        3'd6: channel_need = need_ch7;
+        3'd7: channel_need = need_ch8;
       endcase
     end
   endfunction
 
-  function [2:0] select_priority;
-    input [1:0] base;
+  function [3:0] select_priority;
+    input [2:0] base;
     input       need_ch1;
     input       need_ch2;
     input       need_ch3;
     input       need_ch4;
+    input       need_ch5;
+    input       need_ch6;
+    input       need_ch7;
+    input       need_ch8;
     integer index;
-    reg [1:0] candidate;
+    reg [2:0] candidate;
     begin
       select_priority = {1'b0, base};
-      for(index = 0; index < 4; index = index + 1) begin
-        candidate = base + index[1:0];
-        if(!select_priority[2] && channel_need(candidate, need_ch1, need_ch2, need_ch3, need_ch4)) begin
+      for(index = 0; index < 8; index = index + 1) begin
+        candidate = base + index[2:0];
+        if(!select_priority[3] && channel_need(candidate, need_ch1, need_ch2, need_ch3, need_ch4, need_ch5, need_ch6, need_ch7, need_ch8)) begin
           select_priority = {1'b1, candidate};
         end
       end
     end
   endfunction
 
-  reg [2:0] hard_sel;
-  reg [2:0] start_sel;
-  reg [2:0] soft_sel;
-  reg [2:0] selected;
+  reg [3:0] hard_sel;
+  reg [3:0] start_sel;
+  reg [3:0] soft_sel;
+  reg [3:0] selected;
 
   always @* begin
-    hard_sel  = select_priority(rr, ch1_need_hard,  ch2_need_hard,  ch3_need_hard,  ch4_need_hard);
-    start_sel = select_priority(rr, ch1_need_start, ch2_need_start, ch3_need_start, ch4_need_start);
-    soft_sel  = select_priority(rr, ch1_need_soft,  ch2_need_soft,  ch3_need_soft,  ch4_need_soft);
+    hard_sel  = select_priority(rr, ch1_need_hard,  ch2_need_hard,  ch3_need_hard,  ch4_need_hard,  ch5_need_hard,  ch6_need_hard,  ch7_need_hard,  ch8_need_hard);
+    start_sel = select_priority(rr, ch1_need_start, ch2_need_start, ch3_need_start, ch4_need_start, ch5_need_start, ch6_need_start, ch7_need_start, ch8_need_start);
+    soft_sel  = select_priority(rr, ch1_need_soft,  ch2_need_soft,  ch3_need_soft,  ch4_need_soft,  ch5_need_soft,  ch6_need_soft,  ch7_need_soft,  ch8_need_soft);
 
-    if(hard_sel[2]) begin
+    if(hard_sel[3]) begin
       selected = hard_sel;
-    end else if(start_sel[2]) begin
+    end else if(start_sel[3]) begin
       selected = start_sel;
     end else begin
       selected = soft_sel;
     end
 
-    req_valid       = selected[2];
-    req_sel         = selected[1:0];
+    req_valid       = selected[3];
+    req_sel         = selected[2:0];
     req_addr        = 64'd0;
     req_chunk_beats = 32'd0;
     req_chunk_bytes = 32'd0;
 
-    case(selected[1:0])
-      2'd0: begin
+    case(selected[2:0])
+      3'd0: begin
         req_addr        = ch1_base_addr;
         req_chunk_beats = ch1_chunk_beats;
         req_chunk_bytes = ch1_chunk_bytes;
       end
-      2'd1: begin
+      3'd1: begin
         req_addr        = ch2_base_addr;
         req_chunk_beats = ch2_chunk_beats;
         req_chunk_bytes = ch2_chunk_bytes;
       end
-      2'd2: begin
+      3'd2: begin
         req_addr        = ch3_base_addr;
         req_chunk_beats = ch3_chunk_beats;
         req_chunk_bytes = ch3_chunk_bytes;
       end
-      2'd3: begin
+      3'd3: begin
         req_addr        = ch4_base_addr;
         req_chunk_beats = ch4_chunk_beats;
         req_chunk_bytes = ch4_chunk_bytes;
+      end
+      3'd4: begin
+        req_addr        = ch5_base_addr;
+        req_chunk_beats = ch5_chunk_beats;
+        req_chunk_bytes = ch5_chunk_bytes;
+      end
+      3'd5: begin
+        req_addr        = ch6_base_addr;
+        req_chunk_beats = ch6_chunk_beats;
+        req_chunk_bytes = ch6_chunk_bytes;
+      end
+      3'd6: begin
+        req_addr        = ch7_base_addr;
+        req_chunk_beats = ch7_chunk_beats;
+        req_chunk_bytes = ch7_chunk_bytes;
+      end
+      3'd7: begin
+        req_addr        = ch8_base_addr;
+        req_chunk_beats = ch8_chunk_beats;
+        req_chunk_bytes = ch8_chunk_bytes;
       end
     endcase
   end

@@ -20,15 +20,19 @@ import host
 import waveform_gui_model as model
 
 
-CHANNELS = ("ch1", "ch2", "ch3", "ch4")
+CHANNELS = ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8")
 PREVIEW_TITLES = (
-    "CH1 DDR 0x0 DAC20",
-    "CH2 DDR 0x1000 DAC22",
-    "CH3 DDR 0x2000 DAC30",
-    "CH4 DDR 0x3000 DAC32",
+    f"CH1 DDR 0x{host.DDR_CH1_ADDR:X} vout00",
+    f"CH2 DDR 0x{host.DDR_CH2_ADDR:X} vout02",
+    f"CH3 DDR 0x{host.DDR_CH3_ADDR:X} vout10",
+    f"CH4 DDR 0x{host.DDR_CH4_ADDR:X} vout12",
+    f"CH5 DDR 0x{host.DDR_CH5_ADDR:X} vout20",
+    f"CH6 DDR 0x{host.DDR_CH6_ADDR:X} vout22",
+    f"CH7 DDR 0x{host.DDR_CH7_ADDR:X} vout30",
+    f"CH8 DDR 0x{host.DDR_CH8_ADDR:X} vout32",
 )
 CHANNEL_PANEL_TITLES = dict(zip(CHANNELS, PREVIEW_TITLES, strict=True))
-PREVIEW_COLORS = ("#38bdf8", "#f97316", "#22c55e", "#e879f9")
+PREVIEW_COLORS = ("#38bdf8", "#f97316", "#22c55e", "#e879f9", "#a78bfa", "#facc15", "#14b8a6", "#fb7185")
 COLOR_BACKGROUND = "#0f172a"
 COLOR_CARD = "#172033"
 COLOR_TEXT = "#dbeafe"
@@ -43,7 +47,9 @@ COLOR_DISABLED_TEXT = "#64748b"
 COLOR_LOG_BACKGROUND = "#020617"
 
 
-WAVEFORM_TYPES = ("quantum", "sine")
+WAVEFORM_TYPES = ("iq-sine", "dc-iq-cw", "pypulse", "quantum", "sine")
+DEFAULT_CHANNEL_WAVEFORM_TYPE = "iq-sine"
+PYPULSE_WAVEFORMS = ("xy", "z", "readout")
 ACTION_BUTTONS = ("Preview", "Test Connection", "Save / Dry Run", "Send to Board")
 ACTION_BUTTON_GRID_COLUMNS = 2
 ACTION_BUTTON_GRID_STICKY = "ew"
@@ -61,6 +67,9 @@ DEFAULT_ILA_PROGRAM_MODE = "never"
 CONTROL_TABS = ("Setup", "Channels", "ILA Report")
 
 CHANNEL_FIELD_GROUPS = {
+    "iq-sine": ("freq_hz", "phase_rad", "amplitude"),
+    "dc-iq-cw": ("amplitude",),
+    "pypulse": ("pypulse_waveform", "freq_hz", "phase_rad", "duration_s", "amplitude"),
     "quantum": ("quantum_gate", "rotation_angle_rad", "freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"),
     "sine": ("freq_hz", "phase_rad", "amplitude", "encoding"),
 }
@@ -71,6 +80,7 @@ COMBOBOX_WHEEL_BLOCK_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")
 
 LABELS = {
     "pulse_preset": "Pulse preset",
+    "pypulse_waveform": "PyPulse waveform",
     "quantum_gate": "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)",
     "rotation_angle_rad": "Rotation angle (rad)",
     "pulse_sigma_s": "Pulse sigma (ns)",
@@ -94,6 +104,13 @@ FIELD_HELP_TEXTS = {
 
 def _field_display_label(field_name: str) -> str:
     return FIELD_DISPLAY_LABELS.get(field_name, LABELS[field_name])
+
+
+def _gui_waveform_type(value: str | None) -> str:
+    normalized = str(value or "").lower()
+    if normalized in CHANNEL_FIELD_GROUPS:
+        return normalized
+    return DEFAULT_CHANNEL_WAVEFORM_TYPE
 
 
 def _block_combobox_mousewheel(_event: object) -> str:
@@ -192,15 +209,12 @@ class WaveformSenderApp(ttk.Frame):
         self.ila_ltx_path = tk.StringVar(value=str(ila_defaults.ltx_path))
         self.ila_report_dir = tk.StringVar(value=str(ila_defaults.output_dir))
         self.ila_program_mode = tk.StringVar(value=ila_defaults.program_mode)
-        channel_defaults = {
-            "ch1": defaults.ch1,
-            "ch2": defaults.ch2,
-            "ch3": defaults.ch3,
-            "ch4": defaults.ch4,
-        }
+        channel_defaults = {channel: getattr(defaults, channel) for channel in CHANNELS}
         def channel_waveform_type(channel: str) -> str:
             channel_config = channel_defaults[channel]
-            return channel_config.waveform_type if channel_config is not None else defaults.mode
+            if channel_config is not None:
+                return _gui_waveform_type(channel_config.waveform_type)
+            return _gui_waveform_type(defaults.mode)
 
         self.channel_type = {
             channel: tk.StringVar(value=channel_waveform_type(channel)) for channel in CHANNELS
@@ -208,6 +222,7 @@ class WaveformSenderApp(ttk.Frame):
         self.channel_fields = {
             "ch1": {
                 "quantum_gate": tk.StringVar(value="x"),
+                "pypulse_waveform": tk.StringVar(value="xy"),
                 "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
                 "freq_hz": tk.StringVar(value=to_display_mhz(defaults.x_freq_hz)),
                 "phase_rad": tk.StringVar(value=f"{defaults.x_phase_rad:g}"),
@@ -222,6 +237,7 @@ class WaveformSenderApp(ttk.Frame):
             },
             "ch2": {
                 "quantum_gate": tk.StringVar(value="y"),
+                "pypulse_waveform": tk.StringVar(value="z"),
                 "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
                 "freq_hz": tk.StringVar(value=to_display_mhz(defaults.y_freq_hz)),
                 "phase_rad": tk.StringVar(value=f"{defaults.y_phase_rad:g}"),
@@ -236,6 +252,7 @@ class WaveformSenderApp(ttk.Frame):
             },
             "ch3": {
                 "quantum_gate": tk.StringVar(value="x"),
+                "pypulse_waveform": tk.StringVar(value="readout"),
                 "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
                 "freq_hz": tk.StringVar(value=to_display_mhz(defaults.x_freq_hz)),
                 "phase_rad": tk.StringVar(value=f"{defaults.x_phase_rad:g}"),
@@ -250,6 +267,7 @@ class WaveformSenderApp(ttk.Frame):
             },
             "ch4": {
                 "quantum_gate": tk.StringVar(value="y"),
+                "pypulse_waveform": tk.StringVar(value="readout"),
                 "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
                 "freq_hz": tk.StringVar(value=to_display_mhz(defaults.y_freq_hz)),
                 "phase_rad": tk.StringVar(value=f"{defaults.y_phase_rad:g}"),
@@ -262,22 +280,78 @@ class WaveformSenderApp(ttk.Frame):
                 "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
                 "start": tk.StringVar(value=hex(host.DDR_CH4_ADDR)),
             },
+            "ch5": {
+                "quantum_gate": tk.StringVar(value="x"),
+                "pypulse_waveform": tk.StringVar(value="xy"),
+                "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
+                "freq_hz": tk.StringVar(value=to_display_mhz(defaults.x_freq_hz)),
+                "phase_rad": tk.StringVar(value=f"{defaults.x_phase_rad:g}"),
+                "amplitude": tk.StringVar(value=str(defaults.amplitude)),
+                "encoding": tk.StringVar(value=defaults.encoding),
+                "delay_s": tk.StringVar(value=to_display_ns(defaults.x_delay_s)),
+                "duration_s": tk.StringVar(value=to_display_ns(defaults.duration_s)),
+                "pulse_preset": tk.StringVar(value="x"),
+                "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
+                "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
+                "start": tk.StringVar(value=hex(host.DDR_CH5_ADDR)),
+            },
+            "ch6": {
+                "quantum_gate": tk.StringVar(value="y"),
+                "pypulse_waveform": tk.StringVar(value="z"),
+                "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
+                "freq_hz": tk.StringVar(value=to_display_mhz(defaults.y_freq_hz)),
+                "phase_rad": tk.StringVar(value=f"{defaults.y_phase_rad:g}"),
+                "amplitude": tk.StringVar(value=str(defaults.amplitude)),
+                "encoding": tk.StringVar(value=defaults.encoding),
+                "delay_s": tk.StringVar(value=to_display_ns(defaults.y_delay_s)),
+                "duration_s": tk.StringVar(value=to_display_ns(defaults.duration_s)),
+                "pulse_preset": tk.StringVar(value="y"),
+                "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
+                "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
+                "start": tk.StringVar(value=hex(host.DDR_CH6_ADDR)),
+            },
+            "ch7": {
+                "quantum_gate": tk.StringVar(value="x"),
+                "pypulse_waveform": tk.StringVar(value="readout"),
+                "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
+                "freq_hz": tk.StringVar(value=to_display_mhz(defaults.x_freq_hz)),
+                "phase_rad": tk.StringVar(value=f"{defaults.x_phase_rad:g}"),
+                "amplitude": tk.StringVar(value=str(defaults.amplitude)),
+                "encoding": tk.StringVar(value=defaults.encoding),
+                "delay_s": tk.StringVar(value=to_display_ns(defaults.x_delay_s)),
+                "duration_s": tk.StringVar(value=to_display_ns(defaults.duration_s)),
+                "pulse_preset": tk.StringVar(value="x"),
+                "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
+                "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
+                "start": tk.StringVar(value=hex(host.DDR_CH7_ADDR)),
+            },
+            "ch8": {
+                "quantum_gate": tk.StringVar(value="y"),
+                "pypulse_waveform": tk.StringVar(value="readout"),
+                "rotation_angle_rad": tk.StringVar(value="3.141592653589793"),
+                "freq_hz": tk.StringVar(value=to_display_mhz(defaults.y_freq_hz)),
+                "phase_rad": tk.StringVar(value=f"{defaults.y_phase_rad:g}"),
+                "amplitude": tk.StringVar(value=str(defaults.amplitude)),
+                "encoding": tk.StringVar(value=defaults.encoding),
+                "delay_s": tk.StringVar(value=to_display_ns(defaults.y_delay_s)),
+                "duration_s": tk.StringVar(value=to_display_ns(defaults.duration_s)),
+                "pulse_preset": tk.StringVar(value="y"),
+                "pulse_sigma_s": tk.StringVar(value=to_display_ns(defaults.pulse_sigma_s)),
+                "pulse_center_s": tk.StringVar(value=to_display_ns(defaults.pulse_center_s)),
+                "start": tk.StringVar(value=hex(host.DDR_CH8_ADDR)),
+            },
         }
         self._apply_channel_settings(defaults)
         self._settings_loaded = self.settings_path.exists()
 
     def _apply_channel_settings(self, config: model.WaveformConfig) -> None:
-        channel_configs = {
-            "ch1": config.ch1,
-            "ch2": config.ch2,
-            "ch3": config.ch3,
-            "ch4": config.ch4,
-        }
+        channel_configs = {channel: getattr(config, channel) for channel in CHANNELS}
         for channel, channel_config in channel_configs.items():
             if channel_config is None:
                 continue
             fields = self.channel_fields[channel]
-            self.channel_type[channel].set(channel_config.waveform_type)
+            self.channel_type[channel].set(_gui_waveform_type(channel_config.waveform_type))
+            fields["pypulse_waveform"].set(channel_config.pypulse_waveform)
             fields["quantum_gate"].set(channel_config.quantum_gate)
             fields["rotation_angle_rad"].set(f"{channel_config.rotation_angle_rad:g}")
             fields["freq_hz"].set(to_display_mhz(channel_config.freq_hz))
@@ -335,7 +409,10 @@ class WaveformSenderApp(ttk.Frame):
         ttk.Label(self, text="RFSoC Waveform Sender", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(
             self,
-            text="Configure CH1-CH4 for DDR offsets 0x0/0x1000/0x2000/0x3000 and DAC ports 20/22/30/32.",
+            text=(
+                f"Configure CH1-CH8 for 32B-aligned DDR offsets 0x{host.DDR_CH1_ADDR:X}-0x{host.DDR_CH8_ADDR:X} "
+                "and DAC ports vout00/vout02/vout10/vout12/vout20/vout22/vout30/vout32."
+            ),
             style="Hint.TLabel",
         ).grid(row=0, column=1, sticky="e", padx=(20, 0))
 
@@ -404,8 +481,8 @@ class WaveformSenderApp(ttk.Frame):
         right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
 
-        self.figure = Figure(figsize=(7, 5.8), dpi=100, facecolor=COLOR_CARD)
-        self.preview_axes = [cast(Any, self.figure.add_subplot(4, 1, index + 1)) for index in range(4)]
+        self.figure = Figure(figsize=(7, 10.4), dpi=100, facecolor=COLOR_CARD)
+        self.preview_axes = [cast(Any, self.figure.add_subplot(8, 1, index + 1)) for index in range(8)]
         self.ax_x = self.preview_axes[0]
         self.ax_y = self.preview_axes[1]
         self.canvas = FigureCanvasTkAgg(self.figure, master=right)
@@ -518,7 +595,10 @@ class WaveformSenderApp(ttk.Frame):
             info = child.grid_info()
             if int(info.get("row", 0)) > 0:
                 child.destroy()
-        fields = CHANNEL_FIELD_GROUPS[self.channel_type[channel].get()]
+        waveform_type = _gui_waveform_type(self.channel_type[channel].get())
+        if waveform_type != self.channel_type[channel].get():
+            self.channel_type[channel].set(waveform_type)
+        fields = CHANNEL_FIELD_GROUPS[waveform_type]
         if not fields:
             ttk.Label(frame, text="Outputs zero samples.", style="Card.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
         for row_offset, field_name in enumerate(fields, start=1):
@@ -536,6 +616,16 @@ class WaveformSenderApp(ttk.Frame):
                 )
                 encoding_menu.grid(row=row_offset, column=1, sticky="ew", pady=4)
                 self._disable_combobox_mousewheel(encoding_menu)
+            elif field_name == "pypulse_waveform":
+                pypulse_menu = ttk.Combobox(
+                    frame,
+                    textvariable=variable,
+                    values=PYPULSE_WAVEFORMS,
+                    state="readonly",
+                    width=18,
+                )
+                pypulse_menu.grid(row=row_offset, column=1, sticky="ew", pady=4)
+                self._disable_combobox_mousewheel(pypulse_menu)
             elif field_name == "quantum_gate":
                 quantum_gate_row = ttk.Frame(frame, style="Card.TFrame")
                 quantum_gate_row.grid(row=row_offset, column=1, sticky="ew", pady=4)
@@ -613,6 +703,7 @@ class WaveformSenderApp(ttk.Frame):
         fields = self.channel_fields[channel]
         return model.ChannelWaveformConfig(
             waveform_type=self.channel_type[channel].get(),
+            pypulse_waveform=fields["pypulse_waveform"].get(),
             quantum_gate=fields["quantum_gate"].get(),
             rotation_angle_rad=float(fields["rotation_angle_rad"].get()),
             freq_hz=from_display_mhz(fields["freq_hz"].get()),
@@ -641,6 +732,10 @@ class WaveformSenderApp(ttk.Frame):
             ch2=self._collect_channel_config("ch2"),
             ch3=self._collect_channel_config("ch3"),
             ch4=self._collect_channel_config("ch4"),
+            ch5=self._collect_channel_config("ch5"),
+            ch6=self._collect_channel_config("ch6"),
+            ch7=self._collect_channel_config("ch7"),
+            ch8=self._collect_channel_config("ch8"),
         )
 
     def _collect_connection(self) -> model.ConnectionConfig:
@@ -693,7 +788,7 @@ class WaveformSenderApp(ttk.Frame):
             self._append_log(f"live preview pending valid settings: {exc}")
 
     def _draw_preview(self, generated: model.GeneratedWaveforms) -> None:
-        waves = (generated.x, generated.y, generated.ch3, generated.ch4)
+        waves = (generated.x, generated.y, generated.ch3, generated.ch4, generated.ch5, generated.ch6, generated.ch7, generated.ch8)
         for axis, title, wave, color in zip(self.preview_axes, PREVIEW_TITLES, waves, PREVIEW_COLORS, strict=True):
             axis.clear()
             indices, values = model.preview_series(wave)

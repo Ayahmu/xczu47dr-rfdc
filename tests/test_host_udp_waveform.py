@@ -26,41 +26,67 @@ host = load_software_module("host", "host.py")
 
 class UdpWaveformPacketTests(unittest.TestCase):
     def test_default_sample_rate_matches_custom_rfdc_config(self):
-        self.assertEqual(host.DAC_XY_FS, 1_200_000_000.0)
+        self.assertEqual(host.DAC_XY_FS, 6_000_000_000.0)
+        self.assertEqual(host.DAC_AXIS_HZ, 93_750_000.0)
+        self.assertEqual(host.RFDC_INTERPOLATION, 8)
 
     def test_default_ddr_addresses_match_bd_mapped_base(self):
         self.assertEqual(host.DDR_BASE, 0x0000000000000000)
+        self.assertEqual(host.DDR_CH_STRIDE, host.TONE_BYTES_DEFAULT)
         self.assertEqual(host.DDR_CH1_ADDR, 0x0000000000000000)
-        self.assertEqual(host.DDR_CH2_ADDR, 0x0000000000001000)
-        self.assertEqual(host.DDR_CH3_ADDR, 0x0000000000002000)
-        self.assertEqual(host.DDR_CH4_ADDR, 0x0000000000003000)
+        self.assertEqual(host.DDR_CH2_ADDR, 0x0000000000040000)
+        self.assertEqual(host.DDR_CH3_ADDR, 0x0000000000080000)
+        self.assertEqual(host.DDR_CH4_ADDR, 0x00000000000C0000)
+        self.assertEqual(host.DDR_CH5_ADDR, 0x0000000000100000)
+        self.assertEqual(host.DDR_CH6_ADDR, 0x0000000000140000)
+        self.assertEqual(host.DDR_CH7_ADDR, 0x0000000000180000)
+        self.assertEqual(host.DDR_CH8_ADDR, 0x00000000001C0000)
+        self.assertEqual(host.DDR_CH_ADDR, [
+            host.DDR_CH1_ADDR,
+            host.DDR_CH2_ADDR,
+            host.DDR_CH3_ADDR,
+            host.DDR_CH4_ADDR,
+            host.DDR_CH5_ADDR,
+            host.DDR_CH6_ADDR,
+            host.DDR_CH7_ADDR,
+            host.DDR_CH8_ADDR,
+        ])
         self.assertEqual(host.DDR_X_ADDR, host.DDR_CH1_ADDR)
         self.assertEqual(host.DDR_Y_ADDR, host.DDR_CH2_ADDR)
 
-    def test_packets_are_128_bit_ddr_writes(self):
-        samples = np.arange(8, dtype=np.int16)
-        packets = list(host.iter_udp_waveform_packets(samples, host.DDR_X_ADDR, sample_count=8))
+    def test_packets_are_256_bit_ddr_writes(self):
+        samples = np.arange(16, dtype=np.int16)
+        packets = list(host.iter_udp_waveform_packets(samples, host.DDR_X_ADDR, sample_count=16))
 
         self.assertEqual(len(packets), 1)
-        self.assertEqual(len(packets[0]), 32)
+        self.assertEqual(len(packets[0]), 48)
 
-        magic, addr, low, high = struct.unpack("<QQQQ", packets[0])
+        magic, addr, word0, word1, word2, word3 = struct.unpack("<QQQQQQ", packets[0])
         self.assertEqual(magic, host.UDP_WAVE_DDR_MAGIC)
         self.assertEqual(addr, 0x0000000000000000)
 
-        payload = struct.pack("<QQ", low, high)
+        payload = struct.pack("<QQQQ", word0, word1, word2, word3)
         self.assertEqual(payload, samples.astype("<i2").tobytes())
+
+    def test_dc_iq_tone_uses_interleaved_i_with_zero_q(self):
+        tone = host.build_dc_iq_tone(64, amp=0.5)
+
+        self.assertEqual(tone.dtype, np.int16)
+        self.assertEqual(len(tone), 32)
+        self.assertTrue(np.all(tone[0::2] == tone[0]))
+        self.assertEqual(int(tone[0]), int(round(0.5 * 32767)))
+        self.assertFalse(np.any(tone[1::2]))
 
     def test_short_waveform_is_zero_padded(self):
         samples = np.array([1, -1], dtype=np.int16)
-        packets = list(host.iter_udp_waveform_packets(samples, host.DDR_Y_ADDR, sample_count=8))
+        packets = list(host.iter_udp_waveform_packets(samples, host.DDR_Y_ADDR, sample_count=16))
 
-        _, addr, low, high = struct.unpack("<QQQQ", packets[0])
-        payload = struct.pack("<QQ", low, high)
+        _, addr, word0, word1, word2, word3 = struct.unpack("<QQQQQQ", packets[0])
+        payload = struct.pack("<QQQQ", word0, word1, word2, word3)
         decoded = np.frombuffer(payload, dtype="<i2")
 
-        self.assertEqual(addr, 0x0000000000001000)
-        np.testing.assert_array_equal(decoded, np.array([1, -1, 0, 0, 0, 0, 0, 0], dtype=np.int16))
+        self.assertEqual(addr, host.DDR_CH2_ADDR)
+        np.testing.assert_array_equal(decoded, np.array([1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.int16))
 
     def test_udp_controller_can_bind_source_interface_and_ip(self):
         class FakeSocket:

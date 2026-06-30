@@ -167,10 +167,10 @@ module Top (
   wire         M_AXI_WAVE_awready;
   wire [2:0]   M_AXI_WAVE_awsize;
   wire         M_AXI_WAVE_awvalid;
-  wire [127:0] M_AXI_WAVE_wdata;
+  wire [255:0] M_AXI_WAVE_wdata;
   wire         M_AXI_WAVE_wlast;
   wire         M_AXI_WAVE_wready;
-  wire [15:0]  M_AXI_WAVE_wstrb;
+  wire [31:0]  M_AXI_WAVE_wstrb;
   wire         M_AXI_WAVE_wvalid;
   wire         M_AXI_WAVE_bready;
   wire [1:0]   M_AXI_WAVE_bresp;
@@ -186,7 +186,7 @@ module Top (
   wire [31:0]  udp_wave_resync_count;
   wire [1:0]   udp_wave_last_bresp;
   wire [63:0]  udp_wave_last_addr;
-  wire [127:0] udp_wave_last_wdata;
+  wire [255:0] udp_wave_last_wdata;
 
   assign SFP_TX_DIS = 1'b0;
 
@@ -262,7 +262,7 @@ module Top (
   // ========== DataMover ==========
   wire [103:0] dm_cmd_tdata;
   wire         dm_cmd_tvalid, dm_cmd_tready;
-  wire [127:0] dm_data_tdata;
+  wire [255:0] dm_data_tdata;
   wire         dm_data_tvalid, dm_data_tready, dm_data_tlast;
   wire         dm_mm2s_err;
   wire         dm_mm2s_sts_tvalid, dm_mm2s_sts_tlast;
@@ -270,16 +270,24 @@ module Top (
   wire         dm_mm2s_sts_tkeep;
 
   // ========== executor -> wave FIFO write side (DDR 域) ==========
-  wire [127:0] ch1_wave_tdata, ch2_wave_tdata, ch3_wave_tdata, ch4_wave_tdata;
+  wire [255:0] ch1_wave_tdata, ch2_wave_tdata, ch3_wave_tdata, ch4_wave_tdata;
+  wire [255:0] ch5_wave_tdata, ch6_wave_tdata, ch7_wave_tdata, ch8_wave_tdata;
   wire         ch1_wave_tvalid, ch2_wave_tvalid, ch3_wave_tvalid, ch4_wave_tvalid;
+  wire         ch5_wave_tvalid, ch6_wave_tvalid, ch7_wave_tvalid, ch8_wave_tvalid;
   wire         ch1_wave_tready_internal, ch2_wave_tready_internal, ch3_wave_tready_internal, ch4_wave_tready_internal;
+  wire         ch5_wave_tready_internal, ch6_wave_tready_internal, ch7_wave_tready_internal, ch8_wave_tready_internal;
   wire [15:0]  ch1_fifo_level_beats;
   wire [15:0]  ch2_fifo_level_beats;
   wire [15:0]  ch3_fifo_level_beats;
   wire [15:0]  ch4_fifo_level_beats;
+  wire [15:0]  ch5_fifo_level_beats;
+  wire [15:0]  ch6_fifo_level_beats;
+  wire [15:0]  ch7_fifo_level_beats;
+  wire [15:0]  ch8_fifo_level_beats;
 
   // ========== DAC side ready from DAC IP ==========
   wire         dac_ch1_ready, dac_ch2_ready, dac_ch3_ready, dac_ch4_ready;
+  wire         dac_ch5_ready, dac_ch6_ready, dac_ch7_ready, dac_ch8_ready;
 
   // ========== DataMover AXI MM2S to DDR ==========
   wire [63:0]  M_AXI_DM_araddr;
@@ -288,11 +296,12 @@ module Top (
   wire [1:0]   M_AXI_DM_arburst;
   wire         M_AXI_DM_arready;
   wire         M_AXI_DM_arvalid;
-  wire [127:0] M_AXI_DM_rdata;
+  wire [255:0] M_AXI_DM_rdata;
   wire         M_AXI_DM_rlast;
   wire         M_AXI_DM_rready;
   wire [1:0]   M_AXI_DM_rresp;
   wire         M_AXI_DM_rvalid;
+  wire [31:0]  dm_data_tkeep;
 
   // ========== GPIO out ==========
   wire [31:0] gpio_out_reg;
@@ -395,8 +404,11 @@ module Top (
 
   // ========== executor outputs config ==========
   wire [31:0] ch1_delay_cycles, ch2_delay_cycles, ch3_delay_cycles, ch4_delay_cycles;
+  wire [31:0] ch5_delay_cycles, ch6_delay_cycles, ch7_delay_cycles, ch8_delay_cycles;
   wire [31:0] ch1_len_beats,   ch2_len_beats,   ch3_len_beats,   ch4_len_beats;
+  wire [31:0] ch5_len_beats,   ch6_len_beats,   ch7_len_beats,   ch8_len_beats;
   wire        ch1_arm,         ch2_arm,         ch3_arm,         ch4_arm;
+  wire        ch5_arm,         ch6_arm,         ch7_arm,         ch8_arm;
   wire        cfg_auto_start;
   wire        cfg_commit; // 每次 END 提交一帧配置
 
@@ -459,11 +471,19 @@ module Top (
     .ch2_fifo_ready(ch2_wave_tready_internal),
     .ch3_fifo_ready(ch3_wave_tready_internal),
     .ch4_fifo_ready(ch4_wave_tready_internal),
+    .ch5_fifo_ready(ch5_wave_tready_internal),
+    .ch6_fifo_ready(ch6_wave_tready_internal),
+    .ch7_fifo_ready(ch7_wave_tready_internal),
+    .ch8_fifo_ready(ch8_wave_tready_internal),
 
     .ch1_fifo_level_beats(ch1_fifo_level_beats),
     .ch2_fifo_level_beats(ch2_fifo_level_beats),
     .ch3_fifo_level_beats(ch3_fifo_level_beats),
     .ch4_fifo_level_beats(ch4_fifo_level_beats),
+    .ch5_fifo_level_beats(ch5_fifo_level_beats),
+    .ch6_fifo_level_beats(ch6_fifo_level_beats),
+    .ch7_fifo_level_beats(ch7_fifo_level_beats),
+    .ch8_fifo_level_beats(ch8_fifo_level_beats),
 
     .m_axis_ch1_tdata(ch1_wave_tdata),
     .m_axis_ch1_tvalid(ch1_wave_tvalid),
@@ -473,19 +493,39 @@ module Top (
     .m_axis_ch3_tvalid(ch3_wave_tvalid),
     .m_axis_ch4_tdata(ch4_wave_tdata),
     .m_axis_ch4_tvalid(ch4_wave_tvalid),
+    .m_axis_ch5_tdata(ch5_wave_tdata),
+    .m_axis_ch5_tvalid(ch5_wave_tvalid),
+    .m_axis_ch6_tdata(ch6_wave_tdata),
+    .m_axis_ch6_tvalid(ch6_wave_tvalid),
+    .m_axis_ch7_tdata(ch7_wave_tdata),
+    .m_axis_ch7_tvalid(ch7_wave_tvalid),
+    .m_axis_ch8_tdata(ch8_wave_tdata),
+    .m_axis_ch8_tvalid(ch8_wave_tvalid),
 
     .ch1_delay_cycles(ch1_delay_cycles),
     .ch2_delay_cycles(ch2_delay_cycles),
     .ch3_delay_cycles(ch3_delay_cycles),
     .ch4_delay_cycles(ch4_delay_cycles),
+    .ch5_delay_cycles(ch5_delay_cycles),
+    .ch6_delay_cycles(ch6_delay_cycles),
+    .ch7_delay_cycles(ch7_delay_cycles),
+    .ch8_delay_cycles(ch8_delay_cycles),
     .ch1_len_beats(ch1_len_beats),
     .ch2_len_beats(ch2_len_beats),
     .ch3_len_beats(ch3_len_beats),
     .ch4_len_beats(ch4_len_beats),
+    .ch5_len_beats(ch5_len_beats),
+    .ch6_len_beats(ch6_len_beats),
+    .ch7_len_beats(ch7_len_beats),
+    .ch8_len_beats(ch8_len_beats),
     .ch1_arm(ch1_arm),
     .ch2_arm(ch2_arm),
     .ch3_arm(ch3_arm),
     .ch4_arm(ch4_arm),
+    .ch5_arm(ch5_arm),
+    .ch6_arm(ch6_arm),
+    .ch7_arm(ch7_arm),
+    .ch8_arm(ch8_arm),
     .cfg_auto_start(cfg_auto_start),
     .cfg_commit(cfg_commit),
 
@@ -540,28 +580,41 @@ module Top (
   wire trig_1_dac_pulse = trig_1_dac_sync & ~trig_1_dac_sync_d;
 
   // ==========================================================
-  // DDR 域：配置帧（160-bit）打包，commit 时写入 cfg FIFO
+  // DDR 域：配置帧打包，commit 时写入 cfg FIFO
   // 关键修复：写入 FIFO 的 seq_id 使用 seq_id_next，避免第一帧=0 导致 DAC gating 卡死
   // ==========================================================
   reg [15:0] seq_id;
   wire [15:0] seq_id_next = seq_id + 16'd1;
   reg         cfg_wr_pending;
-  reg [287:0] cfg_wr_payload;
-  wire [287:0] cfg_payload_next = {
+  wire        cfg_wr_ready;
+  reg [543:0] cfg_wr_payload;
+  wire [543:0] cfg_payload_next = {
       ch1_delay_cycles,
       ch2_delay_cycles,
       ch3_delay_cycles,
       ch4_delay_cycles,
+      ch5_delay_cycles,
+      ch6_delay_cycles,
+      ch7_delay_cycles,
+      ch8_delay_cycles,
       ch1_len_beats,
       ch2_len_beats,
       ch3_len_beats,
       ch4_len_beats,
-      11'd0,
+      ch5_len_beats,
+      ch6_len_beats,
+      ch7_len_beats,
+      ch8_len_beats,
+      7'd0,
       cfg_auto_start,
       ch1_arm,
       ch2_arm,
       ch3_arm,
       ch4_arm,
+      ch5_arm,
+      ch6_arm,
+      ch7_arm,
+      ch8_arm,
       seq_id_next
   };
 
@@ -569,7 +622,7 @@ module Top (
     if(!ddr4_ui_aresetn) begin
       seq_id <= 16'd0;
       cfg_wr_pending <= 1'b0;
-      cfg_wr_payload <= 288'd0;
+      cfg_wr_payload <= 544'd0;
     end else begin
       if(cfg_commit && !cfg_wr_pending) begin
         cfg_wr_pending <= 1'b1;
@@ -588,12 +641,12 @@ module Top (
   // ==========================================================
   // cfg CDC FIFO (xpm_fifo_async)  DDR->DAC
   // ==========================================================
-  wire [287:0] cfg_rd_data;
+  wire [543:0] cfg_rd_data;
   wire         cfg_rd_valid;
   reg          cfg_rd_ready;
 
   cfg_cdc_fifo_xpm #(
-    .W(288),
+    .W(544),
     .DEPTH(16)
   ) u_cfg_fifo (
     .wr_clk(ddr4_ui_clk),
@@ -611,44 +664,54 @@ module Top (
 
   // DAC 域：锁存最新一帧配置
   reg [31:0] ch1_delay_dac, ch2_delay_dac, ch3_delay_dac, ch4_delay_dac;
+  reg [31:0] ch5_delay_dac, ch6_delay_dac, ch7_delay_dac, ch8_delay_dac;
   reg [31:0] ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac;
+  reg [31:0] ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac;
   reg        cfg_auto_start_dac;
   reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
+  reg        ch5_arm_dac, ch6_arm_dac, ch7_arm_dac, ch8_arm_dac;
   reg [15:0] seq_id_dac;
-
-  // The executor counts 128-bit DataMover/FIFO beats. Each RFDC tile AXIS port
-  // is 256-bit, so the 128->256 gearbox emits one DAC beat per two FIFO beats;
-  // the DAC gate therefore counts half as many output beats.
-  wire [31:0] ch1_len_dac256 = {1'b0, ch1_len_dac[31:1]};
-  wire [31:0] ch2_len_dac256 = {1'b0, ch2_len_dac[31:1]};
-  wire [31:0] ch3_len_dac256 = {1'b0, ch3_len_dac[31:1]};
-  wire [31:0] ch4_len_dac256 = {1'b0, ch4_len_dac[31:1]};
 
   always @(posedge dac_axis_clk or negedge dac_rst_n) begin
     if(!dac_rst_n) begin
       cfg_rd_ready  <= 1'b0;
       ch1_delay_dac <= 0; ch2_delay_dac <= 0; ch3_delay_dac <= 0; ch4_delay_dac <= 0;
+      ch5_delay_dac <= 0; ch6_delay_dac <= 0; ch7_delay_dac <= 0; ch8_delay_dac <= 0;
       ch1_len_dac   <= 0; ch2_len_dac   <= 0; ch3_len_dac <= 0; ch4_len_dac <= 0;
+      ch5_len_dac   <= 0; ch6_len_dac   <= 0; ch7_len_dac <= 0; ch8_len_dac <= 0;
       cfg_auto_start_dac <= 0;
       ch1_arm_dac   <= 0; ch2_arm_dac   <= 0; ch3_arm_dac <= 0; ch4_arm_dac <= 0;
+      ch5_arm_dac   <= 0; ch6_arm_dac   <= 0; ch7_arm_dac <= 0; ch8_arm_dac <= 0;
       seq_id_dac    <= 0;
     end else begin
       cfg_rd_ready <= 1'b1; // 简化：一直准备接收
 
       if(cfg_rd_valid && cfg_rd_ready) begin
-        ch1_delay_dac <= cfg_rd_data[287:256];
-        ch2_delay_dac <= cfg_rd_data[255:224];
-        ch3_delay_dac <= cfg_rd_data[223:192];
-        ch4_delay_dac <= cfg_rd_data[191:160];
-        ch1_len_dac   <= cfg_rd_data[159:128];
-        ch2_len_dac   <= cfg_rd_data[127:96];
-        ch3_len_dac   <= cfg_rd_data[95:64];
-        ch4_len_dac   <= cfg_rd_data[63:32];
-        cfg_auto_start_dac <= cfg_rd_data[20];
-        ch1_arm_dac   <= cfg_rd_data[19];
-        ch2_arm_dac   <= cfg_rd_data[18];
-        ch3_arm_dac   <= cfg_rd_data[17];
-        ch4_arm_dac   <= cfg_rd_data[16];
+        ch1_delay_dac <= cfg_rd_data[543:512];
+        ch2_delay_dac <= cfg_rd_data[511:480];
+        ch3_delay_dac <= cfg_rd_data[479:448];
+        ch4_delay_dac <= cfg_rd_data[447:416];
+        ch5_delay_dac <= cfg_rd_data[415:384];
+        ch6_delay_dac <= cfg_rd_data[383:352];
+        ch7_delay_dac <= cfg_rd_data[351:320];
+        ch8_delay_dac <= cfg_rd_data[319:288];
+        ch1_len_dac   <= cfg_rd_data[287:256];
+        ch2_len_dac   <= cfg_rd_data[255:224];
+        ch3_len_dac   <= cfg_rd_data[223:192];
+        ch4_len_dac   <= cfg_rd_data[191:160];
+        ch5_len_dac   <= cfg_rd_data[159:128];
+        ch6_len_dac   <= cfg_rd_data[127:96];
+        ch7_len_dac   <= cfg_rd_data[95:64];
+        ch8_len_dac   <= cfg_rd_data[63:32];
+        cfg_auto_start_dac <= cfg_rd_data[24];
+        ch1_arm_dac   <= cfg_rd_data[23];
+        ch2_arm_dac   <= cfg_rd_data[22];
+        ch3_arm_dac   <= cfg_rd_data[21];
+        ch4_arm_dac   <= cfg_rd_data[20];
+        ch5_arm_dac   <= cfg_rd_data[19];
+        ch6_arm_dac   <= cfg_rd_data[18];
+        ch7_arm_dac   <= cfg_rd_data[17];
+        ch8_arm_dac   <= cfg_rd_data[16];
         seq_id_dac    <= cfg_rd_data[15:0];
       end
     end
@@ -670,14 +733,19 @@ module Top (
     .s_axis_mm2s_cmd_tready(dm_cmd_tready),
 
     .m_axis_mm2s_tdata (dm_data_tdata),
+    .m_axis_mm2s_tkeep (dm_data_tkeep),
     .m_axis_mm2s_tvalid(dm_data_tvalid),
     .m_axis_mm2s_tready(dm_data_tready),
     .m_axis_mm2s_tlast (dm_data_tlast),
 
+    .m_axi_mm2s_arid   (),
     .m_axi_mm2s_araddr (M_AXI_DM_araddr),
     .m_axi_mm2s_arlen  (M_AXI_DM_arlen),
     .m_axi_mm2s_arsize (M_AXI_DM_arsize),
     .m_axi_mm2s_arburst(M_AXI_DM_arburst),
+    .m_axi_mm2s_arprot (),
+    .m_axi_mm2s_arcache(),
+    .m_axi_mm2s_aruser (),
     .m_axi_mm2s_arvalid(M_AXI_DM_arvalid),
     .m_axi_mm2s_arready(M_AXI_DM_arready),
     .m_axi_mm2s_rdata  (M_AXI_DM_rdata),
@@ -694,25 +762,27 @@ module Top (
   );
 
   // ==========================================================
-  // Wave async FIFO (DDR 128-bit AXIS -> DAC 128-bit) then a
-  // 128->256 gearbox feeding each RFDC tile's 256-bit IQ AXIS port.
-  // Each executor channel maps to one DAC tile (2 physical DACs):
-  //   ch1 -> tile0 (s00, vout00/02)   ch2 -> tile1 (s10, vout10/12)
-  //   ch3 -> tile2 (s20, vout20/22)   ch4 -> tile3 (s30, vout30/32)
+  // Wave async FIFO (DDR 256-bit AXIS -> DAC 256-bit RFDC AXIS).
   // ==========================================================
-  wire [127:0] dac_fifo_ch1_tdata, dac_fifo_ch2_tdata, dac_fifo_ch3_tdata, dac_fifo_ch4_tdata;
-  wire         dac_fifo_ch1_tvalid, dac_fifo_ch2_tvalid, dac_fifo_ch3_tvalid, dac_fifo_ch4_tvalid;
-  wire         dac_fifo_ch1_tready, dac_fifo_ch2_tready, dac_fifo_ch3_tready, dac_fifo_ch4_tready;
   wire [255:0] dac_in_ch1_tdata, dac_in_ch2_tdata, dac_in_ch3_tdata, dac_in_ch4_tdata;
+  wire [255:0] dac_in_ch5_tdata, dac_in_ch6_tdata, dac_in_ch7_tdata, dac_in_ch8_tdata;
   wire         dac_in_ch1_tvalid, dac_in_ch2_tvalid, dac_in_ch3_tvalid, dac_in_ch4_tvalid;
+  wire         dac_in_ch5_tvalid, dac_in_ch6_tvalid, dac_in_ch7_tvalid, dac_in_ch8_tvalid;
   wire         dac_ch1_ready_gated, dac_ch2_ready_gated, dac_ch3_ready_gated, dac_ch4_ready_gated;
+  wire         dac_ch5_ready_gated, dac_ch6_ready_gated, dac_ch7_ready_gated, dac_ch8_ready_gated;
   wire         dac_ch1_valid_gated, dac_ch2_valid_gated, dac_ch3_valid_gated, dac_ch4_valid_gated;
+  wire         dac_ch5_valid_gated, dac_ch6_valid_gated, dac_ch7_valid_gated, dac_ch8_valid_gated;
 
   wire ch1_allow, ch2_allow, ch3_allow, ch4_allow;
+  wire ch5_allow, ch6_allow, ch7_allow, ch8_allow;
   wire ch1_prog_empty, ch1_prog_full;
   wire ch2_prog_empty, ch2_prog_full;
   wire ch3_prog_empty, ch3_prog_full;
   wire ch4_prog_empty, ch4_prog_full;
+  wire ch5_prog_empty, ch5_prog_full;
+  wire ch6_prog_empty, ch6_prog_full;
+  wire ch7_prog_empty, ch7_prog_full;
+  wire ch8_prog_empty, ch8_prog_full;
 
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start, pc_started;
@@ -732,38 +802,70 @@ module Top (
     .ch2_delay_cycles(ch2_delay_dac),
     .ch3_delay_cycles(ch3_delay_dac),
     .ch4_delay_cycles(ch4_delay_dac),
-    .ch1_len_beats(ch1_len_dac256),
-    .ch2_len_beats(ch2_len_dac256),
-    .ch3_len_beats(ch3_len_dac256),
-    .ch4_len_beats(ch4_len_dac256),
+    .ch5_delay_cycles(ch5_delay_dac),
+    .ch6_delay_cycles(ch6_delay_dac),
+    .ch7_delay_cycles(ch7_delay_dac),
+    .ch8_delay_cycles(ch8_delay_dac),
+    .ch1_len_beats(ch1_len_dac),
+    .ch2_len_beats(ch2_len_dac),
+    .ch3_len_beats(ch3_len_dac),
+    .ch4_len_beats(ch4_len_dac),
+    .ch5_len_beats(ch5_len_dac),
+    .ch6_len_beats(ch6_len_dac),
+    .ch7_len_beats(ch7_len_dac),
+    .ch8_len_beats(ch8_len_dac),
     .ch1_arm(ch1_arm_dac),
     .ch2_arm(ch2_arm_dac),
     .ch3_arm(ch3_arm_dac),
     .ch4_arm(ch4_arm_dac),
+    .ch5_arm(ch5_arm_dac),
+    .ch6_arm(ch6_arm_dac),
+    .ch7_arm(ch7_arm_dac),
+    .ch8_arm(ch8_arm_dac),
 
     .ch1_fifo_tvalid(dac_in_ch1_tvalid),
     .ch2_fifo_tvalid(dac_in_ch2_tvalid),
     .ch3_fifo_tvalid(dac_in_ch3_tvalid),
     .ch4_fifo_tvalid(dac_in_ch4_tvalid),
+    .ch5_fifo_tvalid(dac_in_ch5_tvalid),
+    .ch6_fifo_tvalid(dac_in_ch6_tvalid),
+    .ch7_fifo_tvalid(dac_in_ch7_tvalid),
+    .ch8_fifo_tvalid(dac_in_ch8_tvalid),
     .ch1_fifo_prog_empty(ch1_prog_empty),
     .ch2_fifo_prog_empty(ch2_prog_empty),
     .ch3_fifo_prog_empty(ch3_prog_empty),
     .ch4_fifo_prog_empty(ch4_prog_empty),
+    .ch5_fifo_prog_empty(ch5_prog_empty),
+    .ch6_fifo_prog_empty(ch6_prog_empty),
+    .ch7_fifo_prog_empty(ch7_prog_empty),
+    .ch8_fifo_prog_empty(ch8_prog_empty),
 
     .dac_ch1_ready_in(dac_ch1_ready),
     .dac_ch2_ready_in(dac_ch2_ready),
     .dac_ch3_ready_in(dac_ch3_ready),
     .dac_ch4_ready_in(dac_ch4_ready),
+    .dac_ch5_ready_in(dac_ch5_ready),
+    .dac_ch6_ready_in(dac_ch6_ready),
+    .dac_ch7_ready_in(dac_ch7_ready),
+    .dac_ch8_ready_in(dac_ch8_ready),
 
     .ch1_allow(ch1_allow),
     .ch2_allow(ch2_allow),
     .ch3_allow(ch3_allow),
     .ch4_allow(ch4_allow),
+    .ch5_allow(ch5_allow),
+    .ch6_allow(ch6_allow),
+    .ch7_allow(ch7_allow),
+    .ch8_allow(ch8_allow),
 
     .ch1_active(),
     .ch2_active(),
     .ch3_active(),
     .ch4_active(),
+    .ch5_active(),
+    .ch6_active(),
+    .ch7_active(),
+    .ch8_active(),
 
     .dbg_trig_pulse (pc_trig_pulse),
     .dbg_new_cfg    (pc_new_cfg),
@@ -773,28 +875,46 @@ module Top (
   );
 
   wire [31:0] ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count;
+  wire [31:0] ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count;
 
   assign ch1_fifo_level_beats = ch1_wr_count[15:0];
   assign ch2_fifo_level_beats = ch2_wr_count[15:0];
   assign ch3_fifo_level_beats = ch3_wr_count[15:0];
   assign ch4_fifo_level_beats = ch4_wr_count[15:0];
+  assign ch5_fifo_level_beats = ch5_wr_count[15:0];
+  assign ch6_fifo_level_beats = ch6_wr_count[15:0];
+  assign ch7_fifo_level_beats = ch7_wr_count[15:0];
+  assign ch8_fifo_level_beats = ch8_wr_count[15:0];
 
   wire ch1_wave_tlast = 1'b0;
   wire ch2_wave_tlast = 1'b0;
   wire ch3_wave_tlast = 1'b0;
   wire ch4_wave_tlast = 1'b0;
+  wire ch5_wave_tlast = 1'b0;
+  wire ch6_wave_tlast = 1'b0;
+  wire ch7_wave_tlast = 1'b0;
+  wire ch8_wave_tlast = 1'b0;
   wire dac_out_ch1_tlast, dac_out_ch2_tlast, dac_out_ch3_tlast, dac_out_ch4_tlast;
+  wire dac_out_ch5_tlast, dac_out_ch6_tlast, dac_out_ch7_tlast, dac_out_ch8_tlast;
 
   assign dac_ch1_ready_gated = dac_ch1_ready & ch1_allow;
   assign dac_ch2_ready_gated = dac_ch2_ready & ch2_allow;
   assign dac_ch3_ready_gated = dac_ch3_ready & ch3_allow;
   assign dac_ch4_ready_gated = dac_ch4_ready & ch4_allow;
+  assign dac_ch5_ready_gated = dac_ch5_ready & ch5_allow;
+  assign dac_ch6_ready_gated = dac_ch6_ready & ch6_allow;
+  assign dac_ch7_ready_gated = dac_ch7_ready & ch7_allow;
+  assign dac_ch8_ready_gated = dac_ch8_ready & ch8_allow;
   assign dac_ch1_valid_gated = dac_in_ch1_tvalid & ch1_allow;
   assign dac_ch2_valid_gated = dac_in_ch2_tvalid & ch2_allow;
   assign dac_ch3_valid_gated = dac_in_ch3_tvalid & ch3_allow;
   assign dac_ch4_valid_gated = dac_in_ch4_tvalid & ch4_allow;
+  assign dac_ch5_valid_gated = dac_in_ch5_tvalid & ch5_allow;
+  assign dac_ch6_valid_gated = dac_in_ch6_tvalid & ch6_allow;
+  assign dac_ch7_valid_gated = dac_in_ch7_tvalid & ch7_allow;
+  assign dac_ch8_valid_gated = dac_in_ch8_tvalid & ch8_allow;
 
-  axis_async_fifo_128 fifo_ch1_inst (
+  axis_async_fifo_256 fifo_ch1_inst (
     .s_axis_aresetn(ddr4_ui_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch1_wave_tvalid),
@@ -803,9 +923,9 @@ module Top (
     .s_axis_tlast  (ch1_wave_tlast),
 
     .m_axis_aclk   (dac_axis_clk),
-    .m_axis_tvalid (dac_fifo_ch1_tvalid),
-    .m_axis_tready (dac_fifo_ch1_tready),
-    .m_axis_tdata  (dac_fifo_ch1_tdata),
+    .m_axis_tvalid (dac_in_ch1_tvalid),
+    .m_axis_tready (dac_ch1_ready_gated),
+    .m_axis_tdata  (dac_in_ch1_tdata),
     .m_axis_tlast  (dac_out_ch1_tlast),
 
     .axis_wr_data_count(ch1_wr_count),
@@ -813,7 +933,7 @@ module Top (
     .prog_full         (ch1_prog_full)
   );
 
-  axis_async_fifo_128 fifo_ch2_inst (
+  axis_async_fifo_256 fifo_ch2_inst (
     .s_axis_aresetn(ddr4_ui_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch2_wave_tvalid),
@@ -822,9 +942,9 @@ module Top (
     .s_axis_tlast  (ch2_wave_tlast),
 
     .m_axis_aclk   (dac_axis_clk),
-    .m_axis_tvalid (dac_fifo_ch2_tvalid),
-    .m_axis_tready (dac_fifo_ch2_tready),
-    .m_axis_tdata  (dac_fifo_ch2_tdata),
+    .m_axis_tvalid (dac_in_ch2_tvalid),
+    .m_axis_tready (dac_ch2_ready_gated),
+    .m_axis_tdata  (dac_in_ch2_tdata),
     .m_axis_tlast  (dac_out_ch2_tlast),
 
     .axis_wr_data_count(ch2_wr_count),
@@ -833,7 +953,7 @@ module Top (
   );
 
 
-  axis_async_fifo_128 fifo_ch3_inst (
+  axis_async_fifo_256 fifo_ch3_inst (
     .s_axis_aresetn(ddr4_ui_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch3_wave_tvalid),
@@ -842,9 +962,9 @@ module Top (
     .s_axis_tlast  (ch3_wave_tlast),
 
     .m_axis_aclk   (dac_axis_clk),
-    .m_axis_tvalid (dac_fifo_ch3_tvalid),
-    .m_axis_tready (dac_fifo_ch3_tready),
-    .m_axis_tdata  (dac_fifo_ch3_tdata),
+    .m_axis_tvalid (dac_in_ch3_tvalid),
+    .m_axis_tready (dac_ch3_ready_gated),
+    .m_axis_tdata  (dac_in_ch3_tdata),
     .m_axis_tlast  (dac_out_ch3_tlast),
 
     .axis_wr_data_count(ch3_wr_count),
@@ -852,7 +972,7 @@ module Top (
     .prog_full         (ch3_prog_full)
   );
 
-  axis_async_fifo_128 fifo_ch4_inst (
+  axis_async_fifo_256 fifo_ch4_inst (
     .s_axis_aresetn(ddr4_ui_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch4_wave_tvalid),
@@ -861,9 +981,9 @@ module Top (
     .s_axis_tlast  (ch4_wave_tlast),
 
     .m_axis_aclk   (dac_axis_clk),
-    .m_axis_tvalid (dac_fifo_ch4_tvalid),
-    .m_axis_tready (dac_fifo_ch4_tready),
-    .m_axis_tdata  (dac_fifo_ch4_tdata),
+    .m_axis_tvalid (dac_in_ch4_tvalid),
+    .m_axis_tready (dac_ch4_ready_gated),
+    .m_axis_tdata  (dac_in_ch4_tdata),
     .m_axis_tlast  (dac_out_ch4_tlast),
 
     .axis_wr_data_count(ch4_wr_count),
@@ -871,49 +991,80 @@ module Top (
     .prog_full         (ch4_prog_full)
   );
 
-  axis_128_to_256 dac_ch1_width_i (
-    .clk      (dac_axis_clk),
-    .rst_n    (dac_rst_n),
-    .s_tdata  (dac_fifo_ch1_tdata),
-    .s_tvalid (dac_fifo_ch1_tvalid),
-    .s_tready (dac_fifo_ch1_tready),
-    .m_tdata  (dac_in_ch1_tdata),
-    .m_tvalid (dac_in_ch1_tvalid),
-    .m_tready (dac_ch1_ready_gated)
+  axis_async_fifo_256 fifo_ch5_inst (
+    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aclk   (ddr4_ui_clk),
+    .s_axis_tvalid (ch5_wave_tvalid),
+    .s_axis_tready (ch5_wave_tready_internal),
+    .s_axis_tdata  (ch5_wave_tdata),
+    .s_axis_tlast  (ch5_wave_tlast),
+
+    .m_axis_aclk   (dac_axis_clk),
+    .m_axis_tvalid (dac_in_ch5_tvalid),
+    .m_axis_tready (dac_ch5_ready_gated),
+    .m_axis_tdata  (dac_in_ch5_tdata),
+    .m_axis_tlast  (dac_out_ch5_tlast),
+
+    .axis_wr_data_count(ch5_wr_count),
+    .prog_empty        (ch5_prog_empty),
+    .prog_full         (ch5_prog_full)
   );
 
-  axis_128_to_256 dac_ch2_width_i (
-    .clk      (dac_axis_clk),
-    .rst_n    (dac_rst_n),
-    .s_tdata  (dac_fifo_ch2_tdata),
-    .s_tvalid (dac_fifo_ch2_tvalid),
-    .s_tready (dac_fifo_ch2_tready),
-    .m_tdata  (dac_in_ch2_tdata),
-    .m_tvalid (dac_in_ch2_tvalid),
-    .m_tready (dac_ch2_ready_gated)
+  axis_async_fifo_256 fifo_ch6_inst (
+    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aclk   (ddr4_ui_clk),
+    .s_axis_tvalid (ch6_wave_tvalid),
+    .s_axis_tready (ch6_wave_tready_internal),
+    .s_axis_tdata  (ch6_wave_tdata),
+    .s_axis_tlast  (ch6_wave_tlast),
+
+    .m_axis_aclk   (dac_axis_clk),
+    .m_axis_tvalid (dac_in_ch6_tvalid),
+    .m_axis_tready (dac_ch6_ready_gated),
+    .m_axis_tdata  (dac_in_ch6_tdata),
+    .m_axis_tlast  (dac_out_ch6_tlast),
+
+    .axis_wr_data_count(ch6_wr_count),
+    .prog_empty        (ch6_prog_empty),
+    .prog_full         (ch6_prog_full)
   );
 
+  axis_async_fifo_256 fifo_ch7_inst (
+    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aclk   (ddr4_ui_clk),
+    .s_axis_tvalid (ch7_wave_tvalid),
+    .s_axis_tready (ch7_wave_tready_internal),
+    .s_axis_tdata  (ch7_wave_tdata),
+    .s_axis_tlast  (ch7_wave_tlast),
 
-  axis_128_to_256 dac_ch3_width_i (
-    .clk      (dac_axis_clk),
-    .rst_n    (dac_rst_n),
-    .s_tdata  (dac_fifo_ch3_tdata),
-    .s_tvalid (dac_fifo_ch3_tvalid),
-    .s_tready (dac_fifo_ch3_tready),
-    .m_tdata  (dac_in_ch3_tdata),
-    .m_tvalid (dac_in_ch3_tvalid),
-    .m_tready (dac_ch3_ready_gated)
+    .m_axis_aclk   (dac_axis_clk),
+    .m_axis_tvalid (dac_in_ch7_tvalid),
+    .m_axis_tready (dac_ch7_ready_gated),
+    .m_axis_tdata  (dac_in_ch7_tdata),
+    .m_axis_tlast  (dac_out_ch7_tlast),
+
+    .axis_wr_data_count(ch7_wr_count),
+    .prog_empty        (ch7_prog_empty),
+    .prog_full         (ch7_prog_full)
   );
 
-  axis_128_to_256 dac_ch4_width_i (
-    .clk      (dac_axis_clk),
-    .rst_n    (dac_rst_n),
-    .s_tdata  (dac_fifo_ch4_tdata),
-    .s_tvalid (dac_fifo_ch4_tvalid),
-    .s_tready (dac_fifo_ch4_tready),
-    .m_tdata  (dac_in_ch4_tdata),
-    .m_tvalid (dac_in_ch4_tvalid),
-    .m_tready (dac_ch4_ready_gated)
+  axis_async_fifo_256 fifo_ch8_inst (
+    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aclk   (ddr4_ui_clk),
+    .s_axis_tvalid (ch8_wave_tvalid),
+    .s_axis_tready (ch8_wave_tready_internal),
+    .s_axis_tdata  (ch8_wave_tdata),
+    .s_axis_tlast  (ch8_wave_tlast),
+
+    .m_axis_aclk   (dac_axis_clk),
+    .m_axis_tvalid (dac_in_ch8_tvalid),
+    .m_axis_tready (dac_ch8_ready_gated),
+    .m_axis_tdata  (dac_in_ch8_tdata),
+    .m_axis_tlast  (dac_out_ch8_tlast),
+
+    .axis_wr_data_count(ch8_wr_count),
+    .prog_empty        (ch8_prog_empty),
+    .prog_full         (ch8_prog_full)
   );
 
   // ==========================================================
@@ -1445,15 +1596,27 @@ module Top (
       .s00_axis_tdata(dac_in_ch1_tdata),
       .s00_axis_tvalid(dac_ch1_valid_gated),
       .s00_axis_tready(dac_ch1_ready),
-      .s10_axis_tdata(dac_in_ch2_tdata),
-      .s10_axis_tvalid(dac_ch2_valid_gated),
-      .s10_axis_tready(dac_ch2_ready),
-      .s20_axis_tdata(dac_in_ch3_tdata),
-      .s20_axis_tvalid(dac_ch3_valid_gated),
-      .s20_axis_tready(dac_ch3_ready),
-      .s30_axis_tdata(dac_in_ch4_tdata),
-      .s30_axis_tvalid(dac_ch4_valid_gated),
-      .s30_axis_tready(dac_ch4_ready),
+      .s02_axis_tdata(dac_in_ch2_tdata),
+      .s02_axis_tvalid(dac_ch2_valid_gated),
+      .s02_axis_tready(dac_ch2_ready),
+      .s10_axis_tdata(dac_in_ch3_tdata),
+      .s10_axis_tvalid(dac_ch3_valid_gated),
+      .s10_axis_tready(dac_ch3_ready),
+      .s12_axis_tdata(dac_in_ch4_tdata),
+      .s12_axis_tvalid(dac_ch4_valid_gated),
+      .s12_axis_tready(dac_ch4_ready),
+      .s20_axis_tdata(dac_in_ch5_tdata),
+      .s20_axis_tvalid(dac_ch5_valid_gated),
+      .s20_axis_tready(dac_ch5_ready),
+      .s22_axis_tdata(dac_in_ch6_tdata),
+      .s22_axis_tvalid(dac_ch6_valid_gated),
+      .s22_axis_tready(dac_ch6_ready),
+      .s30_axis_tdata(dac_in_ch7_tdata),
+      .s30_axis_tvalid(dac_ch7_valid_gated),
+      .s30_axis_tready(dac_ch7_ready),
+      .s32_axis_tdata(dac_in_ch8_tdata),
+      .s32_axis_tvalid(dac_ch8_valid_gated),
+      .s32_axis_tready(dac_ch8_ready),
       .irq(rfdc_irq)
   );
 
@@ -1595,59 +1758,74 @@ module Top (
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      25'd0,
+      21'd0,
       trig_1_dac_pulse,
       trig_1_dac_sync,
-      ch4_prog_full,
-      ch3_prog_full,
-      ch2_prog_full,
-      ch1_prog_full,
-      ch4_prog_empty,
-      ch3_prog_empty,
-      ch2_prog_empty,
-      ch1_prog_empty,
+      ps_trigger_dac_sync,
+      pc_trig_pulse,
+      pc_trig_start,
+      pc_started,
+      pc_new_cfg,
+      cfg_auto_start_dac,
       cfg_rd_ready,
       cfg_rd_valid,
-      pc_new_cfg,
-      ch4_allow,
-      ch3_allow,
-      ch2_len_dac256[13:0],
-      ch1_len_dac256[13:0],
       pc_last_seq_id,
       seq_id_dac,
-      ch4_arm_dac,
-      ch3_arm_dac,
-      ch2_arm_dac,
-      ch1_arm_dac,
-      pc_started,
-      pc_trig_start,
-      cfg_auto_start_dac,
-      pc_trig_pulse,
-      ch2_allow,
-      ch1_allow,
+      ch8_prog_full, ch7_prog_full, ch6_prog_full, ch5_prog_full,
+      ch4_prog_full, ch3_prog_full, ch2_prog_full, ch1_prog_full,
+      ch8_prog_empty, ch7_prog_empty, ch6_prog_empty, ch5_prog_empty,
+      ch4_prog_empty, ch3_prog_empty, ch2_prog_empty, ch1_prog_empty,
+      ch8_arm_dac, ch7_arm_dac, ch6_arm_dac, ch5_arm_dac,
+      ch4_arm_dac, ch3_arm_dac, ch2_arm_dac, ch1_arm_dac,
+      ch8_allow, ch7_allow, ch6_allow, ch5_allow,
+      ch4_allow, ch3_allow, ch2_allow, ch1_allow,
+      dac_ch8_ready_gated,
+      dac_ch7_ready_gated,
+      dac_ch6_ready_gated,
+      dac_ch5_ready_gated,
       dac_ch4_ready_gated,
       dac_ch3_ready_gated,
       dac_ch2_ready_gated,
       dac_ch1_ready_gated,
+      dac_ch8_ready,
+      dac_ch7_ready,
+      dac_ch6_ready,
+      dac_ch5_ready,
       dac_ch4_ready,
       dac_ch3_ready,
       dac_ch2_ready,
       dac_ch1_ready,
+      dac_ch8_valid_gated,
+      dac_ch7_valid_gated,
+      dac_ch6_valid_gated,
+      dac_ch5_valid_gated,
       dac_ch4_valid_gated,
       dac_ch3_valid_gated,
       dac_ch2_valid_gated,
       dac_ch1_valid_gated,
+      dac_in_ch8_tvalid,
+      dac_in_ch7_tvalid,
+      dac_in_ch6_tvalid,
+      dac_in_ch5_tvalid,
       dac_in_ch4_tvalid,
       dac_in_ch3_tvalid,
       dac_in_ch2_tvalid,
       dac_in_ch1_tvalid,
-      ps_trigger_dac_sync,
       dac_rst_n
     }),
     .probe1(dac_in_ch1_tdata),
     .probe2(dac_in_ch2_tdata),
-    .probe3(cfg_rd_data[127:0]),
-    .probe4({ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count}),
-    .probe5({ch1_delay_dac, ch2_delay_dac, ch3_delay_dac, ch4_delay_dac})
+    .probe3(dac_in_ch3_tdata),
+    .probe4(dac_in_ch4_tdata),
+    .probe5(dac_in_ch5_tdata),
+    .probe6(dac_in_ch6_tdata),
+    .probe7(dac_in_ch7_tdata),
+    .probe8(dac_in_ch8_tdata),
+    .probe9({ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count,
+             ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count}),
+    .probe10({ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,
+              ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac}),
+    .probe11({ch1_delay_dac, ch2_delay_dac, ch3_delay_dac, ch4_delay_dac,
+              ch5_delay_dac, ch6_delay_dac, ch7_delay_dac, ch8_delay_dac})
   );
 endmodule

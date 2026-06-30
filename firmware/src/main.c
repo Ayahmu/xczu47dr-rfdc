@@ -245,7 +245,13 @@ int Configure_Custom_DAC_NCO(double NcoFreqGHz)
 			return XST_FAILURE;
 		}
 
-		XRFdc_UpdateEvent(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, XRFDC_EVENT_MIXER);
+		Status = XRFdc_UpdateEvent(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, XRFDC_EVENT_MIXER);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_UpdateEvent failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
 
 		xil_printf("Success: DAC Tile%d Block%d NCO set to %d MHz (baseband)\r\n",
 			   Tile_Id, Block_Id, (int)(NcoFreqGHz * 1000.0));
@@ -379,7 +385,7 @@ int main(void)
 		return XST_FAILURE;
 
 #if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
-	// DDR offsets 0/0x1000 are host-uploaded PL regions; firmware must not preload them.
+		// Host uploads all PL DDR waveform slots; firmware must not preload them.
 	preload_debug_waveforms();
 #endif
 

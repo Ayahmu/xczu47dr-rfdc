@@ -18,40 +18,55 @@ import matplotlib.pyplot as plt
 # 8 通道 NCO 数字上变频（IQ -> Real / C2R）配置：
 #   每个 DAC tile 采样率 Fs = 6.0 GSPS，8 倍内插，
 #   PL/AXIS 织物时钟 = Fs / interp / 8 = 93.75 MHz。
-#   每个 256-bit tile 字 = 该 tile 两个物理 DAC（slice0 + slice2）
-#   的复数样本；DDR 侧仍按 128-bit beat 组织，gearbox 把
-#   相邻两 beat 合成一个 256-bit 字（beat0->slice0, beat1->slice2）。
+#   每个 256-bit AXIS 字 = 一个物理 DAC slice 的复数 I/Q 样本；顶层
+#   将 8 个执行器通道分别送到 8 个物理 DAC slice。
+#   DDR 播放侧按 256-bit / 32B beat 组织，DataMover 每 beat 直接输出一个
+#   256-bit RFDC AXIS 字。
 #   NCO 频率由固件在启动时设置（默认 -1.5 GHz，Zone2 -> 4.5 GHz RF）。
 DAC_TILE_FS = 6.0e9
 DAC_INTERP = 8
 DAC_FABRIC_HZ = DAC_TILE_FS / DAC_INTERP / 8  # 93.75 MHz
 NCO_FREQ_GHZ = 4.5  # 仅作记录，实际由固件配置
+DEFAULT_WAVEFORM_SAMPLE_RATE_HZ = DAC_TILE_FS
+DEFAULT_AXIS_HZ = DAC_FABRIC_HZ
+RFDC_INTERPOLATION = DAC_INTERP
 
-# 单频 CW 的复基带置于 DC：I/Q 两路均为常数。
-# 用「整片常数填充」的方式生成 DDR 数据，对 I/Q lane 的具体
-# 排布（交织 or 分块）完全不敏感——无论哪种排布，常数填充都
-# 等价于一个 DC 复基带矢量，经 NCO 上变频后在每个 DAC 上输出
-# 唯一一根 NCO 频率的单频波，确保准确无误。
+# 单频 CW 的复基带置于 DC：I 为常数，Q 为 0。每个 256-bit RFDC
+# AXIS 字按 I0,Q0,I1,Q1,...,I7,Q7 的 int16 lane 顺序写入 DDR。
 TONE_AMP = 0.5  # 每路 lane 占满量程的比例（C = round(amp*32767)）
 TONE_BYTES_DEFAULT = 256 * 1024  # 每通道 DDR 缓冲字节数（32B 对齐）
+DDR_CH_STRIDE = TONE_BYTES_DEFAULT
 
 DDR_BASE = 0x0000000000000000
-DDR_CH_STRIDE = 0x0000000000200000  # 每通道间隔 2 MiB，避免缓冲重叠
-DDR_CH_ADDR = [DDR_BASE + i * DDR_CH_STRIDE for i in range(4)]
-
-# 兼容旧 GUI/工具子系统的共享常量与别名。
-DDR_CH1_ADDR = DDR_CH_ADDR[0]
-DDR_CH2_ADDR = DDR_CH_ADDR[1]
-DDR_CH3_ADDR = DDR_CH_ADDR[2]
-DDR_CH4_ADDR = DDR_CH_ADDR[3]
+DDR_CH1_ADDR = 0x0000000000000000
+DDR_CH2_ADDR = DDR_CH1_ADDR + DDR_CH_STRIDE
+DDR_CH3_ADDR = DDR_CH2_ADDR + DDR_CH_STRIDE
+DDR_CH4_ADDR = DDR_CH3_ADDR + DDR_CH_STRIDE
+DDR_CH5_ADDR = DDR_CH4_ADDR + DDR_CH_STRIDE
+DDR_CH6_ADDR = DDR_CH5_ADDR + DDR_CH_STRIDE
+DDR_CH7_ADDR = DDR_CH6_ADDR + DDR_CH_STRIDE
+DDR_CH8_ADDR = DDR_CH7_ADDR + DDR_CH_STRIDE
+DDR_CH_ADDR = [
+    DDR_CH1_ADDR,
+    DDR_CH2_ADDR,
+    DDR_CH3_ADDR,
+    DDR_CH4_ADDR,
+    DDR_CH5_ADDR,
+    DDR_CH6_ADDR,
+    DDR_CH7_ADDR,
+    DDR_CH8_ADDR,
+]
 DDR_X_ADDR = DDR_CH1_ADDR
 DDR_Y_ADDR = DDR_CH2_ADDR
-# DAC tile 采样率与织物时钟（供 GUI 时间轴/速率换算使用）。
-DAC_XY_FS = DAC_TILE_FS                  # 6.0 GS/s
-DAC_AXIS_HZ = DAC_FABRIC_HZ              # 93.75 MHz
+# Backward-compatible aliases used by older GUI/tests. They now point at the
+# actual custom RFDC defaults instead of the retired 1.2 GS/s / 300 MHz path.
+DAC_XY_FS = DEFAULT_WAVEFORM_SAMPLE_RATE_HZ
+DAC_AXIS_HZ = DEFAULT_AXIS_HZ
 # 单帧固定字节数 / 样本数：一个 256-bit DAC 字 = 32B = 16 个 int16 lane。
 FIXED_DATA_BYTES = 4096
 NUM_SAMPLES = FIXED_DATA_BYTES // 2
+INT16_PER_BEAT = 16
+INT16_PER_DACWORD = 16
 
 DEFAULT_BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "192.168.1.128")
 DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "1234"))
@@ -72,35 +87,42 @@ def _normalize_waveform_int16(data_int16: np.ndarray, sample_count: int = NUM_SA
     return np.concatenate([data_int16, pad])
 
 
-def iter_udp_waveform_packets(wave_bytes: bytes, ddr_addr: int):
-    """把任意长度的波形字节流切成 16B 一组，封装成 UDP DDR 写包。
+def iter_udp_waveform_packets(wave_bytes: bytes | np.ndarray, ddr_addr: int, sample_count: int | None = None):
+    """把任意长度的波形字节流切成 32B 一组，封装成 UDP DDR 写包。
 
-    每包：[magic(u64), ddr_addr(u64), low(u64), high(u64)] 小端。
-    长度补齐到 16B。"""
-    if len(wave_bytes) % 16 != 0:
-        wave_bytes += b"\x00" * (16 - (len(wave_bytes) % 16))
+    每包：[magic(u64), ddr_addr(u64), data0..data3(u64)] 小端。
+    网口写 DDR 的包粒度和播放缓冲的 256-bit / 32B DAC beat 对齐。"""
+    if isinstance(wave_bytes, np.ndarray):
+        samples = _normalize_waveform_int16(wave_bytes, sample_count=sample_count or len(wave_bytes))
+        payload_bytes = np.ascontiguousarray(samples, dtype="<i2").tobytes()
+    else:
+        payload_bytes = wave_bytes
+    if len(payload_bytes) % 32 != 0:
+        payload_bytes += b"\x00" * (32 - (len(payload_bytes) % 32))
 
     base_addr = int(ddr_addr) & 0xFFFFFFFFFFFFFFFF
-    for offset in range(0, len(wave_bytes), 16):
-        low, high = struct.unpack("<QQ", wave_bytes[offset:offset + 16])
-        yield struct.pack("<QQQQ", UDP_WAVE_DDR_MAGIC, base_addr + offset, low, high)
+    for offset in range(0, len(payload_bytes), 32):
+        data_words = struct.unpack("<QQQQ", payload_bytes[offset:offset + 32])
+        yield struct.pack("<QQQQQQ", UDP_WAVE_DDR_MAGIC, base_addr + offset, *data_words)
 
 
 # ============================================================
 # 2. 波形生成（DC 复基带，单频 CW）
 # ============================================================
 def build_dc_iq_tone(n_bytes: int, amp: float = TONE_AMP) -> np.ndarray:
-    """生成一段「常数填充」的 IQ DDR 缓冲。
+    """生成一段 DC IQ DDR 缓冲。
 
     n_bytes 必须为 32 的倍数（一个 256-bit DAC 字 = 32B）。
-    返回 int16 数组（小端写入 DDR），每个 lane 都是同一常数 C。
+    返回 int16 数组（小端写入 DDR），偶数 lane 是常数 I，奇数 lane 是 Q=0。
     经 NCO 上变频后等价于 DC 复基带 -> 单一 NCO 频率的 CW。"""
     if n_bytes % 32 != 0:
         n_bytes += 32 - (n_bytes % 32)
     c = int(round(float(amp) * 32767))
     c = max(-32768, min(32767, c))
     n_samples = n_bytes // 2
-    return np.full(n_samples, c, dtype=np.int16)
+    wave = np.zeros(n_samples, dtype=np.int16)
+    wave[0::2] = c
+    return wave
 
 
 # ============================================================
@@ -242,8 +264,8 @@ def parse_args():
                         help="Per-channel DDR buffer size in bytes (32B aligned)")
     parser.add_argument("--tone-amp", type=float, default=TONE_AMP,
                         help="Per-lane amplitude as a fraction of full scale (0..1)")
-    parser.add_argument("--channels", default="1,2,3,4",
-                        help="Comma-separated executor channels to play (1..4 -> DAC tiles 0..3)")
+    parser.add_argument("--channels", default="1,2,3,4,5,6,7,8",
+                        help="Comma-separated executor channels to play (1..8 -> physical DAC slices)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate plots and waveform dumps without connecting to hardware")
     parser.add_argument("--output-dir", default=".", help="Directory for generated plots and dumps")
@@ -265,8 +287,8 @@ def main():
 
     channels = sorted({int(c) for c in args.channels.split(",") if c.strip()})
     for ch in channels:
-        if ch < 1 or ch > 4:
-            raise SystemExit(f"channel {ch} out of range (1..4)")
+        if ch < 1 or ch > 8:
+            raise SystemExit(f"channel {ch} out of range (1..8)")
 
     tone_bytes = int(args.tone_bytes)
     if tone_bytes % 32 != 0:

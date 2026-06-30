@@ -42,8 +42,17 @@ object RfdcCustomXczu47drConfig {
   private val ncoFreqGHz = "1.5"
 
   // Used DAC slices per tile: block 0 and block 2 (the two physical DACs).
+  // Vivado RFDC GUI/IP parameter encodings, not Vitis driver encodings.
+  // Band=4 is Vivado's "Multi x4" mode. It keeps slice2's fine mixer path
+  // independent and exposes the sX2_axis stream instead of collapsing the
+  // dual-slice IQ configuration into only sX0_axis.
+  private val dacBandMultiX4 = "4"
+  private val dacMixerModeC2R = "1"
+  private val dacMixerTypeFine = "2"
+  private val dacDataTypeIQ = "1"
   private val usedSlices = Seq("0", "2")
   private val tiles = Seq("0", "1", "2", "3")
+  private val usedAxisPorts = for (t <- tiles; s <- usedSlices) yield s"s$t${s}_axis"
 
   private val configEntries: Seq[String] = {
     val adcDisable =
@@ -56,7 +65,8 @@ object RfdcCustomXczu47drConfig {
       val base = Seq(
         s"CONFIG.DAC${t}_Enable {1}",
         s"CONFIG.DAC${t}_Sampling_Rate {6.0}",
-        s"CONFIG.DAC${t}_Clock_Source {6}"
+        s"CONFIG.DAC${t}_Clock_Source {6}",
+        s"CONFIG.DAC${t}_Band {$dacBandMultiX4}"
       )
       if (t == "2")
         base ++ Seq(
@@ -71,14 +81,14 @@ object RfdcCustomXczu47drConfig {
         )
     }
 
-    // Per used-slice datapath: enable, 2x interpolation, C2R fine-NCO mixer,
+    // Per used-slice datapath: enable, 8x interpolation, C2R fine-NCO mixer,
     // complex (IQ) input data type, Zone2, and the default NCO frequency.
     val sliceCfg = for (t <- tiles; s <- usedSlices) yield Seq(
       s"CONFIG.DAC_Slice${t}${s}_Enable {true}",
       s"CONFIG.DAC_Interpolation_Mode${t}${s} {$interpolationMode}",
-      s"CONFIG.DAC_Mixer_Mode${t}${s} {1}",
-      s"CONFIG.DAC_Mixer_Type${t}${s} {2}",
-      s"CONFIG.DAC_Data_Type${t}${s} {1}",
+      s"CONFIG.DAC_Mixer_Mode${t}${s} {$dacMixerModeC2R}",
+      s"CONFIG.DAC_Mixer_Type${t}${s} {$dacMixerTypeFine}",
+      s"CONFIG.DAC_Data_Type${t}${s} {$dacDataTypeIQ}",
       s"CONFIG.DAC_NCO_Freq${t}${s} {$ncoFreqGHz}",
       s"CONFIG.DAC_Nyquist${t}${s} {1}"
     )
@@ -106,7 +116,7 @@ namespace eval ::rfdc_custom_xczu47dr {
   proc axis_freq_hz {} { return $axisFreqHz }
   proc refclk_freq_hz {} { return $refclkFreqHz }
   proc outclk_freq_hz {} { return $outclkFreqHz }
-  proc associated_busif {} { return {s00_axis:s10_axis:s20_axis:s30_axis} }
+  proc associated_busif {} { return {${usedAxisPorts.mkString(":")}} }
 
   proc config {} {
     return [list \\
@@ -175,17 +185,32 @@ module RfdcCustomXczu47dr (
     input  [255:0] s00_axis_tdata,
     input          s00_axis_tvalid,
     output         s00_axis_tready,
+    input  [255:0] s02_axis_tdata,
+    input          s02_axis_tvalid,
+    output         s02_axis_tready,
     input  [255:0] s10_axis_tdata,
     input          s10_axis_tvalid,
     output         s10_axis_tready,
+    input  [255:0] s12_axis_tdata,
+    input          s12_axis_tvalid,
+    output         s12_axis_tready,
     input  [255:0] s20_axis_tdata,
     input          s20_axis_tvalid,
     output         s20_axis_tready,
+    input  [255:0] s22_axis_tdata,
+    input          s22_axis_tvalid,
+    output         s22_axis_tready,
     input  [255:0] s30_axis_tdata,
     input          s30_axis_tvalid,
     output         s30_axis_tready,
+    input  [255:0] s32_axis_tdata,
+    input          s32_axis_tvalid,
+    output         s32_axis_tready,
     output         irq
 );
+
+  wire [255:0] unused_multiband_axis_tdata = 256'b0;
+  wire         unused_multiband_axis_tvalid = 1'b1;
 
   rfdc_custom_xczu47dr_ip rfdc_custom_xczu47dr_ip_i (
       .s_axi_aclk(s_axi_aclk),
@@ -242,15 +267,51 @@ module RfdcCustomXczu47dr (
       .s00_axis_tdata(s00_axis_tdata),
       .s00_axis_tvalid(s00_axis_tvalid),
       .s00_axis_tready(s00_axis_tready),
+      .s01_axis_tdata(unused_multiband_axis_tdata),
+      .s01_axis_tvalid(unused_multiband_axis_tvalid),
+      .s01_axis_tready(),
+      .s02_axis_tdata(s02_axis_tdata),
+      .s02_axis_tvalid(s02_axis_tvalid),
+      .s02_axis_tready(s02_axis_tready),
+      .s03_axis_tdata(unused_multiband_axis_tdata),
+      .s03_axis_tvalid(unused_multiband_axis_tvalid),
+      .s03_axis_tready(),
       .s10_axis_tdata(s10_axis_tdata),
       .s10_axis_tvalid(s10_axis_tvalid),
       .s10_axis_tready(s10_axis_tready),
+      .s11_axis_tdata(unused_multiband_axis_tdata),
+      .s11_axis_tvalid(unused_multiband_axis_tvalid),
+      .s11_axis_tready(),
+      .s12_axis_tdata(s12_axis_tdata),
+      .s12_axis_tvalid(s12_axis_tvalid),
+      .s12_axis_tready(s12_axis_tready),
+      .s13_axis_tdata(unused_multiband_axis_tdata),
+      .s13_axis_tvalid(unused_multiband_axis_tvalid),
+      .s13_axis_tready(),
       .s20_axis_tdata(s20_axis_tdata),
       .s20_axis_tvalid(s20_axis_tvalid),
       .s20_axis_tready(s20_axis_tready),
+      .s21_axis_tdata(unused_multiband_axis_tdata),
+      .s21_axis_tvalid(unused_multiband_axis_tvalid),
+      .s21_axis_tready(),
+      .s22_axis_tdata(s22_axis_tdata),
+      .s22_axis_tvalid(s22_axis_tvalid),
+      .s22_axis_tready(s22_axis_tready),
+      .s23_axis_tdata(unused_multiband_axis_tdata),
+      .s23_axis_tvalid(unused_multiband_axis_tvalid),
+      .s23_axis_tready(),
       .s30_axis_tdata(s30_axis_tdata),
       .s30_axis_tvalid(s30_axis_tvalid),
       .s30_axis_tready(s30_axis_tready),
+      .s31_axis_tdata(unused_multiband_axis_tdata),
+      .s31_axis_tvalid(unused_multiband_axis_tvalid),
+      .s31_axis_tready(),
+      .s32_axis_tdata(s32_axis_tdata),
+      .s32_axis_tvalid(s32_axis_tvalid),
+      .s32_axis_tready(s32_axis_tready),
+      .s33_axis_tdata(unused_multiband_axis_tdata),
+      .s33_axis_tvalid(unused_multiband_axis_tvalid),
+      .s33_axis_tready(),
       .irq(irq)
   );
 

@@ -14,12 +14,12 @@ module tb_udp_protocol;
   wire        instr64_tvalid;
   wire [63:0] instr64_tdata;
   wire [63:0] awaddr;
-  wire [127:0] wdata;
+  wire [255:0] wdata;
   wire        awvalid;
   wire        wvalid;
   wire [2:0]  dbg_state;
   wire [31:0] dbg_write_count;
-  wire [127:0] dbg_last_wdata;
+  wire [255:0] dbg_last_wdata;
 
   reg         instr128_tready = 1'b1;
   wire [127:0] instr128_tdata;
@@ -114,10 +114,12 @@ module tb_udp_protocol;
     send_word(DDR_X_ADDR);
     send_word(64'h0003000200010000);
     send_word(64'h0007000600050004);
+    send_word(64'h000b000a00090008);
+    send_word(64'h000f000e000d000c);
     repeat (4) @(negedge clk);
 
     check_condition(dbg_write_count == 32'd1, "writer did not accept one waveform write");
-    check_condition(dbg_last_wdata == 128'h00070006000500040003000200010000, "writer 128-bit lane order mismatch");
+    check_condition(dbg_last_wdata == 256'h000f000e000d000c000b000a0009000800070006000500040003000200010000, "writer 256-bit lane order mismatch");
 
     send_word(64'h0000100000000012);
     send_word(DDR_X_ADDR);
