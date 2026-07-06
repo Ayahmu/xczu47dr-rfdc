@@ -535,10 +535,17 @@ def save_ezq_wave_bundle(
     bundle_meta: dict[str, Any] = {
         "mode": metadata.get("mode", "ezq"),
         "layout": metadata.get("layout", host.DEFAULT_DDR_LAYOUT),
+        "sample_rate_hz": metadata.get("sample_rate_hz"),
+        "axis_freq_hz": metadata.get("axis_freq_hz"),
+        "rfdc_interpolation": metadata.get("rfdc_interpolation"),
+        "analog_sample_rate_hz": metadata.get("analog_sample_rate_hz"),
         "encoding": "ezq-compatible",
         "channel_format": channel_format,
         "channels": [],
     }
+    for key in ("ezq", "tile_bytes", "superblock_bytes", "beat_bytes", "lane_bytes", "lanes"):
+        if key in metadata:
+            bundle_meta[key] = metadata[key]
     for channel, wave in sorted(channel_waves.items()):
         interleaved = ezq_wave_to_interleaved_int16(wave, wave_format=channel_format)
         packed = ezq_wave_to_packed_int32(wave, wave_format=channel_format)

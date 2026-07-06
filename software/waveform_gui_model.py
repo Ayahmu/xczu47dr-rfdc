@@ -78,6 +78,37 @@ class ChannelWaveformConfig:
 
 
 @dataclass(slots=True)
+class EzqPulseConfig:
+    f10_hz: float = 4.6e9
+    f21_hz: float = 4.35e9
+    fc_hz: float = 4.5e9
+    nonlinearity_hz: float = -250e6
+    pi_amp: float = 0.55
+    pi_len_s: float = 60e-9
+    pi_fwhm_s: float = 30e-9
+    pi_alpha: float = 0.5
+    pi_df_hz: float = 0.0
+    xy_phase_rad: float = 0.0
+    z_offset: float = 0.0
+    pi_amp_z: float = 0.0
+    pi_len_z_s: float = 60e-9
+    readout_freq_hz: float = 6.75e9
+    readout_fc_hz: float = 6.65e9
+    readout_len_s: float = 1e-6
+    readout_power_dbm: float = -20.0
+    ring_power_dbm: float = -20.0
+    ring_len_s: float = 100e-9
+    readout_start_s: float = 0.0
+    adc_start_delay_s: float = 0.0
+    timing_lag_xy_s: float = 0.0
+    timing_lag_z_s: float = 0.0
+    timing_lag_read_s: float = 0.0
+    repeat: int = 1
+    period_s: float = 1e-6
+    channel_mask: int = 0xFF
+
+
+@dataclass(slots=True)
 class WaveformConfig:
     mode: str = "iq-sine"
     ddr_layout: str = host.DEFAULT_DDR_LAYOUT
@@ -119,6 +150,7 @@ class WaveformConfig:
     ch6: ChannelWaveformConfig | None = None
     ch7: ChannelWaveformConfig | None = None
     ch8: ChannelWaveformConfig | None = None
+    ezq: EzqPulseConfig = field(default_factory=EzqPulseConfig)
 
 
 @dataclass(slots=True)
@@ -288,6 +320,50 @@ def _channel_config_from_dict(data: object) -> ChannelWaveformConfig | None:
     return ChannelWaveformConfig(**kwargs)
 
 
+def _ezq_config_to_dict(config: EzqPulseConfig) -> dict[str, object]:
+    return {
+        "f10_hz": config.f10_hz,
+        "f21_hz": config.f21_hz,
+        "fc_hz": config.fc_hz,
+        "nonlinearity_hz": config.nonlinearity_hz,
+        "pi_amp": config.pi_amp,
+        "pi_len_s": config.pi_len_s,
+        "pi_fwhm_s": config.pi_fwhm_s,
+        "pi_alpha": config.pi_alpha,
+        "pi_df_hz": config.pi_df_hz,
+        "xy_phase_rad": config.xy_phase_rad,
+        "z_offset": config.z_offset,
+        "pi_amp_z": config.pi_amp_z,
+        "pi_len_z_s": config.pi_len_z_s,
+        "readout_freq_hz": config.readout_freq_hz,
+        "readout_fc_hz": config.readout_fc_hz,
+        "readout_len_s": config.readout_len_s,
+        "readout_power_dbm": config.readout_power_dbm,
+        "ring_power_dbm": config.ring_power_dbm,
+        "ring_len_s": config.ring_len_s,
+        "readout_start_s": config.readout_start_s,
+        "adc_start_delay_s": config.adc_start_delay_s,
+        "timing_lag_xy_s": config.timing_lag_xy_s,
+        "timing_lag_z_s": config.timing_lag_z_s,
+        "timing_lag_read_s": config.timing_lag_read_s,
+        "repeat": config.repeat,
+        "period_s": config.period_s,
+        "channel_mask": config.channel_mask,
+    }
+
+
+def _ezq_config_from_dict(data: object) -> EzqPulseConfig:
+    if not isinstance(data, dict):
+        return EzqPulseConfig()
+    allowed = set(_ezq_config_to_dict(EzqPulseConfig()))
+    kwargs = {key: value for key, value in data.items() if key in allowed}
+    if "channel_mask" in kwargs:
+        kwargs["channel_mask"] = int(kwargs["channel_mask"])
+    if "repeat" in kwargs:
+        kwargs["repeat"] = int(kwargs["repeat"])
+    return EzqPulseConfig(**kwargs)
+
+
 def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
     return {
         "mode": config.mode,
@@ -330,6 +406,7 @@ def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
         "ch6": _channel_config_to_dict(config.ch6),
         "ch7": _channel_config_to_dict(config.ch7),
         "ch8": _channel_config_to_dict(config.ch8),
+        "ezq": _ezq_config_to_dict(config.ezq),
     }
 
 
@@ -378,6 +455,7 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
     for channel in ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"):
         if channel in data:
             kwargs[channel] = _channel_config_from_dict(data[channel])
+    kwargs["ezq"] = _ezq_config_from_dict(data.get("ezq"))
     if kwargs.get("ddr_layout") not in {
         host.DDR_LAYOUT_CONTIGUOUS,
         host.DDR_LAYOUT_TILED,
@@ -514,6 +592,8 @@ def _metadata_base(config: WaveformConfig) -> MetadataBase:
 
 
 def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
+    if config.mode.lower() == "ezq-quantum":
+        return _generate_ezq_quantum_waveforms(config)
     if any(channel is not None for channel in (config.ch1, config.ch2, config.ch3, config.ch4, config.ch5, config.ch6, config.ch7, config.ch8)):
         return _generate_independent_waveforms(config)
 
@@ -644,6 +724,151 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     raise ValueError(f"Unsupported waveform mode: {config.mode}")
+
+
+def _ezq_xy_baseband_hz(ezq: EzqPulseConfig) -> float:
+    return float(ezq.f10_hz) - float(ezq.fc_hz) + float(ezq.pi_df_hz)
+
+
+def _ezq_readout_baseband_hz(ezq: EzqPulseConfig) -> float:
+    return float(ezq.readout_freq_hz) - float(ezq.readout_fc_hz)
+
+
+def _ezq_amplitude_codes(normalized: float) -> int:
+    return int(round(np.clip(float(normalized), -1.0, 1.0) * 32767.0))
+
+
+def _ezq_channel_enabled(ezq: EzqPulseConfig, channel: int) -> bool:
+    return bool(int(ezq.channel_mask) & (1 << (int(channel) - 1)))
+
+
+def _generate_ezq_quantum_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
+    ezq = config.ezq
+    baseband_hz = _ezq_xy_baseband_hz(ezq)
+    _validate_iq_frequency(baseband_hz, config.sample_rate_hz, "ezq XY")
+    if float(ezq.pi_len_s) <= 0.0:
+        raise ValueError("ezq pi_len_s must be positive")
+    if float(ezq.pi_fwhm_s) <= 0.0:
+        raise ValueError("ezq pi_fwhm_s must be positive")
+    if int(ezq.repeat) < 1:
+        raise ValueError("ezq repeat must be at least 1")
+
+    active_samples = waveform_tools.iq_duration_to_sample_count(ezq.pi_len_s, config.sample_rate_hz)
+    zero_tail_s = max(float(ezq.period_s) - float(ezq.pi_len_s), 0.0)
+    amplitude_codes = _ezq_amplitude_codes(ezq.pi_amp)
+    use_drag = abs(float(ezq.pi_alpha)) > 1e-12 and abs(float(ezq.nonlinearity_hz)) >= 1.0
+    waves: dict[int, np.ndarray] = {}
+    for channel in range(1, 9):
+        if _ezq_channel_enabled(ezq, channel):
+            wave = waveform_tools.make_iq_gaussian_sine_tile_waveform(
+                baseband_hz,
+                float(ezq.xy_phase_rad),
+                amplitude_codes,
+                config.sample_rate_hz,
+                float(ezq.pi_len_s),
+                sample_count=active_samples,
+                fwhm_s=float(ezq.pi_fwhm_s),
+                q_sign=-1,
+                hls_xy_drag=use_drag,
+                drag_alpha=float(ezq.pi_alpha),
+                drag_delta_hz=float(ezq.nonlinearity_hz) if use_drag else -200e6,
+            )
+        else:
+            wave = np.zeros(active_samples, dtype=np.int16)
+        waves[channel] = waveform_tools.append_iq_zero_tail(wave, zero_tail_s, config.sample_rate_hz)
+
+    metadata = waveform_tools.build_metadata(
+        mode="ezq-quantum",
+        sample_rate_hz=config.sample_rate_hz,
+        axis_freq_hz=config.axis_freq_hz,
+        encoding="signed-iq-interleaved",
+        loop=False,
+        layout=config.ddr_layout,
+        ch1_label=CHANNEL_LABELS["ch1"],
+        ch2_label=CHANNEL_LABELS["ch2"],
+        ch3_label=CHANNEL_LABELS["ch3"],
+        ch4_label=CHANNEL_LABELS["ch4"],
+        ch5_label=CHANNEL_LABELS["ch5"],
+        ch6_label=CHANNEL_LABELS["ch6"],
+        ch7_label=CHANNEL_LABELS["ch7"],
+        ch8_label=CHANNEL_LABELS["ch8"],
+        ezq=_ezq_metadata(config),
+        **_metadata_base(config),
+    )
+    for channel in range(1, 9):
+        metadata[f"ch{channel}"] = _ezq_channel_metadata(config, channel, amplitude_codes, baseband_hz, zero_tail_s)
+        metadata[f"ch{channel}_delay_cycles"] = metadata[f"ch{channel}"]["delay_cycles"]
+    _apply_generated_lengths(
+        metadata,
+        (waves[1], waves[2], waves[3], waves[4], waves[5], waves[6], waves[7], waves[8]),
+        sample_rate_hz=config.sample_rate_hz,
+    )
+    return GeneratedWaveforms(
+        ch1=waves[1],
+        ch2=waves[2],
+        ch3=waves[3],
+        ch4=waves[4],
+        ch5=waves[5],
+        ch6=waves[6],
+        ch7=waves[7],
+        ch8=waves[8],
+        metadata=metadata,
+    )
+
+
+def _ezq_metadata(config: WaveformConfig) -> dict[str, object]:
+    ezq = config.ezq
+    return {
+        **_ezq_config_to_dict(ezq),
+        "xy_baseband_hz": _ezq_xy_baseband_hz(ezq),
+        "readout_baseband_hz": _ezq_readout_baseband_hz(ezq),
+        "amplitude_codes": _ezq_amplitude_codes(ezq.pi_amp),
+        "format": "ezq-like single XY pulse per enabled RFDC channel",
+        "frequency_rule": "xy_baseband_hz = f10_hz - fc_hz + pi_df_hz",
+    }
+
+
+def _ezq_channel_metadata(
+    config: WaveformConfig,
+    channel: int,
+    amplitude_codes: int,
+    baseband_hz: float,
+    zero_tail_s: float,
+) -> dict[str, object]:
+    ezq = config.ezq
+    delay_s = float(ezq.timing_lag_xy_s)
+    delay_cycles = waveform_tools.delay_seconds_to_axis_cycles_by_freq(delay_s, config.axis_freq_hz)
+    enabled = _ezq_channel_enabled(ezq, channel)
+    return {
+        "label": CHANNEL_LABELS[f"ch{channel}"],
+        "upload_arg": CHANNEL_UPLOAD_ARGS[f"ch{channel}"],
+        "type": "ezq-xy" if enabled else "off",
+        "role": "xy",
+        "enabled": enabled,
+        "encoding": "signed-iq-interleaved",
+        "semantics": "ez-Q-like Gaussian XY IQ pulse" if enabled else "disabled channel",
+        "f10_hz": float(ezq.f10_hz),
+        "f21_hz": float(ezq.f21_hz),
+        "fc_hz": float(ezq.fc_hz),
+        "nonlinearity_hz": float(ezq.nonlinearity_hz),
+        "freq_hz": float(baseband_hz),
+        "scope_freq_hz": float(baseband_hz),
+        "python_freq_hz": float(baseband_hz),
+        "phase_rad": float(ezq.xy_phase_rad),
+        "pi_df_hz": float(ezq.pi_df_hz),
+        "pi_amp": float(ezq.pi_amp),
+        "amplitude": int(amplitude_codes),
+        "duration_s": float(ezq.pi_len_s),
+        "pi_len_s": float(ezq.pi_len_s),
+        "pi_fwhm_s": float(ezq.pi_fwhm_s),
+        "pi_alpha": float(ezq.pi_alpha),
+        "drag_enabled": abs(float(ezq.pi_alpha)) > 1e-12 and abs(float(ezq.nonlinearity_hz)) >= 1.0,
+        "zero_tail_s": float(zero_tail_s),
+        "delay_s": delay_s,
+        "delay_cycles": delay_cycles,
+        "repeat": int(ezq.repeat),
+        "period_s": float(ezq.period_s),
+    }
 
 
 def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
@@ -952,16 +1177,26 @@ def summarize_waveform(name: str, wave: np.ndarray) -> str:
 
 
 def build_send_summary(config: WaveformConfig, connection: ConnectionConfig) -> str:
-    channel_configs = {
-        "ch1": config.ch1 or ChannelWaveformConfig(waveform_type=config.mode),
-        "ch2": config.ch2 or ChannelWaveformConfig(waveform_type=config.mode),
-        "ch3": config.ch3 or ChannelWaveformConfig(waveform_type="off"),
-        "ch4": config.ch4 or ChannelWaveformConfig(waveform_type="off"),
-        "ch5": config.ch5 or ChannelWaveformConfig(waveform_type="off"),
-        "ch6": config.ch6 or ChannelWaveformConfig(waveform_type="off"),
-        "ch7": config.ch7 or ChannelWaveformConfig(waveform_type="off"),
-        "ch8": config.ch8 or ChannelWaveformConfig(waveform_type="off"),
-    }
+    if config.mode.lower() == "ezq-quantum":
+        baseband_hz = _ezq_xy_baseband_hz(config.ezq)
+        channel_configs = {
+            f"ch{channel}": ChannelWaveformConfig(
+                waveform_type="ezq-xy" if _ezq_channel_enabled(config.ezq, channel) else "off",
+                freq_hz=baseband_hz,
+            )
+            for channel in range(1, 9)
+        }
+    else:
+        channel_configs = {
+            "ch1": config.ch1 or ChannelWaveformConfig(waveform_type=config.mode),
+            "ch2": config.ch2 or ChannelWaveformConfig(waveform_type=config.mode),
+            "ch3": config.ch3 or ChannelWaveformConfig(waveform_type="off"),
+            "ch4": config.ch4 or ChannelWaveformConfig(waveform_type="off"),
+            "ch5": config.ch5 or ChannelWaveformConfig(waveform_type="off"),
+            "ch6": config.ch6 or ChannelWaveformConfig(waveform_type="off"),
+            "ch7": config.ch7 or ChannelWaveformConfig(waveform_type="off"),
+            "ch8": config.ch8 or ChannelWaveformConfig(waveform_type="off"),
+        }
     auto_start = "no, wait for trigger" if config.wait_for_trigger else "yes"
     return "\n".join(
         [
@@ -987,6 +1222,8 @@ def _summarize_channel(config: ChannelWaveformConfig) -> str:
         return f"sine {config.freq_hz:g} Hz"
     if waveform_type == "burst":
         return f"burst {config.freq_hz:g} Hz delay={config.delay_s:g}s duration={config.duration_s:g}s"
+    if waveform_type == "ezq-xy":
+        return f"ez-Q XY {config.freq_hz:g} Hz"
     if waveform_type == "pulse":
         return f"pulse {config.pulse_preset.lower()}"
     if waveform_type == "golden":
@@ -1134,12 +1371,49 @@ def channel_delay_cycles(config: WaveformConfig) -> dict[int, int]:
             for channel, channel_config in channel_configs.items()
             if channel_config is not None and channel_config.waveform_type.lower() != "off"
         }
+    if config.mode.lower() == "ezq-quantum":
+        delay_cycles = waveform_tools.delay_seconds_to_axis_cycles_by_freq(config.ezq.timing_lag_xy_s, config.axis_freq_hz)
+        return {
+            channel: delay_cycles
+            for channel in range(1, 9)
+            if _ezq_channel_enabled(config.ezq, channel)
+        }
     if config.mode.lower() == "burst":
         return {
             1: waveform_tools.delay_seconds_to_axis_cycles_by_freq(config.x_delay_s, config.axis_freq_hz),
             2: waveform_tools.delay_seconds_to_axis_cycles_by_freq(config.y_delay_s, config.axis_freq_hz),
         }
     return {}
+
+
+def ezq_channel_sequences(generated: GeneratedWaveforms) -> dict[int, np.ndarray]:
+    sequences: dict[int, np.ndarray] = {}
+    waves = {
+        1: generated.ch1,
+        2: generated.ch2,
+        3: generated.ch3,
+        4: generated.ch4,
+        5: generated.ch5,
+        6: generated.ch6,
+        7: generated.ch7,
+        8: generated.ch8,
+    }
+    for channel, wave in waves.items():
+        meta = generated.metadata.get(f"ch{channel}")
+        if not isinstance(meta, dict):
+            meta = {}
+        interleaved_words = int(np.asarray(wave, dtype=np.int16).size)
+        length_units = max(1, interleaved_words // 4)
+        delay_cycles = int(meta.get("delay_cycles", generated.metadata.get(f"ch{channel}_delay_cycles", 0)))
+        sequences[channel] = np.array(
+            [
+                [0, length_units, delay_cycles, 4 << 11],
+                [0, length_units, 0, 0x0000],
+                [0, 0, 0, 0x8000],
+            ],
+            dtype="<u2",
+        )
+    return sequences
 
 
 def _tail_nonempty_lines(text: str, limit: int = 6) -> list[str]:
@@ -1183,6 +1457,7 @@ class WaveformController:
                 8: generated.ch8,
             },
             generated.metadata,
+            channel_sequences=ezq_channel_sequences(generated),
             channel_format="interleaved_iq",
             stem="ezq",
         )

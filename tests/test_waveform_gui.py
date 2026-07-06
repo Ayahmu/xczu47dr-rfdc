@@ -72,11 +72,12 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(waveform_gui.from_display_gsps("1"), 1.0e9)
 
     def test_left_controls_define_tabbed_container(self):
-        self.assertEqual(waveform_gui.CONTROL_TABS, ("Setup", "Channels", "ILA Report"))
+        self.assertEqual(waveform_gui.CONTROL_TABS, ("Setup", "Quantum", "Channels", "ILA Report"))
         self.assertEqual(
             waveform_gui.CONTROL_TAB_MARKERS,
-            ("ttk.Notebook", "Setup", "Channels", "ILA Report"),
+            ("ttk.Notebook", "Setup", "Quantum", "Channels", "ILA Report"),
         )
+        self.assertEqual(waveform_gui.WAVEFORM_SOURCE_MODES, ("ezq-quantum", "manual-channels"))
 
     def test_control_tabs_keep_scrollable_content_regions(self):
         self.assertEqual(

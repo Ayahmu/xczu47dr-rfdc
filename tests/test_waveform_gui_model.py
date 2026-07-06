@@ -1,4 +1,5 @@
 import sys
+import json
 import subprocess
 import tempfile
 import unittest
@@ -167,6 +168,109 @@ class WaveformGuiModelTests(unittest.TestCase):
 
         self.assertEqual(settings.waveform.ch1.waveform_type, "dc-iq-cw")
         self.assertEqual(settings.waveform.ch1.amplitude, 16000)
+
+    def test_ezq_settings_round_trip_quantum_parameters(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings_path = Path(temp_dir) / "waveform_gui_settings.json"
+            settings = waveform_gui_model.GuiSettings(
+                waveform=waveform_gui_model.WaveformConfig(
+                    mode="ezq-quantum",
+                    ezq=waveform_gui_model.EzqPulseConfig(
+                        f10_hz=4.61e9,
+                        fc_hz=4.5e9,
+                        pi_df_hz=-10e6,
+                        pi_amp=0.42,
+                        pi_len_s=80e-9,
+                        pi_fwhm_s=35e-9,
+                        channel_mask=0x55,
+                    ),
+                )
+            )
+
+            waveform_gui_model.save_gui_settings(settings, settings_path)
+            loaded = waveform_gui_model.load_gui_settings(settings_path)
+
+        self.assertEqual(loaded.waveform.mode, "ezq-quantum")
+        self.assertEqual(loaded.waveform.ezq.f10_hz, 4.61e9)
+        self.assertEqual(loaded.waveform.ezq.fc_hz, 4.5e9)
+        self.assertEqual(loaded.waveform.ezq.pi_df_hz, -10e6)
+        self.assertEqual(loaded.waveform.ezq.pi_amp, 0.42)
+        self.assertEqual(loaded.waveform.ezq.channel_mask, 0x55)
+
+    def test_ezq_quantum_generates_gaussian_iq_from_frequency_rule_and_mask(self):
+        config = waveform_gui_model.WaveformConfig(
+            mode="ezq-quantum",
+            sample_rate_hz=host.DAC_XY_FS,
+            axis_freq_hz=100_000_000.0,
+            ezq=waveform_gui_model.EzqPulseConfig(
+                f10_hz=4.62e9,
+                fc_hz=4.5e9,
+                pi_df_hz=-20e6,
+                pi_amp=0.5,
+                pi_len_s=60e-9,
+                pi_fwhm_s=30e-9,
+                timing_lag_xy_s=80e-9,
+                period_s=120e-9,
+                channel_mask=0b00000101,
+            ),
+        )
+
+        result = waveform_gui_model.generate_waveforms(config)
+
+        self.assertEqual(result.metadata["mode"], "ezq-quantum")
+        self.assertEqual(result.metadata["ezq"]["xy_baseband_hz"], 100e6)
+        self.assertEqual(result.metadata["ch1"]["type"], "ezq-xy")
+        self.assertEqual(result.metadata["ch2"]["type"], "off")
+        self.assertEqual(result.metadata["ch3"]["type"], "ezq-xy")
+        self.assertEqual(result.metadata["ch1"]["delay_cycles"], 8)
+        self.assertGreater(int(np.max(np.abs(result.ch1))), 1000)
+        self.assertFalse(np.any(result.ch2))
+        self.assertGreater(int(np.max(np.abs(result.ch3))), 1000)
+        self.assertFalse(np.any(result.ch1[-16:]))
+
+    def test_ezq_frequency_above_input_nyquist_is_rejected(self):
+        config = waveform_gui_model.WaveformConfig(
+            mode="ezq-quantum",
+            sample_rate_hz=host.DAC_XY_FS,
+            ezq=waveform_gui_model.EzqPulseConfig(f10_hz=5.0e9, fc_hz=4.5e9),
+        )
+
+        with self.assertRaisesRegex(ValueError, "exceeds the RFDC input Nyquist"):
+            waveform_gui_model.generate_waveforms(config)
+
+    def test_ezq_channel_sequences_use_generated_delay_and_length(self):
+        config = waveform_gui_model.WaveformConfig(
+            mode="ezq-quantum",
+            sample_rate_hz=host.DAC_XY_FS,
+            axis_freq_hz=100_000_000.0,
+            ezq=waveform_gui_model.EzqPulseConfig(timing_lag_xy_s=90e-9, period_s=120e-9),
+        )
+        generated = waveform_gui_model.generate_waveforms(config)
+
+        sequences = waveform_gui_model.ezq_channel_sequences(generated)
+
+        self.assertEqual(int(sequences[1][0][2]), 9)
+        self.assertEqual(int(sequences[1][1][1]), len(generated.ch1) // 4)
+        self.assertEqual(int(sequences[1][2][3]), 0x8000)
+
+    def test_controller_saves_ezq_metadata_with_quantum_profile(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = waveform_gui_model.WaveformConfig(
+                mode="ezq-quantum",
+                output_dir=Path(temp_dir),
+                ezq=waveform_gui_model.EzqPulseConfig(f10_hz=4.61e9, fc_hz=4.5e9, channel_mask=0x01),
+                dry_run=True,
+            )
+            controller = waveform_gui_model.WaveformController(uploader=mock.Mock())
+
+            controller.run(config, waveform_gui_model.ConnectionConfig())
+            saved_meta = json.loads((Path(temp_dir) / "ezq_metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue((Path(temp_dir) / "ch1_ezq_wave_iq.npy").exists())
+            self.assertTrue((Path(temp_dir) / "ch1_ezq_seq.npy").exists())
+
+        self.assertEqual(saved_meta["mode"], "ezq-quantum")
+        self.assertEqual(saved_meta["ezq"]["xy_baseband_hz"], 110e6)
+        self.assertEqual(saved_meta["channels"][0]["type"], "ezq-xy")
 
     def test_ila_capture_command_uses_current_python_connection_and_artifacts(self):
         connection = waveform_gui_model.ConnectionConfig(

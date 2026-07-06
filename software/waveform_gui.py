@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import numpy as np
 
 import host
 import waveform_gui_model as model
@@ -68,7 +69,12 @@ GLOBAL_AXIS_FREQ_LABEL = "AXIS clock (MHz)"
 ILA_CAPTURE_BUTTON_TEXT = "Run ILA Capture + Report"
 ILA_PROGRAM_MODES = ("never", "auto", "always")
 DEFAULT_ILA_PROGRAM_MODE = "never"
-CONTROL_TABS = ("Setup", "Channels", "ILA Report")
+CONTROL_TABS = ("Setup", "Quantum", "Channels", "ILA Report")
+WAVEFORM_SOURCE_MODES = ("ezq-quantum", "manual-channels")
+WAVEFORM_SOURCE_LABELS = {
+    "ezq-quantum": "ez-Q Quantum Pulse",
+    "manual-channels": "Manual CH1-CH8",
+}
 
 CHANNEL_FIELD_GROUPS = {
     "dc-iq-cw": ("amplitude", "duration_s"),
@@ -85,6 +91,27 @@ LABELS = {
     "phase_rad": "Phase (rad)",
     "amplitude": "Amplitude (DAC codes)",
     "duration_s": "Length (ns)",
+}
+
+EZQ_FIELD_UNITS = {
+    "f10_hz": "mhz",
+    "f21_hz": "mhz",
+    "fc_hz": "mhz",
+    "nonlinearity_hz": "mhz",
+    "pi_df_hz": "mhz",
+    "readout_freq_hz": "mhz",
+    "readout_fc_hz": "mhz",
+    "pi_len_s": "ns",
+    "pi_fwhm_s": "ns",
+    "pi_len_z_s": "ns",
+    "readout_len_s": "ns",
+    "ring_len_s": "ns",
+    "readout_start_s": "ns",
+    "adc_start_delay_s": "ns",
+    "timing_lag_xy_s": "ns",
+    "timing_lag_z_s": "ns",
+    "timing_lag_read_s": "ns",
+    "period_s": "ns",
 }
 
 
@@ -179,6 +206,7 @@ class WaveformSenderApp(ttk.Frame):
 
     def _build_variables(self) -> None:
         settings = model.load_gui_settings(self.settings_path)
+        settings_exists = self.settings_path.exists()
         defaults = settings.waveform
         connection = settings.connection
         self.output_dir = tk.StringVar(value=str(defaults.output_dir))
@@ -191,9 +219,16 @@ class WaveformSenderApp(ttk.Frame):
         self.sample_rate_hz = tk.StringVar(value=to_display_gsps(defaults.sample_rate_hz))
         self.rfdc_interpolation = tk.StringVar(value=str(defaults.rfdc_interpolation))
         self.axis_freq_hz = tk.StringVar(value=to_display_mhz(defaults.axis_freq_hz))
+        default_source = "ezq-quantum" if defaults.mode == "ezq-quantum" or not settings_exists else "manual-channels"
+        self.waveform_source = tk.StringVar(value=default_source)
         self.loop = tk.BooleanVar(value=False)
         self.wait_for_trigger = tk.BooleanVar(value=defaults.wait_for_trigger)
         self.dry_run = tk.BooleanVar(value=defaults.dry_run)
+        self.ezq_fields = self._make_ezq_field_variables(defaults.ezq)
+        self.ezq_channel_enabled = {
+            channel: tk.BooleanVar(value=bool(defaults.ezq.channel_mask & (1 << index)))
+            for index, channel in enumerate(CHANNELS)
+        }
         ila_defaults = settings.ila
         self.ila_bitstream_path = tk.StringVar(value=str(ila_defaults.bitstream_path))
         self.ila_ltx_path = tk.StringVar(value=str(ila_defaults.ltx_path))
@@ -228,7 +263,46 @@ class WaveformSenderApp(ttk.Frame):
             "ch8": channel_fields(defaults.y_freq_hz, defaults.y_phase_rad),
         }
         self._apply_channel_settings(defaults)
-        self._settings_loaded = self.settings_path.exists()
+        self._settings_loaded = settings_exists
+
+    def _make_ezq_field_variables(self, ezq: model.EzqPulseConfig) -> dict[str, tk.StringVar]:
+        values = {
+            "f10_hz": ezq.f10_hz,
+            "f21_hz": ezq.f21_hz,
+            "fc_hz": ezq.fc_hz,
+            "nonlinearity_hz": ezq.nonlinearity_hz,
+            "pi_amp": ezq.pi_amp,
+            "pi_len_s": ezq.pi_len_s,
+            "pi_fwhm_s": ezq.pi_fwhm_s,
+            "pi_alpha": ezq.pi_alpha,
+            "pi_df_hz": ezq.pi_df_hz,
+            "xy_phase_rad": ezq.xy_phase_rad,
+            "z_offset": ezq.z_offset,
+            "pi_amp_z": ezq.pi_amp_z,
+            "pi_len_z_s": ezq.pi_len_z_s,
+            "readout_freq_hz": ezq.readout_freq_hz,
+            "readout_fc_hz": ezq.readout_fc_hz,
+            "readout_len_s": ezq.readout_len_s,
+            "readout_power_dbm": ezq.readout_power_dbm,
+            "ring_power_dbm": ezq.ring_power_dbm,
+            "ring_len_s": ezq.ring_len_s,
+            "readout_start_s": ezq.readout_start_s,
+            "adc_start_delay_s": ezq.adc_start_delay_s,
+            "timing_lag_xy_s": ezq.timing_lag_xy_s,
+            "timing_lag_z_s": ezq.timing_lag_z_s,
+            "timing_lag_read_s": ezq.timing_lag_read_s,
+            "repeat": ezq.repeat,
+            "period_s": ezq.period_s,
+        }
+        return {key: tk.StringVar(value=self._format_ezq_display_value(key, value)) for key, value in values.items()}
+
+    def _format_ezq_display_value(self, key: str, value: float | int) -> str:
+        unit = EZQ_FIELD_UNITS.get(key)
+        if unit == "mhz":
+            return to_display_mhz(float(value))
+        if unit == "ns":
+            return to_display_ns(float(value))
+        return _format_display_value(float(value))
 
     def _apply_channel_settings(self, config: model.WaveformConfig) -> None:
         channel_configs = {channel: getattr(config, channel) for channel in CHANNELS}
@@ -303,8 +377,9 @@ class WaveformSenderApp(ttk.Frame):
         self.control_tab_canvases: list[tk.Canvas] = []
 
         setup_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[0])
-        channels_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[1])
-        ila_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[2])
+        quantum_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[1])
+        channels_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[2])
+        ila_controls = self._build_control_tab(self.control_notebook, CONTROL_TABS[3])
 
         self._add_section_label(setup_controls, "Target Connection", 0)
         self._add_entry(setup_controls, "Board IP", self.ip, 1)
@@ -314,17 +389,31 @@ class WaveformSenderApp(ttk.Frame):
         self._add_entry(setup_controls, "Timeout (s)", self.timeout_s, 5)
         self._add_entry(setup_controls, "Post-upload sleep (s)", self.post_upload_sleep_s, 6)
 
-        self._add_section_label(setup_controls, "Global Playback", 7)
-        self._add_entry(setup_controls, GLOBAL_SAMPLE_RATE_LABEL, self.sample_rate_hz, 8)
-        self._add_entry(setup_controls, GLOBAL_RFDC_INTERPOLATION_LABEL, self.rfdc_interpolation, 9)
-        self._add_entry(setup_controls, GLOBAL_AXIS_FREQ_LABEL, self.axis_freq_hz, 10)
-        ttk.Checkbutton(setup_controls, text="Wait for trigger", variable=self.wait_for_trigger).grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(setup_controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=12, column=0, columnspan=2, sticky="w")
+        self._add_section_label(setup_controls, "Waveform Source", 7)
+        ttk.Label(setup_controls, text="Source", style="Card.TLabel", wraplength=180).grid(row=8, column=0, sticky="w", pady=4, padx=(0, 10))
+        source_menu = ttk.Combobox(
+            setup_controls,
+            textvariable=self.waveform_source,
+            values=WAVEFORM_SOURCE_MODES,
+            state="readonly",
+            width=18,
+        )
+        source_menu.grid(row=8, column=1, sticky="ew", pady=4)
+        self._disable_combobox_mousewheel(source_menu)
 
-        self._add_section_label(setup_controls, "Artifacts", 13)
-        self._add_entry(setup_controls, "Output dir", self.output_dir, 14)
-        ttk.Button(setup_controls, text="Browse", command=self._browse_output_dir).grid(row=15, column=1, sticky="e", pady=(0, 8))
-        self._build_action_buttons(setup_controls, 16)
+        self._add_section_label(setup_controls, "Global Playback", 9)
+        self._add_entry(setup_controls, GLOBAL_SAMPLE_RATE_LABEL, self.sample_rate_hz, 10)
+        self._add_entry(setup_controls, GLOBAL_RFDC_INTERPOLATION_LABEL, self.rfdc_interpolation, 11)
+        self._add_entry(setup_controls, GLOBAL_AXIS_FREQ_LABEL, self.axis_freq_hz, 12)
+        ttk.Checkbutton(setup_controls, text="Wait for trigger", variable=self.wait_for_trigger).grid(row=13, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(setup_controls, text="Dry run, do not send UDP", variable=self.dry_run).grid(row=14, column=0, columnspan=2, sticky="w")
+
+        self._add_section_label(setup_controls, "Artifacts", 15)
+        self._add_entry(setup_controls, "Output dir", self.output_dir, 16)
+        ttk.Button(setup_controls, text="Browse", command=self._browse_output_dir).grid(row=17, column=1, sticky="e", pady=(0, 8))
+        self._build_action_buttons(setup_controls, 18)
+
+        self._build_quantum_panel(quantum_controls)
 
         self.channel_frames = {}
         for index, channel in enumerate(CHANNELS):
@@ -358,9 +447,13 @@ class WaveformSenderApp(ttk.Frame):
         right.columnconfigure(0, weight=1)
 
         self.figure = Figure(figsize=(7, 10.4), dpi=100, facecolor=COLOR_CARD)
-        self.preview_axes = [cast(Any, self.figure.add_subplot(8, 1, index + 1)) for index in range(8)]
-        self.ax_x = self.preview_axes[0]
-        self.ax_y = self.preview_axes[1]
+        grid = self.figure.add_gridspec(3, 1, height_ratios=[1.0, 2.0, 1.2])
+        self.timeline_axis = cast(Any, self.figure.add_subplot(grid[0, 0]))
+        self.wave_axis = cast(Any, self.figure.add_subplot(grid[1, 0]))
+        self.fft_axis = cast(Any, self.figure.add_subplot(grid[2, 0]))
+        self.preview_axes = [self.timeline_axis, self.wave_axis, self.fft_axis]
+        self.ax_x = self.wave_axis
+        self.ax_y = self.fft_axis
         self.canvas = FigureCanvasTkAgg(self.figure, master=right)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
@@ -461,6 +554,75 @@ class WaveformSenderApp(ttk.Frame):
         self._disable_combobox_mousewheel(menu)
         menu.bind("<<ComboboxSelected>>", lambda _event, channel=channel: self._set_channel_fields(channel))
 
+    def _build_quantum_panel(self, parent: ttk.Frame) -> None:
+        row = 0
+        self._add_section_label(parent, "Qubit Frequencies", row)
+        row += 1
+        for label, key in (
+            ("f10 (MHz)", "f10_hz"),
+            ("f21 (MHz)", "f21_hz"),
+            ("fc / NCO center (MHz)", "fc_hz"),
+            ("nonlinearity delta (MHz)", "nonlinearity_hz"),
+        ):
+            self._add_ezq_entry(parent, label, key, row)
+            row += 1
+
+        self._add_section_label(parent, "XY Pulse", row)
+        row += 1
+        for label, key in (
+            ("pi_amp (-1..1)", "pi_amp"),
+            ("pi_len (ns)", "pi_len_s"),
+            ("pi_fwhm (ns)", "pi_fwhm_s"),
+            ("pi_alpha / DRAG", "pi_alpha"),
+            ("pi_df (MHz)", "pi_df_hz"),
+            ("xy_phase (rad)", "xy_phase_rad"),
+        ):
+            self._add_ezq_entry(parent, label, key, row)
+            row += 1
+
+        self._add_section_label(parent, "Z / Readout Parameters", row)
+        row += 1
+        for label, key in (
+            ("z_offset", "z_offset"),
+            ("pi_amp_z", "pi_amp_z"),
+            ("pi_len_z (ns)", "pi_len_z_s"),
+            ("readout_freq (MHz)", "readout_freq_hz"),
+            ("readout_fc (MHz)", "readout_fc_hz"),
+            ("readout_len (ns)", "readout_len_s"),
+            ("readout_power (dBm)", "readout_power_dbm"),
+            ("ring_power (dBm)", "ring_power_dbm"),
+            ("ring_len (ns)", "ring_len_s"),
+        ):
+            self._add_ezq_entry(parent, label, key, row)
+            row += 1
+
+        self._add_section_label(parent, "Timing / Channels", row)
+        row += 1
+        for label, key in (
+            ("readout_start (ns)", "readout_start_s"),
+            ("adc_start_delay (ns)", "adc_start_delay_s"),
+            ("timing_lag_xy (ns)", "timing_lag_xy_s"),
+            ("timing_lag_z (ns)", "timing_lag_z_s"),
+            ("timing_lag_read (ns)", "timing_lag_read_s"),
+            ("repeat", "repeat"),
+            ("period (ns)", "period_s"),
+        ):
+            self._add_ezq_entry(parent, label, key, row)
+            row += 1
+
+        channel_frame = ttk.Frame(parent, style="Card.TFrame")
+        channel_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        for index, channel in enumerate(CHANNELS):
+            ttk.Checkbutton(
+                channel_frame,
+                text=channel.upper(),
+                variable=self.ezq_channel_enabled[channel],
+            ).grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 10), pady=2)
+
+    def _add_ezq_entry(self, parent: ttk.Frame, label: str, key: str, row: int) -> None:
+        ttk.Label(parent, text=label, style="Card.TLabel", wraplength=180).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 10))
+        ttk.Entry(parent, textvariable=self.ezq_fields[key], width=22).grid(row=row, column=1, sticky="ew", pady=4)
+
     def _disable_combobox_mousewheel(self, combobox: ttk.Combobox) -> None:
         for event_name in COMBOBOX_WHEEL_BLOCK_EVENTS:
             combobox.bind(event_name, _block_combobox_mousewheel)
@@ -510,7 +672,9 @@ class WaveformSenderApp(ttk.Frame):
         return int(value.strip(), 0)
 
     def _preview_variables(self) -> list[Any]:
-        variables: list[Any] = [self.sample_rate_hz, self.axis_freq_hz, self.wait_for_trigger, self.dry_run]
+        variables: list[Any] = [self.sample_rate_hz, self.axis_freq_hz, self.wait_for_trigger, self.dry_run, self.waveform_source]
+        variables.extend(self.ezq_fields.values())
+        variables.extend(self.ezq_channel_enabled.values())
         variables.extend(self.channel_type.values())
         for channel_fields in self.channel_fields.values():
             variables.extend(channel_fields.values())
@@ -545,16 +709,67 @@ class WaveformSenderApp(ttk.Frame):
             duration_s=from_display_ns(fields["duration_s"].get()),
         )
 
+    def _parse_ezq_value(self, key: str) -> float:
+        value = self.ezq_fields[key].get()
+        unit = EZQ_FIELD_UNITS.get(key)
+        if unit == "mhz":
+            return from_display_mhz(value)
+        if unit == "ns":
+            return from_display_ns(value)
+        return float(value)
+
+    def _collect_ezq_config(self) -> model.EzqPulseConfig:
+        channel_mask = 0
+        for index, channel in enumerate(CHANNELS):
+            if self.ezq_channel_enabled[channel].get():
+                channel_mask |= 1 << index
+        return model.EzqPulseConfig(
+            f10_hz=self._parse_ezq_value("f10_hz"),
+            f21_hz=self._parse_ezq_value("f21_hz"),
+            fc_hz=self._parse_ezq_value("fc_hz"),
+            nonlinearity_hz=self._parse_ezq_value("nonlinearity_hz"),
+            pi_amp=self._parse_ezq_value("pi_amp"),
+            pi_len_s=self._parse_ezq_value("pi_len_s"),
+            pi_fwhm_s=self._parse_ezq_value("pi_fwhm_s"),
+            pi_alpha=self._parse_ezq_value("pi_alpha"),
+            pi_df_hz=self._parse_ezq_value("pi_df_hz"),
+            xy_phase_rad=self._parse_ezq_value("xy_phase_rad"),
+            z_offset=self._parse_ezq_value("z_offset"),
+            pi_amp_z=self._parse_ezq_value("pi_amp_z"),
+            pi_len_z_s=self._parse_ezq_value("pi_len_z_s"),
+            readout_freq_hz=self._parse_ezq_value("readout_freq_hz"),
+            readout_fc_hz=self._parse_ezq_value("readout_fc_hz"),
+            readout_len_s=self._parse_ezq_value("readout_len_s"),
+            readout_power_dbm=self._parse_ezq_value("readout_power_dbm"),
+            ring_power_dbm=self._parse_ezq_value("ring_power_dbm"),
+            ring_len_s=self._parse_ezq_value("ring_len_s"),
+            readout_start_s=self._parse_ezq_value("readout_start_s"),
+            adc_start_delay_s=self._parse_ezq_value("adc_start_delay_s"),
+            timing_lag_xy_s=self._parse_ezq_value("timing_lag_xy_s"),
+            timing_lag_z_s=self._parse_ezq_value("timing_lag_z_s"),
+            timing_lag_read_s=self._parse_ezq_value("timing_lag_read_s"),
+            repeat=self._parse_int(self.ezq_fields["repeat"].get()),
+            period_s=self._parse_ezq_value("period_s"),
+            channel_mask=channel_mask,
+        )
+
     def _collect_config(self, dry_run: bool | None = None) -> model.WaveformConfig:
+        ezq = self._collect_ezq_config()
+        common = {
+            "output_dir": Path(self.output_dir.get()).expanduser(),
+            "sample_rate_hz": from_display_gsps(self.sample_rate_hz.get()),
+            "rfdc_interpolation": self._parse_int(self.rfdc_interpolation.get()),
+            "axis_freq_hz": from_display_mhz(self.axis_freq_hz.get()),
+            "loop": False,
+            "wait_for_trigger": bool(self.wait_for_trigger.get()),
+            "dry_run": bool(self.dry_run.get() if dry_run is None else dry_run),
+            "ezq": ezq,
+        }
+        if self.waveform_source.get() == "ezq-quantum":
+            return model.WaveformConfig(mode="ezq-quantum", **common)
         return model.WaveformConfig(
             mode="per-channel",
-            output_dir=Path(self.output_dir.get()).expanduser(),
-            sample_rate_hz=from_display_gsps(self.sample_rate_hz.get()),
-            rfdc_interpolation=self._parse_int(self.rfdc_interpolation.get()),
-            axis_freq_hz=from_display_mhz(self.axis_freq_hz.get()),
-            loop=False,
-            wait_for_trigger=bool(self.wait_for_trigger.get()),
-            dry_run=bool(self.dry_run.get() if dry_run is None else dry_run),
+            **common,
             ch1=self._collect_channel_config("ch1"),
             ch2=self._collect_channel_config("ch2"),
             ch3=self._collect_channel_config("ch3"),
@@ -616,18 +831,82 @@ class WaveformSenderApp(ttk.Frame):
 
     def _draw_preview(self, generated: model.GeneratedWaveforms) -> None:
         waves = (generated.x, generated.y, generated.ch3, generated.ch4, generated.ch5, generated.ch6, generated.ch7, generated.ch8)
-        for axis, title, wave, color in zip(self.preview_axes, PREVIEW_TITLES, waves, PREVIEW_COLORS, strict=True):
-            axis.clear()
-            indices, values = model.preview_series(wave)
-            axis.plot(indices, values, color=color, linewidth=1.5)
-            axis.set_title(title, color="#f8fafc")
-            axis.set_ylabel("DAC code", color="#cbd5e1")
-            axis.grid(True, color="#334155", linewidth=0.6, alpha=0.8)
-            axis.tick_params(colors="#cbd5e1")
-            axis.set_facecolor("#0f172a")
-        self.preview_axes[-1].set_xlabel("Sample index", color="#cbd5e1")
+        sample_rate_hz = float(generated.metadata.get("sample_rate_hz", host.DAC_XY_FS))
+        self._draw_timeline(waves, sample_rate_hz)
+        self._draw_time_waveforms(waves, sample_rate_hz)
+        self._draw_fft(waves, sample_rate_hz)
         self.figure.tight_layout()
         self.canvas.draw_idle()
+
+    def _style_preview_axis(self, axis: Any) -> None:
+        axis.grid(True, color="#334155", linewidth=0.6, alpha=0.8)
+        axis.tick_params(colors="#cbd5e1")
+        axis.set_facecolor("#0f172a")
+        axis.title.set_color("#f8fafc")
+        axis.xaxis.label.set_color("#cbd5e1")
+        axis.yaxis.label.set_color("#cbd5e1")
+
+    def _draw_timeline(self, waves: tuple[Any, ...], sample_rate_hz: float) -> None:
+        axis = self.timeline_axis
+        axis.clear()
+        for index, (wave, color) in enumerate(zip(waves, PREVIEW_COLORS, strict=True)):
+            iq = np.asarray(wave, dtype=np.int16).reshape(-1, 2) if len(wave) >= 2 else np.zeros((0, 2), dtype=np.int16)
+            activity = np.abs(iq[:, 0].astype(np.int32)) + np.abs(iq[:, 1].astype(np.int32))
+            active = np.flatnonzero(activity)
+            y = len(waves) - index
+            if active.size:
+                start_ns = active[0] / sample_rate_hz * 1e9
+                width_ns = max(1.0 / sample_rate_hz * 1e9, (active[-1] - active[0] + 1) / sample_rate_hz * 1e9)
+                axis.broken_barh([(start_ns, width_ns)], (y - 0.34, 0.68), facecolors=color, edgecolors=color, alpha=0.9)
+            else:
+                axis.broken_barh([(0.0, 1.0)], (y - 0.18, 0.36), facecolors="#475569", edgecolors="#475569", alpha=0.45)
+        axis.set_yticks(range(1, len(waves) + 1), [f"CH{idx}" for idx in range(len(waves), 0, -1)])
+        axis.set_title("Pulse Timeline")
+        axis.set_xlabel("Time (ns)")
+        axis.set_ylabel("Channel")
+        self._style_preview_axis(axis)
+
+    def _draw_time_waveforms(self, waves: tuple[Any, ...], sample_rate_hz: float) -> None:
+        axis = self.wave_axis
+        axis.clear()
+        max_complex = 768
+        for index, (wave, color) in enumerate(zip(waves, PREVIEW_COLORS, strict=True)):
+            iq = np.asarray(wave, dtype=np.int16).reshape(-1, 2)
+            if iq.size == 0:
+                continue
+            step = max(1, int(np.ceil(iq.shape[0] / max_complex)))
+            sampled = iq[::step, 0]
+            time_ns = np.arange(0, iq.shape[0], step, dtype=np.float64) / sample_rate_hz * 1e9
+            axis.plot(time_ns, sampled, color=color, linewidth=1.15, label=f"CH{index + 1}")
+        axis.set_title("I Lane Preview")
+        axis.set_xlabel("Time (ns)")
+        axis.set_ylabel("DAC code")
+        axis.legend(loc="upper right", ncol=4, fontsize=8, frameon=False, labelcolor="#dbeafe")
+        self._style_preview_axis(axis)
+
+    def _draw_fft(self, waves: tuple[Any, ...], sample_rate_hz: float) -> None:
+        axis = self.fft_axis
+        axis.clear()
+        selected_channel = 1
+        selected = np.asarray(waves[0], dtype=np.int16)
+        for index, wave in enumerate(waves, start=1):
+            candidate = np.asarray(wave, dtype=np.int16)
+            if np.any(candidate):
+                selected_channel = index
+                selected = candidate
+                break
+        iq = selected.reshape(-1, 2).astype(np.float64)
+        if iq.shape[0] > 1 and np.any(iq):
+            complex_wave = iq[:, 0] + (1j * iq[:, 1])
+            window = np.hanning(complex_wave.size)
+            spectrum = np.fft.fftshift(np.fft.fft(complex_wave * window))
+            freqs_mhz = np.fft.fftshift(np.fft.fftfreq(complex_wave.size, d=1.0 / sample_rate_hz)) / 1e6
+            mag_db = 20.0 * np.log10(np.maximum(np.abs(spectrum), 1.0))
+            axis.plot(freqs_mhz, mag_db - np.max(mag_db), color=PREVIEW_COLORS[selected_channel - 1], linewidth=1.2)
+        axis.set_title(f"FFT Preview CH{selected_channel}")
+        axis.set_xlabel("Baseband frequency (MHz)")
+        axis.set_ylabel("dBc")
+        self._style_preview_axis(axis)
 
     def save_or_dry_run(self) -> None:
         self._run_controller(dry_run=True)
