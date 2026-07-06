@@ -13,6 +13,22 @@
 #include "xparameters.h"
 #include "xrfdc.h"
 
+#if !defined(XPAR_XRFDC_NUM_INSTANCES)
+#define XPAR_XRFDC_NUM_INSTANCES 1U
+#endif
+
+#if !defined(XPAR_XRFDC_0_DEVICE_ID)
+#define XPAR_XRFDC_0_DEVICE_ID 0U
+#endif
+
+#if !defined(XPAR_XRFDC_0_BASEADDR)
+#if defined(XPAR_TOP_I_DESIGN_1_I_M_AXI_RFDC_BASEADDR)
+#define XPAR_XRFDC_0_BASEADDR XPAR_TOP_I_DESIGN_1_I_M_AXI_RFDC_BASEADDR
+#else
+#define XPAR_XRFDC_0_BASEADDR 0xA0040000U
+#endif
+#endif
+
 /*
  * This config-table MixMode is not the same enum as XRFdc_Mixer_Settings.
  * The RFDC driver initialization path treats DAC analog MixMode 0 as C2R,

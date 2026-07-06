@@ -84,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, default=Path("software/ila_reports"), help="Directory for generated Tcl, CSV, JSON, and Markdown reports.")
     parser.add_argument("--vivado", default="vivado", help="Vivado executable used for capture mode.")
     parser.add_argument("--hw-server", default="localhost:3121", help="Vivado hw_server URL.")
+    parser.add_argument("--target-filter", default="", help="Substring used to select a hardware target/cable before opening it.")
     parser.add_argument("--device-filter", default="", help="Substring used to select a hardware device.")
     parser.add_argument("--ila-filter", default="", help="Substring used to select a hardware ILA core.")
     parser.add_argument("--bit", type=Path, help="Optional bitstream to program before capture.")
@@ -147,13 +148,23 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
     ltx = vivado_quote(args.ltx)
     setup_tcl = vivado_quote(args.setup_tcl)
     csv_out = vivado_quote(csv_path)
+    target_filter = args.target_filter.replace("'", "")
     device_filter = args.device_filter.replace("'", "")
     ila_filter = args.ila_filter.replace("'", "")
     lines = [
         "set_param messaging.defaultLimit 10000",
         "open_hw_manager",
         f"connect_hw_server -allow_non_jtag -url {args.hw_server}",
-        "open_hw_target",
+        f"set target_filter {{{target_filter}}}",
+        "set hw_targets [get_hw_targets *]",
+        "if {$target_filter ne \"\"} {",
+        "  set matched_targets {}",
+        "  foreach t $hw_targets { if {[string first $target_filter $t] >= 0} { lappend matched_targets $t } }",
+        "  if {[llength $matched_targets] == 0} { error \"No hardware target matched target filter '$target_filter'\" }",
+        "  open_hw_target [lindex $matched_targets 0]",
+        "} else {",
+        "  open_hw_target",
+        "}",
         "set devs [get_hw_devices]",
         f"set device_filter {{{device_filter}}}",
         "set dev [lindex $devs 0]",
@@ -180,20 +191,31 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
     trigger_for_select = (args.trigger_probe or DEFAULT_TRIGGER_PROBES[0]).replace("'", "")
     valid_for_select = DEFAULT_VALID_PROBES[1][0]
     data_for_select = DEFAULT_DATA_PROBES[1][0]
+    if args.trigger_probe:
+        preferred_probe_names = f"{{{trigger_for_select}}}"
+    else:
+        preferred_probe_names = f"{{{trigger_for_select} {valid_for_select} {data_for_select}}}"
     lines.extend([
         "set raw_ilas [get_hw_ilas -of_objects $dev]",
         f"set ila_filter {{{ila_filter}}}",
+        "puts \"RAW_ILA_COUNT=[llength $raw_ilas]\"",
+        "foreach i $raw_ilas { puts \"RAW_ILA=[get_property NAME $i]\" }",
         "if {[llength $raw_ilas] == 0} { error \"No ILA cores found. Program the design or check the LTX/bitstream match.\" }",
         "set ilas {}",
         "if {$ila_filter ne \"\"} {",
         "  foreach i $raw_ilas { if {[string first $ila_filter [get_property NAME $i]] >= 0} { lappend ilas $i } }",
+        "  if {[llength $ilas] == 0} {",
+        "    puts \"WARN: no ILA matched filter '$ila_filter', falling back to all ILAs\"",
+        "    set ilas $raw_ilas",
+        "  }",
         "} else {",
         "  set ilas $raw_ilas",
         "}",
-        "if {[llength $ilas] == 0} { error \"No ILA cores matched the requested --ila-filter\" }",
-        f"set preferred_probe_names {{{trigger_for_select} {valid_for_select} {data_for_select}}}",
+        "if {[llength $ilas] == 0} { error \"No ILA cores available after filtering\" }",
+        f"set preferred_probe_names {preferred_probe_names}",
         "set ila {}",
         "foreach candidate $ilas {",
+        "  puts \"CANDIDATE_ILA=[get_property NAME $candidate]\"",
         "  foreach probe_name $preferred_probe_names {",
         "    set found [get_hw_probes $probe_name -of_objects $candidate]",
         "    if {[llength $found] == 0} { set found [get_hw_probes *$probe_name* -of_objects $candidate] }",
@@ -205,6 +227,8 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
         "puts \"Using ILA: $ila\"",
         "current_hw_ila $ila",
         "set probes [get_hw_probes -of_objects $ila]",
+        "puts \"ILA_PROBE_COUNT=[llength $probes]\"",
+        "foreach p $probes { puts \"ILA_PROBE=[get_property NAME $p]\" }",
         "if {[llength $probes] == 0} { error \"Selected ILA has no probes. Check that the LTX matches the programmed design.\" }",
         f"catch {{ set_property CONTROL.DATA_DEPTH {int(args.capture_depth)} $ila }}",
         f"catch {{ set_property CONTROL.TRIGGER_POSITION {int(args.trigger_position)} $ila }}",
@@ -244,13 +268,23 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
 
 def write_preflight_tcl(args: argparse.Namespace, tcl_path: Path) -> None:
     ltx = vivado_quote(args.ltx)
+    target_filter = args.target_filter.replace("'", "")
     device_filter = args.device_filter.replace("'", "")
     ila_filter = args.ila_filter.replace("'", "")
     lines = [
         "set_param messaging.defaultLimit 10000",
         "open_hw_manager",
         f"connect_hw_server -allow_non_jtag -url {args.hw_server}",
-        "open_hw_target",
+        f"set target_filter {{{target_filter}}}",
+        "set hw_targets [get_hw_targets *]",
+        "if {$target_filter ne \"\"} {",
+        "  set matched_targets {}",
+        "  foreach t $hw_targets { if {[string first $target_filter $t] >= 0} { lappend matched_targets $t } }",
+        "  if {[llength $matched_targets] == 0} { error \"No hardware target matched target filter '$target_filter'\" }",
+        "  open_hw_target [lindex $matched_targets 0]",
+        "} else {",
+        "  open_hw_target",
+        "}",
         "set devs [get_hw_devices]",
         f"set device_filter {{{device_filter}}}",
         "set dev [lindex $devs 0]",
@@ -268,6 +302,8 @@ def write_preflight_tcl(args: argparse.Namespace, tcl_path: Path) -> None:
     lines.extend([
         "set ilas [get_hw_ilas -of_objects $dev]",
         f"set ila_filter {{{ila_filter}}}",
+        "puts \"RAW_ILA_COUNT=[llength $ilas]\"",
+        "foreach i $ilas { puts \"RAW_ILA=[get_property NAME $i]\" }",
         "if {$ila_filter ne \"\"} {",
         "  set matched {}",
         "  foreach i $ilas { if {[string first $ila_filter [get_property NAME $i]] >= 0} { lappend matched $i } }",
@@ -318,6 +354,7 @@ def confirm_programming(args: argparse.Namespace) -> bool:
 
 def send_artifacts_to_board(args: argparse.Namespace) -> None:
     waves = {channel: load_waveform(args.artifact_dir, channel) for channel in CHANNELS}
+    channel_lengths = {channel: waveform_tools.waveform_length_bytes(wave) for channel, wave in waves.items()}
     ctrl = host.RFSocController(
         args.ip,
         port=args.port,
@@ -327,16 +364,21 @@ def send_artifacts_to_board(args: argparse.Namespace) -> None:
         timeout_s=float(args.timeout_s),
     )
     try:
-        for channel, samples in waves.items():
-            ddr_addr = waveform_tools.DEFAULT_CHANNEL_ADDRS[channel]
-            dump_path = args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"
-            ctrl.upload_waveform_udp(samples, ddr_addr, str(dump_path))
+        for channel, wave in sorted(waves.items()):
+            ctrl.upload_waveform_udp_tiled(
+                wave,
+                channel,
+                host.DDR_BASE,
+                str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
+            )
         if args.post_upload_sleep_s > 0:
             time.sleep(args.post_upload_sleep_s)
         commands = waveform_tools.build_play_commands(
             loop=args.loop,
             auto_start=not args.wait_for_trigger,
-            channel_addrs=waveform_tools.DEFAULT_CHANNEL_ADDRS,
+            channel_addrs={channel: host.tiled_channel_base_addr(channel) for channel in CHANNELS},
+            channel_lengths=channel_lengths,
+            layout=host.DEFAULT_DDR_LAYOUT,
         )
         ctrl.send_instructions(commands)
         if args.wait_for_trigger:

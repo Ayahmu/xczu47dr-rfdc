@@ -1,7 +1,7 @@
 # Vivado target matrix for supported RFDC builds
 
 proc target_config_allowed_targets {} {
-    return [list custom_xczu47dr]
+    return [list custom_xczu47dr custom_xczu47dr_bw]
 }
 
 proc target_config_exists {target} {
@@ -20,6 +20,9 @@ proc target_config_load {target} {
     switch -- $target {
         custom_xczu47dr {
             return [dict create                 target custom_xczu47dr                 project_basename custom_xczu47dr_rfdc                 part xczu47dr-ffvg1517-2-i                 part_query *xczu47dr*ffvg1517*                 board_part {}                 xdc_files [list xdc/custom_xczu47dr_minimal.xdc]                 top_module TopCustomXczu47dr                 output_basename custom_xczu47dr_rfdc                 firmware_workspace firmware/workspace/custom_xczu47dr                 firmware_app rfdc_app                 firmware_elf firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf                 psu_init firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl                 clock_policy custom_external_clock_decision_needed]
+        }
+        custom_xczu47dr_bw {
+            return [dict create                 target custom_xczu47dr_bw                 project_basename custom_xczu47dr_bandwidth                 part xczu47dr-ffvg1517-2-i                 part_query *xczu47dr*ffvg1517*                 board_part {}                 xdc_files [list xdc/custom_xczu47dr_bandwidth.xdc]                 top_module TopBandwidthXczu47dr                 output_basename custom_xczu47dr_bandwidth                 firmware_workspace firmware/workspace/custom_xczu47dr_bandwidth                 firmware_app bandwidth_app                 firmware_elf firmware/workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf                 psu_init firmware/workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl                 clock_policy ddr_bandwidth_interleaved_512b]
         }
     }
 }

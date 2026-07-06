@@ -43,14 +43,18 @@ object RfdcCustomXczu47drConfig {
 
   // Used DAC slices per tile: block 0 and block 2 (the two physical DACs).
   // Vivado RFDC GUI/IP parameter encodings, not Vitis driver encodings.
-  // Band=4 is Vivado's "Multi x4" mode. It keeps slice2's fine mixer path
-  // independent and exposes the sX2_axis stream instead of collapsing the
-  // dual-slice IQ configuration into only sX0_axis.
-  private val dacBandMultiX4 = "4"
-  private val dacMixerModeC2R = "1"
+  // Band=3 is Vivado's "Multi x2(all)" mode. In this configuration the IP
+  // still exposes all four slice ports per tile (sX0..sX3), but only slices
+  // 0 and 2 are enabled. Each enabled 256-bit AXIS port already carries
+  // interleaved I/Q samples for C2R (IQ -> Real), so the wrapper must forward
+  // the upstream 256-bit IQ stream directly instead of splitting it across the
+  // disabled companion slice ports.
+  private val dacBandMultiX2All = "3"
+  private val dacMixerModeC2R = "0"
   private val dacMixerTypeFine = "2"
-  private val dacDataTypeIQ = "1"
+  private val dacDataTypeReal = "0"
   private val usedSlices = Seq("0", "2")
+  private val portSlices = Seq("0", "1", "2", "3")
   private val tiles = Seq("0", "1", "2", "3")
   private val usedAxisPorts = for (t <- tiles; s <- usedSlices) yield s"s$t${s}_axis"
 
@@ -66,7 +70,7 @@ object RfdcCustomXczu47drConfig {
         s"CONFIG.DAC${t}_Enable {1}",
         s"CONFIG.DAC${t}_Sampling_Rate {6.0}",
         s"CONFIG.DAC${t}_Clock_Source {6}",
-        s"CONFIG.DAC${t}_Band {$dacBandMultiX4}"
+        s"CONFIG.DAC${t}_Band {$dacBandMultiX2All}"
       )
       if (t == "2")
         base ++ Seq(
@@ -81,22 +85,27 @@ object RfdcCustomXczu47drConfig {
         )
     }
 
-    // Per used-slice datapath: enable, 8x interpolation, C2R fine-NCO mixer,
-    // complex (IQ) input data type, Zone2, and the default NCO frequency.
+    // Per used-slice datapath: enable, 8x interpolation, Real I/Q stream pair,
+    // C2R fine-NCO mixer to real analog output, Zone2, and default NCO.
     val sliceCfg = for (t <- tiles; s <- usedSlices) yield Seq(
       s"CONFIG.DAC_Slice${t}${s}_Enable {true}",
       s"CONFIG.DAC_Interpolation_Mode${t}${s} {$interpolationMode}",
       s"CONFIG.DAC_Mixer_Mode${t}${s} {$dacMixerModeC2R}",
       s"CONFIG.DAC_Mixer_Type${t}${s} {$dacMixerTypeFine}",
-      s"CONFIG.DAC_Data_Type${t}${s} {$dacDataTypeIQ}",
+      s"CONFIG.DAC_Data_Type${t}${s} {$dacDataTypeReal}",
       s"CONFIG.DAC_NCO_Freq${t}${s} {$ncoFreqGHz}",
       s"CONFIG.DAC_Nyquist${t}${s} {1}"
     )
 
-    val sliceDisable = for (t <- tiles; s <- Seq("1", "3"))
-      yield s"CONFIG.DAC_Slice${t}${s}_Enable {false}"
+    val companionSliceCfg = for (t <- tiles; s <- Seq("1", "3")) yield Seq(
+      s"CONFIG.DAC_Slice${t}${s}_Enable {false}",
+      s"CONFIG.DAC_Interpolation_Mode${t}${s} {$interpolationMode}",
+      s"CONFIG.DAC_Mixer_Mode${t}${s} {$dacMixerModeC2R}",
+      s"CONFIG.DAC_Mixer_Type${t}${s} {$dacMixerTypeFine}",
+      s"CONFIG.DAC_Data_Type${t}${s} {$dacDataTypeReal}"
+    )
 
-    adcDisable ++ tileClock ++ sliceCfg.flatten ++ sliceDisable ++ Seq(
+    adcDisable ++ tileClock ++ sliceCfg.flatten ++ companionSliceCfg.flatten ++ Seq(
       "CONFIG.DAC_VOP_Mode {1}",
       "CONFIG.RF_Analyzer {1}"
     )
@@ -209,8 +218,16 @@ module RfdcCustomXczu47dr (
     output         irq
 );
 
-  wire [255:0] unused_multiband_axis_tdata = 256'b0;
-  wire         unused_multiband_axis_tvalid = 1'b1;
+  wire [255:0] disabled_axis_tdata = 256'b0;
+  wire         disabled_axis_tvalid = 1'b0;
+  wire         ch1_axis_tready_unused;
+  wire         ch2_axis_tready_unused;
+  wire         ch3_axis_tready_unused;
+  wire         ch4_axis_tready_unused;
+  wire         ch5_axis_tready_unused;
+  wire         ch6_axis_tready_unused;
+  wire         ch7_axis_tready_unused;
+  wire         ch8_axis_tready_unused;
 
   rfdc_custom_xczu47dr_ip rfdc_custom_xczu47dr_ip_i (
       .s_axi_aclk(s_axi_aclk),
@@ -267,51 +284,51 @@ module RfdcCustomXczu47dr (
       .s00_axis_tdata(s00_axis_tdata),
       .s00_axis_tvalid(s00_axis_tvalid),
       .s00_axis_tready(s00_axis_tready),
-      .s01_axis_tdata(unused_multiband_axis_tdata),
-      .s01_axis_tvalid(unused_multiband_axis_tvalid),
-      .s01_axis_tready(),
+      .s01_axis_tdata(disabled_axis_tdata),
+      .s01_axis_tvalid(disabled_axis_tvalid),
+      .s01_axis_tready(ch1_axis_tready_unused),
       .s02_axis_tdata(s02_axis_tdata),
       .s02_axis_tvalid(s02_axis_tvalid),
       .s02_axis_tready(s02_axis_tready),
-      .s03_axis_tdata(unused_multiband_axis_tdata),
-      .s03_axis_tvalid(unused_multiband_axis_tvalid),
-      .s03_axis_tready(),
+      .s03_axis_tdata(disabled_axis_tdata),
+      .s03_axis_tvalid(disabled_axis_tvalid),
+      .s03_axis_tready(ch2_axis_tready_unused),
       .s10_axis_tdata(s10_axis_tdata),
       .s10_axis_tvalid(s10_axis_tvalid),
       .s10_axis_tready(s10_axis_tready),
-      .s11_axis_tdata(unused_multiband_axis_tdata),
-      .s11_axis_tvalid(unused_multiband_axis_tvalid),
-      .s11_axis_tready(),
+      .s11_axis_tdata(disabled_axis_tdata),
+      .s11_axis_tvalid(disabled_axis_tvalid),
+      .s11_axis_tready(ch3_axis_tready_unused),
       .s12_axis_tdata(s12_axis_tdata),
       .s12_axis_tvalid(s12_axis_tvalid),
       .s12_axis_tready(s12_axis_tready),
-      .s13_axis_tdata(unused_multiband_axis_tdata),
-      .s13_axis_tvalid(unused_multiband_axis_tvalid),
-      .s13_axis_tready(),
+      .s13_axis_tdata(disabled_axis_tdata),
+      .s13_axis_tvalid(disabled_axis_tvalid),
+      .s13_axis_tready(ch4_axis_tready_unused),
       .s20_axis_tdata(s20_axis_tdata),
       .s20_axis_tvalid(s20_axis_tvalid),
       .s20_axis_tready(s20_axis_tready),
-      .s21_axis_tdata(unused_multiband_axis_tdata),
-      .s21_axis_tvalid(unused_multiband_axis_tvalid),
-      .s21_axis_tready(),
+      .s21_axis_tdata(disabled_axis_tdata),
+      .s21_axis_tvalid(disabled_axis_tvalid),
+      .s21_axis_tready(ch5_axis_tready_unused),
       .s22_axis_tdata(s22_axis_tdata),
       .s22_axis_tvalid(s22_axis_tvalid),
       .s22_axis_tready(s22_axis_tready),
-      .s23_axis_tdata(unused_multiband_axis_tdata),
-      .s23_axis_tvalid(unused_multiband_axis_tvalid),
-      .s23_axis_tready(),
+      .s23_axis_tdata(disabled_axis_tdata),
+      .s23_axis_tvalid(disabled_axis_tvalid),
+      .s23_axis_tready(ch6_axis_tready_unused),
       .s30_axis_tdata(s30_axis_tdata),
       .s30_axis_tvalid(s30_axis_tvalid),
       .s30_axis_tready(s30_axis_tready),
-      .s31_axis_tdata(unused_multiband_axis_tdata),
-      .s31_axis_tvalid(unused_multiband_axis_tvalid),
-      .s31_axis_tready(),
+      .s31_axis_tdata(disabled_axis_tdata),
+      .s31_axis_tvalid(disabled_axis_tvalid),
+      .s31_axis_tready(ch7_axis_tready_unused),
       .s32_axis_tdata(s32_axis_tdata),
       .s32_axis_tvalid(s32_axis_tvalid),
       .s32_axis_tready(s32_axis_tready),
-      .s33_axis_tdata(unused_multiband_axis_tdata),
-      .s33_axis_tvalid(unused_multiband_axis_tvalid),
-      .s33_axis_tready(),
+      .s33_axis_tdata(disabled_axis_tdata),
+      .s33_axis_tvalid(disabled_axis_tvalid),
+      .s33_axis_tready(ch8_axis_tready_unused),
       .irq(irq)
   );
 

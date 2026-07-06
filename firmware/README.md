@@ -39,8 +39,9 @@ source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
 ### Build Commands
 
-The only supported firmware target is `TARGET=custom_xczu47dr`, which is also the
-default, for the custom XCZU47DR eight-output DAC bring-up flow.
+The default firmware target is `TARGET=custom_xczu47dr`, which builds the
+normal eight-output RFDC playback application. Use `TARGET=custom_xczu47dr_bw`
+only for the standalone DDR bandwidth pressure application.
 
 ```bash
 # Create application from XSA, first time
@@ -75,11 +76,17 @@ DRY_RUN=1 ./build.sh program
 
 ## Build Outputs
 
-`TARGET=custom_xczu47dr` outputs:
+Default `TARGET=custom_xczu47dr` outputs:
 
 - **ELF file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
 - **Map file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf.map`
 - **PS init script**: `workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl`
+
+`TARGET=custom_xczu47dr_bw` outputs:
+
+- **ELF file**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf`
+- **Map file**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf.map`
+- **PS init script**: `workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl`
 
 ## Hardware Configuration
 

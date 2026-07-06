@@ -13,7 +13,14 @@ import sys
 from typing import Any, Callable, TypedDict
 
 import numpy as np
-from scipy.signal.windows import gaussian
+try:
+    from scipy.signal.windows import gaussian
+except ModuleNotFoundError:
+    def gaussian(M: int, std: float, sym: bool = True) -> np.ndarray:
+        if M < 1:
+            return np.array([], dtype=np.float64)
+        n = np.arange(0, M, dtype=np.float64) - (M - 1.0) / 2.0
+        return np.exp(-0.5 * (n / float(std)) ** 2)
 
 import host
 import waveform_tools
@@ -62,7 +69,8 @@ class ChannelWaveformConfig:
     amplitude: int = 20000
     encoding: str = "signed"
     delay_s: float = 80e-9
-    duration_s: float = 120e-9
+    duration_s: float = 1e-6
+    zero_tail_s: float = 50e-9
     pulse_preset: str = "x"
     pulse_sigma_s: float = 20e-9
     pulse_center_s: float = 80e-9
@@ -72,6 +80,7 @@ class ChannelWaveformConfig:
 @dataclass(slots=True)
 class WaveformConfig:
     mode: str = "iq-sine"
+    ddr_layout: str = host.DEFAULT_DDR_LAYOUT
     output_dir: Path = Path("/tmp/opencode/rfsoc_waveform_gui")
     sample_rate_hz: float = host.DAC_XY_FS
     rfdc_interpolation: int = host.RFDC_INTERPOLATION
@@ -95,7 +104,8 @@ class WaveformConfig:
     encoding: str = "signed"
     x_delay_s: float = 80e-9
     y_delay_s: float = 120e-9
-    duration_s: float = 120e-9
+    duration_s: float = 1e-6
+    zero_tail_s: float = 50e-9
     pulse_preset: str = "x"
     pulse_sigma_s: float = 20e-9
     pulse_center_s: float = 80e-9
@@ -236,6 +246,7 @@ def _channel_config_to_dict(config: ChannelWaveformConfig | None) -> dict[str, o
         "encoding": config.encoding,
         "delay_s": config.delay_s,
         "duration_s": config.duration_s,
+        "zero_tail_s": config.zero_tail_s,
         "pulse_preset": config.pulse_preset,
         "pulse_sigma_s": config.pulse_sigma_s,
         "pulse_center_s": config.pulse_center_s,
@@ -260,6 +271,7 @@ def _channel_config_from_dict(data: object) -> ChannelWaveformConfig | None:
         "encoding",
         "delay_s",
         "duration_s",
+        "zero_tail_s",
         "pulse_preset",
         "pulse_sigma_s",
         "pulse_center_s",
@@ -267,20 +279,24 @@ def _channel_config_from_dict(data: object) -> ChannelWaveformConfig | None:
     }
     kwargs = {key: value for key, value in data.items() if key in allowed}
     waveform_type = str(kwargs.get("waveform_type", "iq-sine")).lower()
-    if waveform_type not in {"sine", "iq-sine", "dc-iq-cw", "pypulse", "quantum", "off", "pulse", "burst", "golden"}:
-        kwargs["waveform_type"] = "pypulse"
-        kwargs.setdefault("pypulse_waveform", "xy")
+    if waveform_type == "sine":
+        kwargs["waveform_type"] = "iq-sine"
+    elif waveform_type in {"pypulse", "burst", "hls", "iq-gaussian", "iq-gaussian-sine"}:
+        kwargs["waveform_type"] = "iq-gaussian-sine"
+    elif waveform_type not in {"iq-sine", "dc-iq-cw", "iq-gaussian-sine"}:
+        kwargs["waveform_type"] = "dc-iq-cw"
     return ChannelWaveformConfig(**kwargs)
 
 
 def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
     return {
         "mode": config.mode,
+        "ddr_layout": config.ddr_layout,
         "output_dir": str(config.output_dir),
         "sample_rate_hz": config.sample_rate_hz,
         "rfdc_interpolation": config.rfdc_interpolation,
         "axis_freq_hz": config.axis_freq_hz,
-        "loop": config.loop,
+        "loop": False,
         "wait_for_trigger": config.wait_for_trigger,
         "dry_run": config.dry_run,
         "ch1_freq_hz": config.ch1_freq_hz,
@@ -300,6 +316,7 @@ def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
         "x_delay_s": config.x_delay_s,
         "y_delay_s": config.y_delay_s,
         "duration_s": config.duration_s,
+        "zero_tail_s": config.zero_tail_s,
         "pulse_preset": config.pulse_preset,
         "pulse_sigma_s": config.pulse_sigma_s,
         "pulse_center_s": config.pulse_center_s,
@@ -321,6 +338,7 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
         return WaveformConfig()
     allowed = {
         "mode",
+        "ddr_layout",
         "sample_rate_hz",
         "rfdc_interpolation",
         "axis_freq_hz",
@@ -344,6 +362,7 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
         "x_delay_s",
         "y_delay_s",
         "duration_s",
+        "zero_tail_s",
         "pulse_preset",
         "pulse_sigma_s",
         "pulse_center_s",
@@ -351,11 +370,21 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
         "y_start",
     }
     kwargs: dict[str, Any] = {key: value for key, value in data.items() if key in allowed}
+    kwargs["loop"] = False
+    if float(kwargs.get("sample_rate_hz", host.DAC_XY_FS)) == float(host.DAC_TILE_FS):
+        kwargs["sample_rate_hz"] = host.DAC_XY_FS
     if "output_dir" in data:
         kwargs["output_dir"] = Path(str(data["output_dir"]))
     for channel in ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"):
         if channel in data:
             kwargs[channel] = _channel_config_from_dict(data[channel])
+    if kwargs.get("ddr_layout") not in {
+        host.DDR_LAYOUT_CONTIGUOUS,
+        host.DDR_LAYOUT_TILED,
+        host.DDR_LAYOUT_INTERLEAVED_512B,
+        None,
+    }:
+        kwargs["ddr_layout"] = host.DEFAULT_DDR_LAYOUT
     return WaveformConfig(**kwargs)
 
 
@@ -432,14 +461,14 @@ def save_gui_settings(settings: GuiSettings, path: Path = DEFAULT_GUI_SETTINGS_P
 
 
 CHANNEL_LABELS = {
-    "ch1": f"CH1 / DDR 0x{host.DDR_CH1_ADDR:X} / vout00",
-    "ch2": f"CH2 / DDR 0x{host.DDR_CH2_ADDR:X} / vout02",
-    "ch3": f"CH3 / DDR 0x{host.DDR_CH3_ADDR:X} / vout10",
-    "ch4": f"CH4 / DDR 0x{host.DDR_CH4_ADDR:X} / vout12",
-    "ch5": f"CH5 / DDR 0x{host.DDR_CH5_ADDR:X} / vout20",
-    "ch6": f"CH6 / DDR 0x{host.DDR_CH6_ADDR:X} / vout22",
-    "ch7": f"CH7 / DDR 0x{host.DDR_CH7_ADDR:X} / vout30",
-    "ch8": f"CH8 / DDR 0x{host.DDR_CH8_ADDR:X} / vout32",
+    "ch1": f"CH1 / DDR 0x{host.tiled_channel_base_addr(1):X} / vout00",
+    "ch2": f"CH2 / DDR 0x{host.tiled_channel_base_addr(2):X} / vout02",
+    "ch3": f"CH3 / DDR 0x{host.tiled_channel_base_addr(3):X} / vout10",
+    "ch4": f"CH4 / DDR 0x{host.tiled_channel_base_addr(4):X} / vout12",
+    "ch5": f"CH5 / DDR 0x{host.tiled_channel_base_addr(5):X} / vout20",
+    "ch6": f"CH6 / DDR 0x{host.tiled_channel_base_addr(6):X} / vout22",
+    "ch7": f"CH7 / DDR 0x{host.tiled_channel_base_addr(7):X} / vout30",
+    "ch8": f"CH8 / DDR 0x{host.tiled_channel_base_addr(8):X} / vout32",
 }
 
 CHANNEL_UPLOAD_ARGS = {
@@ -459,7 +488,22 @@ def analog_sample_rate_hz(config: WaveformConfig) -> float:
 
 
 def python_frequency_hz(scope_freq_hz: float, rfdc_interpolation: int) -> float:
-    return float(scope_freq_hz) * int(rfdc_interpolation)
+    # The generators already synthesize at the DAC sample rate configured in
+    # `sample_rate_hz`, so the requested tone frequency is used directly.
+    # Keep the helper name for existing call sites, but do not rescale by the
+    # RFDC interpolation factor here.
+    return float(scope_freq_hz)
+
+
+def _validate_iq_frequency(freq_hz: float, sample_rate_hz: float, channel_name: str) -> None:
+    nyquist_hz = float(sample_rate_hz) / 2.0
+    if abs(float(freq_hz)) > nyquist_hz:
+        raise ValueError(
+            f"{channel_name} IQ frequency {float(freq_hz) / 1e6:g} MHz exceeds "
+            f"the RFDC input Nyquist limit {nyquist_hz / 1e6:g} MHz. "
+            "Use the RFDC NCO for the RF center frequency and set the GUI "
+            "frequency to the baseband offset."
+        )
 
 
 def _metadata_base(config: WaveformConfig) -> MetadataBase:
@@ -481,6 +525,7 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             sample_rate_hz=config.sample_rate_hz,
             encoding="signed",
             loop=config.loop,
+            layout=config.ddr_layout,
             pulse_preset=config.pulse_preset.lower(),
             pulse_sigma_s=config.pulse_sigma_s,
             pulse_center_s=config.pulse_center_s,
@@ -498,23 +543,31 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
     if mode in ("sine", "iq-sine"):
         x_python_freq_hz = python_frequency_hz(config.x_freq_hz, config.rfdc_interpolation)
         y_python_freq_hz = python_frequency_hz(config.y_freq_hz, config.rfdc_interpolation)
+        sample_count = waveform_tools.iq_duration_to_sample_count(config.duration_s, config.sample_rate_hz)
         x = waveform_tools.make_iq_sine_tile_waveform(
             x_python_freq_hz,
             config.x_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
+            sample_count=sample_count,
+            q_sign=-1,
         )
+        x = waveform_tools.append_iq_zero_tail(x, config.zero_tail_s, config.sample_rate_hz)
         y = waveform_tools.make_iq_sine_tile_waveform(
             y_python_freq_hz,
             config.y_phase_rad,
             config.amplitude,
             config.sample_rate_hz,
+            sample_count=sample_count,
+            q_sign=-1,
         )
+        y = waveform_tools.append_iq_zero_tail(y, config.zero_tail_s, config.sample_rate_hz)
         metadata = waveform_tools.build_metadata(
             mode=mode,
             sample_rate_hz=config.sample_rate_hz,
             encoding="signed-iq-interleaved",
-            loop=config.loop,
+            loop=False,
+            layout=config.ddr_layout,
             ch1_freq_hz=config.x_freq_hz,
             ch2_freq_hz=config.y_freq_hz,
             ch1_phase_rad=config.x_phase_rad,
@@ -524,8 +577,11 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             ch2_scope_freq_hz=config.y_freq_hz,
             ch1_python_freq_hz=x_python_freq_hz,
             ch2_python_freq_hz=y_python_freq_hz,
+            duration_s=config.duration_s,
+            zero_tail_s=config.zero_tail_s,
             **_metadata_base(config),
         )
+        _apply_generated_lengths(metadata, (x, y), sample_rate_hz=config.sample_rate_hz)
         return GeneratedWaveforms(ch1=x, ch2=y, metadata=metadata)
 
     if mode == "burst":
@@ -553,6 +609,7 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             axis_freq_hz=config.axis_freq_hz,
             encoding="signed",
             loop=config.loop,
+            layout=config.ddr_layout,
             ch1_freq_hz=config.x_freq_hz,
             ch2_freq_hz=config.y_freq_hz,
             ch1_phase_rad=config.x_phase_rad,
@@ -579,6 +636,7 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             sample_rate_hz=config.sample_rate_hz,
             encoding="uint16-viewed-as-int16",
             loop=config.loop,
+            layout=config.ddr_layout,
             ch1_start=config.x_start,
             ch2_start=config.y_start,
             **_metadata_base(config),
@@ -610,6 +668,7 @@ def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveform
         sample_rate_hz=config.sample_rate_hz,
         encoding="mixed-per-channel",
         loop=config.loop,
+        layout=config.ddr_layout,
         ch1_label=CHANNEL_LABELS["ch1"],
         ch2_label=CHANNEL_LABELS["ch2"],
         ch3_label=CHANNEL_LABELS["ch3"],
@@ -618,32 +677,78 @@ def _generate_independent_waveforms(config: WaveformConfig) -> GeneratedWaveform
         ch6_label=CHANNEL_LABELS["ch6"],
         ch7_label=CHANNEL_LABELS["ch7"],
         ch8_label=CHANNEL_LABELS["ch8"],
-        ch1=_channel_metadata(ch1_config, "ch1", config.axis_freq_hz, config.rfdc_interpolation),
-        ch2=_channel_metadata(ch2_config, "ch2", config.axis_freq_hz, config.rfdc_interpolation),
-        ch3=_channel_metadata(ch3_config, "ch3", config.axis_freq_hz, config.rfdc_interpolation),
-        ch4=_channel_metadata(ch4_config, "ch4", config.axis_freq_hz, config.rfdc_interpolation),
-        ch5=_channel_metadata(ch5_config, "ch5", config.axis_freq_hz, config.rfdc_interpolation),
-        ch6=_channel_metadata(ch6_config, "ch6", config.axis_freq_hz, config.rfdc_interpolation),
-        ch7=_channel_metadata(ch7_config, "ch7", config.axis_freq_hz, config.rfdc_interpolation),
-        ch8=_channel_metadata(ch8_config, "ch8", config.axis_freq_hz, config.rfdc_interpolation),
+        ch1=_channel_metadata(ch1_config, "ch1", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch2=_channel_metadata(ch2_config, "ch2", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch3=_channel_metadata(ch3_config, "ch3", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch4=_channel_metadata(ch4_config, "ch4", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch5=_channel_metadata(ch5_config, "ch5", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch6=_channel_metadata(ch6_config, "ch6", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch7=_channel_metadata(ch7_config, "ch7", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
+        ch8=_channel_metadata(ch8_config, "ch8", config.axis_freq_hz, config.rfdc_interpolation, config.sample_rate_hz),
         **_metadata_base(config),
+    )
+    _apply_generated_lengths(
+        metadata,
+        (x, y, ch3, ch4, ch5, ch6, ch7, ch8),
+        sample_rate_hz=config.sample_rate_hz,
     )
     return GeneratedWaveforms(ch1=x, ch2=y, ch3=ch3, ch4=ch4, ch5=ch5, ch6=ch6, ch7=ch7, ch8=ch8, metadata=metadata)
 
 
+def _apply_generated_lengths(metadata: dict[str, Any], waves: tuple[np.ndarray, ...], sample_rate_hz: float) -> None:
+    max_samples = 0
+    max_bytes = 0
+    for channel, wave in enumerate(waves, start=1):
+        samples = int(np.asarray(wave).size)
+        length_bytes = waveform_tools.waveform_length_bytes(wave)
+        max_samples = max(max_samples, samples)
+        max_bytes = max(max_bytes, length_bytes)
+        metadata[f"ch{channel}_logical_bytes"] = length_bytes
+        metadata[f"ch{channel}_samples_per_channel"] = samples
+        metadata[f"ch{channel}_complex_samples"] = samples // 2
+        metadata[f"ch{channel}_record_duration_s"] = (samples // 2) / float(sample_rate_hz)
+        channel_meta = metadata.get(f"ch{channel}")
+        if isinstance(channel_meta, dict):
+            channel_meta["samples_per_channel"] = samples
+            channel_meta["bytes"] = length_bytes
+            channel_meta["complex_samples"] = samples // 2
+            channel_meta["record_duration_s"] = (samples // 2) / float(sample_rate_hz)
+    metadata["samples_per_channel"] = max_samples
+    metadata["bytes_per_channel"] = max_bytes
+    metadata["record_duration_s"] = (max_samples // 2) / float(sample_rate_hz)
+
+
 def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float, rfdc_interpolation: int, channel_name: str) -> np.ndarray:
     waveform_type = config.waveform_type.lower()
+    sample_count = waveform_tools.iq_duration_to_sample_count(config.duration_s, sample_rate_hz)
     if waveform_type == "off":
-        return np.zeros(host.NUM_SAMPLES, dtype=np.int16)
+        return np.zeros(sample_count, dtype=np.int16)
     if waveform_type == "dc-iq-cw":
-        return host.build_dc_iq_tone(host.FIXED_DATA_BYTES, amp=float(config.amplitude) / 32767.0)
+        wave = host.build_dc_iq_tone(sample_count * 2, amp=float(config.amplitude) / 32767.0)
+        return waveform_tools.append_iq_zero_tail(wave, config.zero_tail_s, sample_rate_hz)
     if waveform_type == "iq-sine":
-        return waveform_tools.make_iq_sine_tile_waveform(
+        _validate_iq_frequency(config.freq_hz, sample_rate_hz, channel_name)
+        wave = waveform_tools.make_iq_sine_tile_waveform(
             python_frequency_hz(config.freq_hz, rfdc_interpolation),
             config.phase_rad,
             config.amplitude,
             sample_rate_hz,
+            sample_count=sample_count,
+            q_sign=-1,
         )
+        return waveform_tools.append_iq_zero_tail(wave, config.zero_tail_s, sample_rate_hz)
+    if waveform_type == "iq-gaussian-sine":
+        _validate_iq_frequency(config.freq_hz, sample_rate_hz, channel_name)
+        wave = waveform_tools.make_iq_gaussian_sine_tile_waveform(
+            python_frequency_hz(config.freq_hz, rfdc_interpolation),
+            config.phase_rad,
+            config.amplitude,
+            sample_rate_hz,
+            config.duration_s,
+            sample_count=sample_count,
+            q_sign=-1,
+        )
+        return waveform_tools.append_iq_zero_tail(wave, config.zero_tail_s, sample_rate_hz)
     if waveform_type == "pypulse":
         wave, _metadata = waveform_tools.make_pypulse_tile_waveform(
             config.pypulse_waveform,
@@ -659,12 +764,15 @@ def _make_channel_waveform(config: ChannelWaveformConfig, sample_rate_hz: float,
     if waveform_type == "quantum":
         return _make_quantum_gate_waveform(config, sample_rate_hz, rfdc_interpolation, channel_name)
     if waveform_type == "sine":
-        return waveform_tools.make_iq_sine_tile_waveform(
+        wave = waveform_tools.make_iq_sine_tile_waveform(
             python_frequency_hz(config.freq_hz, rfdc_interpolation),
             config.phase_rad,
             config.amplitude,
             sample_rate_hz,
+            sample_count=sample_count,
+            q_sign=-1,
         )
+        return waveform_tools.append_iq_zero_tail(wave, config.zero_tail_s, sample_rate_hz)
     if waveform_type == "burst":
         wave = waveform_tools.make_gaussian_burst(
             python_frequency_hz(config.freq_hz, rfdc_interpolation),
@@ -735,10 +843,12 @@ def _channel_gaussian_window_pulse(config: ChannelWaveformConfig, sample_rate_hz
     return wave
 
 
-def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz: float, rfdc_interpolation: int) -> dict:
+def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz: float, rfdc_interpolation: int, sample_rate_hz: float) -> dict:
     python_freq_hz = python_frequency_hz(config.freq_hz, rfdc_interpolation)
     pypulse_info = _pypulse_metadata(config)
     waveform_type = config.waveform_type.lower()
+    sample_count = waveform_tools.iq_duration_to_sample_count(config.duration_s, sample_rate_hz)
+    length_bytes = sample_count * 2
     return {
         "label": CHANNEL_LABELS[channel],
         "upload_arg": CHANNEL_UPLOAD_ARGS[channel],
@@ -756,10 +866,14 @@ def _channel_metadata(config: ChannelWaveformConfig, channel: str, axis_freq_hz:
         "python_freq_hz": python_freq_hz,
         "phase_rad": config.phase_rad,
         "amplitude": config.amplitude,
-        "encoding": "signed-iq-interleaved" if waveform_type in ("iq-sine", "sine", "dc-iq-cw", "pypulse") else config.encoding,
+        "encoding": "signed-iq-interleaved" if waveform_type in ("iq-sine", "iq-gaussian-sine", "sine", "dc-iq-cw", "pypulse") else config.encoding,
         "delay_s": config.delay_s,
         "delay_cycles": waveform_tools.delay_seconds_to_axis_cycles_by_freq(config.delay_s, axis_freq_hz),
         "duration_s": config.duration_s,
+        "zero_tail_s": config.zero_tail_s,
+        "samples_per_channel": sample_count,
+        "bytes": length_bytes,
+        "complex_samples": sample_count // 2,
         "pulse_preset": config.pulse_preset,
         "pulse_sigma_s": config.pulse_sigma_s,
         "pulse_center_s": config.pulse_center_s,
@@ -773,6 +887,8 @@ def _channel_semantics(config: ChannelWaveformConfig) -> str:
         return "DC complex baseband with interleaved I/Q lanes"
     if waveform_type == "iq-sine":
         return "continuous complex sine with interleaved I/Q lanes"
+    if waveform_type == "iq-gaussian-sine":
+        return "finite HLS/DRAG-style Gaussian-envelope complex sine with interleaved I/Q lanes"
     if waveform_type == "sine":
         return "continuous complex sine with interleaved I/Q lanes"
     if waveform_type == "pypulse":
@@ -1054,6 +1170,22 @@ class WaveformController:
             ch4=generated.ch4,
             extra_channels={5: generated.ch5, 6: generated.ch6, 7: generated.ch7, 8: generated.ch8},
         )
+        waveform_tools.save_ezq_wave_bundle(
+            output_dir,
+            {
+                1: generated.ch1,
+                2: generated.ch2,
+                3: generated.ch3,
+                4: generated.ch4,
+                5: generated.ch5,
+                6: generated.ch6,
+                7: generated.ch7,
+                8: generated.ch8,
+            },
+            generated.metadata,
+            channel_format="interleaved_iq",
+            stem="ezq",
+        )
 
         log_lines = [
             "progress: generated waveforms",
@@ -1067,6 +1199,7 @@ class WaveformController:
             summarize_waveform("CH7", generated.ch7),
             summarize_waveform("CH8", generated.ch8),
             "progress: saved artifacts",
+            "progress: saved ezq artifacts",
             f"saved artifacts to {output_dir}",
         ]
         if config.dry_run:
@@ -1085,12 +1218,13 @@ class WaveformController:
             timeout_s=connection.timeout_s,
             post_upload_sleep_s=connection.post_upload_sleep_s,
             output_dir=output_dir,
-            loop=config.loop,
+            loop=False,
             auto_start=not config.wait_for_trigger,
             ch3=generated.ch3,
             ch4=generated.ch4,
             extra_channels={5: generated.ch5, 6: generated.ch6, 7: generated.ch7, 8: generated.ch8},
             channel_delays=channel_delay_cycles(config),
+            layout=config.ddr_layout,
         )
         log_lines.append("progress: send complete")
         log_lines.append(f"sent UDP waveform to {connection.ip}:{connection.port}")

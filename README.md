@@ -21,14 +21,18 @@ xczu47dr-rfdc/
 
 ## Top-Level Workflow
 
-Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The only supported target is `custom_xczu47dr`, and it is the default.
+Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The default target is `custom_xczu47dr`, which builds the normal eight-output RFDC playback path. Use `TARGET=custom_xczu47dr_bw` only when you explicitly want the standalone DDR bandwidth pressure design.
 
 ```bash
-# Full custom XCZU47DR hardware and firmware build
+# Full normal RFDC playback hardware and firmware build
 make all
 
 # Build only FPGA artifacts: Chisel RTL, Vivado project, synth, impl, bitstream, XSA
 make hardware
+
+# Build the standalone DDR bandwidth pressure design explicitly
+TARGET=custom_xczu47dr_bw make hardware
+TARGET=custom_xczu47dr_bw make firmware
 
 # Build only firmware from the current XSA
 make firmware
@@ -38,6 +42,9 @@ make artifacts
 
 # Program the custom board over JTAG with the default bitstream and ELF
 make run
+
+# Select one board when multiple JTAG cables are connected
+JTAG_CABLE_SERIAL=210512180082 make program
 
 # Or program with explicit artifacts
 make run BIT=/path/to/top.bit ELF=/path/to/app.elf PSU_INIT=/path/to/psu_init.tcl
@@ -54,7 +61,7 @@ make host-dry-run
 python3 software/waveform_gui.py
 ```
 
-Default handoff artifacts:
+Default normal RFDC playback handoff artifacts:
 
 - Bitstream: `hardware/vivado/output/custom_xczu47dr_rfdc.bit`
 - Debug probes: `hardware/vivado/output/custom_xczu47dr_rfdc.ltx`
@@ -62,21 +69,21 @@ Default handoff artifacts:
 - Firmware ELF: `firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
 - PS init script: `firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl`
 
-`make run` programs the custom board over JTAG with the `.bit`, runs PS initialization from `psu_init.tcl`, downloads the ELF to `Cortex-A53 #0`, and starts execution. Use UART at 115200 baud to inspect firmware output. Verify the HMC7044 sequencer done bit, RFDC DAC tile startup messages, and per-channel analog output before treating a bitstream as hardware-qualified.
+`make run` and `make program` program the custom board over JTAG with the `.bit`, run PS initialization from `psu_init.tcl`, download the ELF to `Cortex-A53 #0`, and start execution. When multiple boards are attached, set `JTAG_CABLE_SERIAL=<serial>` to select the cable, for example `JTAG_CABLE_SERIAL=210512180082 make program`; the normal `TARGET=custom_xczu47dr` path defaults to serial `210512180081`, while the bandwidth target should be selected explicitly when more than one cable is connected. Use UART at 115200 baud to inspect firmware output.
 
 ## Custom XCZU47DR Bring-Up Scope
 
 The build selects the `xczu47dr-ffvg1517-2-i` part without a Vivado `board_part`, uses `hardware/vivado/xdc/custom_xczu47dr_minimal.xdc`, and selects the `TopCustomXczu47dr` wrapper. The wrapper drives the XS18 `TRIG_1` MMCX output from package ball A6 as an END-after-commit trigger/debug pulse.
 
-The current custom scope is eight-output DAC playback on the custom XCZU47DR board using fine-NCO digital up-conversion in C2R (IQ->Real) mode. All four DAC tiles (228-231) are enabled with both slices (0 and 2), giving eight analog outputs `vout00/02/10/12/20/22/30/32`. The eight executor channels map one-to-one to the eight active RFDC slice AXIS streams: CH1->`s00_axis`, CH2->`s02_axis`, CH3->`s10_axis`, CH4->`s12_axis`, CH5->`s20_axis`, CH6->`s22_axis`, CH7->`s30_axis`, CH8->`s32_axis`. The DataMover reads DDR through a 512-bit AXI-MM port, keeps multiple 4 KiB MM2S commands outstanding, and outputs native 256-bit RFDC beats through per-channel 256-bit async FIFOs into the physical DAC slices; the old 128-to-256 gearbox has been removed. Within every 256-bit RFDC word, software stores little-endian int16 lanes as `I0,Q0,I1,Q1,...,I7,Q7`. Per-channel DDR buffers use 32B-aligned 256 KiB default slots (`0x0`, `0x40000`, ..., `0x1C0000`) so longer CW uploads cannot overlap. PCIe, QSFP, Type-C, Aurora, ADC capture, LEDs, and unrelated board interfaces remain outside this bring-up scope unless requested later.
+The current custom scope is eight-output DAC playback on the custom XCZU47DR board using fine-NCO digital up-conversion in C2R (IQ->Real) mode. All four DAC tiles (228-231) are enabled with both physical slices (0 and 2), giving eight analog outputs `vout00/02/10/12/20/22/30/32`. The eight executor channels map one-to-one to the eight logical playback streams: CH1->`vout00`, CH2->`vout02`, CH3->`vout10`, CH4->`vout12`, CH5->`vout20`, CH6->`vout22`, CH7->`vout30`, CH8->`vout32`. The RFDC IP is in `Multi x2(all)` C2R mode and the normal wrapper connects the eight active logical 256-bit RFDC AXIS streams to `s00/s02/s10/s12/s20/s22/s30/s32`; generated companion ports `s01/s03/s11/s13/s21/s23/s31/s33` are tied off by the wrapper for this configuration. The DataMover reads DDR through a 512-bit AXI-MM port, keeps multiple 4 KiB MM2S commands outstanding, and outputs native 256-bit beats through per-channel 256-bit async FIFOs. Within every logical 256-bit word, software stores little-endian int16 lanes as `I0,Q0,I1,Q1,...,I7,Q7`. Host upload now defaults to the `tiled` DDR layout: each channel keeps independent 4 KiB tiles inside an 8-channel 32 KiB superblock, so CH1 tile0 starts at `0x0`, CH2 tile0 at `0x1000`, and CH1 tile1 at `0x8000`. The old contiguous per-channel slot layout (`0x0`, `0x40000`, ..., `0x1C0000`) remains available from software with `--ddr-layout contiguous`; `interleaved_512b` remains available only for explicit bandwidth/experimental flows. PCIe, QSFP, Type-C, Aurora, ADC capture, LEDs, and unrelated board interfaces remain outside this bring-up scope unless requested later.
 
-Each DAC runs at `Fs = 6.0 GS/s` with `8x` interpolation, so the PL/AXIS fabric clock is `Fs / interp / 8 = 93.75 MHz`. DAC2 (tile 230) owns the PLL from the 125 MHz HMC7044 refclk (`Clock_Dist=2`) and distributes to all tiles (`Clock_Source=6`). Every DAC slice is configured for fine-NCO C2R up-conversion (`DAC_Mixer_Mode=1`, `DAC_Mixer_Type=2` / `Fine`, `DAC_Data_Type=1` / `I/Q`) in Nyquist Zone 2. For single-frequency CW the host streams a constant DC complex baseband (constant I, Q=0); the C2R fine NCO then translates the tone entirely by the NCO frequency, producing one clean tone per output. With `Fs = 6.0 GS/s` a baseband NCO of `-1.5 GHz` lands the Zone 2 image at `6.0 - 1.5 = 4.5 GHz`. The firmware sets the NCO once at startup via `Configure_Custom_DAC_NCO()` (default `-1.5 GHz`) and the wrapper allows retuning across the 4-5 GHz band at runtime without rebuilding the bitstream.
+Each DAC runs at `Fs = 6.0 GS/s` with `8x` interpolation, so the PL/AXIS fabric clock is `Fs / interp / 8 = 93.75 MHz`. DAC2 (tile 230) owns the PLL from the 125 MHz HMC7044 refclk (`Clock_Dist=2`) and distributes to all tiles (`Clock_Source=6`). Every active DAC slice is configured for fine-NCO C2R up-conversion (`DAC_Band=3` / `Multi x2(all)`, `DAC_Mixer_Mode=0` / `I/Q->Real`, `DAC_Mixer_Type=2` / `Fine`, `DAC_Data_Type=0` / `Real` input ports) in Nyquist Zone 2. For single-frequency CW the host streams a constant DC complex baseband (constant I, Q=0); the C2R fine NCO then translates the tone entirely by the NCO frequency, producing one clean tone per output. With `Fs = 6.0 GS/s` a baseband NCO of `-1.5 GHz` lands the Zone 2 image at `6.0 - 1.5 = 4.5 GHz`. The firmware sets the NCO once at startup via `Configure_Custom_DAC_NCO()` (default `-1.5 GHz`) and the wrapper allows retuning across the 4-5 GHz band at runtime without rebuilding the bitstream.
 
 The custom PL includes an HMC7044 sequencer and the firmware waits for its done bit before RFDC startup. The RTL currently drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The host DC-CW path now writes explicit interleaved `I=C,Q=0` samples; tone frequency is set by the firmware NCO, not by the host sample rate. The custom firmware no longer initializes PS Ethernet or lwIP.
 
 Vivado project creation and synthesis have passed for `TARGET=custom_xczu47dr` with top module `TopCustomXczu47dr` and part `xczu47dr-ffvg1517-2-i`; implementation/bitstream generation is the final gate for the current 256-bit native playback revision. The custom DDR4 controller uses a `Custom` board interface with `CONFIG.C0.DDR4_InputClockPeriod {3334}` to match the existing 300 MHz `c0_sys` port. The reference project exposes two separate 64-bit DDR4 controllers, while this bring-up flow still uses the existing single-DDR4 BD path. Full DDR4 topology, memory part, data width, and pin constraints still need schematic/BOM confirmation before production hardware-readiness claims.
 
-Generated custom bitstream, XSA, and firmware ELF artifacts exist, but hardware qualification still requires JTAG programming, UART RFDC/HMC7044 status review, ILA checks on the 256-bit `s00/s02/s10/s12/s20/s22/s30/s32_axis` streams, and per-output measurements on `vout00/02/10/12/20/22/30/32`.
+Generated custom bitstream, XSA, and firmware ELF artifacts exist, but hardware qualification still requires JTAG programming, UART RFDC/HMC7044 status review, ILA checks on the 256-bit logical channel streams and RFDC I/Q split ports, and per-output measurements on `vout00/02/10/12/20/22/30/32`.
 
 ## Requirements
 

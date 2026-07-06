@@ -1,8 +1,7 @@
 `timescale 1ns / 1ps
 
-module tb_waveform_executor_outstanding;
+module tb_waveform_executor_wave_done_hold;
   localparam [63:0] CH1_ADDR = 64'h0000000000000000;
-  localparam [63:0] CH2_ADDR = 64'h0000000000040000;
 
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -16,7 +15,17 @@ module tb_waveform_executor_outstanding;
   wire         dm_cmd_tvalid;
   reg          dm_cmd_tready = 1'b1;
 
-  integer cmd_count = 0;
+  reg [255:0] dm_data_tdata = 256'd0;
+  reg         dm_data_tvalid = 1'b0;
+  wire        dm_data_tready;
+
+  reg [15:0] ch1_fifo_level_beats = 16'd0;
+  wire [31:0] ch1_len_beats;
+  wire        ch1_arm;
+  wire        cfg_auto_start;
+  wire        cfg_commit;
+  wire [2:0]  dbg_st;
+
   integer cfg_commit_count = 0;
 
   Waveform_System_Top dut (
@@ -29,9 +38,9 @@ module tb_waveform_executor_outstanding;
     .m_axis_dm_cmd_tdata(dm_cmd_tdata),
     .m_axis_dm_cmd_tvalid(dm_cmd_tvalid),
     .m_axis_dm_cmd_tready(dm_cmd_tready),
-    .s_axis_dm_data_tdata(256'd0),
-    .s_axis_dm_data_tvalid(1'b0),
-    .s_axis_dm_data_tready(),
+    .s_axis_dm_data_tdata(dm_data_tdata),
+    .s_axis_dm_data_tvalid(dm_data_tvalid),
+    .s_axis_dm_data_tready(dm_data_tready),
     .ch1_fifo_ready(1'b1),
     .ch2_fifo_ready(1'b1),
     .ch3_fifo_ready(1'b1),
@@ -40,7 +49,7 @@ module tb_waveform_executor_outstanding;
     .ch6_fifo_ready(1'b1),
     .ch7_fifo_ready(1'b1),
     .ch8_fifo_ready(1'b1),
-    .ch1_fifo_level_beats(16'd0),
+    .ch1_fifo_level_beats(ch1_fifo_level_beats),
     .ch2_fifo_level_beats(16'd0),
     .ch3_fifo_level_beats(16'd0),
     .ch4_fifo_level_beats(16'd0),
@@ -72,7 +81,7 @@ module tb_waveform_executor_outstanding;
     .ch6_delay_cycles(),
     .ch7_delay_cycles(),
     .ch8_delay_cycles(),
-    .ch1_len_beats(),
+    .ch1_len_beats(ch1_len_beats),
     .ch2_len_beats(),
     .ch3_len_beats(),
     .ch4_len_beats(),
@@ -80,7 +89,7 @@ module tb_waveform_executor_outstanding;
     .ch6_len_beats(),
     .ch7_len_beats(),
     .ch8_len_beats(),
-    .ch1_arm(),
+    .ch1_arm(ch1_arm),
     .ch2_arm(),
     .ch3_arm(),
     .ch4_arm(),
@@ -88,9 +97,9 @@ module tb_waveform_executor_outstanding;
     .ch6_arm(),
     .ch7_arm(),
     .ch8_arm(),
-    .cfg_auto_start(),
+    .cfg_auto_start(cfg_auto_start),
     .cfg_commit(cfg_commit),
-    .dbg_st(),
+    .dbg_st(dbg_st),
     .dbg_dm_st(),
     .dbg_dm_sel_ch1(),
     .dbg_dm_chunk_beats(),
@@ -117,17 +126,9 @@ module tb_waveform_executor_outstanding;
 
   always @(posedge clk) begin
     if(!rst_n) begin
-      cmd_count <= 0;
       cfg_commit_count <= 0;
-    end else begin
-      if(dm_cmd_tvalid && dm_cmd_tready) begin
-        cmd_count <= cmd_count + 1;
-        if(dm_cmd_tdata[22:0] != 23'd4096) begin
-          $display("FAIL: each outstanding command should be 4096 bytes");
-          $finish;
-        end
-      end
-      if(cfg_commit) cfg_commit_count <= cfg_commit_count + 1;
+    end else if(cfg_commit) begin
+      cfg_commit_count <= cfg_commit_count + 1;
     end
   end
 
@@ -140,6 +141,18 @@ module tb_waveform_executor_outstanding;
       @(negedge clk);
       instr_tvalid = 1'b0;
       instr_tdata = 128'd0;
+    end
+  endtask
+
+  task send_dm_beat(input [255:0] word);
+    begin
+      @(negedge clk);
+      dm_data_tdata = word;
+      dm_data_tvalid = 1'b1;
+      while(!dm_data_tready) @(negedge clk);
+      @(negedge clk);
+      dm_data_tvalid = 1'b0;
+      dm_data_tdata = 256'd0;
     end
   endtask
 
@@ -157,15 +170,31 @@ module tb_waveform_executor_outstanding;
     rst_n = 1'b1;
     repeat(4) @(negedge clk);
 
-    send_instr({CH1_ADDR, 32'd8192, 32'h00000012});
-    send_instr({CH2_ADDR, 32'd8192, 32'h00000022});
+    send_instr({CH1_ADDR, 32'd4096, 32'h00000012});
     send_instr(128'h000000000000000000000000000000f3);
 
-    repeat(80) @(negedge clk);
-    check_condition(cmd_count == 4, "executor should issue four 4KiB commands before any data returns");
-    check_condition(cfg_commit_count == 0, "cfg_commit must wait for outstanding data to drain");
+    wait(dm_cmd_tvalid && dm_cmd_tready);
+    repeat(2) @(negedge clk);
+    ch1_fifo_level_beats = 16'd128;
 
-    $display("PASS: waveform executor keeps multiple MM2S commands outstanding");
+    for(integer beat = 0; beat < 128; beat = beat + 1) begin
+      send_dm_beat({224'd0, beat[31:0]});
+    end
+
+    wait(cfg_commit);
+    repeat(4) @(negedge clk);
+    check_condition(cfg_commit_count == 1, "cfg_commit should pulse once after prefill");
+    check_condition(ch1_arm == 1'b1, "ch1_arm must stay high while the DAC FIFO still contains data");
+    check_condition(cfg_auto_start == 1'b1, "cfg_auto_start must stay high while the DAC FIFO still contains data");
+    check_condition(ch1_len_beats == 32'd128, "ch1_len_beats must remain valid for the CDC payload");
+    check_condition(dbg_st == 3'd3, "executor must remain in ST_PLAYING until the armed FIFO drains");
+
+    ch1_fifo_level_beats = 16'd0;
+    repeat(4) @(negedge clk);
+    check_condition(ch1_arm == 1'b0, "ch1_arm should clear after the armed FIFO drains");
+    check_condition(dbg_st == 3'd0, "executor should return to ST_BUILD after playback drains");
+
+    $display("PASS: waveform executor holds config until armed FIFO drains");
     $finish;
   end
 endmodule

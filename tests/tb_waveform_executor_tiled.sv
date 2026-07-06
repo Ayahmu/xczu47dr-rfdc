@@ -1,8 +1,8 @@
 `timescale 1ns / 1ps
 
-module tb_waveform_executor_outstanding;
-  localparam [63:0] CH1_ADDR = 64'h0000000000000000;
-  localparam [63:0] CH2_ADDR = 64'h0000000000040000;
+module tb_waveform_executor_tiled;
+  localparam [63:0] CH1_TILE0_ADDR = 64'h0000000000000000;
+  localparam [63:0] CH1_TILE1_ADDR = 64'h0000000000008000;
 
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -15,9 +15,10 @@ module tb_waveform_executor_outstanding;
   wire [103:0] dm_cmd_tdata;
   wire         dm_cmd_tvalid;
   reg          dm_cmd_tready = 1'b1;
+  wire [31:0]  bad_instr_count;
 
   integer cmd_count = 0;
-  integer cfg_commit_count = 0;
+  reg [63:0] cmd_addr [0:1];
 
   Waveform_System_Top dut (
     .aclk(clk),
@@ -89,7 +90,7 @@ module tb_waveform_executor_outstanding;
     .ch7_arm(),
     .ch8_arm(),
     .cfg_auto_start(),
-    .cfg_commit(cfg_commit),
+    .cfg_commit(),
     .dbg_st(),
     .dbg_dm_st(),
     .dbg_dm_sel_ch1(),
@@ -112,22 +113,21 @@ module tb_waveform_executor_outstanding;
     .dbg_pending_valid(),
     .dbg_active_valid(),
     .dbg_run_delay_cnt(),
-    .dbg_bad_instr_count()
+    .dbg_bad_instr_count(bad_instr_count)
   );
 
   always @(posedge clk) begin
     if(!rst_n) begin
       cmd_count <= 0;
-      cfg_commit_count <= 0;
-    end else begin
-      if(dm_cmd_tvalid && dm_cmd_tready) begin
-        cmd_count <= cmd_count + 1;
-        if(dm_cmd_tdata[22:0] != 23'd4096) begin
-          $display("FAIL: each outstanding command should be 4096 bytes");
-          $finish;
-        end
+      cmd_addr[0] <= 64'd0;
+      cmd_addr[1] <= 64'd0;
+    end else if(dm_cmd_tvalid && dm_cmd_tready) begin
+      if(cmd_count < 2) cmd_addr[cmd_count] <= dm_cmd_tdata[95:32];
+      cmd_count <= cmd_count + 1;
+      if(dm_cmd_tdata[22:0] != 23'd4096) begin
+        $display("FAIL: tiled command BTT should stay at 4096 bytes");
+        $finish;
       end
-      if(cfg_commit) cfg_commit_count <= cfg_commit_count + 1;
     end
   end
 
@@ -157,15 +157,20 @@ module tb_waveform_executor_outstanding;
     rst_n = 1'b1;
     repeat(4) @(negedge clk);
 
-    send_instr({CH1_ADDR, 32'd8192, 32'h00000012});
-    send_instr({CH2_ADDR, 32'd8192, 32'h00000022});
+    send_instr({64'd0, 32'd4097, 32'h00000212});
+    repeat(4) @(negedge clk);
+    check_condition(cmd_count == 0, "unaligned tiled PLAY should not issue a DataMover command");
+    check_condition(bad_instr_count == 1, "unaligned tiled PLAY should increment bad instruction count");
+
+    send_instr({CH1_TILE0_ADDR, 32'd8192, 32'h00000212});
     send_instr(128'h000000000000000000000000000000f3);
 
-    repeat(80) @(negedge clk);
-    check_condition(cmd_count == 4, "executor should issue four 4KiB commands before any data returns");
-    check_condition(cfg_commit_count == 0, "cfg_commit must wait for outstanding data to drain");
+    repeat(50) @(negedge clk);
+    check_condition(cmd_count == 2, "tiled CH1 8192B playback should issue two commands");
+    check_condition(cmd_addr[0] == CH1_TILE0_ADDR, "first tiled command should read CH1 tile0");
+    check_condition(cmd_addr[1] == CH1_TILE1_ADDR, "second tiled command should jump to CH1 tile1 in next superblock");
 
-    $display("PASS: waveform executor keeps multiple MM2S commands outstanding");
+    $display("PASS: waveform executor tiled mode strides by one 8-channel superblock");
     $finish;
   end
 endmodule

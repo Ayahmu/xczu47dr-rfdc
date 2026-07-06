@@ -1,4 +1,6 @@
 
+#ifndef BOARD_CUSTOM_XCZU47DR_BW
+
 /***************************** Include Files *********************************/
 #include <stdio.h>
 #include <stdarg.h>
@@ -619,3 +621,5 @@ int rfdcStartup(void)
 
 	return XST_SUCCESS;
 }
+
+#endif /* BOARD_CUSTOM_XCZU47DR_BW */

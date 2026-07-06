@@ -20,6 +20,11 @@ xvlog.pb
 test.gen/
 vivado.jou
 vivado.log
+xsim.jou
+xsim.log
+xelab.log
+*.wdb
+*.pb
 
 # Xilinx Vitis/XSCT generated state
 firmware/workspace/
@@ -46,6 +51,7 @@ software/.venv/
 software/output/
 software/waveform_out/
 software/ila_reports*/
+logs/
 
 # IDE
 .vscode/
@@ -68,6 +74,8 @@ Thumbs.db
 *.xsa
 
 # Temporary and backup files
+ch*_waveform_hex.txt
+wave_preview_*.png
 *.tmp
 *.bak
 *.old

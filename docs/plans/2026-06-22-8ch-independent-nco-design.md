@@ -37,26 +37,28 @@ C2R fine mixer，基带在 DC，NCO 把它搬到 |f_nco|，Zone2 镜像：
 
 f_nco ∈ [0.5, 2.5] < Fs/2=3.0，全部合法。
 
-## 数据组织（不改 RTL）
+## 数据组织（当前 RTL）
 
-已验证 RTL：axis_128_to_256 gearbox 把两个连续 128-bit DDR beat 拼成一个 256-bit tile 字：
-- beat0（偶）→ 低 128 位 → slice0（vout_0）
-- beat1（奇）→ 高 128 位 → slice2（vout_2）
+当前 RTL 已改为 8 个逻辑通道独立播放。DataMover 使用 512-bit AXI-MM 读 DDR，
+每通道 async FIFO 输出 256-bit beat，旧 `axis_128_to_256` gearbox 已删除。
 
-因此 8 口独立**只需 host 在每个 tile 缓冲里按 beat 交替填两个 DAC 的常数**，RTL 不动。
+每个逻辑 256-bit beat 仍按软件侧格式存放 interleaved IQ：
 
-| 用户通道 | DAC 口 | Tile | tile 缓冲内位置 |
+    I0,Q0,I1,Q1,...,I7,Q7
+
+RFDC IP 静态配置为 Real 输入的 C2R 模式，wrapper 在 RFDC 边界把每个逻辑通道拆成
+两个 Real AXIS 端口：
+
+| 用户通道 | DAC 口 | RFDC I 端口 | RFDC Q 端口 |
 |---|---|---|---|
-| CH1 | vout00 | 0 | 偶 beat |
-| CH2 | vout02 | 0 | 奇 beat |
-| CH3 | vout10 | 1 | 偶 beat |
-| CH4 | vout12 | 1 | 奇 beat |
-| CH5 | vout20 | 2 | 偶 beat |
-| CH6 | vout22 | 2 | 奇 beat |
-| CH7 | vout30 | 3 | 偶 beat |
-| CH8 | vout32 | 3 | 奇 beat |
-
-executor 指令仍按 4 个 tile 下发（AXIS 是 4 个）；每个 tile 缓冲含其两个 DAC 各自的常数。
+| CH1 | vout00 | s00 | s01 |
+| CH2 | vout02 | s02 | s03 |
+| CH3 | vout10 | s10 | s11 |
+| CH4 | vout12 | s12 | s13 |
+| CH5 | vout20 | s20 | s21 |
+| CH6 | vout22 | s22 | s23 |
+| CH7 | vout30 | s30 | s31 |
+| CH8 | vout32 | s32 | s33 |
 
 ## firmware 改动
 
@@ -72,11 +74,15 @@ executor 指令仍按 4 个 tile 下发（AXIS 是 4 个）；每个 tile 缓冲
 - 每个 tile 缓冲按 beat 交替填该 tile 两个 DAC 的常数。
 - 保持 DC 常数复基带（对 lane 交织不敏感）。
 
-## 不改动项
+## RFDC IP 配置
 
-- RFDC IP 配置 TCL（DAC_Mixer_Mode=1, Type=2 Fine, Data_Type=1 I/Q, Interp=8, Fs=6.0, Zone=2）
-- 时钟链 / HMC7044 / PLL / fabric 时钟
-- RTL（Top.v / gearbox / TopCustomXczu47dr.v）
+- `DAC_Band=3` / Multi x2(all)
+- `DAC_Mixer_Mode=0` / I/Q->Real
+- `DAC_Mixer_Type=2` / Fine
+- `DAC_Data_Type=0` / Real input ports
+- `DAC_Interpolation_Mode=8`
+- `Fs=6.0 GS/s`
+- `Zone=2`
 
 ## 验证
 

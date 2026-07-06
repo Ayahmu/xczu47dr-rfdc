@@ -147,7 +147,8 @@ module tb_waveform_executor;
     .dbg_main_tready(),
     .dbg_pending_valid(),
     .dbg_active_valid(),
-    .dbg_run_delay_cnt()
+    .dbg_run_delay_cnt(),
+    .dbg_bad_instr_count()
   );
 
   always @(posedge clk) begin

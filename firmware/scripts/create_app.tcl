@@ -49,8 +49,30 @@ proc add_include_to_app_makefiles {debug_dir app_src_dir bsp_include_dir} {
     }
 }
 
+proc copy_source_tree {src dst exclude_files} {
+    file delete -force ${dst}
+    file mkdir ${dst}
+
+    foreach entry [glob -nocomplain -directory ${src} *] {
+        set name [file tail ${entry}]
+        if {[lsearch -exact ${exclude_files} ${name}] >= 0} {
+            continue
+        }
+        file copy -force ${entry} ${dst}
+    }
+}
+
 # Set workspace
 setws ${workspace_dir}
+
+set import_src_dir [file join ${workspace_dir} import_src]
+if {$board_define eq "BOARD_CUSTOM_XCZU47DR"} {
+    copy_source_tree ${src_dir} ${import_src_dir} [list bandwidth_main.c]
+} elseif {$board_define eq "BOARD_CUSTOM_XCZU47DR_BW"} {
+    copy_source_tree ${src_dir} ${import_src_dir} [list main.c main.h]
+} else {
+    copy_source_tree ${src_dir} ${import_src_dir} [list]
+}
 
 # Create platform from XSA
 puts "Creating platform from XSA..."
@@ -74,14 +96,14 @@ app config -name ${app_name} define-compiler-symbols ${compiler_symbols}
 
 # Import source files
 puts "Importing source files..."
-importsources -name ${app_name} -path ${src_dir}
+importsources -name ${app_name} -path ${import_src_dir}
 
 # Vitis 2024.2 can generate managed-make rules that reference ../src even
 # when importsources does not materialize the source tree. Copy explicitly so
 # the generated Debug makefile has real prerequisites.
 set app_src_dir [file join ${workspace_dir} ${app_name} src]
 file delete -force ${app_src_dir}
-file copy -force ${src_dir} ${app_src_dir}
+file copy -force ${import_src_dir} ${app_src_dir}
 
 if {$board_define eq "BOARD_CUSTOM_XCZU47DR"} {
     puts "Injecting custom RFDC driver sources..."
@@ -115,25 +137,6 @@ if {$board_define eq "BOARD_CUSTOM_XCZU47DR"} {
     file delete -force [file join ${platform_bsp_include_dir} metal]
     file copy -force ${custom_metal_dir} ${platform_bsp_include_dir}
 
-    set xparameters_overlay [file join ${app_src_dir} xparameters.h]
-    set fp [open ${xparameters_overlay} w]
-    puts $fp "#ifndef CUSTOM_XCZU47DR_XPARAMETERS_OVERLAY_H"
-    puts $fp "#define CUSTOM_XCZU47DR_XPARAMETERS_OVERLAY_H"
-    puts $fp "#include_next \"xparameters.h\""
-    puts $fp "#ifndef XPAR_XRFDC_NUM_INSTANCES"
-    puts $fp "#define XPAR_XRFDC_NUM_INSTANCES 1U"
-    puts $fp "#endif"
-    puts $fp "#ifndef XPAR_XRFDC_0_DEVICE_ID"
-    puts $fp "#define XPAR_XRFDC_0_DEVICE_ID 0U"
-    puts $fp "#endif"
-    puts $fp "#ifndef XPAR_XRFDC_0_BASEADDR"
-    puts $fp "#define XPAR_XRFDC_0_BASEADDR 0xA0040000U"
-    puts $fp "#endif"
-    puts $fp "#ifndef XPAR_XRFDC_0_DEV_NAME"
-    puts $fp "#define XPAR_XRFDC_0_DEV_NAME \"rfdc_custom_xczu47dr_ip\""
-    puts $fp "#endif"
-    puts $fp "#endif"
-    close $fp
 }
 
 # Build application

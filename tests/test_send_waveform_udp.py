@@ -1,5 +1,6 @@
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -11,13 +12,14 @@ sys.path.insert(0, str(SOFTWARE_DIR))
 
 import host  # type: ignore[import-not-found]  # noqa: E402
 import send_waveform_udp  # type: ignore[import-not-found]  # noqa: E402
+import waveform_tools  # type: ignore[import-not-found]  # noqa: E402
 
 
 class SendWaveformUdpTests(unittest.TestCase):
     def test_cli_default_sample_rate_matches_custom_rfdc_config(self):
         args = send_waveform_udp.build_parser().parse_args(["sine", "--dry-run"])
 
-        self.assertEqual(args.sample_rate_hz, 6_000_000_000.0)
+        self.assertEqual(args.sample_rate_hz, 750_000_000.0)
 
     def test_cli_default_axis_frequency_matches_custom_rfdc_axis_clock(self):
         args = send_waveform_udp.build_parser().parse_args(["burst", "--dry-run"])
@@ -39,12 +41,21 @@ class SendWaveformUdpTests(unittest.TestCase):
         ])
 
         *waves, metadata = send_waveform_udp.generate_waveforms(args)
+        expected_len = (
+            waveform_tools.iq_duration_to_sample_count(args.duration_s, args.sample_rate_hz)
+            + waveform_tools.iq_duration_to_sample_count(args.zero_tail_s, args.sample_rate_hz)
+        )
 
         self.assertEqual(len(waves), 8)
         for wave in waves:
             self.assertEqual(wave.dtype, np.int16)
-            self.assertEqual(len(wave), host.NUM_SAMPLES)
+            self.assertEqual(len(wave), expected_len)
+            self.assertFalse(np.any(wave[-16:]))
         self.assertFalse(np.array_equal(waves[0], waves[7]))
+        self.assertFalse(metadata["loop"])
+        self.assertEqual(metadata["duration_s"], 1e-6)
+        self.assertEqual(metadata["zero_tail_s"], 50e-9)
+        self.assertEqual(metadata["bytes_per_channel"], expected_len * 2)
         self.assertEqual(metadata["ch1_freq_hz"], 20e6)
         self.assertEqual(metadata["ch2_freq_hz"], 30e6)
         self.assertEqual(metadata["ch3_freq_hz"], 40e6)
@@ -160,6 +171,47 @@ class SendWaveformUdpTests(unittest.TestCase):
         self.assertEqual(metadata["ch3_delay_cycles"], 48)
         self.assertEqual(metadata["ch4_delay_cycles"], 60)
         self.assertEqual(metadata["ch8_delay_cycles"], 108)
+
+    def test_ezq_cli_parses_artifact_directory_mode(self):
+        args = send_waveform_udp.build_parser().parse_args([
+            "ezq",
+            "--artifact-dir", "/tmp/ezq-artifacts",
+            "--dry-run",
+        ])
+
+        self.assertEqual(args.mode, "ezq")
+        self.assertEqual(args.artifact_dir, Path("/tmp/ezq-artifacts"))
+        self.assertEqual(args.wave_format, "packed_iq")
+
+    def test_ezq_loader_round_trips_saved_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_dir = Path(temp_dir)
+            wave = np.array([1, 10, 2, 20, 3, 30, 4, 40], dtype=np.int16)
+            metadata = {
+                "mode": "iq-sine",
+                "layout": host.DDR_LAYOUT_TILED,
+                "ch1_delay_cycles": 24,
+            }
+            waveform_tools.save_ezq_wave_bundle(
+                out_dir,
+                {1: wave},
+                metadata,
+                channel_format="interleaved_iq",
+                stem="ezq",
+            )
+
+            loader_args = send_waveform_udp.build_parser().parse_args([
+                "ezq",
+                "--artifact-dir", str(out_dir),
+                "--dry-run",
+            ])
+            channel_waves, channel_sequences, loaded_metadata = send_waveform_udp._load_ezq_channel_artifacts(loader_args)
+
+            self.assertEqual(sorted(channel_waves), [1])
+            np.testing.assert_array_equal(channel_waves[1], wave)
+            self.assertEqual(sorted(channel_sequences), [1])
+            self.assertEqual(int(channel_sequences[1][0][1]), len(wave) // 4)
+            self.assertEqual(loaded_metadata["mode"], "iq-sine")
 
 
 if __name__ == "__main__":

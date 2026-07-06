@@ -18,41 +18,49 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(
             waveform_gui.PREVIEW_TITLES,
             (
-                f"CH1 DDR 0x{host.DDR_CH1_ADDR:X} vout00",
-                f"CH2 DDR 0x{host.DDR_CH2_ADDR:X} vout02",
-                f"CH3 DDR 0x{host.DDR_CH3_ADDR:X} vout10",
-                f"CH4 DDR 0x{host.DDR_CH4_ADDR:X} vout12",
-                f"CH5 DDR 0x{host.DDR_CH5_ADDR:X} vout20",
-                f"CH6 DDR 0x{host.DDR_CH6_ADDR:X} vout22",
-                f"CH7 DDR 0x{host.DDR_CH7_ADDR:X} vout30",
-                f"CH8 DDR 0x{host.DDR_CH8_ADDR:X} vout32",
+                f"CH1 DDR 0x{host.tiled_channel_base_addr(1):X} vout00",
+                f"CH2 DDR 0x{host.tiled_channel_base_addr(2):X} vout02",
+                f"CH3 DDR 0x{host.tiled_channel_base_addr(3):X} vout10",
+                f"CH4 DDR 0x{host.tiled_channel_base_addr(4):X} vout12",
+                f"CH5 DDR 0x{host.tiled_channel_base_addr(5):X} vout20",
+                f"CH6 DDR 0x{host.tiled_channel_base_addr(6):X} vout22",
+                f"CH7 DDR 0x{host.tiled_channel_base_addr(7):X} vout30",
+                f"CH8 DDR 0x{host.tiled_channel_base_addr(8):X} vout32",
             ),
         )
         self.assertEqual(waveform_gui.CHANNELS, ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"))
         self.assertEqual(len(waveform_gui.PREVIEW_COLORS), 8)
 
-    def test_waveform_types_expose_pypulse_iq_mode(self):
-        self.assertEqual(waveform_gui.WAVEFORM_TYPES, ("iq-sine", "dc-iq-cw", "pypulse", "quantum", "sine"))
-        self.assertEqual(waveform_gui.DEFAULT_CHANNEL_WAVEFORM_TYPE, "iq-sine")
-        self.assertEqual(waveform_gui.PYPULSE_WAVEFORMS, ("xy", "z", "readout"))
-        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["iq-sine"], ("freq_hz", "phase_rad", "amplitude"))
-        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["pypulse"], ("pypulse_waveform", "freq_hz", "phase_rad", "duration_s", "amplitude"))
-        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["quantum"], ("quantum_gate", "rotation_angle_rad", "freq_hz", "phase_rad", "delay_s", "duration_s", "amplitude"))
-        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["sine"], ("freq_hz", "phase_rad", "amplitude", "encoding"))
+    def test_waveform_types_are_limited_to_iq_cw_iq_sine_and_gaussian_sine(self):
+        self.assertEqual(waveform_gui.WAVEFORM_TYPES, ("dc-iq-cw", "iq-sine", "iq-gaussian-sine"))
+        self.assertEqual(waveform_gui.DEFAULT_CHANNEL_WAVEFORM_TYPE, "dc-iq-cw")
+        self.assertEqual(waveform_gui.WAVEFORM_TYPE_LABELS["dc-iq-cw"], "IQ CW")
+        self.assertEqual(waveform_gui.WAVEFORM_TYPE_LABELS["iq-sine"], "IQ Sine")
+        self.assertEqual(waveform_gui.WAVEFORM_TYPE_LABELS["iq-gaussian-sine"], "IQ Gaussian Sine")
+        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["dc-iq-cw"], ("amplitude", "duration_s"))
+        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["iq-sine"], ("freq_hz", "phase_rad", "amplitude", "duration_s"))
+        self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["iq-gaussian-sine"], ("freq_hz", "phase_rad", "amplitude", "duration_s"))
+        self.assertNotIn("pypulse", waveform_gui.CHANNEL_FIELD_GROUPS)
+        self.assertNotIn("quantum", waveform_gui.CHANNEL_FIELD_GROUPS)
+        self.assertNotIn("sine", waveform_gui.CHANNEL_FIELD_GROUPS)
 
     def test_gui_waveform_type_falls_back_for_legacy_modes(self):
-        self.assertEqual(waveform_gui._gui_waveform_type("pypulse"), "pypulse")
-        self.assertEqual(waveform_gui._gui_waveform_type("per-channel"), "iq-sine")
-        self.assertEqual(waveform_gui._gui_waveform_type("golden"), "iq-sine")
-        self.assertEqual(waveform_gui._gui_waveform_type(None), "iq-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("dc-iq-cw"), "dc-iq-cw")
+        self.assertEqual(waveform_gui._gui_waveform_type("iq-sine"), "iq-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("iq-gaussian-sine"), "iq-gaussian-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("sine"), "iq-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("pypulse"), "iq-gaussian-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("hls"), "iq-gaussian-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("per-channel"), "dc-iq-cw")
+        self.assertEqual(waveform_gui._gui_waveform_type("golden"), "dc-iq-cw")
+        self.assertEqual(waveform_gui._gui_waveform_type(None), "dc-iq-cw")
 
     def test_engineering_unit_labels_hide_scientific_notation(self):
-        self.assertEqual(waveform_gui.LABELS["quantum_gate"], "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)")
-        self.assertEqual(waveform_gui.LABELS["freq_hz"], "Scope target freq (MHz)")
-        self.assertEqual(waveform_gui.LABELS["delay_s"], "Hardware delay (ns)")
-        self.assertEqual(waveform_gui.LABELS["duration_s"], "Burst duration (ns)")
-        self.assertEqual(waveform_gui.LABELS["pypulse_waveform"], "PyPulse waveform")
-        self.assertEqual(waveform_gui.GLOBAL_SAMPLE_RATE_LABEL, "Python sample rate (GS/s)")
+        self.assertEqual(waveform_gui.LABELS["freq_hz"], "IQ sine freq (MHz)")
+        self.assertEqual(waveform_gui.LABELS["phase_rad"], "Phase (rad)")
+        self.assertEqual(waveform_gui.LABELS["amplitude"], "Amplitude (DAC codes)")
+        self.assertEqual(waveform_gui.LABELS["duration_s"], "Length (ns)")
+        self.assertEqual(waveform_gui.GLOBAL_SAMPLE_RATE_LABEL, "IQ sample rate (GS/s)")
         self.assertEqual(waveform_gui.GLOBAL_RFDC_INTERPOLATION_LABEL, "RFDC interpolation (x)")
 
     def test_engineering_unit_conversions(self):
@@ -97,10 +105,9 @@ class WaveformGuiTests(unittest.TestCase):
             waveform_gui.ACTION_BUTTON_GRID_COLUMNS * waveform_gui.ACTION_BUTTON_MIN_WIDTH_PX,
         )
 
-    def test_long_semantic_labels_have_short_display_copy(self):
-        self.assertEqual(waveform_gui.LABELS["quantum_gate"], "Quantum gate (X=I, Y=Q+90deg, Z=paired phase)")
-        self.assertEqual(waveform_gui.FIELD_DISPLAY_LABELS["quantum_gate"], "Quantum gate")
-        self.assertIn("Q+90deg", waveform_gui.FIELD_HELP_TEXTS["quantum_gate"])
+    def test_gui_field_labels_are_limited_to_iq_controls(self):
+        self.assertEqual(set(waveform_gui.LABELS), {"freq_hz", "phase_rad", "amplitude", "duration_s"})
+        self.assertEqual(waveform_gui._field_display_label("freq_hz"), "IQ sine freq (MHz)")
 
 
     def test_combobox_mousewheel_events_are_blocked(self):

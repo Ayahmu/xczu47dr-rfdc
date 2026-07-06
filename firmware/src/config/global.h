@@ -45,6 +45,13 @@
 
 #define MAX_BUF_SIZE 8192
 
+#define BW_CTRL_BASE       0xA0000000U
+#define BW_INST_BASE       0xA0020000U
+#define BW_DDR_BASE        ((UINTPTR)0x0000000500000000ULL)
+#define BW_DDR_SIZE_BYTES  ((u64)0x0000000100000000ULL)
+#define BW_CHANNELS        8U
+#define BW_CHANNEL_SIZE    (BW_DDR_SIZE_BYTES / BW_CHANNELS)
+
 extern u32 Ch0BdTxChainBuffer[0x40 * 16] __attribute__((aligned(64)));
 
 #endif /* __GLOBAL_H__ */

@@ -8,6 +8,8 @@ module Waveform_System_Top #(
   parameter integer START_WM     = 512,
   parameter integer OUTSTANDING_LIMIT = 15,
   parameter integer MAX_CONSECUTIVE_CHUNKS = 4,
+  parameter integer TILE_BYTES   = BEAT_BYTES * CHUNK_BEATS,
+  parameter integer TILE_CHANNELS = 8,
   parameter [63:0] DDR_ADDR_BASE = 64'd0
 )(
     input  wire         aclk,
@@ -111,7 +113,8 @@ module Waveform_System_Top #(
     output wire         dbg_main_tready,
     output wire         dbg_pending_valid,
     output wire         dbg_active_valid,
-    output wire [31:0]  dbg_run_delay_cnt
+    output wire [31:0]  dbg_run_delay_cnt,
+    output reg  [31:0]  dbg_bad_instr_count
 );
 
   // =========================================================
@@ -167,14 +170,17 @@ module Waveform_System_Top #(
   wire [3:0]  instr_cmd;
   wire [3:0]  instr_ch;
   wire        instr_loop;
+  wire        instr_tiled_layout;
   wire [31:0] instr_value;
   wire [63:0] instr_addr;
+  wire        instr_play_aligned = (instr_value[4:0] == 5'd0) && (instr_addr[4:0] == 5'd0);
 
   Waveform_Instruction_Decoder u_instr_decoder (
     .instr       (main_tdata),
     .cmd         (instr_cmd),
     .channel     (instr_ch),
     .loop_enable (instr_loop),
+    .tiled_layout(instr_tiled_layout),
     .value       (instr_value),
     .addr        (instr_addr)
   );
@@ -218,6 +224,10 @@ module Waveform_System_Top #(
   reg [63:0] ch5_load_addr, ch6_load_addr, ch7_load_addr, ch8_load_addr;
   reg [31:0] ch1_load_bytes, ch2_load_bytes, ch3_load_bytes, ch4_load_bytes;
   reg [31:0] ch5_load_bytes, ch6_load_bytes, ch7_load_bytes, ch8_load_bytes;
+  reg        ch1_load_tiled, ch2_load_tiled, ch3_load_tiled, ch4_load_tiled;
+  reg        ch5_load_tiled, ch6_load_tiled, ch7_load_tiled, ch8_load_tiled;
+
+  localparam integer SUPERBLOCK_BYTES = TILE_BYTES * TILE_CHANNELS;
 
   // =========================================================
   // 4) DMA 调度器（单 DataMover，分块搬运）
@@ -303,8 +313,10 @@ module Waveform_System_Top #(
     .load_tog        (ch1_load_tog),
     .load_addr       (ch1_load_addr),
     .load_bytes      (ch1_load_bytes),
+    .load_tiled      (ch1_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd0)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch1_base_addr),
     .bytes_left      (ch1_bytes_left),
     .active_valid_dm (act_ch1_valid_dm)
@@ -317,8 +329,10 @@ module Waveform_System_Top #(
     .load_tog        (ch2_load_tog),
     .load_addr       (ch2_load_addr),
     .load_bytes      (ch2_load_bytes),
+    .load_tiled      (ch2_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd1)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch2_base_addr),
     .bytes_left      (ch2_bytes_left),
     .active_valid_dm (act_ch2_valid_dm)
@@ -331,8 +345,10 @@ module Waveform_System_Top #(
     .load_tog        (ch3_load_tog),
     .load_addr       (ch3_load_addr),
     .load_bytes      (ch3_load_bytes),
+    .load_tiled      (ch3_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd2)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch3_base_addr),
     .bytes_left      (ch3_bytes_left),
     .active_valid_dm (act_ch3_valid_dm)
@@ -345,8 +361,10 @@ module Waveform_System_Top #(
     .load_tog        (ch4_load_tog),
     .load_addr       (ch4_load_addr),
     .load_bytes      (ch4_load_bytes),
+    .load_tiled      (ch4_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd3)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch4_base_addr),
     .bytes_left      (ch4_bytes_left),
     .active_valid_dm (act_ch4_valid_dm)
@@ -359,8 +377,10 @@ module Waveform_System_Top #(
     .load_tog        (ch5_load_tog),
     .load_addr       (ch5_load_addr),
     .load_bytes      (ch5_load_bytes),
+    .load_tiled      (ch5_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd4)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch5_base_addr),
     .bytes_left      (ch5_bytes_left),
     .active_valid_dm (act_ch5_valid_dm)
@@ -373,8 +393,10 @@ module Waveform_System_Top #(
     .load_tog        (ch6_load_tog),
     .load_addr       (ch6_load_addr),
     .load_bytes      (ch6_load_bytes),
+    .load_tiled      (ch6_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd5)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch6_base_addr),
     .bytes_left      (ch6_bytes_left),
     .active_valid_dm (act_ch6_valid_dm)
@@ -387,8 +409,10 @@ module Waveform_System_Top #(
     .load_tog        (ch7_load_tog),
     .load_addr       (ch7_load_addr),
     .load_bytes      (ch7_load_bytes),
+    .load_tiled      (ch7_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd6)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch7_base_addr),
     .bytes_left      (ch7_bytes_left),
     .active_valid_dm (act_ch7_valid_dm)
@@ -401,8 +425,10 @@ module Waveform_System_Top #(
     .load_tog        (ch8_load_tog),
     .load_addr       (ch8_load_addr),
     .load_bytes      (ch8_load_bytes),
+    .load_tiled      (ch8_load_tiled),
     .chunk_done      (cmd_fire && (dma_req_sel_r == 3'd7)),
     .chunk_bytes     (dm_chunk_bytes),
+    .superblock_bytes(SUPERBLOCK_BYTES[31:0]),
     .base_addr       (ch8_base_addr),
     .bytes_left      (ch8_bytes_left),
     .active_valid_dm (act_ch8_valid_dm)
@@ -599,14 +625,14 @@ module Waveform_System_Top #(
   // =========================================================
   // 5) wave_done：只在 PLAYING 状态判断结束
   // =========================================================
-  wire ch1_done = (!act_ch1_valid_dm) || ((ch1_bytes_left == 0) && (ch1_fifo_level_beats == 0));
-  wire ch2_done = (!act_ch2_valid_dm) || ((ch2_bytes_left == 0) && (ch2_fifo_level_beats == 0));
-  wire ch3_done = (!act_ch3_valid_dm) || ((ch3_bytes_left == 0) && (ch3_fifo_level_beats == 0));
-  wire ch4_done = (!act_ch4_valid_dm) || ((ch4_bytes_left == 0) && (ch4_fifo_level_beats == 0));
-  wire ch5_done = (!act_ch5_valid_dm) || ((ch5_bytes_left == 0) && (ch5_fifo_level_beats == 0));
-  wire ch6_done = (!act_ch6_valid_dm) || ((ch6_bytes_left == 0) && (ch6_fifo_level_beats == 0));
-  wire ch7_done = (!act_ch7_valid_dm) || ((ch7_bytes_left == 0) && (ch7_fifo_level_beats == 0));
-  wire ch8_done = (!act_ch8_valid_dm) || ((ch8_bytes_left == 0) && (ch8_fifo_level_beats == 0));
+  wire ch1_done = (!cur_ch1_have_play) || ((ch1_bytes_left == 0) && (ch1_fifo_level_beats == 0));
+  wire ch2_done = (!cur_ch2_have_play) || ((ch2_bytes_left == 0) && (ch2_fifo_level_beats == 0));
+  wire ch3_done = (!cur_ch3_have_play) || ((ch3_bytes_left == 0) && (ch3_fifo_level_beats == 0));
+  wire ch4_done = (!cur_ch4_have_play) || ((ch4_bytes_left == 0) && (ch4_fifo_level_beats == 0));
+  wire ch5_done = (!cur_ch5_have_play) || ((ch5_bytes_left == 0) && (ch5_fifo_level_beats == 0));
+  wire ch6_done = (!cur_ch6_have_play) || ((ch6_bytes_left == 0) && (ch6_fifo_level_beats == 0));
+  wire ch7_done = (!cur_ch7_have_play) || ((ch7_bytes_left == 0) && (ch7_fifo_level_beats == 0));
+  wire ch8_done = (!cur_ch8_have_play) || ((ch8_bytes_left == 0) && (ch8_fifo_level_beats == 0));
   wire wave_done = (st == ST_PLAYING) && ch1_done && ch2_done && ch3_done && ch4_done && ch5_done && ch6_done && ch7_done && ch8_done;
 
   localparam integer RETQ_DEPTH = 16;
@@ -691,6 +717,7 @@ module Waveform_System_Top #(
       cfg_auto_start   <= 1'b0;
       cfg_commit       <= 1'b0;
       cfg_commit_pending <= 1'b0;
+      dbg_bad_instr_count <= 32'd0;
 
       ch1_load_tog <= 1'b0; ch2_load_tog <= 1'b0; ch3_load_tog <= 1'b0; ch4_load_tog <= 1'b0;
       ch5_load_tog <= 1'b0; ch6_load_tog <= 1'b0; ch7_load_tog <= 1'b0; ch8_load_tog <= 1'b0;
@@ -698,12 +725,56 @@ module Waveform_System_Top #(
       ch5_load_addr <= 64'd0; ch6_load_addr <= 64'd0; ch7_load_addr <= 64'd0; ch8_load_addr <= 64'd0;
       ch1_load_bytes<= 32'd0; ch2_load_bytes<= 32'd0; ch3_load_bytes <= 32'd0; ch4_load_bytes <= 32'd0;
       ch5_load_bytes<= 32'd0; ch6_load_bytes<= 32'd0; ch7_load_bytes <= 32'd0; ch8_load_bytes <= 32'd0;
+      ch1_load_tiled <= 1'b0; ch2_load_tiled <= 1'b0; ch3_load_tiled <= 1'b0; ch4_load_tiled <= 1'b0;
+      ch5_load_tiled <= 1'b0; ch6_load_tiled <= 1'b0; ch7_load_tiled <= 1'b0; ch8_load_tiled <= 1'b0;
     end else begin
       cfg_commit <= cfg_commit_pending;
       cfg_commit_pending <= 1'b0;
 
+      // A new instruction frame is allowed to replace an old armed/running frame.
+      // This keeps the UDP path recoverable after a previous wait-for-trigger or
+      // looped playback command: the first queued word is consumed after one
+      // clear cycle in ST_BUILD.
+      if((st != ST_BUILD) && main_tvalid) begin
+        st <= ST_BUILD;
+        pending_valid <= 1'b0;
+        prefill_auto_start <= 1'b0;
+        loop_enable <= 1'b0;
+        active_valid  <= 1'b0;
+        run_delay_cnt <= 32'd0;
+
+        cur_ch1_delay <= 0; cur_ch2_delay <= 0; cur_ch3_delay <= 0; cur_ch4_delay <= 0;
+        cur_ch5_delay <= 0; cur_ch6_delay <= 0; cur_ch7_delay <= 0; cur_ch8_delay <= 0;
+        cur_ch1_have_play <= 1'b0;
+        cur_ch2_have_play <= 1'b0;
+        cur_ch3_have_play <= 1'b0;
+        cur_ch4_have_play <= 1'b0;
+        cur_ch5_have_play <= 1'b0;
+        cur_ch6_have_play <= 1'b0;
+        cur_ch7_have_play <= 1'b0;
+        cur_ch8_have_play <= 1'b0;
+
+        ch1_delay_cycles <= 0; ch2_delay_cycles <= 0; ch3_delay_cycles <= 0; ch4_delay_cycles <= 0;
+        ch5_delay_cycles <= 0; ch6_delay_cycles <= 0; ch7_delay_cycles <= 0; ch8_delay_cycles <= 0;
+        ch1_len_beats    <= 0; ch2_len_beats    <= 0; ch3_len_beats <= 0; ch4_len_beats <= 0;
+        ch5_len_beats    <= 0; ch6_len_beats    <= 0; ch7_len_beats <= 0; ch8_len_beats <= 0;
+        ch1_arm <= 1'b0;
+        ch2_arm <= 1'b0;
+        ch3_arm <= 1'b0;
+        ch4_arm <= 1'b0;
+        ch5_arm <= 1'b0;
+        ch6_arm <= 1'b0;
+        ch7_arm <= 1'b0;
+        ch8_arm <= 1'b0;
+        cfg_auto_start <= 1'b0;
+
+        ch1_load_bytes <= 32'd0; ch2_load_bytes <= 32'd0; ch3_load_bytes <= 32'd0; ch4_load_bytes <= 32'd0;
+        ch5_load_bytes <= 32'd0; ch6_load_bytes <= 32'd0; ch7_load_bytes <= 32'd0; ch8_load_bytes <= 32'd0;
+        ch1_load_tiled <= 1'b0; ch2_load_tiled <= 1'b0; ch3_load_tiled <= 1'b0; ch4_load_tiled <= 1'b0;
+        ch5_load_tiled <= 1'b0; ch6_load_tiled <= 1'b0; ch7_load_tiled <= 1'b0; ch8_load_tiled <= 1'b0;
+
       // 播放完成：清空并回到 BUILD
-      if(wave_done) begin
+      end else if(wave_done) begin
         if(loop_enable) begin
           st <= ST_PREFILL;
           pending_valid <= 1'b0;
@@ -750,6 +821,7 @@ module Waveform_System_Top #(
         end
       end
 
+      if(!((st != ST_BUILD) && main_tvalid)) begin
       case(st)
         ST_BUILD: begin
           // 来指令就处理；PLAY 立刻启动预取
@@ -768,7 +840,9 @@ module Waveform_System_Top #(
             end
             // PLAY
             else if(instr_cmd == CMD_PLAY) begin
-              if(instr_ch == CH1) begin
+              if(!instr_play_aligned || (instr_ch < CH1) || (instr_ch > CH8)) begin
+                dbg_bad_instr_count <= dbg_bad_instr_count + 32'd1;
+              end else if(instr_ch == CH1) begin
                 // 只允许本波第一次 PLAY 配置 ch1（避免覆盖已预取的数据）
                 if(!cur_ch1_have_play) begin
                   cur_ch1_have_play <= 1'b1;
@@ -777,84 +851,85 @@ module Waveform_System_Top #(
                   // 发 load 请求给 DMA（toggle + payload）
                   ch1_load_addr  <= instr_addr;
                   ch1_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch1_load_tiled <= instr_tiled_layout;
                   ch1_load_tog   <= ~ch1_load_tog;
 
                   // 有 PLAY 就 active_valid=1（允许预取）
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH2) begin
+              end else if(instr_ch == CH2) begin
                 if(!cur_ch2_have_play) begin
                   cur_ch2_have_play <= 1'b1;
                   ch2_len_beats <= bytes_to_beats(instr_value);
 
                   ch2_load_addr  <= instr_addr;
                   ch2_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch2_load_tiled <= instr_tiled_layout;
                   ch2_load_tog   <= ~ch2_load_tog;
 
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH3) begin
+              end else if(instr_ch == CH3) begin
                 if(!cur_ch3_have_play) begin
                   cur_ch3_have_play <= 1'b1;
                   ch3_len_beats <= bytes_to_beats(instr_value);
 
                   ch3_load_addr  <= instr_addr;
                   ch3_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch3_load_tiled <= instr_tiled_layout;
                   ch3_load_tog   <= ~ch3_load_tog;
 
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH4) begin
+              end else if(instr_ch == CH4) begin
                 if(!cur_ch4_have_play) begin
                   cur_ch4_have_play <= 1'b1;
                   ch4_len_beats <= bytes_to_beats(instr_value);
 
                   ch4_load_addr  <= instr_addr;
                   ch4_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch4_load_tiled <= instr_tiled_layout;
                   ch4_load_tog   <= ~ch4_load_tog;
 
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH5) begin
+              end else if(instr_ch == CH5) begin
                 if(!cur_ch5_have_play) begin
                   cur_ch5_have_play <= 1'b1;
                   ch5_len_beats <= bytes_to_beats(instr_value);
                   ch5_load_addr  <= instr_addr;
                   ch5_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch5_load_tiled <= instr_tiled_layout;
                   ch5_load_tog   <= ~ch5_load_tog;
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH6) begin
+              end else if(instr_ch == CH6) begin
                 if(!cur_ch6_have_play) begin
                   cur_ch6_have_play <= 1'b1;
                   ch6_len_beats <= bytes_to_beats(instr_value);
                   ch6_load_addr  <= instr_addr;
                   ch6_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch6_load_tiled <= instr_tiled_layout;
                   ch6_load_tog   <= ~ch6_load_tog;
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH7) begin
+              end else if(instr_ch == CH7) begin
                 if(!cur_ch7_have_play) begin
                   cur_ch7_have_play <= 1'b1;
                   ch7_len_beats <= bytes_to_beats(instr_value);
                   ch7_load_addr  <= instr_addr;
                   ch7_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch7_load_tiled <= instr_tiled_layout;
                   ch7_load_tog   <= ~ch7_load_tog;
                   active_valid <= 1'b1;
                 end
-              end
-              if(instr_ch == CH8) begin
+              end else begin
                 if(!cur_ch8_have_play) begin
                   cur_ch8_have_play <= 1'b1;
                   ch8_len_beats <= bytes_to_beats(instr_value);
                   ch8_load_addr  <= instr_addr;
                   ch8_load_bytes <= align_bytes_to_beat(instr_value);
+                  ch8_load_tiled <= instr_tiled_layout;
                   ch8_load_tog   <= ~ch8_load_tog;
                   active_valid <= 1'b1;
                 end
@@ -924,6 +999,7 @@ module Waveform_System_Top #(
 
         default: st <= ST_BUILD;
       endcase
+      end
     end
   end
 
@@ -1145,6 +1221,7 @@ module Waveform_Instruction_Decoder (
     output wire [3:0]   cmd,
     output wire [3:0]   channel,
     output wire         loop_enable,
+    output wire         tiled_layout,
     output wire [31:0]  value,
     output wire [63:0]  addr
 );
@@ -1152,6 +1229,7 @@ module Waveform_Instruction_Decoder (
   assign cmd         = instr[3:0];
   assign channel     = instr[7:4];
   assign loop_enable = instr[8];
+  assign tiled_layout = instr[9];
   assign value       = instr[63:32];
   assign addr        = instr[127:64];
 
@@ -1164,8 +1242,10 @@ module Waveform_Channel_State (
     input  wire        load_tog,
     input  wire [63:0] load_addr,
     input  wire [31:0] load_bytes,
+    input  wire        load_tiled,
     input  wire        chunk_done,
     input  wire [31:0] chunk_bytes,
+    input  wire [31:0] superblock_bytes,
 
     output reg  [63:0] base_addr,
     output reg  [31:0] bytes_left,
@@ -1173,6 +1253,7 @@ module Waveform_Channel_State (
 );
 
   reg load_tog_d;
+  reg tiled_mode;
 
   always @(posedge aclk or negedge aresetn) begin
     if(!aresetn) begin
@@ -1180,21 +1261,24 @@ module Waveform_Channel_State (
       bytes_left      <= 32'd0;
       active_valid_dm <= 1'b0;
       load_tog_d      <= 1'b0;
+      tiled_mode      <= 1'b0;
     end else if(!prefetch_en) begin
       base_addr       <= 64'd0;
       bytes_left      <= 32'd0;
       active_valid_dm <= 1'b0;
       load_tog_d      <= load_tog;
+      tiled_mode      <= 1'b0;
     end else begin
       if(load_tog_d != load_tog) begin
         load_tog_d      <= load_tog;
         base_addr       <= load_addr;
         bytes_left      <= load_bytes;
         active_valid_dm <= (load_bytes != 0);
+        tiled_mode      <= load_tiled;
       end
 
       if(chunk_done) begin
-        base_addr  <= base_addr + chunk_bytes;
+        base_addr  <= base_addr + (tiled_mode ? {32'd0, superblock_bytes} : {32'd0, chunk_bytes});
         bytes_left <= bytes_left - chunk_bytes;
         if(bytes_left == chunk_bytes) active_valid_dm <= 1'b0;
       end

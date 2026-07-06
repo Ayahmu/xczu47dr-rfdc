@@ -17,6 +17,7 @@ set proj_dir "${vivado_dir}/work"
 set target_part [target_config_get $target part]
 set target_board_part [target_config_get $target board_part]
 set target_top_module [target_config_get $target top_module]
+set is_bandwidth_target [expr {$target eq "custom_xczu47dr_bw"}]
 
 puts "INFO: Creating Vivado project..."
 puts "INFO: Target: ${target}"
@@ -54,12 +55,16 @@ if {$target_board_part ne ""} {
 }
 set_property target_language Verilog [current_project]
 set_property simulator_language Mixed [current_project]
-puts "INFO: Enabling CUSTOM_XCZU47DR Verilog define"
-set_property verilog_define {CUSTOM_XCZU47DR} [current_fileset]
+puts "INFO: Enabling target Verilog define"
+if {$is_bandwidth_target} {
+    set_property verilog_define {CUSTOM_XCZU47DR_BW} [current_fileset]
+} else {
+    set_property verilog_define {CUSTOM_XCZU47DR} [current_fileset]
+}
 
 set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
 set ddr_generated_config "${vivado_dir}/../chisel/generated/ddr_custom_xczu47dr_config.tcl"
-if {![file exists ${rfdc_generated_config}]} {
+if {!$is_bandwidth_target && ![file exists ${rfdc_generated_config}]} {
     puts "ERROR: Missing generated RFDC configuration: ${rfdc_generated_config}"
     puts "ERROR: Run hardware/chisel/build.sh rfdc or make chisel first."
     exit 1
@@ -69,23 +74,27 @@ if {![file exists ${ddr_generated_config}]} {
     puts "ERROR: Run hardware/chisel/build.sh ddr or make chisel first."
     exit 1
 }
-source ${rfdc_generated_config}
+if {!$is_bandwidth_target} {
+    source ${rfdc_generated_config}
+}
 source ${ddr_generated_config}
 
-puts "INFO: Creating project-level RFDC IP outside block design"
-set rfdc_ip_dir "${vivado_dir}/ip"
-file mkdir ${rfdc_ip_dir}
-create_ip -force -name usp_rf_data_converter -vendor xilinx.com -library ip -version 2.6 \
-    -module_name rfdc_custom_xczu47dr_ip -dir ${rfdc_ip_dir}
-set rfdc_ip [get_ips rfdc_custom_xczu47dr_ip]
-set_property -dict [::rfdc_custom_xczu47dr::config] ${rfdc_ip}
-set rfdc_ip_file [get_files -quiet "${rfdc_ip_dir}/rfdc_custom_xczu47dr_ip/rfdc_custom_xczu47dr_ip.xci"]
-if {[llength ${rfdc_ip_file}] == 0} {
-    puts "ERROR: RFDC IP XCI not found after create_ip"
-    exit 1
+if {!$is_bandwidth_target} {
+    puts "INFO: Creating project-level RFDC IP outside block design"
+    set rfdc_ip_dir "${vivado_dir}/ip"
+    file mkdir ${rfdc_ip_dir}
+    create_ip -force -name usp_rf_data_converter -vendor xilinx.com -library ip -version 2.6 \
+        -module_name rfdc_custom_xczu47dr_ip -dir ${rfdc_ip_dir}
+    set rfdc_ip [get_ips rfdc_custom_xczu47dr_ip]
+    set_property -dict [::rfdc_custom_xczu47dr::config] ${rfdc_ip}
+    set rfdc_ip_file [get_files -quiet "${rfdc_ip_dir}/rfdc_custom_xczu47dr_ip/rfdc_custom_xczu47dr_ip.xci"]
+    if {[llength ${rfdc_ip_file}] == 0} {
+        puts "ERROR: RFDC IP XCI not found after create_ip"
+        exit 1
+    }
+    set_property generate_synth_checkpoint true ${rfdc_ip_file}
+    generate_target all ${rfdc_ip_file}
 }
-set_property generate_synth_checkpoint true ${rfdc_ip_file}
-generate_target all ${rfdc_ip_file}
 
 puts "INFO: Creating project-level DDR4 IP outside block design"
 set ddr_ip_dir "${vivado_dir}/ip"
@@ -106,7 +115,11 @@ generate_target all ${ddr_ip_file}
 set chisel_dir "${vivado_dir}/../chisel/generated"
 if {[file exists ${chisel_dir}]} {
     puts "INFO: Adding Chisel generated files from ${chisel_dir}"
-    set verilog_files [glob -nocomplain ${chisel_dir}/*.v ${chisel_dir}/*.sv]
+    if {$is_bandwidth_target} {
+        set verilog_files [glob -nocomplain ${chisel_dir}/Ddr4CustomXczu47dr.v ${chisel_dir}/ChiselProcSysReset.v]
+    } else {
+        set verilog_files [glob -nocomplain ${chisel_dir}/*.v ${chisel_dir}/*.sv]
+    }
     if {[llength $verilog_files] > 0} {
         add_files -norecurse $verilog_files
         puts "INFO: Added [llength $verilog_files] Chisel Verilog files"
@@ -125,7 +138,37 @@ if {[file exists ${src_dir}]} {
     set filtered_rtl_files [list]
     foreach rtl_file $rtl_files {
         set rtl_tail [file tail $rtl_file]
-        if {$rtl_tail ne "design_1_wrapper.v" && $rtl_tail ne "axis_128_to_256.v"} {
+        set is_bw_file [expr {$rtl_tail in {
+            "TopBandwidthCore.v"
+            "TopBandwidthXczu47dr.v"
+            "waveform_bandwidth_top.v"
+            "bandwidth_sink.v"
+            "bandwidth_axi_regs.v"
+        }}]
+        set is_rfdc_file [expr {$rtl_tail in {
+            "Top.v"
+            "TopCustomXczu47dr.v"
+            "waveform_system_top.v"
+            "dac_play_ctrl.v"
+            "udp_waveform_ddr_writer.v"
+            "udp64_to_axis128_instr.v"
+            "hmc7044.vhd"
+            "axis_async_fifo_256_stub.v"
+            "rfdc_custom_xczu47dr_ip_stub.v"
+        }}]
+        if {$rtl_tail eq "design_1_wrapper.v" || $rtl_tail eq "axis_128_to_256.v"} {
+            continue
+        }
+        if {$is_bandwidth_target && $is_rfdc_file} {
+            continue
+        }
+        if {!$is_bandwidth_target && $is_bw_file} {
+            continue
+        }
+        if {$is_bandwidth_target && $rtl_tail eq "udp"} {
+            continue
+        }
+        if {1} {
             lappend filtered_rtl_files $rtl_file
         }
     }
@@ -137,7 +180,7 @@ if {[file exists ${src_dir}]} {
 
 # Add reference 10G UDP/XXV Ethernet RTL for the custom XCZU47DR data path.
 set udp_src_dir "${src_dir}/udp"
-if {[file exists ${udp_src_dir}]} {
+if {!$is_bandwidth_target && [file exists ${udp_src_dir}]} {
     puts "INFO: Adding 10G UDP RTL source files from ${udp_src_dir}"
     set udp_rtl_files [glob -nocomplain ${udp_src_dir}/*.v ${udp_src_dir}/*.sv ${udp_src_dir}/*.vhd]
     if {[llength $udp_rtl_files] > 0} {
@@ -150,7 +193,7 @@ if {[file exists ${udp_src_dir}]} {
 
 # Import the reference XXV Ethernet IP used by udp_10G.
 set xxv_xci "${vivado_dir}/ip/xxv_ethernet_1/xxv_ethernet.xci"
-if {[file exists ${xxv_xci}]} {
+if {!$is_bandwidth_target && [file exists ${xxv_xci}]} {
     puts "INFO: Adding reference XXV Ethernet IP: ${xxv_xci}"
     add_files -norecurse ${xxv_xci}
 } else {
@@ -158,7 +201,7 @@ if {[file exists ${xxv_xci}]} {
 }
 
 set fifo64_xci "${vivado_dir}/ip/fifo64_2/fifo64.xci"
-if {[file exists ${fifo64_xci}]} {
+if {!$is_bandwidth_target && [file exists ${fifo64_xci}]} {
     puts "INFO: Adding reference fifo64 IP: ${fifo64_xci}"
     add_files -norecurse ${fifo64_xci}
     set_property generate_synth_checkpoint false [get_files ${fifo64_xci}]
@@ -206,7 +249,7 @@ if {[file exists ${instr_fifo_script}]} {
 
 # Create AXIS Async FIFO IP
 set async_fifo_script "${script_path}/axis_async_fifo_256.tcl"
-if {[file exists ${async_fifo_script}]} {
+if {!$is_bandwidth_target && [file exists ${async_fifo_script}]} {
     source ${async_fifo_script}
     puts "INFO: AXIS Async FIFO IP created"
 } else {
@@ -215,7 +258,7 @@ if {[file exists ${async_fifo_script}]} {
 
 # Create ILA IPs used for custom 10G UDP to RFDC debug and acceptance.
 set ila_udp_ddr_script "${script_path}/ila_udp_ddr.tcl"
-if {[file exists ${ila_udp_ddr_script}]} {
+if {!$is_bandwidth_target && [file exists ${ila_udp_ddr_script}]} {
     source ${ila_udp_ddr_script}
     puts "INFO: DDR-domain UDP/DataMover ILA IP created"
 } else {
@@ -223,7 +266,7 @@ if {[file exists ${ila_udp_ddr_script}]} {
 }
 
 set ila_dac_axis_script "${script_path}/ila_dac_axis.tcl"
-if {[file exists ${ila_dac_axis_script}]} {
+if {!$is_bandwidth_target && [file exists ${ila_dac_axis_script}]} {
     source ${ila_dac_axis_script}
     puts "INFO: DAC-domain RFDC AXIS ILA IP created"
 } else {
@@ -231,7 +274,7 @@ if {[file exists ${ila_dac_axis_script}]} {
 }
 
 set ila_s_axi_01_script "${script_path}/ila_s_axi_01.tcl"
-if {[file exists ${ila_s_axi_01_script}]} {
+if {!$is_bandwidth_target && [file exists ${ila_s_axi_01_script}]} {
     source ${ila_s_axi_01_script}
     puts "INFO: S_AXI_01 ILA IP created"
 } else {
@@ -241,6 +284,9 @@ if {[file exists ${ila_s_axi_01_script}]} {
 # Create and configure Block Design
 puts "INFO: Creating Block Design..."
 set bd_script "${vivado_dir}/bd/design_1.tcl"
+if {$is_bandwidth_target} {
+    set bd_script "${vivado_dir}/bd/design_1_bandwidth.tcl"
+}
 if {[file exists ${bd_script}]} {
     source ${bd_script}
     puts "INFO: Block Design created from ${bd_script}"
@@ -277,6 +323,9 @@ if {[file exists ${bd_script}]} {
 
 puts "INFO: Creating external DDR AXI SmartConnect Block Design..."
 set ddr_axi_bd_script "${vivado_dir}/bd/ddr_axi_smartconnect.tcl"
+if {$is_bandwidth_target} {
+    set ddr_axi_bd_script "${vivado_dir}/bd/ddr_axi_smartconnect_bandwidth.tcl"
+}
 if {[file exists ${ddr_axi_bd_script}]} {
     source ${ddr_axi_bd_script}
 

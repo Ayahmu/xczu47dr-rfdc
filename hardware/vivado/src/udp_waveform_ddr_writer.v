@@ -41,6 +41,7 @@ module udp_waveform_ddr_writer #(
     output reg  [31:0]  dbg_write_count,
     output reg  [31:0]  dbg_bresp_count,
     output wire [31:0]  dbg_drop_count_o,
+    output wire [31:0]  dbg_align_error_count_o,
     output wire [15:0]  dbg_fifo_count_o,
     output reg  [31:0]  dbg_resync_count,
     output reg  [1:0]   dbg_last_bresp,
@@ -68,6 +69,7 @@ module udp_waveform_ddr_writer #(
   reg [FIFO_DEPTH_LOG2-1:0] fifo_rd_ptr;
   reg [FIFO_DEPTH_LOG2:0] fifo_count;
   reg [31:0] dbg_drop_count;
+  reg [31:0] dbg_align_error_count;
   reg write_resp_pending;
 
   wire fifo_full = fifo_count == FIFO_DEPTH;
@@ -76,7 +78,8 @@ module udp_waveform_ddr_writer #(
   wire launch_write = axi_idle && !write_resp_pending && !fifo_empty;
   wire pop_write = launch_write;
   wire resync_word = udp_tvalid && (udp_tdata == MAGIC) && (dbg_state != ST_IDLE);
-  wire push_write = udp_tvalid && !resync_word && (dbg_state == ST_DATA_3) && (!fifo_full || pop_write);
+  wire write_addr_aligned = (write_addr[4:0] == 5'd0);
+  wire push_write = udp_tvalid && !resync_word && (dbg_state == ST_DATA_3) && write_addr_aligned && (!fifo_full || pop_write);
   wire aw_fire = m_axi_awvalid && m_axi_awready;
   wire w_fire = m_axi_wvalid && m_axi_wready;
   wire b_fire = m_axi_bvalid && m_axi_bready;
@@ -113,6 +116,7 @@ module udp_waveform_ddr_writer #(
       fifo_rd_ptr <= {FIFO_DEPTH_LOG2{1'b0}};
       fifo_count  <= {FIFO_DEPTH_LOG2+1{1'b0}};
       dbg_drop_count <= 32'd0;
+      dbg_align_error_count <= 32'd0;
       dbg_resync_count <= 32'd0;
       write_resp_pending <= 1'b0;
       write_addr   <= 64'd0;
@@ -185,7 +189,10 @@ module udp_waveform_ddr_writer #(
           end
 
           ST_DATA_3: begin
-            if (!fifo_full || pop_write) begin
+            if (!write_addr_aligned) begin
+              dbg_align_error_count <= dbg_align_error_count + 32'd1;
+              dbg_drop_count <= dbg_drop_count + 32'd1;
+            end else if (!fifo_full || pop_write) begin
               fifo_addr[fifo_wr_ptr] <= write_addr;
               fifo_data[fifo_wr_ptr] <= {udp_tdata, data_word2, data_word1, data_word0};
               fifo_wr_ptr <= fifo_wr_ptr + {{FIFO_DEPTH_LOG2-1{1'b0}}, 1'b1};
@@ -211,6 +218,7 @@ module udp_waveform_ddr_writer #(
   end
 
   assign dbg_drop_count_o = dbg_drop_count;
+  assign dbg_align_error_count_o = dbg_align_error_count;
   assign dbg_fifo_count_o = {11'd0, fifo_count};
 
 endmodule

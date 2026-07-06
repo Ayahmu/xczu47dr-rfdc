@@ -30,6 +30,10 @@ if {![info exists target]} {
     set target [lindex $argv 0]
   }
 }
+set mm2s_stream_width 256
+if {$target eq "custom_xczu47dr_bw"} {
+  set mm2s_stream_width 512
+}
 set target_part [target_config_get $target part]
 set target_board_part [target_config_get $target board_part]
 
@@ -85,8 +89,9 @@ set_property -dict [list \
   CONFIG.c_addr_width {64} \
   CONFIG.c_enable_s2mm {0} \
   CONFIG.c_m_axi_mm2s_data_width {512} \
-  CONFIG.c_m_axis_mm2s_tdata_width {256} \
+  CONFIG.c_m_axis_mm2s_tdata_width ${mm2s_stream_width} \
   CONFIG.c_mm2s_burst_size {64} \
+  CONFIG.c_mm2s_btt_used {23} \
   CONFIG.c_mm2s_stscmd_fifo_depth {16} \
 ] [get_ips axi_datamover_0]
 

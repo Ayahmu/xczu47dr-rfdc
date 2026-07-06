@@ -182,6 +182,7 @@ module Top (
   wire [31:0]  udp_wave_write_count;
   wire [31:0]  udp_wave_bresp_count;
   wire [31:0]  udp_wave_drop_count;
+  wire [31:0]  udp_wave_align_error_count;
   wire [15:0]  udp_wave_fifo_count;
   wire [31:0]  udp_wave_resync_count;
   wire [1:0]   udp_wave_last_bresp;
@@ -242,6 +243,7 @@ module Top (
       .dbg_write_count  (udp_wave_write_count),
       .dbg_bresp_count  (udp_wave_bresp_count),
       .dbg_drop_count_o (udp_wave_drop_count),
+      .dbg_align_error_count_o(udp_wave_align_error_count),
       .dbg_fifo_count_o (udp_wave_fifo_count),
       .dbg_resync_count (udp_wave_resync_count),
       .dbg_last_bresp   (udp_wave_last_bresp),
@@ -413,20 +415,6 @@ module Top (
   wire        cfg_commit; // 每次 END 提交一帧配置
 
   localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
-  reg [15:0] trig_1_count;
-
-  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if(!ddr4_ui_aresetn) begin
-      trig_1_count <= 16'd0;
-    end else if(cfg_commit) begin
-      trig_1_count <= TRIG_1_WIDTH_CYCLES;
-    end else if(trig_1_count != 16'd0) begin
-      trig_1_count <= trig_1_count - 16'd1;
-    end
-  end
-
-  wire trig_1_ddr = (trig_1_count != 16'd0);
-  assign TRIG_1 = trig_1_ddr;
 
   wire [2:0]  ex_dbg_st;
   wire [1:0]  ex_dbg_dm_st;
@@ -446,6 +434,7 @@ module Top (
   wire         ex_dbg_main_tvalid, ex_dbg_main_tready;
   wire         ex_dbg_pending_valid, ex_dbg_active_valid;
   wire [31:0]  ex_dbg_run_delay_cnt;
+  wire [31:0]  ex_dbg_bad_instr_count;
 
   // ========== executor ==========
   Waveform_System_Top #(
@@ -550,7 +539,8 @@ module Top (
     .dbg_main_tready    (ex_dbg_main_tready),
     .dbg_pending_valid  (ex_dbg_pending_valid),
     .dbg_active_valid   (ex_dbg_active_valid),
-    .dbg_run_delay_cnt  (ex_dbg_run_delay_cnt)
+    .dbg_run_delay_cnt  (ex_dbg_run_delay_cnt),
+    .dbg_bad_instr_count(ex_dbg_bad_instr_count)
   );
 
   // ==========================================================
@@ -562,22 +552,6 @@ module Top (
     else                dac_rstff <= {dac_rstff[1:0], 1'b1};
   end
   wire dac_rst_n = dac_rstff[2];
-
-  (* ASYNC_REG="TRUE" *) reg [2:0] trig_1_dac_sync_ff;
-  reg trig_1_dac_sync_d;
-
-  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
-    if(!dac_rst_n) begin
-      trig_1_dac_sync_ff <= 3'b000;
-      trig_1_dac_sync_d  <= 1'b0;
-    end else begin
-      trig_1_dac_sync_ff <= {trig_1_dac_sync_ff[1:0], trig_1_ddr};
-      trig_1_dac_sync_d  <= trig_1_dac_sync_ff[2];
-    end
-  end
-
-  wire trig_1_dac_sync  = trig_1_dac_sync_ff[2];
-  wire trig_1_dac_pulse = trig_1_dac_sync & ~trig_1_dac_sync_d;
 
   // ==========================================================
   // DDR 域：配置帧打包，commit 时写入 cfg FIFO
@@ -913,6 +887,48 @@ module Top (
   assign dac_ch6_valid_gated = dac_in_ch6_tvalid & ch6_allow;
   assign dac_ch7_valid_gated = dac_in_ch7_tvalid & ch7_allow;
   assign dac_ch8_valid_gated = dac_in_ch8_tvalid & ch8_allow;
+
+  wire [255:0] rfdc_ch1_tdata = ch1_allow ? dac_in_ch1_tdata : 256'd0;
+  wire [255:0] rfdc_ch2_tdata = ch2_allow ? dac_in_ch2_tdata : 256'd0;
+  wire [255:0] rfdc_ch3_tdata = ch3_allow ? dac_in_ch3_tdata : 256'd0;
+  wire [255:0] rfdc_ch4_tdata = ch4_allow ? dac_in_ch4_tdata : 256'd0;
+  wire [255:0] rfdc_ch5_tdata = ch5_allow ? dac_in_ch5_tdata : 256'd0;
+  wire [255:0] rfdc_ch6_tdata = ch6_allow ? dac_in_ch6_tdata : 256'd0;
+  wire [255:0] rfdc_ch7_tdata = ch7_allow ? dac_in_ch7_tdata : 256'd0;
+  wire [255:0] rfdc_ch8_tdata = ch8_allow ? dac_in_ch8_tdata : 256'd0;
+  wire         rfdc_ch1_tvalid = ch1_allow ? dac_in_ch1_tvalid : 1'b1;
+  wire         rfdc_ch2_tvalid = ch2_allow ? dac_in_ch2_tvalid : 1'b1;
+  wire         rfdc_ch3_tvalid = ch3_allow ? dac_in_ch3_tvalid : 1'b1;
+  wire         rfdc_ch4_tvalid = ch4_allow ? dac_in_ch4_tvalid : 1'b1;
+  wire         rfdc_ch5_tvalid = ch5_allow ? dac_in_ch5_tvalid : 1'b1;
+  wire         rfdc_ch6_tvalid = ch6_allow ? dac_in_ch6_tvalid : 1'b1;
+  wire         rfdc_ch7_tvalid = ch7_allow ? dac_in_ch7_tvalid : 1'b1;
+  wire         rfdc_ch8_tvalid = ch8_allow ? dac_in_ch8_tvalid : 1'b1;
+
+  wire dac_any_valid_gated = dac_ch1_valid_gated | dac_ch2_valid_gated |
+                             dac_ch3_valid_gated | dac_ch4_valid_gated |
+                             dac_ch5_valid_gated | dac_ch6_valid_gated |
+                             dac_ch7_valid_gated | dac_ch8_valid_gated;
+  reg        dac_any_valid_gated_d;
+  reg [15:0] trig_1_dac_valid_count;
+
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if(!dac_rst_n) begin
+      dac_any_valid_gated_d  <= 1'b0;
+      trig_1_dac_valid_count <= 16'd0;
+    end else begin
+      dac_any_valid_gated_d <= dac_any_valid_gated;
+      if(dac_any_valid_gated & ~dac_any_valid_gated_d) begin
+        trig_1_dac_valid_count <= TRIG_1_WIDTH_CYCLES;
+      end else if(trig_1_dac_valid_count != 16'd0) begin
+        trig_1_dac_valid_count <= trig_1_dac_valid_count - 16'd1;
+      end
+    end
+  end
+
+  wire trig_1_dac_valid = (trig_1_dac_valid_count != 16'd0);
+  wire trig_1_dac_valid_pulse = dac_any_valid_gated & ~dac_any_valid_gated_d;
+  assign TRIG_1 = trig_1_dac_valid;
 
   axis_async_fifo_256 fifo_ch1_inst (
     .s_axis_aresetn(ddr4_ui_aresetn),
@@ -1593,29 +1609,29 @@ module Top (
       .vout30_n(vout30_v_n),
       .vout32_p(vout32_v_p),
       .vout32_n(vout32_v_n),
-      .s00_axis_tdata(dac_in_ch1_tdata),
-      .s00_axis_tvalid(dac_ch1_valid_gated),
+      .s00_axis_tdata(rfdc_ch1_tdata),
+      .s00_axis_tvalid(rfdc_ch1_tvalid),
       .s00_axis_tready(dac_ch1_ready),
-      .s02_axis_tdata(dac_in_ch2_tdata),
-      .s02_axis_tvalid(dac_ch2_valid_gated),
+      .s02_axis_tdata(rfdc_ch2_tdata),
+      .s02_axis_tvalid(rfdc_ch2_tvalid),
       .s02_axis_tready(dac_ch2_ready),
-      .s10_axis_tdata(dac_in_ch3_tdata),
-      .s10_axis_tvalid(dac_ch3_valid_gated),
+      .s10_axis_tdata(rfdc_ch3_tdata),
+      .s10_axis_tvalid(rfdc_ch3_tvalid),
       .s10_axis_tready(dac_ch3_ready),
-      .s12_axis_tdata(dac_in_ch4_tdata),
-      .s12_axis_tvalid(dac_ch4_valid_gated),
+      .s12_axis_tdata(rfdc_ch4_tdata),
+      .s12_axis_tvalid(rfdc_ch4_tvalid),
       .s12_axis_tready(dac_ch4_ready),
-      .s20_axis_tdata(dac_in_ch5_tdata),
-      .s20_axis_tvalid(dac_ch5_valid_gated),
+      .s20_axis_tdata(rfdc_ch5_tdata),
+      .s20_axis_tvalid(rfdc_ch5_tvalid),
       .s20_axis_tready(dac_ch5_ready),
-      .s22_axis_tdata(dac_in_ch6_tdata),
-      .s22_axis_tvalid(dac_ch6_valid_gated),
+      .s22_axis_tdata(rfdc_ch6_tdata),
+      .s22_axis_tvalid(rfdc_ch6_tvalid),
       .s22_axis_tready(dac_ch6_ready),
-      .s30_axis_tdata(dac_in_ch7_tdata),
-      .s30_axis_tvalid(dac_ch7_valid_gated),
+      .s30_axis_tdata(rfdc_ch7_tdata),
+      .s30_axis_tvalid(rfdc_ch7_tvalid),
       .s30_axis_tready(dac_ch7_ready),
-      .s32_axis_tdata(dac_in_ch8_tdata),
-      .s32_axis_tvalid(dac_ch8_valid_gated),
+      .s32_axis_tdata(rfdc_ch8_tdata),
+      .s32_axis_tvalid(rfdc_ch8_tvalid),
       .s32_axis_tready(dac_ch8_ready),
       .irq(rfdc_irq)
   );
@@ -1736,11 +1752,12 @@ module Top (
       M_AXI_WAVE_bresp,                // 78:77
       udp_wave_last_bresp,             // 76:75
       dm_mm2s_sts_tdata,               // 74:67
-      udp_wave_fifo_count,             // 66:51
-      ch1_fifo_level_beats,            // 50:35
-      ch2_fifo_level_beats,            // 34:19
-      udp_wave_write_count[9:0],       // 18:9
-      udp_wave_drop_count[8:0]         // 8:0
+      udp_wave_fifo_count[7:0],        // 66:59
+      ch1_fifo_level_beats,            // 58:43
+      ch2_fifo_level_beats,            // 42:27
+      udp_wave_write_count[8:0],       // 26:18
+      udp_wave_drop_count[8:0],        // 17:9
+      udp_wave_align_error_count[8:0]  // 8:0
     }),
     .probe1(udp64_rcv_dat),
     .probe2(M_AXI_WAVE_wdata),
@@ -1749,7 +1766,7 @@ module Top (
     .probe5(dm_cmd_tdata),
     .probe6(dm_data_tdata),
     .probe7({ex_dbg_ch1_base_addr, ex_dbg_ch2_base_addr}),
-    .probe8({ex_dbg_ch1_bytes_left, ex_dbg_ch2_bytes_left, ex_dbg_dm_chunk_beats, ex_dbg_dm_beats_sent}),
+    .probe8({ex_dbg_ch1_bytes_left, ex_dbg_ch2_bytes_left, ex_dbg_dm_chunk_beats, ex_dbg_bad_instr_count}),
     .probe9(ch1_wave_tdata),
     .probe10(ch2_wave_tdata),
     .probe11(udp_wave_last_wdata)
@@ -1759,8 +1776,8 @@ module Top (
     .clk(dac_axis_clk),
     .probe0({
       21'd0,
-      trig_1_dac_pulse,
-      trig_1_dac_sync,
+      trig_1_dac_valid_pulse,
+      trig_1_dac_valid,
       ps_trigger_dac_sync,
       pc_trig_pulse,
       pc_trig_start,

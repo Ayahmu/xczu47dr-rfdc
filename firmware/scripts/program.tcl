@@ -50,9 +50,29 @@ proc board_target_filter {target role} {
     return "jtag_cable_serial == \"$serial\" && $role_filter"
 }
 
+proc board_role_filter {role} {
+    switch -- $role {
+        psu { return {name =~ "PSU"} }
+        fpga { return {name =~ "PS TAP"} }
+        pl { return {name =~ "PL"} }
+        a53 { return {name =~ "Cortex-A53 #0"} }
+        default { error "Unknown target role: $role" }
+    }
+}
+
 proc select_board_target {target role} {
     set filter [board_target_filter $target $role]
-    targets -set -filter $filter
+    if {[catch {targets -set -filter $filter} err]} {
+        if {[info exists ::env(JTAG_CABLE_SERIAL)]} {
+            puts "ERROR: Could not select JTAG_CABLE_SERIAL=$::env(JTAG_CABLE_SERIAL) for role=${role}."
+            puts "ERROR: Refusing to fall back to a role-only target because multiple boards may be attached."
+            puts "Available targets:"
+            targets
+            exit 1
+        } else {
+            error $err
+        }
+    }
 }
 
 if {![info exists ::env(DRY_RUN)] || $::env(DRY_RUN) ne "1"} {

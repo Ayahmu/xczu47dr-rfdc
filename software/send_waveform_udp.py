@@ -2,8 +2,10 @@
 """Generate, save, upload, and play RFSoC DAC waveforms over UDP."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
+import time
 
 import numpy as np
 
@@ -33,11 +35,28 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/opencode/rfsoc_waveform_send"))
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument("--post-upload-sleep-s", type=float, default=0.5)
-    parser.add_argument("--sample-rate-hz", "--sample-rate", dest="sample_rate_hz", type=float, default=host.DAC_XY_FS, help="DAC sample rate used for waveform synthesis")
+    parser.add_argument("--sample-rate-hz", "--sample-rate", dest="sample_rate_hz", type=float, default=host.DAC_XY_FS, help="RFDC input I/Q sample rate used for waveform synthesis")
     parser.add_argument("--axis-freq-hz", type=float, default=host.DAC_AXIS_HZ, help="DAC AXIS clock used to convert hardware delay ns to cycles")
-    parser.add_argument("--loop", action="store_true", help="Replay the uploaded waveform continuously")
+    parser.add_argument("--loop", action="store_true", help="Replay the uploaded waveform continuously for legacy debug modes")
     parser.add_argument("--wait-for-trigger", action="store_true", help="Do not auto-start; wait for PS/external trigger")
     parser.add_argument("--dry-run", action="store_true", help="Only generate local waveform files; do not send UDP packets")
+    parser.add_argument(
+        "--ddr-layout",
+        choices=[host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_INTERLEAVED_512B],
+        default=host.DEFAULT_DDR_LAYOUT,
+        help="DDR upload/playback layout; tiled is the default layout for the normal RFDC output chain",
+    )
+
+
+def add_ezq_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--artifact-dir", type=Path, required=True, help="Directory containing ez-Q compatible artifacts")
+    parser.add_argument(
+        "--wave-format",
+        choices=["packed_iq", "iq_matrix", "interleaved_iq"],
+        default="packed_iq",
+        help="How to interpret the saved ez-Q wave artifact",
+    )
+    parser.add_argument("--channels", default="1,2,3,4,5,6,7,8", help="Comma-separated channel list to upload")
 
 
 def add_channel_sine_args(parser: argparse.ArgumentParser) -> None:
@@ -76,11 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    sine = subparsers.add_parser("sine", help="continuous I/Q sine wave on CH1-CH8 for RFDC C2R")
+    sine = subparsers.add_parser("sine", help="finite-length I/Q sine wave on CH1-CH8 for RFDC C2R")
     add_common_args(sine)
     add_channel_sine_args(sine)
     sine.add_argument("--amplitude", type=int, default=20000, help="DAC code amplitude, 0..32767")
     sine.add_argument("--encoding", choices=["signed"], default="signed")
+    sine.add_argument("--duration-s", type=float, default=1e-6, help="Finite I/Q record length in seconds")
+    sine.add_argument("--zero-tail-s", type=float, default=50e-9, help="Zero I/Q tail appended after the finite sine record")
 
     burst = subparsers.add_parser("burst", help="Gaussian-windowed RF bursts on CH1-CH8")
     add_common_args(burst)
@@ -100,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
     golden = subparsers.add_parser("golden", help="incrementing int16 pattern for ILA/debug")
     add_common_args(golden)
     add_channel_golden_args(golden)
+
+    ezq = subparsers.add_parser("ezq", help="upload ez-Q style wave/seq artifacts through the RFSoC 10G path")
+    add_common_args(ezq)
+    add_ezq_args(ezq)
 
     return parser
 
@@ -126,11 +151,17 @@ def _channel_key(channel: int, suffix: str) -> str:
 
 def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
     if args.mode == "sine":
+        sample_count = waveform_tools.iq_duration_to_sample_count(args.duration_s, args.sample_rate_hz)
         waves = tuple(
-            waveform_tools.make_iq_sine_tile_waveform(
-                float(_channel_value(args, "freq_hz", channel)) * host.RFDC_INTERPOLATION,
-                float(_channel_value(args, "phase_rad", channel)),
-                args.amplitude,
+            waveform_tools.append_iq_zero_tail(
+                waveform_tools.make_iq_sine_tile_waveform(
+                    float(_channel_value(args, "freq_hz", channel)),
+                    float(_channel_value(args, "phase_rad", channel)),
+                    args.amplitude,
+                    args.sample_rate_hz,
+                    sample_count=sample_count,
+                ),
+                args.zero_tail_s,
                 args.sample_rate_hz,
             )
             for channel in range(1, 9)
@@ -139,11 +170,22 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             mode="iq-sine",
             sample_rate_hz=args.sample_rate_hz,
             encoding="signed-iq-interleaved",
-            loop=args.loop,
+            loop=False,
+            layout=args.ddr_layout,
             amplitude=args.amplitude,
+            duration_s=args.duration_s,
+            zero_tail_s=args.zero_tail_s,
             **{_channel_key(channel, "freq_hz"): float(_channel_value(args, "freq_hz", channel)) for channel in range(1, 9)},
             **{_channel_key(channel, "phase_rad"): float(_channel_value(args, "phase_rad", channel)) for channel in range(1, 9)},
         )
+        for channel, wave in enumerate(waves, start=1):
+            metadata[f"ch{channel}_logical_bytes"] = waveform_tools.waveform_length_bytes(wave)
+            metadata[f"ch{channel}_samples_per_channel"] = int(wave.size)
+            metadata[f"ch{channel}_complex_samples"] = int(wave.size) // 2
+            metadata[f"ch{channel}_record_duration_s"] = (int(wave.size) // 2) / float(args.sample_rate_hz)
+        metadata["samples_per_channel"] = int(sample_count)
+        metadata["bytes_per_channel"] = waveform_tools.waveform_length_bytes(waves[0])
+        metadata["record_duration_s"] = (int(sample_count) // 2) / float(args.sample_rate_hz)
         return (*waves, metadata)
 
     if args.mode == "burst":
@@ -165,6 +207,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             axis_freq_hz=args.axis_freq_hz,
             encoding="signed",
             loop=args.loop,
+            layout=args.ddr_layout,
             duration_s=args.duration_s,
             amplitude=args.amplitude,
             **{_channel_key(channel, "freq_hz"): float(_channel_value(args, "freq_hz", channel)) for channel in range(1, 9)},
@@ -189,6 +232,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             z_freq_hz=args.z_freq_hz,
             readout_freq_hz=args.readout_freq_hz,
             phase_rad=args.phase_rad,
+            layout=args.ddr_layout,
         )
 
     if args.mode == "golden":
@@ -201,6 +245,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             sample_rate_hz=args.sample_rate_hz,
             encoding="uint16-viewed-as-int16",
             loop=args.loop,
+            layout=args.ddr_layout,
             **{_channel_key(channel, "start"): int(_channel_value(args, "start", channel)) for channel in range(1, 9)},
         )
         return (*waves, metadata)
@@ -208,8 +253,115 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
     raise ValueError(f"Unsupported waveform mode: {args.mode}")
 
 
+def _load_ezq_channel_artifacts(args: argparse.Namespace) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray], dict[str, object]]:
+    metadata_path = args.artifact_dir / "ezq_metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Missing ez-Q metadata file: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict):
+        raise ValueError("ez-Q metadata must be a JSON object")
+
+    requested_channels = {int(ch) for ch in args.channels.split(",") if ch.strip()}
+    channel_waves: dict[int, np.ndarray] = {}
+    channel_sequences: dict[int, np.ndarray] = {}
+    for channel_info in metadata.get("channels", []):
+        if not isinstance(channel_info, dict):
+            continue
+        channel = int(channel_info.get("channel", 0))
+        if channel not in requested_channels:
+            continue
+
+        wave_file = channel_info.get("wave_packed_npy")
+        seq_file = channel_info.get("seq_npy")
+        if not wave_file:
+            raise ValueError(f"Missing wave artifact file name for channel {channel}")
+
+        wave_path = args.artifact_dir / str(wave_file)
+        if not wave_path.exists():
+            raise FileNotFoundError(f"Missing ez-Q wave artifact: {wave_path}")
+        channel_waves[channel] = waveform_tools.load_ezq_channel_wave(wave_path, wave_format=args.wave_format)
+
+        if seq_file:
+            seq_path = args.artifact_dir / str(seq_file)
+            if seq_path.exists():
+                channel_sequences[channel] = waveform_tools.ezq_sequence_rows(np.load(seq_path, allow_pickle=False))
+
+    if not channel_waves:
+        raise ValueError("No ez-Q channel artifacts matched the requested channels")
+    return channel_waves, channel_sequences, metadata
+
+
 def main() -> int:
     args = build_parser().parse_args()
+    if args.mode == "ezq":
+        channel_waves, channel_sequences, metadata = _load_ezq_channel_artifacts(args)
+        layout = str(metadata.get("layout", args.ddr_layout))
+        if layout not in (host.DDR_LAYOUT_INTERLEAVED_512B, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_CONTIGUOUS):
+            layout = args.ddr_layout
+
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        waveform_tools.save_ezq_wave_bundle(
+            output_dir,
+            channel_waves,
+            metadata,
+            channel_sequences=channel_sequences,
+            channel_format="interleaved_iq",
+            stem="ezq_upload",
+        )
+
+        print(f"[ezq] artifact_dir={args.artifact_dir}")
+        print(f"[ezq] channels={sorted(channel_waves)} layout={layout}")
+        if args.dry_run:
+            print("[ezq] dry-run: not sending UDP packets")
+            return 0
+
+        channel_lengths = {channel: waveform_tools.waveform_length_bytes(samples) for channel, samples in channel_waves.items()}
+        channel_delays = {
+            channel: int(metadata.get(f"ch{channel}_delay_cycles", 0))
+            for channel in channel_waves
+        }
+
+        ctrl = host.RFSocController(
+            args.ip,
+            port=args.port,
+            timeout_s=args.timeout_s,
+            transport="udp",
+            udp_interface=args.udp_interface,
+            udp_source_ip=args.udp_source_ip,
+        )
+        try:
+            if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
+                ctrl.upload_waveform_udp_interleaved(channel_waves, base_addr=host.DDR_BASE, dump_path=str(output_dir / "ezq_interleaved_upload_hex.txt"))
+            else:
+                channel_addrs = {
+                    channel: (host.tiled_channel_base_addr(channel) if layout == host.DDR_LAYOUT_TILED else host.DDR_CH_ADDR[channel - 1])
+                    for channel in sorted(channel_waves)
+                }
+                for channel, samples in sorted(channel_waves.items()):
+                    dump = f"ch{channel}_ezq_upload_hex.txt"
+                    if layout == host.DDR_LAYOUT_TILED:
+                        ctrl.upload_waveform_udp_tiled(samples, channel=channel, base_addr=host.DDR_BASE, dump_path=str(output_dir / dump))
+                    else:
+                        ctrl.upload_waveform_udp(samples, channel_addrs[channel], str(output_dir / dump))
+            if args.post_upload_sleep_s > 0:
+                print(f"[ezq] waiting {args.post_upload_sleep_s:.3f}s for DDR write completion")
+                time.sleep(args.post_upload_sleep_s)
+            ctrl.send_instructions(
+                waveform_tools.build_play_commands(
+                    loop=bool(metadata.get("loop", False)),
+                    auto_start=not args.wait_for_trigger,
+                    channel_addrs=None if layout == host.DDR_LAYOUT_INTERLEAVED_512B else channel_addrs,
+                    channel_lengths=channel_lengths,
+                    channel_delays=channel_delays,
+                    layout=layout,
+                )
+            )
+            print("Done.")
+            return 0
+        finally:
+            ctrl.close()
+
     generated = generate_waveforms(args)
     *waves, metadata = generated
     extra_waves = {channel: wave for channel, wave in enumerate(waves[2:], start=3)}
@@ -241,11 +393,12 @@ def main() -> int:
         timeout_s=args.timeout_s,
         post_upload_sleep_s=args.post_upload_sleep_s,
         output_dir=args.output_dir,
-        loop=args.loop,
+        loop=False if args.mode == "sine" else args.loop,
         auto_start=not args.wait_for_trigger,
         ch3=waves[2] if len(waves) > 2 else None,
         ch4=waves[3] if len(waves) > 3 else None,
         extra_channels={channel: wave for channel, wave in enumerate(waves[4:], start=5)},
+        layout=args.ddr_layout,
         channel_delays={
             channel: waveform_tools.delay_seconds_to_axis_cycles_by_freq(float(_channel_value(args, "delay_s", channel)), args.axis_freq_hz)
             for channel in range(1, 9)
