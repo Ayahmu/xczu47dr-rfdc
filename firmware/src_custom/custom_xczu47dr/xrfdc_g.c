@@ -4,8 +4,8 @@
 * The RFDC IP is instantiated outside the Vivado block design for this target,
 * so Vitis cannot derive the usual XRFdc metadata from the XSA. This table keeps
 * the standalone driver deterministic while preserving the fixed AXI-Lite base
-* address and 6.0 GS/s, 8x-interpolated, 8-output DAC configuration used by the
-* hardware flow.
+* address and 6.4 GS/s, 16x-interpolated, 8-output DAC configuration used by
+* the hardware flow.
 ******************************************************************************/
 
 #ifdef __BAREMETAL__
@@ -35,6 +35,17 @@
  * 1 as C2C, and XRFDC_MIXER_MODE_BYPASS (2) as bypass/real.
  */
 #define CUSTOM_RFDC_DAC_CFG_MIXMODE_C2R 0U
+/*
+ * Vivado RFDC IP raw Link Coupling encoding for DAC tiles is AC=0, DC=1.
+ * Keep this metadata aligned with the RFDC IP XCI so software status matches
+ * the synthesized hardware configuration.
+ */
+#define CUSTOM_RFDC_DAC_LINK_COUPLING_AC 0U
+#define CUSTOM_RFDC_DAC_LINK_COUPLING_DC 1U
+
+#ifndef XRFDC_INTERP_DECIM_16X
+#define XRFDC_INTERP_DECIM_16X 0x10U
+#endif
 
 #define CUSTOM_RFDC_DAC_ANALOG_CFG                                                   \
 	{                                                                                \
@@ -42,26 +53,27 @@
 		.MixMode = CUSTOM_RFDC_DAC_CFG_MIXMODE_C2R, .DecoderMode = 0U              \
 	}
 
-#define CUSTOM_RFDC_DAC_DIGITAL_CFG                                                  \
+#define CUSTOM_RFDC_DAC_DIGITAL_CFG(NCO_FREQ_GHZ)                                    \
 	{                                                                                \
 		.MixerInputDataType = XRFDC_DATA_TYPE_IQ, .DataWidth = 4U,                 \
-		.InterpolationMode = XRFDC_INTERP_DECIM_8X, .FifoEnable = 1U,              \
-		.AdderEnable = 0U, .MixerType = XRFDC_MIXER_TYPE_FINE, .NCOFreq = 1.5      \
+		.InterpolationMode = XRFDC_INTERP_DECIM_16X, .FifoEnable = 1U,             \
+		.AdderEnable = 0U, .MixerType = XRFDC_MIXER_TYPE_FINE,                    \
+		.NCOFreq = (NCO_FREQ_GHZ)                                                  \
 	}
 
-#define CUSTOM_RFDC_DAC_TILE_CFG(PLL_ENABLE)                                         \
+#define CUSTOM_RFDC_DAC_TILE_CFG(PLL_ENABLE, LINK_COUPLING, BLOCK0_NCO_GHZ, BLOCK2_NCO_GHZ) \
 	{                                                                                \
-		.Enable = 1U, .PLLEnable = (PLL_ENABLE), .SamplingRate = 6.0,              \
-		.RefClkFreq = 125.0, .FabClkFreq = 93.75, .FeedbackDiv = 48U,              \
-		.OutputDiv = 1U, .RefClkDiv = 1U, .MultibandConfig = XRFDC_MB_MODE_SB,     \
-		.MaxSampleRate = 6.0, .NumSlices = XRFDC_DUAL_TILE, .LinkCoupling = 0U,    \
+		.Enable = 1U, .PLLEnable = (PLL_ENABLE), .SamplingRate = 6.4,              \
+		.RefClkFreq = 128.0, .FabClkFreq = 50.0, .FeedbackDiv = 100U,              \
+		.OutputDiv = 2U, .RefClkDiv = 1U, .MultibandConfig = XRFDC_MB_MODE_SB,     \
+		.MaxSampleRate = 7.0, .NumSlices = XRFDC_DUAL_TILE, .LinkCoupling = (LINK_COUPLING), \
 		.DACBlock_Analog_Config = {                                                \
 			[0] = CUSTOM_RFDC_DAC_ANALOG_CFG,                                     \
 			[2] = CUSTOM_RFDC_DAC_ANALOG_CFG                                      \
 		},                                                                         \
 		.DACBlock_Digital_Config = {                                               \
-			[0] = CUSTOM_RFDC_DAC_DIGITAL_CFG,                                    \
-			[2] = CUSTOM_RFDC_DAC_DIGITAL_CFG                                     \
+			[0] = CUSTOM_RFDC_DAC_DIGITAL_CFG(BLOCK0_NCO_GHZ),                   \
+			[2] = CUSTOM_RFDC_DAC_DIGITAL_CFG(BLOCK2_NCO_GHZ)                    \
 		}                                                                          \
 	}
 
@@ -77,10 +89,10 @@ XRFdc_Config XRFdc_ConfigTable[XPAR_XRFDC_NUM_INSTANCES] = {
 		.IPType = XRFDC_GEN3,
 		.SiRevision = 0U,
 		.DACTile_Config = {
-			[0] = CUSTOM_RFDC_DAC_TILE_CFG(0U),
-			[1] = CUSTOM_RFDC_DAC_TILE_CFG(0U),
-			[2] = CUSTOM_RFDC_DAC_TILE_CFG(1U),
-			[3] = CUSTOM_RFDC_DAC_TILE_CFG(0U)
+			[0] = CUSTOM_RFDC_DAC_TILE_CFG(0U, CUSTOM_RFDC_DAC_LINK_COUPLING_AC, -1.9, -1.9),
+			[1] = CUSTOM_RFDC_DAC_TILE_CFG(0U, CUSTOM_RFDC_DAC_LINK_COUPLING_AC, -1.9, -1.9),
+			[2] = CUSTOM_RFDC_DAC_TILE_CFG(1U, CUSTOM_RFDC_DAC_LINK_COUPLING_DC, 0.0, 0.0),
+			[3] = CUSTOM_RFDC_DAC_TILE_CFG(0U, CUSTOM_RFDC_DAC_LINK_COUPLING_AC, -0.6, -0.2)
 		},
 		.ADCTile_Config = {0}
 	}

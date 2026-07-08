@@ -130,7 +130,7 @@ class WaveformToolTests(unittest.TestCase):
         self.assertEqual(trigger_cmds[-1], [3, 0, 0, 0, 0])
         self.assertEqual(
             [cmd for cmd in loop_cmds if cmd[0] == 2],
-            [[2, channel, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(channel), host.PLAY_FLAG_TILED] for channel in range(1, 9)],
+            [[2, channel, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED] for channel in range(1, 9)],
         )
 
     def test_build_play_commands_can_emit_tiled_layout(self):
@@ -168,21 +168,21 @@ class WaveformToolTests(unittest.TestCase):
 
         self.assertEqual(cmds, [
             [1, 1, 0, 0],
-            [2, 1, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(1), host.PLAY_FLAG_TILED],
+            [2, 1, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 2, 0, 0],
-            [2, 2, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(2), host.PLAY_FLAG_TILED],
+            [2, 2, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 3, 0, 0],
-            [2, 3, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(3), host.PLAY_FLAG_TILED],
+            [2, 3, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 4, 0, 0],
-            [2, 4, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(4), host.PLAY_FLAG_TILED],
+            [2, 4, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 5, 0, 0],
-            [2, 5, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(5), host.PLAY_FLAG_TILED],
+            [2, 5, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 6, 0, 0],
-            [2, 6, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(6), host.PLAY_FLAG_TILED],
+            [2, 6, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 7, 0, 0],
-            [2, 7, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(7), host.PLAY_FLAG_TILED],
+            [2, 7, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [1, 8, 0, 0],
-            [2, 8, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(8), host.PLAY_FLAG_TILED],
+            [2, 8, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
             [3, 15, 0, 0, 1],
         ])
 
@@ -206,7 +206,7 @@ class WaveformToolTests(unittest.TestCase):
         self.assertEqual(cmds[4], [1, 3, 30, 0])
         self.assertEqual(cmds[6], [1, 4, 0, 0])
 
-    def test_upload_and_play_uploads_supplied_four_channel_arrays(self):
+    def test_upload_and_play_uploads_supplied_four_channel_arrays_in_interleaved_layout(self):
         arrays = [np.full(8, value, dtype=np.int16) for value in (1, 2, 3, 4)]
         calls = []
 
@@ -214,8 +214,8 @@ class WaveformToolTests(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 calls.append(("init", args, kwargs))
 
-            def upload_waveform_udp_tiled(self, samples, channel, base_addr, dump_path):
-                calls.append(("upload_tiled", channel, base_addr, Path(dump_path).name, samples.tolist()))
+            def upload_waveform_udp_interleaved(self, channel_waves, base_addr, dump_path):
+                calls.append(("upload_interleaved", sorted(channel_waves), base_addr, Path(dump_path).name))
 
             def send_instructions(self, commands):
                 calls.append(("instructions", commands))
@@ -244,18 +244,15 @@ class WaveformToolTests(unittest.TestCase):
         finally:
             waveform_tools.host.RFSocController = original
 
-        upload_calls = [call for call in calls if call[0] == "upload_tiled"]
+        upload_calls = [call for call in calls if call[0] == "upload_interleaved"]
         self.assertEqual(upload_calls, [
-            ("upload_tiled", 1, host.DDR_BASE, "ch1_upload_hex.txt", arrays[0].tolist()),
-            ("upload_tiled", 2, host.DDR_BASE, "ch2_upload_hex.txt", arrays[1].tolist()),
-            ("upload_tiled", 3, host.DDR_BASE, "ch3_upload_hex.txt", arrays[2].tolist()),
-            ("upload_tiled", 4, host.DDR_BASE, "ch4_upload_hex.txt", arrays[3].tolist()),
+            ("upload_interleaved", [1, 2, 3, 4], host.DDR_BASE, "interleaved_wave_hex.txt"),
         ])
         instruction_calls = [call for call in calls if call[0] == "instructions"]
-        self.assertEqual(instruction_calls[0][1][1], [2, 1, 32, host.tiled_channel_base_addr(1), host.PLAY_FLAG_TILED])
-        self.assertEqual(instruction_calls[0][1][3], [2, 2, 32, host.tiled_channel_base_addr(2), host.PLAY_FLAG_TILED])
-        self.assertEqual(instruction_calls[0][1][5], [2, 3, 32, host.tiled_channel_base_addr(3), host.PLAY_FLAG_TILED])
-        self.assertEqual(instruction_calls[0][1][7], [2, 4, 32, host.tiled_channel_base_addr(4), host.PLAY_FLAG_TILED])
+        self.assertEqual(instruction_calls[0][1][1], [2, 1, 32, 0, host.PLAY_FLAG_INTERLEAVED])
+        self.assertEqual(instruction_calls[0][1][3], [2, 2, 32, 0, host.PLAY_FLAG_INTERLEAVED])
+        self.assertEqual(instruction_calls[0][1][5], [2, 3, 32, 0, host.PLAY_FLAG_INTERLEAVED])
+        self.assertEqual(instruction_calls[0][1][7], [2, 4, 32, 0, host.PLAY_FLAG_INTERLEAVED])
 
     def test_waveform_metadata_uses_explicit_units(self):
         metadata = waveform_tools.build_metadata(
@@ -343,7 +340,7 @@ class WaveformToolTests(unittest.TestCase):
 
     def test_iq_sine_tile_waveform_uses_varying_interleaved_iq_lanes_with_negative_q(self):
         wave = waveform_tools.make_iq_sine_tile_waveform(
-            freq_hz=80e6,
+            freq_hz=70e6,
             phase_rad=0.0,
             amplitude=16000,
             sample_rate_hz=host.DAC_XY_FS,
@@ -454,6 +451,31 @@ class WaveformToolTests(unittest.TestCase):
         self.assertEqual(metadata["ch6_q_signal"], "zero_q")
         self.assertEqual(metadata["xy_freq_hz"], 90e6)
         self.assertEqual(metadata["readout_freq_hz"], 140e6)
+
+    def test_interleaved_512b_four_ddr_beats_reconstruct_one_rfdc_beat_per_channel(self):
+        channel_waves = {
+            channel: np.array([
+                channel * 1000 + lane
+                for lane in range(16)
+            ], dtype=np.int16)
+            for channel in range(1, 9)
+        }
+
+        payload, logical_samples = host.pack_interleaved_512b_waveforms(channel_waves)
+
+        self.assertEqual(logical_samples, 16)
+        self.assertEqual(len(payload), 256)
+        reconstructed = {channel: bytearray() for channel in range(1, 9)}
+        for beat_index in range(4):
+            beat = payload[beat_index * 64:(beat_index + 1) * 64]
+            for channel in range(1, 9):
+                lane = beat[(channel - 1) * 8:channel * 8]
+                reconstructed[channel].extend(lane)
+        for channel in range(1, 9):
+            np.testing.assert_array_equal(
+                np.frombuffer(bytes(reconstructed[channel]), dtype="<i2"),
+                channel_waves[channel],
+            )
 
 
 if __name__ == "__main__":

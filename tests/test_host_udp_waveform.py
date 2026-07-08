@@ -26,10 +26,14 @@ host = load_software_module("host", "host.py")
 
 class UdpWaveformPacketTests(unittest.TestCase):
     def test_default_sample_rate_matches_custom_rfdc_config(self):
-        self.assertEqual(host.DAC_TILE_FS, 6_000_000_000.0)
-        self.assertEqual(host.DAC_XY_FS, 750_000_000.0)
-        self.assertEqual(host.DAC_AXIS_HZ, 93_750_000.0)
-        self.assertEqual(host.RFDC_INTERPOLATION, 8)
+        self.assertEqual(host.DAC_TILE_FS, 6_400_000_000.0)
+        self.assertEqual(host.DAC_XY_FS, 400_000_000.0)
+        self.assertEqual(host.DAC_AXIS_HZ, 50_000_000.0)
+        self.assertEqual(host.RFDC_INTERPOLATION, 16)
+        self.assertEqual(host.DEFAULT_DDR_LAYOUT, host.DDR_LAYOUT_INTERLEAVED_512B)
+        self.assertEqual(host.CHANNEL_ROLES[5], "z")
+        self.assertEqual(host.CHANNEL_ROLES[7], "readout")
+        self.assertEqual(host.DEFAULT_READOUT_TARGET_RF_HZ[8], 6.2e9)
 
     def test_default_ddr_addresses_match_bd_mapped_base(self):
         self.assertEqual(host.DDR_BASE, 0x0000000000000000)
@@ -66,6 +70,50 @@ class UdpWaveformPacketTests(unittest.TestCase):
     def test_tiled_ddr_address_requires_32_byte_alignment(self):
         with self.assertRaisesRegex(ValueError, "byte_offset must be 32B aligned"):
             host.tiled_ddr_addr(1, 2)
+
+    def test_interleaved_ddr_lane_address_mapping(self):
+        self.assertEqual(host.interleaved_ddr_addr(1, 0), host.DDR_BASE)
+        self.assertEqual(host.interleaved_ddr_addr(2, 0), host.DDR_BASE + 8)
+        self.assertEqual(host.interleaved_ddr_addr(8, 0), host.DDR_BASE + 56)
+        self.assertEqual(host.interleaved_ddr_addr(1, 8), host.DDR_BASE + 64)
+        self.assertEqual(host.interleaved_ddr_addr(3, 16), host.DDR_BASE + 128 + 16)
+
+    def test_interleaved_packer_lane_order(self):
+        channel_waves = {
+            channel: np.array([
+                channel * 100 + 0,
+                channel * 100 + 1,
+                channel * 100 + 2,
+                channel * 100 + 3,
+                channel * 100 + 4,
+                channel * 100 + 5,
+                channel * 100 + 6,
+                channel * 100 + 7,
+            ], dtype=np.int16)
+            for channel in range(1, 9)
+        }
+
+        payload, logical_samples = host.pack_interleaved_512b_waveforms(channel_waves)
+
+        self.assertEqual(logical_samples, 16)
+        self.assertEqual(len(payload), 256)
+        first_beat = payload[:64]
+        lanes = [np.frombuffer(first_beat[idx * 8:(idx + 1) * 8], dtype="<i2").tolist() for idx in range(8)]
+        self.assertEqual(lanes[0], [100, 101, 102, 103])
+        self.assertEqual(lanes[1], [200, 201, 202, 203])
+        self.assertEqual(lanes[7], [800, 801, 802, 803])
+
+    def test_rfdc_nco_plan_maps_zone1_and_zone2_targets(self):
+        self.assertEqual(host.rfdc_nco_plan_for_target(3.5e9)["nco_hz"], -2.9e9)
+        self.assertEqual(host.rfdc_nco_plan_for_target(3.5e9)["nyquist_zone"], 2)
+        self.assertEqual(host.rfdc_nco_plan_for_target(4.5e9)["nco_hz"], -1.9e9)
+        self.assertEqual(host.rfdc_nco_plan_for_target(4.5e9)["nyquist_zone"], 2)
+        self.assertEqual(host.rfdc_nco_plan_for_target(5.5e9)["nco_hz"], -0.9e9)
+        self.assertEqual(host.rfdc_nco_plan_for_target(5.5e9)["nyquist_zone"], 2)
+        self.assertEqual(host.rfdc_nco_plan_for_target(6.2e9)["nco_hz"], -0.2e9)
+        self.assertEqual(host.rfdc_nco_plan_for_target(6.2e9)["nyquist_zone"], 2)
+        with self.assertRaisesRegex(ValueError, "target RF frequency"):
+            host.rfdc_nco_plan_for_target(6.5e9)
 
     def test_udp_packet_address_requires_32_byte_alignment(self):
         samples = np.arange(16, dtype=np.int16)
@@ -208,6 +256,89 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(word1, host.FIXED_DATA_BYTES)
         self.assertEqual(word2, host.tiled_channel_base_addr(1))
         self.assertEqual(word3, 0)
+
+    def test_send_instructions_encodes_interleaved_play_flag_without_tiled_conflict(self):
+        class FakeSocket:
+            def __init__(self):
+                self.calls = []
+
+            def settimeout(self, timeout_s):
+                self.calls.append(("settimeout", timeout_s))
+
+            def close(self):
+                self.calls.append(("close",))
+
+            def sendto(self, packet, addr):
+                self.calls.append(("sendto", packet, addr))
+                return len(packet)
+
+        fake_socket = FakeSocket()
+        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
+            ctrl = host.RFSocController("192.168.1.128", transport="udp")
+            ctrl.send_instructions([[2, 1, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED]])
+            ctrl.close()
+
+        packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
+        word0, word1, word2, word3 = struct.unpack("<IIII", packet)
+        self.assertEqual(word0, 0x00000412)
+        self.assertFalse(word0 & 0x00000200)
+        self.assertEqual(word1, host.FIXED_DATA_BYTES)
+        self.assertEqual(word2, 0)
+        self.assertEqual(word3, 0)
+
+    def test_udp_trigger_sends_single_reserved_word(self):
+        class FakeSocket:
+            def __init__(self):
+                self.calls = []
+
+            def settimeout(self, timeout_s):
+                self.calls.append(("settimeout", timeout_s))
+
+            def close(self):
+                self.calls.append(("close",))
+
+            def sendto(self, packet, addr):
+                self.calls.append(("sendto", packet, addr))
+                return len(packet)
+
+        fake_socket = FakeSocket()
+        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
+            ctrl = host.RFSocController("192.168.1.128", transport="udp")
+            ctrl.trigger()
+            ctrl.close()
+
+        packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
+        self.assertEqual(packet, struct.pack("<Q", host.UDP_TRIGGER_WORD))
+
+    def test_rfdc_nco_mailbox_packs_entries_and_commits_header_last(self):
+        nco = {channel: 4.5e9 for channel in range(1, 5)}
+        nco.update({5: 0.0, 6: 0.0, 7: -0.6e9, 8: -0.2e9})
+        zones = {channel: 2 for channel in range(1, 5)}
+        zones.update({5: 1, 6: 1, 7: 2, 8: 2})
+
+        image = host.pack_rfdc_nco_mailbox(nco, zones, seq=7)
+        magic, seq, mask, flags, _ = struct.unpack("<QIII12s", image[:host.RFDC_CTRL_MAILBOX_HEADER_BYTES])
+        ch5_nco_hz, ch5_zone, _ = struct.unpack(
+            "<qII",
+            image[host.RFDC_CTRL_MAILBOX_HEADER_BYTES + 4 * host.RFDC_CTRL_MAILBOX_ENTRY_BYTES:
+                  host.RFDC_CTRL_MAILBOX_HEADER_BYTES + 5 * host.RFDC_CTRL_MAILBOX_ENTRY_BYTES],
+        )
+
+        self.assertEqual(len(image), host.RFDC_CTRL_MAILBOX_BYTES)
+        self.assertEqual(magic, host.RFDC_CTRL_MAILBOX_MAGIC)
+        self.assertEqual(seq, 7)
+        self.assertEqual(mask, 0xFF)
+        self.assertEqual(flags, host.RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE)
+        self.assertEqual(ch5_nco_hz, 0)
+        self.assertEqual(ch5_zone, 1)
+
+        packets = list(host.iter_rfdc_nco_mailbox_packets(nco, zones, seq=7))
+        self.assertEqual(len(packets), 5)
+        _, first_addr, _ = host.decode_udp_waveform_packet(packets[0])
+        _, last_addr, last_payload = host.decode_udp_waveform_packet(packets[-1])
+        self.assertEqual(first_addr, host.RFDC_CTRL_MAILBOX_OFFSET + host.RFDC_CTRL_MAILBOX_HEADER_BYTES)
+        self.assertEqual(last_addr, host.RFDC_CTRL_MAILBOX_OFFSET)
+        self.assertEqual(last_payload, image[:host.RFDC_CTRL_MAILBOX_HEADER_BYTES])
 
     def test_send_instructions_rejects_unaligned_play(self):
         class FakeSocket:

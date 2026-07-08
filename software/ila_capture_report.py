@@ -130,7 +130,7 @@ def parse_expected_delays(text: str) -> dict[int, int]:
         key, sep, value = item.partition("=")
         if sep != "=":
             raise ValueError(f"Bad delay item {item!r}; expected chN=value")
-        match = re.fullmatch(r"ch([1-4])", key.strip().lower())
+        match = re.fullmatch(r"ch([1-8])", key.strip().lower())
         if match is None:
             raise ValueError(f"Bad channel in delay item {item!r}")
         delays[int(match.group(1))] = int(value.strip(), 0)
@@ -355,6 +355,10 @@ def confirm_programming(args: argparse.Namespace) -> bool:
 def send_artifacts_to_board(args: argparse.Namespace) -> None:
     waves = {channel: load_waveform(args.artifact_dir, channel) for channel in CHANNELS}
     channel_lengths = {channel: waveform_tools.waveform_length_bytes(wave) for channel, wave in waves.items()}
+    metadata = load_metadata(args.artifact_dir)
+    layout = str(metadata.get("layout", host.DEFAULT_DDR_LAYOUT))
+    if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
+        layout = host.DEFAULT_DDR_LAYOUT
     ctrl = host.RFSocController(
         args.ip,
         port=args.port,
@@ -364,21 +368,39 @@ def send_artifacts_to_board(args: argparse.Namespace) -> None:
         timeout_s=float(args.timeout_s),
     )
     try:
-        for channel, wave in sorted(waves.items()):
-            ctrl.upload_waveform_udp_tiled(
-                wave,
-                channel,
-                host.DDR_BASE,
-                str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
+        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
+            ctrl.upload_waveform_udp_interleaved(
+                waves,
+                base_addr=host.DDR_BASE,
+                dump_path=str(args.out_dir / f"{args.report_prefix}_interleaved_upload_hex.txt"),
             )
+            channel_addrs = {channel: 0 for channel in CHANNELS}
+        else:
+            channel_addrs = {}
+            for channel, wave in sorted(waves.items()):
+                if layout == host.DDR_LAYOUT_TILED:
+                    channel_addrs[channel] = host.tiled_channel_base_addr(channel)
+                    ctrl.upload_waveform_udp_tiled(
+                        wave,
+                        channel,
+                        host.DDR_BASE,
+                        str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
+                    )
+                else:
+                    channel_addrs[channel] = host.DDR_CH_ADDR[channel - 1]
+                    ctrl.upload_waveform_udp(
+                        wave,
+                        channel_addrs[channel],
+                        str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
+                    )
         if args.post_upload_sleep_s > 0:
             time.sleep(args.post_upload_sleep_s)
         commands = waveform_tools.build_play_commands(
             loop=args.loop,
             auto_start=not args.wait_for_trigger,
-            channel_addrs={channel: host.tiled_channel_base_addr(channel) for channel in CHANNELS},
+            channel_addrs=channel_addrs,
             channel_lengths=channel_lengths,
-            layout=host.DEFAULT_DDR_LAYOUT,
+            layout=layout,
         )
         ctrl.send_instructions(commands)
         if args.wait_for_trigger:
@@ -676,11 +698,23 @@ def ensure_send_artifacts(args: argparse.Namespace) -> None:
     )
 
 
-def samples_from_words(words: list[int]) -> np.ndarray:
+def probe_width_bytes(probe: ProbeRef) -> int | None:
+    if probe.bit_columns:
+        return max(1, (max(bit for bit, _column in probe.bit_columns) + 8) // 8)
+    label = probe.label
+    match = re.search(r"\[(\d+):(\d+)\]$", label)
+    if match:
+        msb = int(match.group(1))
+        lsb = int(match.group(2))
+        return max(1, (abs(msb - lsb) + 8) // 8)
+    return None
+
+
+def samples_from_words(words: list[int], width_bytes: int | None = None) -> np.ndarray:
     data = bytearray()
     for word in words:
-        width_bytes = 32 if int(word).bit_length() > 64 else 8
-        data.extend((int(word) & ((1 << (width_bytes * 8)) - 1)).to_bytes(width_bytes, byteorder="little", signed=False))
+        current_width = width_bytes if width_bytes is not None else (32 if int(word).bit_length() > 64 else 8)
+        data.extend((int(word) & ((1 << (current_width * 8)) - 1)).to_bytes(current_width, byteorder="little", signed=False))
     return np.frombuffer(bytes(data), dtype="<i2").astype(np.int16)
 
 
@@ -764,7 +798,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
         windows = valid_windows(valid_values)
         valid_indices = [idx for idx, value in enumerate(valid_values) if value]
         words = [data_values[idx] for idx in valid_indices if idx < len(data_values)]
-        captured = samples_from_words(words)
+        captured = samples_from_words(words, probe_width_bytes(data_probe) if data_probe.resolved else None)
         expected_cycles = len(valid_indices) if hardware_cw_mode or metadata.get("loop") else expected_valid_cycles(metadata, expected, channel)
         if hardware_cw_mode:
             matched, mismatches, first_mismatch = len(valid_indices), 0, None
@@ -779,11 +813,14 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
         first_valid = valid_indices[0] if valid_indices else None
         if trigger_index is not None and first_valid is not None:
             observed_delay = first_valid - trigger_index
-        expected_delay = expected_delays.get(channel, metadata_delay(metadata, channel))
+        expected_delay = expected_delays.get(channel)
+        metadata_instruction_delay = metadata_delay(metadata, channel)
         if len(windows) > 1:
             notes.append(f"valid has {len(windows)} windows")
         if expected_delay is None:
             notes.append("expected delay not provided; observed delay reported only")
+            if metadata_instruction_delay is not None:
+                notes.append(f"metadata instruction delay={metadata_instruction_delay}; not used as trigger-to-valid latency")
         if delay_probe.resolved and trigger_index is not None:
             values = column_values(rows, delay_probe)
             if trigger_index < len(values):
@@ -845,6 +882,11 @@ def render_markdown(details: dict[str, Any]) -> str:
             return "data probe 缺失"
         if note == "expected delay not provided; observed delay reported only":
             return "未提供期望延迟，仅报告观测到的延迟"
+        if note.startswith("metadata instruction delay="):
+            return note.replace("metadata instruction delay=", "metadata 中的指令延迟=").replace(
+                "; not used as trigger-to-valid latency",
+                "；不作为 trigger 到 valid 的内部延迟判据",
+            )
         if note.startswith("valid has ") and note.endswith(" windows"):
             return note.replace("valid has", "valid 出现").replace("windows", "个窗口")
         if note.startswith("captured delay probe near trigger="):

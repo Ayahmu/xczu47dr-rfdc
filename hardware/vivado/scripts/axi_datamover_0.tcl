@@ -30,10 +30,7 @@ if {![info exists target]} {
     set target [lindex $argv 0]
   }
 }
-set mm2s_stream_width 256
-if {$target eq "custom_xczu47dr_bw"} {
-  set mm2s_stream_width 512
-}
+set mm2s_stream_width 512
 set target_part [target_config_get $target part]
 set target_board_part [target_config_get $target board_part]
 

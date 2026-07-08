@@ -19,12 +19,13 @@ class SendWaveformUdpTests(unittest.TestCase):
     def test_cli_default_sample_rate_matches_custom_rfdc_config(self):
         args = send_waveform_udp.build_parser().parse_args(["sine", "--dry-run"])
 
-        self.assertEqual(args.sample_rate_hz, 750_000_000.0)
+        self.assertEqual(args.sample_rate_hz, 400_000_000.0)
+        self.assertEqual(args.ddr_layout, host.DDR_LAYOUT_INTERLEAVED_512B)
 
     def test_cli_default_axis_frequency_matches_custom_rfdc_axis_clock(self):
         args = send_waveform_udp.build_parser().parse_args(["burst", "--dry-run"])
 
-        self.assertEqual(args.axis_freq_hz, 93_750_000.0)
+        self.assertEqual(args.axis_freq_hz, 50_000_000.0)
 
     def test_sine_cli_generates_eight_channels_and_metadata(self):
         args = send_waveform_udp.build_parser().parse_args([
@@ -119,11 +120,36 @@ class SendWaveformUdpTests(unittest.TestCase):
         self.assertEqual(send_waveform_udp.CHANNEL_DEFAULTS[2]["start"], host.DDR_CH2_ADDR)
         self.assertEqual(send_waveform_udp.CHANNEL_DEFAULTS[8]["start"], host.DDR_CH8_ADDR)
 
-    def test_burst_cli_sends_hardware_delay_cycles_from_ns_and_axis_frequency(self):
+    def test_burst_cli_does_not_send_hardware_delays_for_interleaved_layout(self):
         output_dir = Path("/tmp/send-waveform-delay-test")
         argv = [
             "send_waveform_udp.py",
             "burst",
+            "--axis-freq-hz", "300000000",
+            "--ch1-delay-s", "80e-9",
+            "--ch2-delay-s", "120e-9",
+            "--ch3-delay-s", "160e-9",
+            "--ch4-delay-s", "200e-9",
+            "--ch5-delay-s", "240e-9",
+            "--ch6-delay-s", "280e-9",
+            "--ch7-delay-s", "320e-9",
+            "--ch8-delay-s", "360e-9",
+            "--output-dir", str(output_dir),
+        ]
+
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.waveform_tools, "save_waveform_bundle"), \
+             mock.patch.object(send_waveform_udp.waveform_tools, "upload_and_play") as upload:
+            self.assertEqual(send_waveform_udp.main(), 0)
+
+        self.assertIsNone(upload.call_args.kwargs["channel_delays"])
+
+    def test_burst_cli_sends_hardware_delay_cycles_for_legacy_tiled_layout(self):
+        output_dir = Path("/tmp/send-waveform-delay-test")
+        argv = [
+            "send_waveform_udp.py",
+            "burst",
+            "--ddr-layout", host.DDR_LAYOUT_TILED,
             "--axis-freq-hz", "300000000",
             "--ch1-delay-s", "80e-9",
             "--ch2-delay-s", "120e-9",

@@ -10,6 +10,7 @@ SOFTWARE_DIR = ROOT / "software"
 sys.path.insert(0, str(SOFTWARE_DIR))
 
 import waveform_gui  # type: ignore[import-not-found]  # noqa: E402
+import waveform_gui_view  # type: ignore[import-not-found]  # noqa: E402
 import host  # type: ignore[import-not-found]  # noqa: E402
 
 
@@ -18,14 +19,14 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(
             waveform_gui.PREVIEW_TITLES,
             (
-                f"CH1 DDR 0x{host.tiled_channel_base_addr(1):X} vout00",
-                f"CH2 DDR 0x{host.tiled_channel_base_addr(2):X} vout02",
-                f"CH3 DDR 0x{host.tiled_channel_base_addr(3):X} vout10",
-                f"CH4 DDR 0x{host.tiled_channel_base_addr(4):X} vout12",
-                f"CH5 DDR 0x{host.tiled_channel_base_addr(5):X} vout20",
-                f"CH6 DDR 0x{host.tiled_channel_base_addr(6):X} vout22",
-                f"CH7 DDR 0x{host.tiled_channel_base_addr(7):X} vout30",
-                f"CH8 DDR 0x{host.tiled_channel_base_addr(8):X} vout32",
+                "CH1 XY lane0 vout00",
+                "CH2 XY lane1 vout02",
+                "CH3 XY lane2 vout10",
+                "CH4 XY lane3 vout12",
+                "CH5 Z lane4 vout20",
+                "CH6 Z lane5 vout22",
+                "CH7 Readout lane6 vout30",
+                "CH8 Readout lane7 vout32",
             ),
         )
         self.assertEqual(waveform_gui.CHANNELS, ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"))
@@ -37,17 +38,59 @@ class WaveformGuiTests(unittest.TestCase):
         self.assertEqual(waveform_gui.WAVEFORM_TYPE_LABELS["dc-iq-cw"], "IQ CW")
         self.assertEqual(waveform_gui.WAVEFORM_TYPE_LABELS["iq-sine"], "IQ Sine")
         self.assertEqual(waveform_gui.WAVEFORM_TYPE_LABELS["iq-gaussian-sine"], "IQ Gaussian Sine")
+        self.assertEqual(waveform_gui.EZQ_CHANNEL_WAVEFORMS, ("xy", "z", "readout"))
         self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["dc-iq-cw"], ("amplitude", "duration_s"))
         self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["iq-sine"], ("freq_hz", "phase_rad", "amplitude", "duration_s"))
         self.assertEqual(waveform_gui.CHANNEL_FIELD_GROUPS["iq-gaussian-sine"], ("freq_hz", "phase_rad", "amplitude", "duration_s"))
         self.assertNotIn("pypulse", waveform_gui.CHANNEL_FIELD_GROUPS)
         self.assertNotIn("quantum", waveform_gui.CHANNEL_FIELD_GROUPS)
         self.assertNotIn("sine", waveform_gui.CHANNEL_FIELD_GROUPS)
+        xy_keys = tuple(field.key for field in waveform_gui.EZQ_CHANNEL_FIELD_GROUPS["xy"])
+        z_keys = tuple(field.key for field in waveform_gui.EZQ_CHANNEL_FIELD_GROUPS["z"])
+        readout_keys = tuple(field.key for field in waveform_gui.EZQ_CHANNEL_FIELD_GROUPS["readout"])
+        self.assertIn("pi_amp", xy_keys)
+        self.assertIn("z_gate_time_s", z_keys)
+        self.assertIn("readout_flattop_s", readout_keys)
+        self.assertEqual(xy_keys[0], "start_time_s")
+        self.assertEqual(z_keys[0], "start_time_s")
+        self.assertEqual(readout_keys[0], "start_time_s")
+        self.assertNotIn("readout_freq_hz", z_keys)
+        self.assertNotIn("z_amp", xy_keys)
+
+    def test_ezq_xy_gate_fields_are_conditionally_visible(self):
+        x_pi_keys = tuple(field.key for field in waveform_gui._ezq_xy_gate_fields("x_pi"))
+        x_half_keys = tuple(field.key for field in waveform_gui._ezq_xy_gate_fields("x_half"))
+        x12_keys = tuple(field.key for field in waveform_gui._ezq_xy_gate_fields("x12_pi"))
+        spec_keys = tuple(field.key for field in waveform_gui._ezq_xy_gate_fields("spec"))
+
+        self.assertEqual(x_pi_keys[0], "start_time_s")
+        self.assertIn("pi_amp", x_pi_keys)
+        self.assertNotIn("pi_amp_half", x_pi_keys)
+        self.assertIn("pi_amp_half", x_half_keys)
+        self.assertNotIn("pi_amp", x_half_keys)
+        self.assertIn("f21_hz", x12_keys)
+        self.assertIn("pi_amp21", x12_keys)
+        self.assertNotIn("f10_hz", x12_keys)
+        self.assertIn("spec_amp", spec_keys)
+        self.assertIn("spec_len_s", spec_keys)
+        self.assertNotIn("pi_amp", spec_keys)
+
+    def test_ezq_z_shape_fields_hide_ripples_until_diabatic_mode(self):
+        square_keys = tuple(field.key for field in waveform_gui._ezq_z_shape_fields("square"))
+        diabatic_keys = tuple(field.key for field in waveform_gui._ezq_z_shape_fields("diabatic_cz"))
+
+        self.assertEqual(square_keys[0], "start_time_s")
+        self.assertIn("z_shape", square_keys)
+        self.assertIn("z_amp", square_keys)
+        self.assertNotIn("z_ripple0", square_keys)
+        self.assertIn("z_ripple0", diabatic_keys)
+        self.assertIn("z_ripple3", diabatic_keys)
 
     def test_gui_waveform_type_falls_back_for_legacy_modes(self):
         self.assertEqual(waveform_gui._gui_waveform_type("dc-iq-cw"), "dc-iq-cw")
         self.assertEqual(waveform_gui._gui_waveform_type("iq-sine"), "iq-sine")
         self.assertEqual(waveform_gui._gui_waveform_type("iq-gaussian-sine"), "iq-gaussian-sine")
+        self.assertEqual(waveform_gui._gui_waveform_type("off"), "dc-iq-cw")
         self.assertEqual(waveform_gui._gui_waveform_type("sine"), "iq-sine")
         self.assertEqual(waveform_gui._gui_waveform_type("pypulse"), "iq-gaussian-sine")
         self.assertEqual(waveform_gui._gui_waveform_type("hls"), "iq-gaussian-sine")
@@ -106,10 +149,25 @@ class WaveformGuiTests(unittest.TestCase):
             waveform_gui.ACTION_BUTTON_GRID_COLUMNS * waveform_gui.ACTION_BUTTON_MIN_WIDTH_PX,
         )
 
+    def test_preview_time_window_follows_active_waveform_region(self):
+        wave = [0] * (10_000 * 2)
+        for complex_index in range(100, 220):
+            wave[complex_index * 2] = 1000
+
+        left_ns, right_ns = waveform_gui_view.preview_time_window_ns([wave], 1.0e9)
+
+        self.assertLess(left_ns, 100.0)
+        self.assertGreater(right_ns, 220.0)
+        self.assertLess(right_ns, 1_000.0)
+
+    def test_preview_time_window_uses_short_default_for_empty_record(self):
+        wave = [0] * (10_000 * 2)
+
+        self.assertEqual(waveform_gui_view.preview_time_window_ns([wave], 1.0e9), (0.0, 1_000.0))
+
     def test_gui_field_labels_are_limited_to_iq_controls(self):
         self.assertEqual(set(waveform_gui.LABELS), {"freq_hz", "phase_rad", "amplitude", "duration_s"})
         self.assertEqual(waveform_gui._field_display_label("freq_hz"), "IQ sine freq (MHz)")
-
 
     def test_combobox_mousewheel_events_are_blocked(self):
         self.assertEqual(waveform_gui.COMBOBOX_WHEEL_BLOCK_EVENTS, ("<MouseWheel>", "<Button-4>", "<Button-5>"))

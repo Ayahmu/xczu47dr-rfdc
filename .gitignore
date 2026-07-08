@@ -73,6 +73,26 @@ Thumbs.db
 *.mmi
 *.xsa
 
+# Versioned release artifacts for the custom XCZU47DR RFDC build.
+!hardware/vivado/output/
+hardware/vivado/output/*
+!hardware/vivado/output/custom_xczu47dr_rfdc.bit
+!hardware/vivado/output/custom_xczu47dr_rfdc.ltx
+!firmware/workspace/
+firmware/workspace/*
+!firmware/workspace/custom_xczu47dr/
+firmware/workspace/custom_xczu47dr/*
+!firmware/workspace/custom_xczu47dr/rfdc_app/
+firmware/workspace/custom_xczu47dr/rfdc_app/*
+!firmware/workspace/custom_xczu47dr/rfdc_app/Debug/
+firmware/workspace/custom_xczu47dr/rfdc_app/Debug/*
+!firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf
+!firmware/workspace/custom_xczu47dr/hw_platform/
+firmware/workspace/custom_xczu47dr/hw_platform/*
+!firmware/workspace/custom_xczu47dr/hw_platform/hw/
+firmware/workspace/custom_xczu47dr/hw_platform/hw/*
+!firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl
+
 # Temporary and backup files
 ch*_waveform_hex.txt
 wave_preview_*.png

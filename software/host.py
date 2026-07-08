@@ -16,20 +16,24 @@ import matplotlib.pyplot as plt
 # 1. 硬件参数
 # ============================================================
 # 8 通道 NCO 数字上变频（IQ -> Real / C2R）配置：
-#   每个 DAC tile 采样率 Fs = 6.0 GSPS，8 倍内插，
-#   RFDC 输入复数 I/Q 样本率 = Fs / interp = 750 MSPS，
-#   PL/AXIS 织物时钟 = Fs / interp / 8 = 93.75 MHz。
+#   每个 DAC tile 采样率 Fs = 6.4 GSPS，16 倍内插，
+#   RFDC 输入复数 I/Q 样本率 = Fs / interp = 400 MSPS，
+#   PL/AXIS 织物时钟 = Fs / interp / 8 = 50 MHz。
 #   每个 256-bit AXIS 字 = 8 个 I/Q 复样本，lane 顺序为
 #   I0,Q0,I1,Q1,...,I7,Q7；顶层将 8 个执行器通道分别送到 8 个
 #   物理 DAC slice。
-#   DDR 播放侧按 256-bit / 32B RFDC beat 组织。DataMover 的 AXI-MM 读口
-#   使用 512-bit DDR 宽度补水，MM2S stream 仍输出 256-bit RFDC AXIS 字。
-#   NCO 频率由固件在启动时设置（默认 -1.5 GHz，Zone2 -> 4.5 GHz RF）。
-DAC_TILE_FS = 6.0e9
-DAC_INTERP = 8
+#   DDR 播放侧默认按 interleaved_512b 组织。每个 512-bit DDR beat
+#   包含 8 路各一个 64-bit lane，硬件每 4 个 DDR beat 拼出 8 路
+#   256-bit RFDC AXIS 字。NCO 频率由固件启动默认值或 DDR mailbox 设置。
+#
+# 当前硬件主线是单 dac_axis_clk + interleaved_512b，所有通道共享同一
+# RFDC 输入采样率。CH7/CH8 的 Readout RF 频点通过 NCO/mailbox 调谐，
+# 不是单独改变这两路的 DAC Fs。
+DAC_TILE_FS = 6.4e9
+DAC_INTERP = 16
 DAC_IQ_SAMPLE_RATE_HZ = DAC_TILE_FS / DAC_INTERP
-DAC_FABRIC_HZ = DAC_TILE_FS / DAC_INTERP / 8  # 93.75 MHz
-NCO_FREQ_GHZ = 4.5  # 仅作记录，实际由固件配置
+DAC_FABRIC_HZ = DAC_TILE_FS / DAC_INTERP / 8  # 50 MHz
+NCO_FREQ_GHZ = 4.5  # 仅作默认记录，实际按通道由固件配置
 DEFAULT_WAVEFORM_SAMPLE_RATE_HZ = DAC_IQ_SAMPLE_RATE_HZ
 DEFAULT_AXIS_HZ = DAC_FABRIC_HZ
 RFDC_INTERPOLATION = DAC_INTERP
@@ -43,16 +47,34 @@ BEAT_BYTES = 32
 DDR_LAYOUT_CONTIGUOUS = "contiguous"
 DDR_LAYOUT_INTERLEAVED_512B = "interleaved_512b"
 DDR_LAYOUT_TILED = "tiled"
-DEFAULT_DDR_LAYOUT = DDR_LAYOUT_TILED
+DEFAULT_DDR_LAYOUT = DDR_LAYOUT_INTERLEAVED_512B
 DDR_TILE_BYTES = FIXED_DATA_BYTES = 4096
 DDR_TILE_CHANNELS = 8
 DDR_SUPERBLOCK_BYTES = DDR_TILE_BYTES * DDR_TILE_CHANNELS
 PLAY_FLAG_LOOP = 0x1
 PLAY_FLAG_TILED = 0x2
-PLAY_FLAG_INTERLEAVED = 0x2
+PLAY_FLAG_INTERLEAVED = 0x4
 DDR_INTERLEAVED_LANE_BYTES = 8
 DDR_INTERLEAVED_BEAT_BYTES = DDR_INTERLEAVED_LANE_BYTES * DDR_TILE_CHANNELS
 DDR_INTERLEAVED_CHANNELS = DDR_TILE_CHANNELS
+DEFAULT_RECORD_DURATION_S = 10e-6
+DEFAULT_BASEBAND_OFFSET_LIMIT_HZ = 160e6
+DEFAULT_XY_TARGET_RF_HZ = 4.5e9
+DEFAULT_READOUT_TARGET_RF_HZ = {
+    7: 5.8e9,
+    8: 6.2e9,
+}
+
+CHANNEL_ROLES = {
+    1: "xy",
+    2: "xy",
+    3: "xy",
+    4: "xy",
+    5: "z",
+    6: "z",
+    7: "readout",
+    8: "readout",
+}
 
 DDR_BASE = 0x0000000000000000
 DDR_CH1_ADDR = 0x0000000000000000
@@ -93,6 +115,96 @@ DEFAULT_UDP_INTERFACE = os.environ.get("RFSOC_UDP_INTERFACE", "")
 DEFAULT_UDP_SOURCE_IP = os.environ.get("RFSOC_UDP_SOURCE_IP", "")
 SO_BINDTODEVICE = 25
 UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
+UDP_TRIGGER_WORD = 0x3152454747495254  # ASCII "TRIGGER1" on the UDP byte stream
+RFDC_CTRL_MAILBOX_OFFSET = 0x0FF00000
+RFDC_CTRL_MAILBOX_MAGIC = 0x304F434E43444652  # ASCII "RFDCNCO0" little-endian
+RFDC_CTRL_MAILBOX_HEADER_BYTES = 32
+RFDC_CTRL_MAILBOX_ENTRY_BYTES = 16
+RFDC_CTRL_MAILBOX_CHANNELS = 8
+RFDC_CTRL_MAILBOX_BYTES = RFDC_CTRL_MAILBOX_HEADER_BYTES + RFDC_CTRL_MAILBOX_ENTRY_BYTES * RFDC_CTRL_MAILBOX_CHANNELS
+RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE = 0x1
+
+
+def rfdc_nco_plan_for_target(target_rf_hz: float, dac_fs_hz: float = DAC_TILE_FS) -> dict[str, float | int | str]:
+    """Map an analog RF target to the C2R fine-NCO setting used by this design."""
+    target = float(target_rf_hz)
+    fs = float(dac_fs_hz)
+    if target < 0.0 or target > fs:
+        raise ValueError(f"target RF frequency must be in [0, Fs], got {target:g} Hz for Fs={fs:g} Hz")
+    if target < fs / 2.0:
+        return {
+            "target_rf_hz": target,
+            "nco_hz": target,
+            "nyquist_zone": 1,
+            "image": "direct",
+        }
+    return {
+        "target_rf_hz": target,
+        "nco_hz": target - fs,
+        "nyquist_zone": 2,
+        "image": "zone2",
+    }
+
+
+def pack_rfdc_nco_mailbox(
+    per_channel_nco_hz: dict[int, float] | dict[str, float],
+    per_channel_nyquist_zone: dict[int, int] | dict[str, int],
+    seq: int,
+    apply_mask: int = 0xFF,
+    flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
+) -> bytes:
+    """Pack one RFDC runtime-retune mailbox image.
+
+    Layout is little-endian and intentionally header-last friendly:
+      header 32B: magic u64, seq u32, apply_mask u32, flags u32, reserved[12]
+      entries:    8 x {int64 nco_hz, uint32 nyquist_zone, uint32 reserved}
+    """
+
+    def _get(mapping, channel: int, default):
+        return mapping.get(channel, mapping.get(f"ch{channel}", default))
+
+    entries = bytearray()
+    for channel in range(1, RFDC_CTRL_MAILBOX_CHANNELS + 1):
+        nco_hz = int(round(float(_get(per_channel_nco_hz, channel, 0.0))))
+        zone = int(_get(per_channel_nyquist_zone, channel, 1))
+        if zone not in (1, 2):
+            raise ValueError(f"RFDC mailbox CH{channel} nyquist_zone must be 1 or 2, got {zone}")
+        entries += struct.pack("<qII", nco_hz, zone, 0)
+
+    header = struct.pack(
+        "<QIII12s",
+        RFDC_CTRL_MAILBOX_MAGIC,
+        int(seq) & 0xFFFFFFFF,
+        int(apply_mask) & 0xFF,
+        int(flags) & 0xFFFFFFFF,
+        b"\x00" * 12,
+    )
+    image = header + bytes(entries)
+    if len(image) != RFDC_CTRL_MAILBOX_BYTES:
+        raise AssertionError("RFDC mailbox packing produced an unexpected size")
+    return image
+
+
+def iter_rfdc_nco_mailbox_packets(
+    per_channel_nco_hz: dict[int, float] | dict[str, float],
+    per_channel_nyquist_zone: dict[int, int] | dict[str, int],
+    seq: int,
+    apply_mask: int = 0xFF,
+    flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
+    mailbox_offset: int = RFDC_CTRL_MAILBOX_OFFSET,
+):
+    """Yield UDP DDR write packets for a mailbox update, committing header last."""
+    image = pack_rfdc_nco_mailbox(
+        per_channel_nco_hz,
+        per_channel_nyquist_zone,
+        seq=seq,
+        apply_mask=apply_mask,
+        flags=flags,
+    )
+    entries = image[RFDC_CTRL_MAILBOX_HEADER_BYTES:]
+    header = image[:RFDC_CTRL_MAILBOX_HEADER_BYTES]
+    yield from iter_udp_waveform_packets(entries, mailbox_offset + RFDC_CTRL_MAILBOX_HEADER_BYTES)
+    yield from iter_udp_waveform_packets(header, mailbox_offset)
 
 
 def align_bytes_to_beat(n_bytes: int) -> int:
@@ -292,6 +404,7 @@ class RFSocController:
             self.sock.bind((udp_source_ip, 0))
         if transport == "tcp":
             self.sock.connect((ip, port))
+        self._rfdc_mailbox_seq = int(time.time() * 1000.0) & 0xFFFFFFFF
 
     def close(self):
         try:
@@ -394,6 +507,37 @@ class RFSocController:
         )
         return packet_count
 
+    def upload_rfdc_nco_mailbox(
+        self,
+        per_channel_nco_hz: dict[int, float] | dict[str, float],
+        per_channel_nyquist_zone: dict[int, int] | dict[str, int],
+        apply_mask: int = 0xFF,
+        flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
+        seq: int | None = None,
+    ):
+        if seq is None:
+            self._rfdc_mailbox_seq = (self._rfdc_mailbox_seq + 1) & 0xFFFFFFFF
+            if self._rfdc_mailbox_seq == 0:
+                self._rfdc_mailbox_seq = 1
+            seq = self._rfdc_mailbox_seq
+        packet_count = 0
+        for packet in iter_rfdc_nco_mailbox_packets(
+            per_channel_nco_hz,
+            per_channel_nyquist_zone,
+            seq=int(seq),
+            apply_mask=int(apply_mask),
+            flags=int(flags),
+        ):
+            self.sock.sendto(packet, (self.ip, self.port))
+            packet_count += 1
+            if packet_count % 8 == 0:
+                time.sleep(0.00001)
+        print(
+            f"[udp-rfdc-mailbox] offset=0x{RFDC_CTRL_MAILBOX_OFFSET:08X}, "
+            f"seq={int(seq) & 0xFFFFFFFF}, apply_mask=0x{int(apply_mask) & 0xFF:02X}, packets={packet_count}"
+        )
+        return packet_count
+
     def upload_waveform_interleaved(self, channel_waves: dict[int, np.ndarray],
                                     ddr_addr: int, dump_path: str,
                                     dump_style: str = "hexdump"):
@@ -417,7 +561,7 @@ class RFSocController:
             if op == 2:
                 require_beat_aligned(cmd[2], "PLAY length")
                 require_beat_aligned(cmd[3], "PLAY addr")
-            word0 = (channel << 4) | op | ((flags & 0x3) << 8)
+            word0 = (channel << 4) | op | ((flags & 0x7) << 8)
             word1 = int(cmd[2]) & 0xFFFFFFFF
             addr = int(cmd[3]) & 0xFFFFFFFFFFFFFFFF
             word2 = addr & 0xFFFFFFFF
@@ -430,7 +574,14 @@ class RFSocController:
         return self._send_packet(1, bin_cmds)
 
     def trigger(self):
-        """type=2：GPIO 触发"""
+        """Issue a playback trigger.
+
+        The PL UDP receiver consumes raw 64-bit words, so the UDP path uses a
+        single reserved word instead of the legacy type/length packet header.
+        """
+        if self.transport == "udp":
+            print("[trig] UDP TRIGGER1")
+            return self.send_udp_words(struct.pack("<Q", UDP_TRIGGER_WORD))
         print("[trig] GO")
         return self._send_packet(2, b"GO")
 
@@ -480,9 +631,9 @@ def parse_args():
                         help="UDP sender interface name, e.g. enp225s0f0, to avoid wrong same-subnet routes")
     parser.add_argument("--udp-source-ip", default=DEFAULT_UDP_SOURCE_IP,
                         help="UDP source IPv4 address to bind before sending")
-    parser.add_argument("--ddr-layout", choices=(DDR_LAYOUT_TILED, DDR_LAYOUT_CONTIGUOUS, DDR_LAYOUT_INTERLEAVED_512B),
+    parser.add_argument("--ddr-layout", choices=(DDR_LAYOUT_INTERLEAVED_512B, DDR_LAYOUT_TILED, DDR_LAYOUT_CONTIGUOUS),
                         default=DEFAULT_DDR_LAYOUT,
-                        help="DDR layout for RFDC playback; tiled is the default layout supported by the normal RFDC chain")
+                        help="DDR layout for RFDC playback; interleaved_512b is the normal 8-channel streaming layout")
     return parser.parse_args()
 
 

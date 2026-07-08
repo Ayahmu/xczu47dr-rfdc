@@ -27,6 +27,7 @@ module tb_udp_waveform_ddr_writer_alignment;
     .udp_tdata(udp_tdata),
     .instr_tvalid(instr_tvalid),
     .instr_tdata(instr_tdata),
+    .trigger_pulse(),
     .m_axi_awaddr(m_axi_awaddr),
     .m_axi_awburst(),
     .m_axi_awcache(),

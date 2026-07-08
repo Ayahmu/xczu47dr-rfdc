@@ -350,7 +350,7 @@ def lane_bytes_hex(samples: np.ndarray) -> str:
 
 
 def play_instruction_words(channel: int, length_bytes: int, ddr_addr: int, flags: int = 0) -> tuple[int, int]:
-    word0 = (int(channel) << 4) | 0x2 | ((int(flags) & 0x3) << 8)
+    word0 = (int(channel) << 4) | 0x2 | ((int(flags) & 0x7) << 8)
     payload = struct.pack(
         "<IIII",
         word0,
@@ -369,7 +369,7 @@ def rtl_instruction_tdata_hex(words: tuple[int, int]) -> str:
 def delay_seconds_to_axis_cycles(
     delay_s: float,
     sample_rate_hz: float = host.DAC_XY_FS,
-    samples_per_axis_cycle: int = host.RFDC_INTERPOLATION * 8,
+    samples_per_axis_cycle: int = 8,
 ) -> int:
     axis_hz = float(sample_rate_hz) / int(samples_per_axis_cycle)
     return max(0, int(round(float(delay_s) * axis_hz)))
@@ -655,6 +655,8 @@ def build_metadata(
         "sample_rate_hz": float(sample_rate_hz),
         "rfdc_interpolation": int(host.RFDC_INTERPOLATION),
         "analog_sample_rate_hz": float(sample_rate_hz) * int(host.RFDC_INTERPOLATION),
+        "dac_fs_hz": float(host.DAC_TILE_FS),
+        "axis_hz": float(host.DAC_AXIS_HZ),
         "record_duration_s": record_duration_s,
         "samples_per_channel": int(host.NUM_SAMPLES),
         "bytes_per_channel": int(host.FIXED_DATA_BYTES),
@@ -746,6 +748,8 @@ def upload_and_play(
     extra_channels: dict[int, np.ndarray] | None = None,
     channel_delays: dict[int, int] | None = None,
     layout: str = host.DEFAULT_DDR_LAYOUT,
+    rfdc_nco_hz: dict[int, float] | dict[str, float] | None = None,
+    rfdc_nyquist_zones: dict[int, int] | dict[str, int] | None = None,
 ) -> None:
     if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
         raise ValueError(f"unsupported DDR layout: {layout}")
@@ -798,6 +802,11 @@ def upload_and_play(
                     ctrl.upload_waveform_udp_tiled(samples, channel, host.DDR_BASE, str(output_dir / filename))
                 else:
                     ctrl.upload_waveform_udp(samples, ddr_addr, str(output_dir / filename))
+        if rfdc_nco_hz is not None and rfdc_nyquist_zones is not None:
+            upload_mailbox = getattr(ctrl, "upload_rfdc_nco_mailbox", None)
+            if upload_mailbox is None:
+                raise RuntimeError("RFSocController does not support RFDC NCO mailbox upload")
+            upload_mailbox(rfdc_nco_hz, rfdc_nyquist_zones)
         if post_upload_sleep_s > 0:
             time.sleep(post_upload_sleep_s)
         channel_addrs = {channel: 0 for channel, _, _, _ in uploads} if layout == host.DDR_LAYOUT_INTERLEAVED_512B else {channel: ddr_addr for channel, _, ddr_addr, _ in uploads}

@@ -44,7 +44,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "--ddr-layout",
         choices=[host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_INTERLEAVED_512B],
         default=host.DEFAULT_DDR_LAYOUT,
-        help="DDR upload/playback layout; tiled is the default layout for the normal RFDC output chain",
+        help="DDR upload/playback layout; interleaved_512b is the normal synchronous RFDC output chain",
     )
 
 
@@ -321,6 +321,8 @@ def main() -> int:
             channel: int(metadata.get(f"ch{channel}_delay_cycles", 0))
             for channel in channel_waves
         }
+        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
+            channel_delays = {channel: 0 for channel in channel_waves}
 
         ctrl = host.RFSocController(
             args.ip,
@@ -331,6 +333,7 @@ def main() -> int:
             udp_source_ip=args.udp_source_ip,
         )
         try:
+            channel_addrs: dict[int, int] = {}
             if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
                 ctrl.upload_waveform_udp_interleaved(channel_waves, base_addr=host.DDR_BASE, dump_path=str(output_dir / "ezq_interleaved_upload_hex.txt"))
             else:
@@ -402,7 +405,9 @@ def main() -> int:
         channel_delays={
             channel: waveform_tools.delay_seconds_to_axis_cycles_by_freq(float(_channel_value(args, "delay_s", channel)), args.axis_freq_hz)
             for channel in range(1, 9)
-        } if args.mode == "burst" else None,
+        } if args.mode == "burst" and args.ddr_layout != host.DDR_LAYOUT_INTERLEAVED_512B else None,
+        rfdc_nco_hz=metadata.get("per_channel_nco") if isinstance(metadata.get("per_channel_nco"), dict) else None,
+        rfdc_nyquist_zones=metadata.get("per_channel_zone") if isinstance(metadata.get("per_channel_zone"), dict) else None,
     )
     print("Done.")
     return 0

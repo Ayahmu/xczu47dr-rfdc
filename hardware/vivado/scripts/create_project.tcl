@@ -149,6 +149,7 @@ if {[file exists ${src_dir}]} {
             "Top.v"
             "TopCustomXczu47dr.v"
             "waveform_system_top.v"
+            "waveform_interleaved_system_top.v"
             "dac_play_ctrl.v"
             "udp_waveform_ddr_writer.v"
             "udp64_to_axis128_instr.v"

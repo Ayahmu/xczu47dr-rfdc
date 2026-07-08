@@ -178,6 +178,7 @@ module Top (
 
   wire         udp_wave_pkt;
   wire         udp_instr_word;
+  wire         udp_trigger_pulse;
   wire [2:0]   udp_wave_state;
   wire [31:0]  udp_wave_write_count;
   wire [31:0]  udp_wave_bresp_count;
@@ -219,6 +220,7 @@ module Top (
       .udp_tdata        (udp64_rcv_dat),
       .instr_tvalid     (udp_instr64_tvalid),
       .instr_tdata      (udp_instr64_tdata),
+      .trigger_pulse    (udp_trigger_pulse),
       .m_axi_awaddr     (M_AXI_WAVE_awaddr),
       .m_axi_awburst    (M_AXI_WAVE_awburst),
       .m_axi_awcache    (M_AXI_WAVE_awcache),
@@ -264,7 +266,7 @@ module Top (
   // ========== DataMover ==========
   wire [103:0] dm_cmd_tdata;
   wire         dm_cmd_tvalid, dm_cmd_tready;
-  wire [255:0] dm_data_tdata;
+  wire [511:0] dm_data_tdata;
   wire         dm_data_tvalid, dm_data_tready, dm_data_tlast;
   wire         dm_mm2s_err;
   wire         dm_mm2s_sts_tvalid, dm_mm2s_sts_tlast;
@@ -303,24 +305,41 @@ module Top (
   wire         M_AXI_DM_rready;
   wire [1:0]   M_AXI_DM_rresp;
   wire         M_AXI_DM_rvalid;
-  wire [31:0]  dm_data_tkeep;
+  wire [63:0]  dm_data_tkeep;
 
   // ========== GPIO out ==========
   wire [31:0] gpio_out_reg;
   wire ps_trigger_raw = gpio_out_reg[0];
+  reg [7:0] udp_trigger_stretch_cnt;
+  reg       udp_trigger_stretched;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if(!ddr4_ui_aresetn) begin
+      udp_trigger_stretch_cnt <= 8'd0;
+      udp_trigger_stretched <= 1'b0;
+    end else if(udp_trigger_pulse) begin
+      udp_trigger_stretch_cnt <= 8'd64;
+      udp_trigger_stretched <= 1'b1;
+    end else if(udp_trigger_stretch_cnt != 8'd0) begin
+      udp_trigger_stretch_cnt <= udp_trigger_stretch_cnt - 8'd1;
+      udp_trigger_stretched <= 1'b1;
+    end else begin
+      udp_trigger_stretched <= 1'b0;
+    end
+  end
+  wire trigger_raw = ps_trigger_raw | udp_trigger_stretched;
 
   // ========== trigger CDC ==========
   (* ASYNCHRONOUS_REG="TRUE" *) reg [2:0] trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn) trigger_ddr_sync_ff <= 3'b000;
-    else                trigger_ddr_sync_ff <= {trigger_ddr_sync_ff[1:0], ps_trigger_raw};
+    else                trigger_ddr_sync_ff <= {trigger_ddr_sync_ff[1:0], trigger_raw};
   end
   wire ps_trigger_ddr_sync = trigger_ddr_sync_ff[2];
 
   (* ASYNCHRONOUS_REG="TRUE" *) reg [2:0] trigger_dac_sync_ff;
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
     if(!clk104_aresetn) trigger_dac_sync_ff <= 3'b000;
-    else                trigger_dac_sync_ff <= {trigger_dac_sync_ff[1:0], ps_trigger_raw};
+    else                trigger_dac_sync_ff <= {trigger_dac_sync_ff[1:0], trigger_raw};
   end
   wire ps_trigger_dac_sync = trigger_dac_sync_ff[2];
 
@@ -435,10 +454,14 @@ module Top (
   wire         ex_dbg_pending_valid, ex_dbg_active_valid;
   wire [31:0]  ex_dbg_run_delay_cnt;
   wire [31:0]  ex_dbg_bad_instr_count;
+  wire         ex_fifo_clear;
 
   // ========== executor ==========
-  Waveform_System_Top #(
-    .DDR_ADDR_BASE(EXT_DDR_ADDR_BASE)
+  Waveform_Interleaved_System_Top #(
+    .DDR_ADDR_BASE(EXT_DDR_ADDR_BASE),
+    .LOW_WM(512),
+    .START_WM(1024),
+    .HIGH_WM(1536)
   ) executor_inst (
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
@@ -517,6 +540,7 @@ module Top (
     .ch8_arm(ch8_arm),
     .cfg_auto_start(cfg_auto_start),
     .cfg_commit(cfg_commit),
+    .fifo_clear(ex_fifo_clear),
 
     .dbg_st            (ex_dbg_st),
     .dbg_dm_st         (ex_dbg_dm_st),
@@ -871,6 +895,18 @@ module Top (
   wire dac_out_ch1_tlast, dac_out_ch2_tlast, dac_out_ch3_tlast, dac_out_ch4_tlast;
   wire dac_out_ch5_tlast, dac_out_ch6_tlast, dac_out_ch7_tlast, dac_out_ch8_tlast;
 
+  reg [4:0] wave_fifo_reset_cnt;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if(!ddr4_ui_aresetn) begin
+      wave_fifo_reset_cnt <= 5'd0;
+    end else if(ex_fifo_clear) begin
+      wave_fifo_reset_cnt <= 5'd16;
+    end else if(wave_fifo_reset_cnt != 5'd0) begin
+      wave_fifo_reset_cnt <= wave_fifo_reset_cnt - 5'd1;
+    end
+  end
+  wire wave_fifo_aresetn = ddr4_ui_aresetn & (wave_fifo_reset_cnt == 5'd0);
+
   assign dac_ch1_ready_gated = dac_ch1_ready & ch1_allow;
   assign dac_ch2_ready_gated = dac_ch2_ready & ch2_allow;
   assign dac_ch3_ready_gated = dac_ch3_ready & ch3_allow;
@@ -931,7 +967,7 @@ module Top (
   assign TRIG_1 = trig_1_dac_valid;
 
   axis_async_fifo_256 fifo_ch1_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch1_wave_tvalid),
     .s_axis_tready (ch1_wave_tready_internal),
@@ -950,7 +986,7 @@ module Top (
   );
 
   axis_async_fifo_256 fifo_ch2_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch2_wave_tvalid),
     .s_axis_tready (ch2_wave_tready_internal),
@@ -970,7 +1006,7 @@ module Top (
 
 
   axis_async_fifo_256 fifo_ch3_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch3_wave_tvalid),
     .s_axis_tready (ch3_wave_tready_internal),
@@ -989,7 +1025,7 @@ module Top (
   );
 
   axis_async_fifo_256 fifo_ch4_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch4_wave_tvalid),
     .s_axis_tready (ch4_wave_tready_internal),
@@ -1008,7 +1044,7 @@ module Top (
   );
 
   axis_async_fifo_256 fifo_ch5_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch5_wave_tvalid),
     .s_axis_tready (ch5_wave_tready_internal),
@@ -1027,7 +1063,7 @@ module Top (
   );
 
   axis_async_fifo_256 fifo_ch6_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch6_wave_tvalid),
     .s_axis_tready (ch6_wave_tready_internal),
@@ -1046,7 +1082,7 @@ module Top (
   );
 
   axis_async_fifo_256 fifo_ch7_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch7_wave_tvalid),
     .s_axis_tready (ch7_wave_tready_internal),
@@ -1065,7 +1101,7 @@ module Top (
   );
 
   axis_async_fifo_256 fifo_ch8_inst (
-    .s_axis_aresetn(ddr4_ui_aresetn),
+    .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch8_wave_tvalid),
     .s_axis_tready (ch8_wave_tready_internal),
@@ -1731,7 +1767,7 @@ module Top (
       M_AXI_DM_rready,                 // 105
       M_AXI_DM_rlast,                  // 104
       dm_mm2s_err,                     // 103
-      dm_mm2s_sts_tvalid,              // 102
+      udp_trigger_pulse,               // 102
       M_AXI_WAVE_awvalid,              // 101
       M_AXI_WAVE_awready,              // 100
       M_AXI_WAVE_wvalid,               // 99

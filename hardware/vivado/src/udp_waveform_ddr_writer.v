@@ -2,6 +2,9 @@
 
 module udp_waveform_ddr_writer #(
     parameter [63:0] MAGIC = 64'h5741564544445230,
+    parameter [63:0] TRIGGER_WORD = 64'h3152454747495254,
+    parameter [63:0] LEGACY_TRIGGER_HEADER = 64'h0000000200000002,
+    parameter [63:0] LEGACY_TRIGGER_GO = 64'h0000000000004F47,
     parameter [63:0] DDR_ADDR_BASE = 64'd0,
     parameter FIFO_DEPTH_LOG2 = 4
 ) (
@@ -13,6 +16,7 @@ module udp_waveform_ddr_writer #(
 
     output reg          instr_tvalid,
     output reg  [63:0]  instr_tdata,
+    output reg          trigger_pulse,
 
     output reg  [63:0]  m_axi_awaddr,
     output wire [1:0]   m_axi_awburst,
@@ -71,6 +75,7 @@ module udp_waveform_ddr_writer #(
   reg [31:0] dbg_drop_count;
   reg [31:0] dbg_align_error_count;
   reg write_resp_pending;
+  reg drop_legacy_trigger_payload;
 
   wire fifo_full = fifo_count == FIFO_DEPTH;
   wire fifo_empty = fifo_count == {FIFO_DEPTH_LOG2+1{1'b0}};
@@ -80,6 +85,9 @@ module udp_waveform_ddr_writer #(
   wire resync_word = udp_tvalid && (udp_tdata == MAGIC) && (dbg_state != ST_IDLE);
   wire write_addr_aligned = (write_addr[4:0] == 5'd0);
   wire push_write = udp_tvalid && !resync_word && (dbg_state == ST_DATA_3) && write_addr_aligned && (!fifo_full || pop_write);
+  wire trigger_word = (udp_tdata == TRIGGER_WORD) || (udp_tdata == LEGACY_TRIGGER_HEADER);
+  wire trigger_word_in_idle = udp_tvalid && (dbg_state == ST_IDLE) && trigger_word;
+  wire drop_legacy_go_word = udp_tvalid && (dbg_state == ST_IDLE) && drop_legacy_trigger_payload && (udp_tdata == LEGACY_TRIGGER_GO);
   wire aw_fire = m_axi_awvalid && m_axi_awready;
   wire w_fire = m_axi_wvalid && m_axi_wready;
   wire b_fire = m_axi_bvalid && m_axi_bready;
@@ -100,6 +108,7 @@ module udp_waveform_ddr_writer #(
     if (!rst_n) begin
       instr_tvalid  <= 1'b0;
       instr_tdata   <= 64'd0;
+      trigger_pulse <= 1'b0;
       m_axi_awaddr  <= 64'd0;
       m_axi_awvalid <= 1'b0;
       m_axi_wdata   <= 256'd0;
@@ -119,14 +128,19 @@ module udp_waveform_ddr_writer #(
       dbg_align_error_count <= 32'd0;
       dbg_resync_count <= 32'd0;
       write_resp_pending <= 1'b0;
+      drop_legacy_trigger_payload <= 1'b0;
       write_addr   <= 64'd0;
       data_word0   <= 64'd0;
       data_word1   <= 64'd0;
       data_word2   <= 64'd0;
     end else begin
       instr_tvalid  <= 1'b0;
+      trigger_pulse <= 1'b0;
       dbg_wave_pkt  <= 1'b0;
       dbg_instr_word <= 1'b0;
+      if (udp_tvalid && dbg_state == ST_IDLE && drop_legacy_trigger_payload && (udp_tdata != LEGACY_TRIGGER_GO)) begin
+        drop_legacy_trigger_payload <= 1'b0;
+      end
 
       if (aw_fire) begin
         m_axi_awvalid <= 1'b0;
@@ -151,7 +165,12 @@ module udp_waveform_ddr_writer #(
         write_resp_pending <= 1'b1;
       end
 
-      if (resync_word) begin
+      if (drop_legacy_go_word) begin
+        drop_legacy_trigger_payload <= 1'b0;
+      end else if (trigger_word_in_idle) begin
+        trigger_pulse <= 1'b1;
+        drop_legacy_trigger_payload <= (udp_tdata == LEGACY_TRIGGER_HEADER);
+      end else if (resync_word) begin
         dbg_state <= ST_ADDR;
         dbg_wave_pkt <= 1'b1;
         dbg_resync_count <= dbg_resync_count + 32'd1;

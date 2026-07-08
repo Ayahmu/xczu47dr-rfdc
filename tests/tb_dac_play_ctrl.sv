@@ -6,7 +6,7 @@ module tb_dac_play_ctrl;
   reg trigger = 1'b0;
   reg [15:0] cfg_seq_id = 16'd1;
   reg auto_start = 1'b1;
-  reg [31:0] ch1_len_beats = 32'd128;
+  reg [31:0] ch1_len_beats = 32'd8;
   reg ch1_arm = 1'b1;
   reg ch1_fifo_tvalid = 1'b1;
   reg ch1_fifo_prog_empty = 1'b1;
@@ -14,6 +14,7 @@ module tb_dac_play_ctrl;
 
   wire ch1_allow;
   wire dbg_started;
+  wire dbg_trig_start;
 
   always #5 clk = ~clk;
 
@@ -91,7 +92,7 @@ module tb_dac_play_ctrl;
     .ch8_active(),
     .dbg_trig_pulse(),
     .dbg_new_cfg(),
-    .dbg_trig_start(),
+    .dbg_trig_start(dbg_trig_start),
     .dbg_started(dbg_started),
     .dbg_last_seq_id()
   );
@@ -99,12 +100,35 @@ module tb_dac_play_ctrl;
   initial begin
     repeat (4) @(posedge clk);
     rst_n = 1'b1;
-    repeat (16) @(posedge clk);
+    repeat (4) @(posedge clk);
     if (!dbg_started || !ch1_allow) begin
       $error("dac_play_ctrl must start when FIFO tvalid=1 even if short-frame prog_empty remains asserted");
       $finish;
     end
-    $display("PASS: dac_play_ctrl starts from FIFO tvalid without waiting for prog_empty threshold");
+
+    wait (dbg_started == 1'b0);
+
+    auto_start = 1'b0;
+    repeat (4) @(posedge clk);
+    @(negedge clk);
+    trigger = 1'b1;
+    @(negedge clk);
+    trigger = 1'b0;
+    repeat (4) @(posedge clk);
+    if (dbg_started || dbg_trig_start) begin
+      $error("dac_play_ctrl must not restart an already consumed cfg_seq_id");
+      $finish;
+    end
+
+    @(negedge clk);
+    cfg_seq_id = 16'd2;
+    repeat (4) @(posedge clk);
+    if (!dbg_started || !ch1_allow) begin
+      $error("dac_play_ctrl must preserve an early trigger until the next cfg_seq_id arrives");
+      $finish;
+    end
+
+    $display("PASS: dac_play_ctrl starts short frames and preserves early trigger until cfg arrival");
     $finish;
   end
 endmodule
