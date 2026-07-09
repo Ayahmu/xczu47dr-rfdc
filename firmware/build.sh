@@ -48,6 +48,9 @@ case "${TARGET}" in
     custom_xczu47dr)
         BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR"
         ;;
+    custom_xczu47dr_bw)
+        BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR_BW"
+        ;;
     *)
         print_error "Unsupported TARGET=${TARGET} for firmware board define selection"
         exit 1

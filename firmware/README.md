@@ -39,8 +39,9 @@ source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
 ### Build Commands
 
-The only supported firmware target is `TARGET=custom_xczu47dr`, which is also the
-default, for the custom XCZU47DR four-DAC bring-up flow.
+The default firmware target is `TARGET=custom_xczu47dr`, which builds the
+normal eight-output RFDC playback application. Use `TARGET=custom_xczu47dr_bw`
+only for the standalone DDR bandwidth pressure application.
 
 ```bash
 # Create application from XSA, first time
@@ -75,11 +76,17 @@ DRY_RUN=1 ./build.sh program
 
 ## Build Outputs
 
-`TARGET=custom_xczu47dr` outputs:
+Default `TARGET=custom_xczu47dr` outputs:
 
 - **ELF file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
 - **Map file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf.map`
 - **PS init script**: `workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl`
+
+`TARGET=custom_xczu47dr_bw` outputs:
+
+- **ELF file**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf`
+- **Map file**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf.map`
+- **PS init script**: `workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl`
 
 ## Hardware Configuration
 
@@ -105,13 +112,13 @@ DRY_RUN=1 ./build.sh program
 
 ## Custom XCZU47DR Firmware Notes
 
-`TARGET=custom_xczu47dr` builds with `BOARD_CUSTOM_XCZU47DR` and uses `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`, `hardware/vivado/output/custom_xczu47dr_rfdc.bit`, and `workspace/custom_xczu47dr`. The custom build produces a target-specific Vitis workspace and ELF for the four-DAC bring-up path.
+`TARGET=custom_xczu47dr` builds with `BOARD_CUSTOM_XCZU47DR` and uses `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`, `hardware/vivado/output/custom_xczu47dr_rfdc.bit`, and `workspace/custom_xczu47dr`. The custom build produces a target-specific Vitis workspace and ELF for the eight-output DAC bring-up path.
 
 The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
 
-For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 125 MHz DAC refclk outputs used by the 5.0 GS/s RFDC configuration. Firmware does not drive any CLK104/LMK/LMX clock path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
+For the custom target, the PL HMC7044 sequencer programs the clock chip before firmware starts RFDC, including the 128 MHz DAC refclk outputs used by the 9.6 GS/s RFDC configuration. Firmware does not drive any CLK104/LMK/LMX clock path, prints the custom clock policy, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
 
-The custom RFDC path uses CH1/CH2/CH3/CH4 -> DAC20/DAC22/DAC30/DAC32, all generated at the host default 1.25 GS/s sample rate for the 5.0 GS/s RFDC interpolation path. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP for tile/block pairs 2/0, 2/2, 3/0, and 3/2. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
+The custom RFDC path uses CH1-CH8 -> DAC00/DAC02/DAC10/DAC12/DAC20/DAC22/DAC30/DAC32, with 6.4 GS/s DAC sampling, 16x interpolation, 400 MS/s complex I/Q input, and a 50 MHz RFDC fabric stream. Firmware starts enabled RFDC tiles, checks startup return values, and configures DAC VOP, Nyquist zone, and fine-NCO C2R mixer settings for tile/block pairs 0/0, 0/2, 1/0, 1/2, 2/0, 2/2, 3/0, and 3/2. The default role map is CH1-CH4 XY at NCO -1.9 GHz, CH5-CH6 Z at NCO 0 GHz with tile-230 DC coupling, and CH7-CH8 Readout at NCO -0.6/-0.2 GHz. The host can retune these through the DDR mailbox at offset `0x0FF00000` with magic `RFDCNCO0`. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
 
 Deferred custom-board interfaces include PCIe, QSFP, SFP, Type-C, Aurora, and extra PL DDR unless later work requests them.
 

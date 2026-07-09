@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 TARGET ?= custom_xczu47dr
-ALLOWED_TARGETS := custom_xczu47dr
+ALLOWED_TARGETS := custom_xczu47dr custom_xczu47dr_bw
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -63,13 +63,14 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all hardware hardware-clean chisel vivado-project synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test hardware hardware-clean chisel vivado-project synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make all              Build hardware and firmware"
+	@echo "  make test             Run software/unit and script syntax checks"
 	@echo "  make hardware         Build Chisel, Vivado project, synth, impl, bitstream, XSA"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
 	@echo "  make artifacts        Verify expected .bit/.ltx/.xsa/.elf artifacts exist"
@@ -105,10 +106,18 @@ help:
 	@echo "  PSU_INIT=$(PSU_INIT)"
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
+	@echo "  Default TARGET=custom_xczu47dr builds the normal eight-output RFDC playback path"
+	@echo "  Use TARGET=custom_xczu47dr_bw only for the standalone DDR bandwidth pressure path"
 	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
 
 all: hardware firmware artifacts
+
+test:
+	python3 -m unittest discover -s tests
+	python3 -m py_compile software/dashboard_server.py
+	bash -n software/capture_uart.sh
+	bash -n firmware/build.sh
 
 check-tools:
 	@command -v vivado >/dev/null || { echo "ERROR: vivado not found. Source Vivado settings first."; exit 1; }

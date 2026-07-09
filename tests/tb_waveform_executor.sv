@@ -15,14 +15,26 @@ module tb_waveform_executor;
   wire         dm_cmd_tvalid;
   reg          dm_cmd_tready = 1'b1;
 
-  reg [127:0] dm_data_tdata = 128'd0;
+  reg [255:0] dm_data_tdata = 256'd0;
   reg         dm_data_tvalid = 1'b0;
   wire        dm_data_tready;
 
-  wire [127:0] ch1_tdata;
+  wire [255:0] ch1_tdata;
   wire         ch1_tvalid;
-  wire [127:0] ch2_tdata;
+  wire [255:0] ch2_tdata;
   wire         ch2_tvalid;
+  wire [255:0] ch3_tdata;
+  wire         ch3_tvalid;
+  wire [255:0] ch4_tdata;
+  wire         ch4_tvalid;
+  wire [255:0] ch5_tdata;
+  wire         ch5_tvalid;
+  wire [255:0] ch6_tdata;
+  wire         ch6_tvalid;
+  wire [255:0] ch7_tdata;
+  wire         ch7_tvalid;
+  wire [255:0] ch8_tdata;
+  wire         ch8_tvalid;
 
   wire [2:0] dbg_st;
   wire [1:0] dbg_dm_st;
@@ -35,6 +47,12 @@ module tb_waveform_executor;
   reg [103:0] captured_cmd_tdata = 104'd0;
   integer ch1_stream_count = 0;
   integer ch2_stream_count = 0;
+  integer ch3_stream_count = 0;
+  integer ch4_stream_count = 0;
+  integer ch5_stream_count = 0;
+  integer ch6_stream_count = 0;
+  integer ch7_stream_count = 0;
+  integer ch8_stream_count = 0;
   integer cfg_commit_count = 0;
 
   Waveform_System_Top dut (
@@ -52,18 +70,60 @@ module tb_waveform_executor;
     .s_axis_dm_data_tready(dm_data_tready),
     .ch1_fifo_ready(1'b1),
     .ch2_fifo_ready(1'b1),
+    .ch3_fifo_ready(1'b1),
+    .ch4_fifo_ready(1'b1),
+    .ch5_fifo_ready(1'b1),
+    .ch6_fifo_ready(1'b1),
+    .ch7_fifo_ready(1'b1),
+    .ch8_fifo_ready(1'b1),
     .ch1_fifo_level_beats(16'd0),
     .ch2_fifo_level_beats(16'd0),
+    .ch3_fifo_level_beats(16'd0),
+    .ch4_fifo_level_beats(16'd0),
+    .ch5_fifo_level_beats(16'd0),
+    .ch6_fifo_level_beats(16'd0),
+    .ch7_fifo_level_beats(16'd0),
+    .ch8_fifo_level_beats(16'd0),
     .m_axis_ch1_tdata(ch1_tdata),
     .m_axis_ch1_tvalid(ch1_tvalid),
     .m_axis_ch2_tdata(ch2_tdata),
     .m_axis_ch2_tvalid(ch2_tvalid),
+    .m_axis_ch3_tdata(ch3_tdata),
+    .m_axis_ch3_tvalid(ch3_tvalid),
+    .m_axis_ch4_tdata(ch4_tdata),
+    .m_axis_ch4_tvalid(ch4_tvalid),
+    .m_axis_ch5_tdata(ch5_tdata),
+    .m_axis_ch5_tvalid(ch5_tvalid),
+    .m_axis_ch6_tdata(ch6_tdata),
+    .m_axis_ch6_tvalid(ch6_tvalid),
+    .m_axis_ch7_tdata(ch7_tdata),
+    .m_axis_ch7_tvalid(ch7_tvalid),
+    .m_axis_ch8_tdata(ch8_tdata),
+    .m_axis_ch8_tvalid(ch8_tvalid),
     .ch1_delay_cycles(),
     .ch2_delay_cycles(),
+    .ch3_delay_cycles(),
+    .ch4_delay_cycles(),
+    .ch5_delay_cycles(),
+    .ch6_delay_cycles(),
+    .ch7_delay_cycles(),
+    .ch8_delay_cycles(),
     .ch1_len_beats(),
     .ch2_len_beats(),
+    .ch3_len_beats(),
+    .ch4_len_beats(),
+    .ch5_len_beats(),
+    .ch6_len_beats(),
+    .ch7_len_beats(),
+    .ch8_len_beats(),
     .ch1_arm(),
     .ch2_arm(),
+    .ch3_arm(),
+    .ch4_arm(),
+    .ch5_arm(),
+    .ch6_arm(),
+    .ch7_arm(),
+    .ch8_arm(),
     .cfg_auto_start(),
     .cfg_commit(cfg_commit),
     .dbg_st(dbg_st),
@@ -87,7 +147,8 @@ module tb_waveform_executor;
     .dbg_main_tready(),
     .dbg_pending_valid(),
     .dbg_active_valid(),
-    .dbg_run_delay_cnt()
+    .dbg_run_delay_cnt(),
+    .dbg_bad_instr_count()
   );
 
   always @(posedge clk) begin
@@ -104,6 +165,12 @@ module tb_waveform_executor;
     if (!rst_n) begin
       ch1_stream_count <= 0;
       ch2_stream_count <= 0;
+      ch3_stream_count <= 0;
+      ch4_stream_count <= 0;
+      ch5_stream_count <= 0;
+      ch6_stream_count <= 0;
+      ch7_stream_count <= 0;
+      ch8_stream_count <= 0;
       cfg_commit_count <= 0;
     end else begin
       if (cfg_commit) begin
@@ -116,6 +183,12 @@ module tb_waveform_executor;
       if (ch2_tvalid) begin
         ch2_stream_count <= ch2_stream_count + 1;
       end
+      if (ch3_tvalid) ch3_stream_count <= ch3_stream_count + 1;
+      if (ch4_tvalid) ch4_stream_count <= ch4_stream_count + 1;
+      if (ch5_tvalid) ch5_stream_count <= ch5_stream_count + 1;
+      if (ch6_tvalid) ch6_stream_count <= ch6_stream_count + 1;
+      if (ch7_tvalid) ch7_stream_count <= ch7_stream_count + 1;
+      if (ch8_tvalid) ch8_stream_count <= ch8_stream_count + 1;
     end
   end
 
@@ -140,7 +213,7 @@ module tb_waveform_executor;
     end
   endtask
 
-  task send_dm_beat(input [127:0] word);
+  task send_dm_beat(input [255:0] word);
     begin
       @(negedge clk);
       dm_data_tdata = word;
@@ -148,7 +221,7 @@ module tb_waveform_executor;
       while (!dm_data_tready) @(negedge clk);
       @(negedge clk);
       dm_data_tvalid = 1'b0;
-      dm_data_tdata = 128'd0;
+      dm_data_tdata = 256'd0;
     end
   endtask
 
@@ -174,16 +247,22 @@ module tb_waveform_executor;
     check_condition(captured_cmd_tdata[30] == 1'b1, "first DataMover command EOF should be 1");
     check_condition(captured_cmd_tdata[29:24] == 6'h00, "first DataMover command DSA should be 0");
     check_condition(captured_cmd_tdata[23] == 1'b1, "first DataMover command type should be incrementing address");
-    check_condition(dbg_dm_chunk_beats == 32'd256, "chunk size should cover one full 4096-byte waveform");
+    check_condition(dbg_dm_chunk_beats == 32'd128, "chunk size should cover one full 4096-byte waveform");
 
-    for (integer beat = 0; beat < 256; beat = beat + 1) begin
-      send_dm_beat({64'hfeedface00000000, 32'd0, beat[31:0]});
+    for (integer beat = 0; beat < 128; beat = beat + 1) begin
+      send_dm_beat({128'h0123456789abcdef0123456789abcdef, 64'hfeedface00000000, 32'd0, beat[31:0]});
     end
 
     repeat (4) @(negedge clk);
     check_condition(cfg_commit_count == 1, "cfg_commit should pulse exactly once after full waveform prefill completes");
-    check_condition(ch1_stream_count == 256, "executor should route one full 4096-byte waveform to ch1");
+    check_condition(ch1_stream_count == 128, "executor should route one full 4096-byte waveform to ch1");
     check_condition(ch2_stream_count == 0, "executor should not route ch1 PLAY data to ch2");
+    check_condition(ch3_stream_count == 0, "executor should not route ch1 PLAY data to ch3");
+    check_condition(ch4_stream_count == 0, "executor should not route ch1 PLAY data to ch4");
+    check_condition(ch5_stream_count == 0, "executor should not route ch1 PLAY data to ch5");
+    check_condition(ch6_stream_count == 0, "executor should not route ch1 PLAY data to ch6");
+    check_condition(ch7_stream_count == 0, "executor should not route ch1 PLAY data to ch7");
+    check_condition(ch8_stream_count == 0, "executor should not route ch1 PLAY data to ch8");
     check_condition(dbg_ch1_bytes_left == 32'd0, "executor should consume the full 4096-byte ch1 waveform");
 
     $display("PASS: Waveform executor emits one full DataMover command for golden PLAY");

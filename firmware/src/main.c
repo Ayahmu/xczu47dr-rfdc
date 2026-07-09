@@ -1,4 +1,6 @@
 
+#ifndef BOARD_CUSTOM_XCZU47DR_BW
+
 /***************************** Include Files *********************************/
 #include <stdio.h>
 #include <stdarg.h>
@@ -36,6 +38,24 @@ void reverse32bArray(u32 *src, int size);
 int rfdcStartup(void);
 int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
+int Configure_Custom_DAC_NCO(void);
+int Report_Custom_DAC_Status(const char *Stage);
+int Poll_Rfdc_Nco_Mailbox(void);
+
+/* Default 6.4 GS/s role map:
+ * CH1-CH4 XY: target 4.5 GHz, Zone2 image, NCO = -1.9 GHz.
+ * CH5-CH6 Z: baseband/DC envelope, NCO = 0 GHz, Zone1.
+ * CH7-CH8 Readout: target 5.8/6.2 GHz, Zone2 images,
+ * NCO = target - 6.4 GHz.
+ */
+#define CUSTOM_DAC_FS_GHZ (6.4)
+#define RFDC_CTRL_MAILBOX_OFFSET 0x0FF00000U
+#define RFDC_CTRL_MAILBOX_MAGIC_LO 0x43444652U /* "RFDCNCO0" little-endian */
+#define RFDC_CTRL_MAILBOX_MAGIC_HI 0x304F434EU
+#define RFDC_CTRL_MAILBOX_BYTES 160U
+#define RFDC_CTRL_MAILBOX_HEADER_WORDS 8U
+#define RFDC_CTRL_MAILBOX_ENTRY_WORDS 4U
+#define RFDC_CTRL_MAILBOX_APPLY_IMMEDIATE 0x1U
 
 /************************** Variable Definitions *****************************/
 
@@ -51,6 +71,26 @@ char CLR_SCREEN[5] = "\x1B[2J";
 #define TEST_LENGTH (32 * 1024 * 1024)
 
 XRFdc RFdcInst; /* RFdc driver instance */
+
+typedef struct {
+	u32 Tile_Id;
+	u32 Block_Id;
+	const char *Channel;
+	const char *Role;
+	double DefaultNcoGHz;
+	u32 DefaultNyquistZone;
+} CustomDacChannel;
+
+static const CustomDacChannel CustomDacChannels[] = {
+	{0, 0, "CH1", "XY", -1.9, XRFDC_EVEN_NYQUIST_ZONE},
+	{0, 2, "CH2", "XY", -1.9, XRFDC_EVEN_NYQUIST_ZONE},
+	{1, 0, "CH3", "XY", -1.9, XRFDC_EVEN_NYQUIST_ZONE},
+	{1, 2, "CH4", "XY", -1.9, XRFDC_EVEN_NYQUIST_ZONE},
+	{2, 0, "CH5", "Z", 0.0, XRFDC_ODD_NYQUIST_ZONE},
+	{2, 2, "CH6", "Z", 0.0, XRFDC_ODD_NYQUIST_ZONE},
+	{3, 0, "CH7", "Readout", -0.6, XRFDC_EVEN_NYQUIST_ZONE},
+	{3, 2, "CH8", "Readout", -0.2, XRFDC_EVEN_NYQUIST_ZONE},
+};
 
 #define DEBUG_WAVEFORM_BYTES 4096U
 #define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
@@ -116,20 +156,11 @@ int Adjust_DAC_Power(u32 Tile_Id, u32 Block_Id, u32 CurrentMA)
 
 int Configure_DAC_Output_Current(void)
 {
-	static const struct {
-		u32 Tile_Id;
-		u32 Block_Id;
-	} CustomDacBlocks[] = {
-		{2, 0},
-		{2, 2},
-		{3, 0},
-		{3, 2},
-	};
 	unsigned int i;
 
-	for (i = 0; i < sizeof(CustomDacBlocks) / sizeof(CustomDacBlocks[0]); i++)
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
 	{
-		if (Adjust_DAC_Power(CustomDacBlocks[i].Tile_Id, CustomDacBlocks[i].Block_Id, 20) != XST_SUCCESS)
+		if (Adjust_DAC_Power(CustomDacChannels[i].Tile_Id, CustomDacChannels[i].Block_Id, 20) != XST_SUCCESS)
 		{
 			return XST_FAILURE;
 		}
@@ -138,35 +169,253 @@ int Configure_DAC_Output_Current(void)
 	return XST_SUCCESS;
 }
 
-int Configure_Custom_DAC_Nyquist(void)
+int Report_Custom_DAC_Status(const char *Stage)
 {
-	static const struct {
-		u32 Tile_Id;
-		u32 Block_Id;
-	} CustomDacBlocks[] = {
-		{2, 0},
-		{2, 2},
-		{3, 0},
-		{3, 2},
-	};
+	XRFdc *RFdcInstPtr = &RFdcInst;
 	unsigned int i;
 
-	for (i = 0; i < sizeof(CustomDacBlocks) / sizeof(CustomDacBlocks[0]); i++)
+	xil_printf("RFDC DAC status readback (%s):\r\n", Stage);
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
 	{
-		u32 Tile_Id = CustomDacBlocks[i].Tile_Id;
-		u32 Block_Id = CustomDacBlocks[i].Block_Id;
-		int Status = XRFdc_SetNyquistZone(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, XRFDC_EVEN_NYQUIST_ZONE);
+		u32 Tile_Id = CustomDacChannels[i].Tile_Id;
+		u32 Block_Id = CustomDacChannels[i].Block_Id;
+		u32 Coupling = 0U;
+		u32 NyquistZone = 0U;
+		u32 Interp = 0U;
+		u32 OutputCurr = 0U;
+		u32 RawCoupling = XRFdc_ReadReg(RFdcInstPtr,
+						 XRFDC_CTRL_STS_BASE(XRFDC_DAC_TILE, Tile_Id),
+						 XRFDC_CPL_TYPE_OFFSET);
+		XRFdc_Mixer_Settings MixerSettings;
+		int CouplingStatus = XRFdc_GetCoupling(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, Block_Id, &Coupling);
+		int NyquistStatus = XRFdc_GetNyquistZone(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, Block_Id, &NyquistZone);
+		int InterpStatus = XRFdc_GetInterpolationFactor(RFdcInstPtr, Tile_Id, Block_Id, &Interp);
+		int MixerStatus = XRFdc_GetMixerSettings(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		int CurrentStatus = XRFdc_GetOutputCurr(RFdcInstPtr, Tile_Id, Block_Id, &OutputCurr);
+
+		xil_printf("  %s Tile%lu Block%lu role=%s coupling=%s(status=%d raw_cpl=0x%08lx) "
+			   "nyquist=%lu(status=%d) interp=%lu(status=%d) "
+			   "nco=%d MHz mixer_mode=%lu mixer_type=%u(status=%d) current_uA=%lu(status=%d)\r\n",
+			   CustomDacChannels[i].Channel,
+			   (unsigned long)Tile_Id,
+			   (unsigned long)Block_Id,
+			   CustomDacChannels[i].Role,
+			   (CouplingStatus == XST_SUCCESS) ?
+				   ((Coupling == XRFDC_LINK_COUPLING_DC) ? "DC" : "AC") :
+				   "UNKNOWN",
+			   CouplingStatus,
+			   (unsigned long)RawCoupling,
+			   (unsigned long)NyquistZone,
+			   NyquistStatus,
+			   (unsigned long)Interp,
+			   InterpStatus,
+			   (MixerStatus == XST_SUCCESS) ? (int)MixerSettings.Freq : 0,
+			   (MixerStatus == XST_SUCCESS) ? (unsigned long)MixerSettings.MixerMode : 0UL,
+			   (MixerStatus == XST_SUCCESS) ? (unsigned int)MixerSettings.MixerType : 0U,
+			   MixerStatus,
+			   (unsigned long)OutputCurr,
+			   CurrentStatus);
+	}
+
+	return XST_SUCCESS;
+}
+
+int Configure_Custom_DAC_Nyquist(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
+	{
+		u32 Tile_Id = CustomDacChannels[i].Tile_Id;
+		u32 Block_Id = CustomDacChannels[i].Block_Id;
+		u32 NyquistZone = CustomDacChannels[i].DefaultNyquistZone;
+		int Status = XRFdc_SetNyquistZone(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, NyquistZone);
 
 		if (Status != XST_SUCCESS)
 		{
-			xil_printf("XRFdc_SetNyquistZone Zone2 failed for DAC Tile%d Block%d status=%d\r\n",
+			xil_printf("XRFdc_SetNyquistZone Zone%d failed for DAC Tile%d Block%d status=%d\r\n",
+				   (unsigned int)NyquistZone, Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		xil_printf("Success: DAC Tile%d Block%d Nyquist zone set to %u\r\n",
+			   Tile_Id, Block_Id, (unsigned int)NyquistZone);
+	}
+
+	return XST_SUCCESS;
+}
+
+int Configure_Custom_DAC_NCO(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
+	{
+		u32 Tile_Id = CustomDacChannels[i].Tile_Id;
+		u32 Block_Id = CustomDacChannels[i].Block_Id;
+		double NcoFreqGHz = CustomDacChannels[i].DefaultNcoGHz;
+		XRFdc_Mixer_Settings MixerSettings;
+		int Status;
+
+		Status = XRFdc_GetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_GetMixerSettings failed for DAC Tile%d Block%d status=%d\r\n",
 				   Tile_Id, Block_Id, Status);
 			return XST_FAILURE;
 		}
 
-		xil_printf("Success: DAC Tile%d Block%d Nyquist zone set to 2\r\n", Tile_Id, Block_Id);
+		MixerSettings.Freq = NcoFreqGHz * 1000.0; /* driver expects MHz */
+		MixerSettings.PhaseOffset = 0.0;
+		MixerSettings.EventSource = XRFDC_EVNT_SRC_IMMEDIATE;
+		MixerSettings.CoarseMixFreq = XRFDC_COARSE_MIX_BYPASS;
+		MixerSettings.MixerMode = XRFDC_MIXER_MODE_C2R;
+		MixerSettings.FineMixerScale = XRFDC_MIXER_SCALE_1P0;
+		MixerSettings.MixerType = XRFDC_MIXER_TYPE_FINE;
+
+		Status = XRFdc_SetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_SetMixerSettings failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		Status = XRFdc_UpdateEvent(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, XRFDC_EVENT_MIXER);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_UpdateEvent failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		xil_printf("Success: DAC Tile%d Block%d role=%s NCO set to %d MHz (baseband)\r\n",
+			   Tile_Id, Block_Id, CustomDacChannels[i].Role, (int)(NcoFreqGHz * 1000.0));
 	}
 
+	return XST_SUCCESS;
+}
+
+static int Apply_Custom_DAC_Channel_NCO(unsigned int ChannelIndex, s64 NcoHz, u32 NyquistZone)
+{
+	const CustomDacChannel *Channel;
+	XRFdc_Mixer_Settings MixerSettings;
+	int Status;
+
+	if (ChannelIndex >= (sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0])))
+	{
+		return XST_FAILURE;
+	}
+	if ((NyquistZone != XRFDC_ODD_NYQUIST_ZONE) && (NyquistZone != XRFDC_EVEN_NYQUIST_ZONE))
+	{
+		xil_printf("RFDC mailbox: invalid Nyquist zone %lu for CH%u\r\n",
+			   (unsigned long)NyquistZone, ChannelIndex + 1U);
+		return XST_FAILURE;
+	}
+
+	Channel = &CustomDacChannels[ChannelIndex];
+	Status = XRFdc_SetNyquistZone(&RFdcInst, XRFDC_DAC_TILE, Channel->Tile_Id, Channel->Block_Id, NyquistZone);
+	if (Status != XST_SUCCESS)
+	{
+		xil_printf("RFDC mailbox: XRFdc_SetNyquistZone failed for %s Tile%lu Block%lu status=%d\r\n",
+			   Channel->Channel, (unsigned long)Channel->Tile_Id, (unsigned long)Channel->Block_Id, Status);
+		return XST_FAILURE;
+	}
+
+	Status = XRFdc_GetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Channel->Tile_Id, Channel->Block_Id, &MixerSettings);
+	if (Status != XST_SUCCESS)
+	{
+		xil_printf("RFDC mailbox: XRFdc_GetMixerSettings failed for %s Tile%lu Block%lu status=%d\r\n",
+			   Channel->Channel, (unsigned long)Channel->Tile_Id, (unsigned long)Channel->Block_Id, Status);
+		return XST_FAILURE;
+	}
+
+	MixerSettings.Freq = ((double)NcoHz) / 1000000.0; /* driver expects MHz */
+	MixerSettings.PhaseOffset = 0.0;
+	MixerSettings.EventSource = XRFDC_EVNT_SRC_IMMEDIATE;
+	MixerSettings.CoarseMixFreq = XRFDC_COARSE_MIX_BYPASS;
+	MixerSettings.MixerMode = XRFDC_MIXER_MODE_C2R;
+	MixerSettings.FineMixerScale = XRFDC_MIXER_SCALE_1P0;
+	MixerSettings.MixerType = XRFDC_MIXER_TYPE_FINE;
+
+	Status = XRFdc_SetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Channel->Tile_Id, Channel->Block_Id, &MixerSettings);
+	if (Status != XST_SUCCESS)
+	{
+		xil_printf("RFDC mailbox: XRFdc_SetMixerSettings failed for %s Tile%lu Block%lu status=%d\r\n",
+			   Channel->Channel, (unsigned long)Channel->Tile_Id, (unsigned long)Channel->Block_Id, Status);
+		return XST_FAILURE;
+	}
+
+	Status = XRFdc_UpdateEvent(&RFdcInst, XRFDC_DAC_TILE, Channel->Tile_Id, Channel->Block_Id, XRFDC_EVENT_MIXER);
+	if (Status != XST_SUCCESS)
+	{
+		xil_printf("RFDC mailbox: XRFdc_UpdateEvent failed for %s Tile%lu Block%lu status=%d\r\n",
+			   Channel->Channel, (unsigned long)Channel->Tile_Id, (unsigned long)Channel->Block_Id, Status);
+		return XST_FAILURE;
+	}
+
+	xil_printf("RFDC mailbox: %s role=%s Tile%lu Block%lu zone=%lu nco=%d MHz applied\r\n",
+		   Channel->Channel,
+		   Channel->Role,
+		   (unsigned long)Channel->Tile_Id,
+		   (unsigned long)Channel->Block_Id,
+		   (unsigned long)NyquistZone,
+		   (int)(NcoHz / 1000000LL));
+	return XST_SUCCESS;
+}
+
+int Poll_Rfdc_Nco_Mailbox(void)
+{
+	static u32 LastSeq = 0U;
+	UINTPTR MailboxAddr = (UINTPTR)DDR4_BASE + RFDC_CTRL_MAILBOX_OFFSET;
+	volatile u32 *Mailbox = (volatile u32 *)MailboxAddr;
+	u32 Seq;
+	u32 ApplyMask;
+	u32 Flags;
+	unsigned int i;
+
+	Xil_DCacheInvalidateRange(MailboxAddr, RFDC_CTRL_MAILBOX_BYTES);
+
+	if ((Mailbox[0] != RFDC_CTRL_MAILBOX_MAGIC_LO) || (Mailbox[1] != RFDC_CTRL_MAILBOX_MAGIC_HI))
+	{
+		return XST_SUCCESS;
+	}
+
+	Seq = Mailbox[2];
+	if ((Seq == 0U) || (Seq == LastSeq))
+	{
+		return XST_SUCCESS;
+	}
+
+	ApplyMask = Mailbox[3] & 0xFFU;
+	Flags = Mailbox[4];
+	xil_printf("RFDC mailbox: seq=%lu apply_mask=0x%02lx flags=0x%08lx\r\n",
+		   (unsigned long)Seq, (unsigned long)ApplyMask, (unsigned long)Flags);
+
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
+	{
+		volatile u32 *Entry;
+		u64 RawNcoHz;
+		s64 NcoHz;
+		u32 Zone;
+
+		if ((ApplyMask & (1U << i)) == 0U)
+		{
+			continue;
+		}
+
+		Entry = &Mailbox[RFDC_CTRL_MAILBOX_HEADER_WORDS + (i * RFDC_CTRL_MAILBOX_ENTRY_WORDS)];
+		RawNcoHz = ((u64)Entry[1] << 32) | (u64)Entry[0];
+		NcoHz = (s64)RawNcoHz;
+		Zone = Entry[2];
+		if (Apply_Custom_DAC_Channel_NCO(i, NcoHz, Zone) != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+	}
+
+	LastSeq = Seq;
+	Report_Custom_DAC_Status("after RFDC mailbox retune");
 	return XST_SUCCESS;
 }
 
@@ -199,6 +448,9 @@ int main(void)
 
 	xil_printf("\n\r###############################################\n\r");
 	xil_printf("Hello RFSoC World!\n\r\n");
+	xil_printf("RFDC playback target: Fs=6.4 GS/s, interpolation=16x, IQ sample=400 MS/s, AXIS=50 MHz, layout=interleaved_512b\r\n");
+	xil_printf("RFDC runtime retune mailbox: DDR offset=0x%08lx magic=RFDCNCO0\r\n",
+		   (unsigned long)RFDC_CTRL_MAILBOX_OFFSET);
 
 	// Display IP version
 	Val = Xil_In32(RFDC_BASE + 0x00000);
@@ -276,7 +528,12 @@ int main(void)
 	{
 		return Status;
 	}
+	Report_Custom_DAC_Status("after startup");
 	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
+	{
+		return XST_FAILURE;
+	}
+	if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
 	{
 		return XST_FAILURE;
 	}
@@ -284,6 +541,7 @@ int main(void)
 	{
 		return XST_FAILURE;
 	}
+	Report_Custom_DAC_Status("after custom config");
 
 	// init_dma_ip(&AxiDma, CH0_DMA_DEV_ID, CH0_MM2S_INTR_ID, &INST);
 
@@ -291,14 +549,18 @@ int main(void)
 		return XST_FAILURE;
 
 #if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
-	// DDR offsets 0/0x1000 are host-uploaded PL regions; firmware must not preload them.
+		// Host uploads all PL DDR waveform slots; firmware must not preload them.
 	preload_debug_waveforms();
 #endif
 
 	// measure_dma_bandwidth();
 	while (1)
 	{
-		sleep(1);
+		if (Poll_Rfdc_Nco_Mailbox() != XST_SUCCESS)
+		{
+			xil_printf("ERROR: RFDC mailbox retune failed.\r\n");
+		}
+		usleep(100000);
 	}
 
 	return 0;
@@ -525,3 +787,5 @@ int rfdcStartup(void)
 
 	return XST_SUCCESS;
 }
+
+#endif /* BOARD_CUSTOM_XCZU47DR_BW */

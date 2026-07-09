@@ -149,7 +149,8 @@ parameter set into the Chisel/Scala generation flow.
 
 **Generated Files:**
 - `rfdc_custom_xczu47dr_config.tcl` - DAC tile/slice enables, 125 MHz refclk,
-  5.0 GS/s sampling, 312.5 MHz fabric clocks, and Zone2 settings.
+  6.0 GS/s sampling, 8x interpolation, 93.75 MHz fabric clocks, C2R fine-NCO
+  mixer settings, and Zone2 settings.
 
 ### AXI DMA (`axidma/`)
 

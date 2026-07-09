@@ -24,32 +24,12 @@ import host  # noqa: E402
 import waveform_tools  # noqa: E402
 
 
-CHANNELS = (1, 2, 3, 4)
+CHANNELS = (1, 2, 3, 4, 5, 6, 7, 8)
 DEFAULT_TRIGGER_PROBES = ("top_i/pc_trig_start", "top_i/pc_trig_pulse")
-DEFAULT_VALID_PROBES = {
-    1: ("top_i/dac_ch1_valid_gated", "top_i/dac_in_ch1_tvalid"),
-    2: ("top_i/dac_ch2_valid_gated", "top_i/dac_in_ch2_tvalid"),
-    3: ("top_i/dac_ch3_valid_gated", "top_i/dac_in_ch3_tvalid"),
-    4: ("top_i/dac_ch4_valid_gated", "top_i/dac_in_ch4_tvalid"),
-}
-DEFAULT_DATA_PROBES = {
-    1: ("top_i/dac_in_ch1_tdata",),
-    2: ("top_i/dac_in_ch2_tdata",),
-    3: ("top_i/dac_in_ch3_tdata",),
-    4: ("top_i/dac_in_ch4_tdata",),
-}
-DEFAULT_DELAY_PROBES = {
-    1: ("top_i/ch1_delay_dac", "top_i/ch1_delay_cycles"),
-    2: ("top_i/ch2_delay_dac", "top_i/ch2_delay_cycles"),
-    3: ("top_i/ch3_delay_dac", "top_i/ch3_delay_cycles"),
-    4: ("top_i/ch4_delay_dac", "top_i/ch4_delay_cycles"),
-}
-DEFAULT_LEN_PROBES = {
-    1: ("top_i/ch1_len_dac64",),
-    2: ("top_i/ch2_len_dac64",),
-    3: ("top_i/ch3_len_dac64",),
-    4: ("top_i/ch4_len_dac64",),
-}
+DEFAULT_VALID_PROBES = {channel: (f"top_i/dac_ch{channel}_valid_gated", f"top_i/dac_in_ch{channel}_tvalid") for channel in CHANNELS}
+DEFAULT_DATA_PROBES = {channel: (f"top_i/dac_in_ch{channel}_tdata",) for channel in CHANNELS}
+DEFAULT_DELAY_PROBES = {channel: (f"top_i/ch{channel}_delay_dac", f"top_i/ch{channel}_delay_cycles") for channel in CHANNELS}
+DEFAULT_LEN_PROBES = {channel: (f"top_i/ch{channel}_len_dac",) for channel in CHANNELS}
 
 
 @dataclass
@@ -96,14 +76,15 @@ class ChannelReport:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Capture Vivado ILA data and compare CH1-CH4 RFDC stream data against saved Python waveform artifacts.",
+        description="Capture Vivado ILA data and compare CH1-CH8 RFDC stream data against saved Python waveform artifacts.",
     )
-    parser.add_argument("--artifact-dir", type=Path, default=Path("software/waveform_out"), help="Directory containing ch1..ch4 waveform artifacts and metadata.")
+    parser.add_argument("--artifact-dir", type=Path, default=Path("software/waveform_out"), help="Directory containing ch1..ch8 waveform artifacts and metadata.")
     parser.add_argument("--csv", dest="csv_file", type=Path, help="Analyze an existing Vivado ILA CSV instead of running capture.")
     parser.add_argument("--capture", action="store_true", help="Run Vivado hardware-manager capture before analysis.")
     parser.add_argument("--out-dir", type=Path, default=Path("software/ila_reports"), help="Directory for generated Tcl, CSV, JSON, and Markdown reports.")
     parser.add_argument("--vivado", default="vivado", help="Vivado executable used for capture mode.")
     parser.add_argument("--hw-server", default="localhost:3121", help="Vivado hw_server URL.")
+    parser.add_argument("--target-filter", default="", help="Substring used to select a hardware target/cable before opening it.")
     parser.add_argument("--device-filter", default="", help="Substring used to select a hardware device.")
     parser.add_argument("--ila-filter", default="", help="Substring used to select a hardware ILA core.")
     parser.add_argument("--bit", type=Path, help="Optional bitstream to program before capture.")
@@ -118,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--post-upload-sleep-s", type=float, default=host.DEFAULT_UDP_WRITE_SETTLE_S, help="Delay between waveform upload and playback instructions.")
     parser.add_argument("--loop", action="store_true", help="Set the hardware loop bit in playback instructions.")
     parser.add_argument("--wait-for-trigger", action="store_true", help="Send a non-auto-start END instruction, then issue the host trigger packet.")
-    parser.add_argument("--no-generate-default-artifacts", action="store_true", help="Fail instead of generating a default CH1-CH4 golden artifact bundle when --send-after-arm has no artifacts.")
+    parser.add_argument("--no-generate-default-artifacts", action="store_true", help="Fail instead of generating a default CH1-CH8 golden artifact bundle when --send-after-arm has no artifacts.")
     parser.add_argument("--capture-depth", type=int, default=4096, help="Requested ILA capture depth when the core supports CONTROL.DATA_DEPTH.")
     parser.add_argument("--trigger-position", type=int, default=1024, help="Requested ILA trigger position when the core supports CONTROL.TRIGGER_POSITION.")
     parser.add_argument("--timeout-s", type=int, default=120, help="Vivado capture process timeout in seconds.")
@@ -149,7 +130,7 @@ def parse_expected_delays(text: str) -> dict[int, int]:
         key, sep, value = item.partition("=")
         if sep != "=":
             raise ValueError(f"Bad delay item {item!r}; expected chN=value")
-        match = re.fullmatch(r"ch([1-4])", key.strip().lower())
+        match = re.fullmatch(r"ch([1-8])", key.strip().lower())
         if match is None:
             raise ValueError(f"Bad channel in delay item {item!r}")
         delays[int(match.group(1))] = int(value.strip(), 0)
@@ -167,13 +148,23 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
     ltx = vivado_quote(args.ltx)
     setup_tcl = vivado_quote(args.setup_tcl)
     csv_out = vivado_quote(csv_path)
+    target_filter = args.target_filter.replace("'", "")
     device_filter = args.device_filter.replace("'", "")
     ila_filter = args.ila_filter.replace("'", "")
     lines = [
         "set_param messaging.defaultLimit 10000",
         "open_hw_manager",
         f"connect_hw_server -allow_non_jtag -url {args.hw_server}",
-        "open_hw_target",
+        f"set target_filter {{{target_filter}}}",
+        "set hw_targets [get_hw_targets *]",
+        "if {$target_filter ne \"\"} {",
+        "  set matched_targets {}",
+        "  foreach t $hw_targets { if {[string first $target_filter $t] >= 0} { lappend matched_targets $t } }",
+        "  if {[llength $matched_targets] == 0} { error \"No hardware target matched target filter '$target_filter'\" }",
+        "  open_hw_target [lindex $matched_targets 0]",
+        "} else {",
+        "  open_hw_target",
+        "}",
         "set devs [get_hw_devices]",
         f"set device_filter {{{device_filter}}}",
         "set dev [lindex $devs 0]",
@@ -200,20 +191,31 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
     trigger_for_select = (args.trigger_probe or DEFAULT_TRIGGER_PROBES[0]).replace("'", "")
     valid_for_select = DEFAULT_VALID_PROBES[1][0]
     data_for_select = DEFAULT_DATA_PROBES[1][0]
+    if args.trigger_probe:
+        preferred_probe_names = f"{{{trigger_for_select}}}"
+    else:
+        preferred_probe_names = f"{{{trigger_for_select} {valid_for_select} {data_for_select}}}"
     lines.extend([
         "set raw_ilas [get_hw_ilas -of_objects $dev]",
         f"set ila_filter {{{ila_filter}}}",
+        "puts \"RAW_ILA_COUNT=[llength $raw_ilas]\"",
+        "foreach i $raw_ilas { puts \"RAW_ILA=[get_property NAME $i]\" }",
         "if {[llength $raw_ilas] == 0} { error \"No ILA cores found. Program the design or check the LTX/bitstream match.\" }",
         "set ilas {}",
         "if {$ila_filter ne \"\"} {",
         "  foreach i $raw_ilas { if {[string first $ila_filter [get_property NAME $i]] >= 0} { lappend ilas $i } }",
+        "  if {[llength $ilas] == 0} {",
+        "    puts \"WARN: no ILA matched filter '$ila_filter', falling back to all ILAs\"",
+        "    set ilas $raw_ilas",
+        "  }",
         "} else {",
         "  set ilas $raw_ilas",
         "}",
-        "if {[llength $ilas] == 0} { error \"No ILA cores matched the requested --ila-filter\" }",
-        f"set preferred_probe_names {{{trigger_for_select} {valid_for_select} {data_for_select}}}",
+        "if {[llength $ilas] == 0} { error \"No ILA cores available after filtering\" }",
+        f"set preferred_probe_names {preferred_probe_names}",
         "set ila {}",
         "foreach candidate $ilas {",
+        "  puts \"CANDIDATE_ILA=[get_property NAME $candidate]\"",
         "  foreach probe_name $preferred_probe_names {",
         "    set found [get_hw_probes $probe_name -of_objects $candidate]",
         "    if {[llength $found] == 0} { set found [get_hw_probes *$probe_name* -of_objects $candidate] }",
@@ -225,6 +227,8 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
         "puts \"Using ILA: $ila\"",
         "current_hw_ila $ila",
         "set probes [get_hw_probes -of_objects $ila]",
+        "puts \"ILA_PROBE_COUNT=[llength $probes]\"",
+        "foreach p $probes { puts \"ILA_PROBE=[get_property NAME $p]\" }",
         "if {[llength $probes] == 0} { error \"Selected ILA has no probes. Check that the LTX matches the programmed design.\" }",
         f"catch {{ set_property CONTROL.DATA_DEPTH {int(args.capture_depth)} $ila }}",
         f"catch {{ set_property CONTROL.TRIGGER_POSITION {int(args.trigger_position)} $ila }}",
@@ -264,13 +268,23 @@ def write_capture_tcl(args: argparse.Namespace, csv_path: Path, tcl_path: Path, 
 
 def write_preflight_tcl(args: argparse.Namespace, tcl_path: Path) -> None:
     ltx = vivado_quote(args.ltx)
+    target_filter = args.target_filter.replace("'", "")
     device_filter = args.device_filter.replace("'", "")
     ila_filter = args.ila_filter.replace("'", "")
     lines = [
         "set_param messaging.defaultLimit 10000",
         "open_hw_manager",
         f"connect_hw_server -allow_non_jtag -url {args.hw_server}",
-        "open_hw_target",
+        f"set target_filter {{{target_filter}}}",
+        "set hw_targets [get_hw_targets *]",
+        "if {$target_filter ne \"\"} {",
+        "  set matched_targets {}",
+        "  foreach t $hw_targets { if {[string first $target_filter $t] >= 0} { lappend matched_targets $t } }",
+        "  if {[llength $matched_targets] == 0} { error \"No hardware target matched target filter '$target_filter'\" }",
+        "  open_hw_target [lindex $matched_targets 0]",
+        "} else {",
+        "  open_hw_target",
+        "}",
         "set devs [get_hw_devices]",
         f"set device_filter {{{device_filter}}}",
         "set dev [lindex $devs 0]",
@@ -288,6 +302,8 @@ def write_preflight_tcl(args: argparse.Namespace, tcl_path: Path) -> None:
     lines.extend([
         "set ilas [get_hw_ilas -of_objects $dev]",
         f"set ila_filter {{{ila_filter}}}",
+        "puts \"RAW_ILA_COUNT=[llength $ilas]\"",
+        "foreach i $ilas { puts \"RAW_ILA=[get_property NAME $i]\" }",
         "if {$ila_filter ne \"\"} {",
         "  set matched {}",
         "  foreach i $ilas { if {[string first $ila_filter [get_property NAME $i]] >= 0} { lappend matched $i } }",
@@ -338,6 +354,11 @@ def confirm_programming(args: argparse.Namespace) -> bool:
 
 def send_artifacts_to_board(args: argparse.Namespace) -> None:
     waves = {channel: load_waveform(args.artifact_dir, channel) for channel in CHANNELS}
+    channel_lengths = {channel: waveform_tools.waveform_length_bytes(wave) for channel, wave in waves.items()}
+    metadata = load_metadata(args.artifact_dir)
+    layout = str(metadata.get("layout", host.DEFAULT_DDR_LAYOUT))
+    if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
+        layout = host.DEFAULT_DDR_LAYOUT
     ctrl = host.RFSocController(
         args.ip,
         port=args.port,
@@ -347,16 +368,39 @@ def send_artifacts_to_board(args: argparse.Namespace) -> None:
         timeout_s=float(args.timeout_s),
     )
     try:
-        for channel, samples in waves.items():
-            ddr_addr = waveform_tools.DEFAULT_CHANNEL_ADDRS[channel]
-            dump_path = args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"
-            ctrl.upload_waveform_udp(samples, ddr_addr, str(dump_path))
+        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
+            ctrl.upload_waveform_udp_interleaved(
+                waves,
+                base_addr=host.DDR_BASE,
+                dump_path=str(args.out_dir / f"{args.report_prefix}_interleaved_upload_hex.txt"),
+            )
+            channel_addrs = {channel: 0 for channel in CHANNELS}
+        else:
+            channel_addrs = {}
+            for channel, wave in sorted(waves.items()):
+                if layout == host.DDR_LAYOUT_TILED:
+                    channel_addrs[channel] = host.tiled_channel_base_addr(channel)
+                    ctrl.upload_waveform_udp_tiled(
+                        wave,
+                        channel,
+                        host.DDR_BASE,
+                        str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
+                    )
+                else:
+                    channel_addrs[channel] = host.DDR_CH_ADDR[channel - 1]
+                    ctrl.upload_waveform_udp(
+                        wave,
+                        channel_addrs[channel],
+                        str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
+                    )
         if args.post_upload_sleep_s > 0:
             time.sleep(args.post_upload_sleep_s)
         commands = waveform_tools.build_play_commands(
             loop=args.loop,
             auto_start=not args.wait_for_trigger,
-            channel_addrs=waveform_tools.DEFAULT_CHANNEL_ADDRS,
+            channel_addrs=channel_addrs,
+            channel_lengths=channel_lengths,
+            layout=layout,
         )
         ctrl.send_instructions(commands)
         if args.wait_for_trigger:
@@ -615,15 +659,28 @@ def generate_default_artifacts(args: argparse.Namespace) -> None:
     ch2 = waveform_tools.make_incrementing_pattern(start=0x1000)
     ch3 = waveform_tools.make_incrementing_pattern(start=0x2000)
     ch4 = waveform_tools.make_incrementing_pattern(start=0x3000)
+    ch5 = waveform_tools.make_incrementing_pattern(start=0x4000)
+    ch6 = waveform_tools.make_incrementing_pattern(start=0x5000)
+    ch7 = waveform_tools.make_incrementing_pattern(start=0x6000)
+    ch8 = waveform_tools.make_incrementing_pattern(start=0x7000)
     metadata = waveform_tools.build_metadata(
         mode="ila-golden",
         sample_rate_hz=host.DAC_XY_FS,
         encoding="signed",
         loop=args.loop,
         generated_by="ila_capture_report.py",
-        notes="Auto-generated because --send-after-arm had no CH1-CH4 waveform artifacts.",
+        notes="Auto-generated because --send-after-arm had no CH1-CH8 waveform artifacts.",
     )
-    waveform_tools.save_waveform_bundle(args.artifact_dir, ch1, ch2, metadata, stem="waveform", ch3=ch3, ch4=ch4)
+    waveform_tools.save_waveform_bundle(
+        args.artifact_dir,
+        ch1,
+        ch2,
+        metadata,
+        stem="waveform",
+        ch3=ch3,
+        ch4=ch4,
+        extra_channels={5: ch5, 6: ch6, 7: ch7, 8: ch8},
+    )
 
 
 def ensure_send_artifacts(args: argparse.Namespace) -> None:
@@ -632,7 +689,7 @@ def ensure_send_artifacts(args: argparse.Namespace) -> None:
         return
     if not found and not args.no_generate_default_artifacts:
         generate_default_artifacts(args)
-        print(f"[artifact] Generated default CH1-CH4 golden waveform bundle in {args.artifact_dir}")
+        print(f"[artifact] Generated default CH1-CH8 golden waveform bundle in {args.artifact_dir}")
         return
     missing = ", ".join(f"CH{channel}" for channel in CHANNELS if channel not in found)
     raise FileNotFoundError(
@@ -641,10 +698,23 @@ def ensure_send_artifacts(args: argparse.Namespace) -> None:
     )
 
 
-def samples_from_words(words: list[int]) -> np.ndarray:
+def probe_width_bytes(probe: ProbeRef) -> int | None:
+    if probe.bit_columns:
+        return max(1, (max(bit for bit, _column in probe.bit_columns) + 8) // 8)
+    label = probe.label
+    match = re.search(r"\[(\d+):(\d+)\]$", label)
+    if match:
+        msb = int(match.group(1))
+        lsb = int(match.group(2))
+        return max(1, (abs(msb - lsb) + 8) // 8)
+    return None
+
+
+def samples_from_words(words: list[int], width_bytes: int | None = None) -> np.ndarray:
     data = bytearray()
     for word in words:
-        data.extend((int(word) & 0xFFFFFFFFFFFFFFFF).to_bytes(8, byteorder="little", signed=False))
+        current_width = width_bytes if width_bytes is not None else (32 if int(word).bit_length() > 64 else 8)
+        data.extend((int(word) & ((1 << (current_width * 8)) - 1)).to_bytes(current_width, byteorder="little", signed=False))
     return np.frombuffer(bytes(data), dtype="<i2").astype(np.int16)
 
 
@@ -663,12 +733,23 @@ def compare_samples(captured: np.ndarray, expected: np.ndarray) -> tuple[int, in
     return limit - int(len(mismatch_indices)), mismatch_count, first
 
 
+def compare_loop_samples(captured: np.ndarray, expected: np.ndarray) -> tuple[int, int, dict[str, Any] | None]:
+    if expected.size == 0:
+        return compare_samples(captured, expected)
+    for offset in range(expected.size):
+        tiled = np.resize(np.roll(expected, -offset), captured.size)
+        if np.array_equal(captured, tiled):
+            return int(captured.size), 0, None
+    tiled = np.resize(expected, captured.size)
+    return compare_samples(captured, tiled)
+
+
 def expected_valid_cycles(metadata: dict[str, Any], expected: np.ndarray, channel: int) -> int:
     bytes_key = f"ch{channel}_bytes_per_channel"
     raw_bytes = metadata.get(bytes_key, metadata.get("bytes_per_channel"))
     if raw_bytes is None:
         raw_bytes = int(expected.size) * 2
-    return int(math.ceil(int(raw_bytes) / 8.0))
+    return int(math.ceil(int(raw_bytes) / 32.0))
 
 
 def metadata_delay(metadata: dict[str, Any], channel: int) -> int | None:
@@ -696,8 +777,9 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
 
     channels: list[ChannelReport] = []
     missing_probes: list[str] = []
+    hardware_cw_mode = bool(metadata.get("hardware_cw_mode"))
     for channel in CHANNELS:
-        expected = load_waveform(args.artifact_dir, channel)
+        expected = np.zeros(0, dtype=np.int16) if hardware_cw_mode else load_waveform(args.artifact_dir, channel)
         valid_probe = resolve_probe(header, f"ch{channel}_valid", DEFAULT_VALID_PROBES[channel], probe_map)
         data_probe = resolve_probe(header, f"ch{channel}_data", DEFAULT_DATA_PROBES[channel], probe_map)
         delay_probe = resolve_probe(header, f"ch{channel}_delay", DEFAULT_DELAY_PROBES[channel], probe_map)
@@ -716,19 +798,29 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
         windows = valid_windows(valid_values)
         valid_indices = [idx for idx, value in enumerate(valid_values) if value]
         words = [data_values[idx] for idx in valid_indices if idx < len(data_values)]
-        captured = samples_from_words(words)
-        expected_cycles = expected_valid_cycles(metadata, expected, channel)
-        matched, mismatches, first_mismatch = compare_samples(captured[: expected.size], expected)
+        captured = samples_from_words(words, probe_width_bytes(data_probe) if data_probe.resolved else None)
+        expected_cycles = len(valid_indices) if hardware_cw_mode or metadata.get("loop") else expected_valid_cycles(metadata, expected, channel)
+        if hardware_cw_mode:
+            matched, mismatches, first_mismatch = len(valid_indices), 0, None
+        elif metadata.get("loop"):
+            expected_size = len(valid_indices) * host.INT16_PER_DACWORD
+            matched, mismatches, first_mismatch = compare_loop_samples(captured[:expected_size], expected)
+        else:
+            expected_size = expected.size
+            matched, mismatches, first_mismatch = compare_samples(captured[: expected.size], expected)
 
         observed_delay = None
         first_valid = valid_indices[0] if valid_indices else None
         if trigger_index is not None and first_valid is not None:
             observed_delay = first_valid - trigger_index
-        expected_delay = expected_delays.get(channel, metadata_delay(metadata, channel))
+        expected_delay = expected_delays.get(channel)
+        metadata_instruction_delay = metadata_delay(metadata, channel)
         if len(windows) > 1:
             notes.append(f"valid has {len(windows)} windows")
         if expected_delay is None:
             notes.append("expected delay not provided; observed delay reported only")
+            if metadata_instruction_delay is not None:
+                notes.append(f"metadata instruction delay={metadata_instruction_delay}; not used as trigger-to-valid latency")
         if delay_probe.resolved and trigger_index is not None:
             values = column_values(rows, delay_probe)
             if trigger_index < len(values):
@@ -738,7 +830,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
             if trigger_index < len(len_values):
                 notes.append(f"captured len probe near trigger={len_values[trigger_index]}")
 
-        checks_ok = bool(valid_probe.resolved and data_probe.resolved)
+        checks_ok = bool(valid_probe.resolved and (hardware_cw_mode or data_probe.resolved))
         checks_ok = checks_ok and len(valid_indices) == expected_cycles and mismatches == 0
         if expected_delay is not None:
             checks_ok = checks_ok and observed_delay == expected_delay
@@ -757,7 +849,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
                 expected_valid_cycles=expected_cycles,
                 valid_windows=windows,
                 captured_samples=int(captured.size),
-                expected_samples=int(expected.size),
+                expected_samples=int(len(valid_indices) if hardware_cw_mode else expected_size),
                 matched_samples=matched,
                 mismatch_count=mismatches,
                 first_mismatch=first_mismatch,
@@ -776,6 +868,7 @@ def analyze(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], s
         "trigger_index": trigger_index,
         "missing_probes": missing_probes + ([] if trigger_probe.resolved else ["trigger"]),
         "metadata": metadata,
+        "hardware_cw_mode": hardware_cw_mode,
         "channels": [c.__dict__ for c in channels],
     }
     return details, render_markdown(details)
@@ -789,6 +882,11 @@ def render_markdown(details: dict[str, Any]) -> str:
             return "data probe 缺失"
         if note == "expected delay not provided; observed delay reported only":
             return "未提供期望延迟，仅报告观测到的延迟"
+        if note.startswith("metadata instruction delay="):
+            return note.replace("metadata instruction delay=", "metadata 中的指令延迟=").replace(
+                "; not used as trigger-to-valid latency",
+                "；不作为 trigger 到 valid 的内部延迟判据",
+            )
         if note.startswith("valid has ") and note.endswith(" windows"):
             return note.replace("valid has", "valid 出现").replace("windows", "个窗口")
         if note.startswith("captured delay probe near trigger="):
@@ -812,6 +910,10 @@ def render_markdown(details: dict[str, Any]) -> str:
     ]
     if details["missing_probes"]:
         lines.append(f"- 缺失 probes：`{', '.join(details['missing_probes'])}`")
+    if details.get("hardware_cw_mode"):
+        lines.append("- hardware CW mode: valid/allow probes are checked without waveform artifact comparison")
+    if details.get("metadata", {}).get("loop"):
+        lines.append("- loop mode: captured windows are matched against repeated waveform records")
     lines.extend(["", "## 通道检查", ""])
     for c in details["channels"]:
         lines.extend([
@@ -836,7 +938,7 @@ def render_markdown(details: dict[str, Any]) -> str:
     lines.extend([
         "## 结果解释",
         "",
-        "PASS 表示脚本找到了触发/参考事件，所有通道都产生了期望数量的 RFDC-facing 64-bit valid 周期，并且 valid 窗口内采集到的每个 int16 样本都与 Python 侧波形文件完全一致。若未显式提供期望延迟周期，报告只展示观测到的延迟，不会仅因缺少期望延迟而判定失败。",
+        "PASS 表示脚本找到了触发/参考事件，所有通道都产生了期望数量的 RFDC-facing 256-bit valid 周期，并且 valid 窗口内采集到的每个 int16 样本都与 Python 侧波形文件完全一致。若未显式提供期望延迟周期，报告只展示观测到的延迟，不会仅因缺少期望延迟而判定失败。",
         "",
     ])
     return "\n".join(lines)

@@ -19,7 +19,7 @@ H7044_SLEN  :	OUT	STD_LOGIC;
 H7044_SCLK  :	OUT	STD_LOGIC;
 H7044_SDATA :	OUT	STD_LOGIC;
 SET_FINISH :	OUT	STD_LOGIC
-);	
+);
 end ;
 architecture MAPPED of hmc7044 is
 
@@ -30,8 +30,8 @@ signal spi_cntr_status : statetype;
 	signal HMC7044_SCLK		:	std_logic;
 	signal HMC7044_CS_N		:	std_logic;
 	signal HMC7044_SDIO		:	std_logic;
-	signal H7044_GPIO1_REG :	std_logic;	
-signal H7044_GPIO2_REG :	std_logic;	
+	signal H7044_GPIO1_REG :	std_logic;
+signal H7044_GPIO2_REG :	std_logic;
 signal H7044_GPIO3_REG :	std_logic;
 signal H7044_GPIO4_REG :	std_logic;
 
@@ -48,19 +48,19 @@ signal HMC7043_SLEN4  :		STD_LOGIC;
 signal HMC7043_SCLK4  :		STD_LOGIC;
 signal HMC7043_SDATA4 :		STD_LOGIC;
 
-	
+
 	signal config_reg			:	std_logic_vector(23 downto 0);
 	signal spi_reg				:	std_logic_vector(23 downto 0);
 	signal config_reg_cnt	:	std_logic_vector(11 downto 0);
 	signal wr_reg_cnt			:	std_logic_vector(7 downto 0);
-	
+
 	signal delay_cnt			:	std_logic_vector(7 downto 0);
-	
+
 	signal rst_cnt				:	std_logic_vector(27 downto 0);
 	signal reset 				:	std_logic;
 
 
-begin 
+begin
 
 H7044_SLEN  <=HMC7044_CS_N;
 H7044_SCLK  <=HMC7044_SCLK;
@@ -73,12 +73,12 @@ H7044_SDATA <=HMC7044_SDIO;
 		if rising_edge(clk) then
 			case config_reg_cnt is
 				when x"000" =>
-					config_reg <= x"0000" & x"00";	--	soft reset[0] = 0, 			
+					config_reg <= x"0000" & x"00";	--	soft reset[0] = 0,
 				when x"001" =>
-					config_reg <= x"0000" & x"01";	--	soft reset[0] = 0, 				
+					config_reg <= x"0000" & x"01";	--	soft reset[0] = 0,
 				when x"002" =>
-					config_reg <= x"0000" & x"00";	--	soft reset[0] = 0, 											
-				when x"003" =>				
+					config_reg <= x"0000" & x"00";	--	soft reset[0] = 0,
+				when x"003" =>
 					config_reg <= x"0001" & x"20"; 	--sleep_mode[0]=0,restart_dividers/fsm[1]=0,pulse_generator_request[2]=0,mute[3]=0,force_holdover[4]=0,high performance plls/vco[5]=0,high performance distribution path[6]=0, reseed_req[7]=0
 				when x"004" =>
 					config_reg <= x"0002" & x"00";	--slip_request[1]=0,pll2_autotune_trig[2]=0
@@ -87,10 +87,10 @@ H7044_SDATA <=HMC7044_SDIO;
 					                                                                                                --  00 internal disabled/external
 																													--  01 high
 																													--  10 low
-														
-					config_reg <= x"0003" & x"2F"; 	
-                   --  config_reg <= x"0003" & x"37";								
-														
+
+					config_reg <= x"0003" & x"2F";
+                   --  config_reg <= x"0003" & x"37";
+
 				when x"006" =>
 					config_reg <= x"0004" & x"7F";	--seven pairs of 14 channel outputs enable[6:0]
 					                                  --bit0    enable channel 0 and channel 1
@@ -100,21 +100,21 @@ H7044_SDATA <=HMC7044_SDIO;
 																 --bit4    enable channel 8 and channel 9
 																 --bit5    enable channel 10 and channel 11
 																 --bit6    enable channel 12 and channel 13
-															
+
 				when x"007" =>
---					config_reg <= x"0005" & x"42";	--	pll1 reference path enable[3:0]     --bit[4] clkin0 input is used for external rf sync  
+--					config_reg <= x"0005" & x"42";	--	pll1 reference path enable[3:0]     --bit[4] clkin0 input is used for external rf sync
 					                                  --bit0 enable clkin0 input path       --bit[5] clkin1 input is used for external vco
-																 --bit1 enable clkin1 input path       --bit[7:6] sync pin mode selection 
+																 --bit1 enable clkin1 input path       --bit[7:6] sync pin mode selection
 																 --bit2 enable clkin2 input path           00 -- disable
 																 --bit3 enable clkin3 input path           01 --sync.a rising edge is carried through pll2.useful for multichip synchronization
 														                                               --10 --pulse generator.request a pulse generator stream from any channels configured for dynamic startup.this behaves in the same way as a gpi requested pulse generator
-                                                                                         --11 causes sync if alarm exits,otherwise causes pulse generator																														  
-	
+                                                                                         --11 causes sync if alarm exits,otherwise causes pulse generator
+
 				--    config_reg <= x"0005" & x"5A";--�ⲿ�ο�ʱ��
 				    config_reg <= x"0005" & x"56";---����ʱ��
-					 
+
 				--config_reg <= x"0005" & x"41";
-				
+
 				when x"008" =>
 					config_reg <= x"0006" & x"00";	--
 				when x"009" =>
@@ -122,20 +122,20 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"00A" =>
 					config_reg <= x"0009" & x"01";	--
 				when x"00B" =>
-					config_reg <= x"000A" & x"07";	--    input buffer mode[4:1]------bit[3:0] bit0---enable internal 100ohm termination    bufer enable[0] 
+					config_reg <= x"000A" & x"07";	--    input buffer mode[4:1]------bit[3:0] bit0---enable internal 100ohm termination    bufer enable[0]
 				when x"00C" =>
 					config_reg <= x"000B" & x"07";	--		                                     bit1---enable ac coupling input mode
 				when x"00D" =>
 					config_reg <= x"000C" & x"07";	--		                                     bit2---enable lvpecl input mode
 				when x"00E" =>
-					config_reg <= x"000D" & x"10";	--	                                        bit3---enable high-z input mode						
+					config_reg <= x"000D" & x"10";	--	                                        bit3---enable high-z input mode
 				when x"00F" =>
-					config_reg <= x"000E" & x"07";	--	       A-E FOR CLKINX AND OSCIN INPUT BUFFER CONTROL    oscin                               
+					config_reg <= x"000E" & x"07";	--	       A-E FOR CLKINX AND OSCIN INPUT BUFFER CONTROL    oscin
 				when x"010" =>
 					config_reg <= x"0014" & x"36";	--      input clk priority
-					
+
 				when x"011" =>
-					config_reg <= x"0015" & x"03";	        --los validation[2:0]  
+					config_reg <= x"0015" & x"03";	        --los validation[2:0]
 					                                                 ---000 none
 																					 ---001 2 cycles
 																					 ---010 4 cycles
@@ -154,12 +154,12 @@ H7044_SDATA <=HMC7044_SDIO;
 																			 -- 01 do nothing
 																			 -- 10 do nothing
 																			 -- 11 dac assist
-																			 
+
 				when x"013" =>
 					config_reg <= x"0017" & x"00";	--  holdover dac value[6:0]
-				when x"014" => 
-					config_reg <= x"0018" & x"04";	--  
-						
+				when x"014" =>
+					config_reg <= x"0018" & x"04";	--
+
 				when x"015" =>
 					config_reg <= x"0019" & x"00";		--bit[0] los uses vcxo prescaler for very low pfd rates,cascades vcxo lcm divider after n1
 					                                   --bit[1] los bypass input prescaler ,bypass lcm r divide cascade,r1 input is the selected clkinx
@@ -180,22 +180,22 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"01B" =>
 					config_reg <= x"001F" & x"01";		---clk3 input prescaler[7:0]
 				when x"01C" =>
-					config_reg <= x"0020" & x"05";		---oscin input prescaler[7:0]	
+					config_reg <= x"0020" & x"05";		---oscin input prescaler[7:0]
 				when x"01D" =>
-				--	config_reg <= x"0021" & x"04";	  --R1 DIVIDER[7:0]	
+				--	config_reg <= x"0021" & x"04";	  --R1 DIVIDER[7:0]
 
 					    config_reg <= x"0021" & x"01";
-					
+
 				when x"01E" =>
-					config_reg <= x"0022" & x"00";	  --R1 DIVIDER[15:8]		
+					config_reg <= x"0022" & x"00";	  --R1 DIVIDER[15:8]
 				when x"01F" =>
-				--	config_reg <= x"0026" & x"04";		--N1 DIVIDER[7:0]	
-				 
+				--	config_reg <= x"0026" & x"04";		--N1 DIVIDER[7:0]
+
 					--    config_reg <= x"0026" & x"0A";  ---�ⲿ�ο�ʱ��10MHz
 					     config_reg <= x"0026" & x"01";  ---����ʱ��100MHz
 
 				when x"020" =>
-					config_reg <= x"0027" & x"00";		--N1 DIVIDER[15:8]			
+					config_reg <= x"0027" & x"00";		--N1 DIVIDER[15:8]
 				when x"021" =>
 					config_reg <= x"0028" & x"0F";		--[4:0] PLL1 LOCK DETECT TIME[4:0], BIT5 PLL1 LOCK DETECT USES SLIP
 				when x"022" =>
@@ -204,12 +204,12 @@ H7044_SDATA <=HMC7044_SDIO;
 				                                          -- BIT 2  HOLDOVER USES DAC,IN HOLDOVER,SELECT WHETHER PLL1 USES THE DAC OR TRISTATE THE CHARGE PUMP
 				                                          -- BIT [4:3} MANUAL MODE REFERENCE SWITCHING[1:0] IF AUTOMODE REF SWITCHING=0,MANUAL SELECTION OF CLKINX INPUT
 				when x"023" =>														--BIT5 BYPASS DEBOUNCER,BYPASS THE DEBOUNCER IN MANUAL MODE AND GPI CLOCK/HOLDOVER SELECTION
-					
+
 					config_reg <= x"002A" & x"00";	   --holdoff time[7:0]
-					
+
 				when x"024" =>
 					config_reg <= x"0032" & x"01";	--     bit[0] bypass frequency doubler, 0---enable frequency doubler before r2 divider ,1----bypass frequency doubler
-					
+
 				when x"025" =>
 					config_reg <= x"0033" & x"01";	--12bit r2 divider[7:0]
 				when x"026" =>
@@ -217,25 +217,25 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"027" =>
 				--	config_reg <= x"0035" & x"18";	--12bit n2 divider[7:0]
 
-					  config_reg <= x"0035" & x"1E";  -------VCO 3G
-					     
+					  config_reg <= x"0035" & x"20";  -------VCO 3.2G, for 128MHz DAC refclk
+
 				when x"028" =>
 					config_reg <= x"0036" & x"00";	--[3:0]======n2 divider[11:8]
 				when x"029" =>
-					config_reg <= x"0037" & x"0F";	--[3:0]=======pll2 cp current[3:0]	
+					config_reg <= x"0037" & x"0F";	--[3:0]=======pll2 cp current[3:0]
 				when x"02A" =>
 					config_reg <= x"0038" & x"18";	--bit0 pll2 pfd polarity sel    bit1=pll2 pfd down force            bit2=pll2 pfd up force              bit3=pll2 pfd down enable    bit4=pll2 pfd up enable
 					                                  --- 0  positive                --force pll2 charge pump down,   --force pll2 charge pump up,
 																 --- 1  negative                --do not assert simultaneously   --do not assert simultaneously
 					                                                                 --with pll2 pfd up force          --with pll2 pfd down force
-					
-					
+
+
 				when x"02B" =>
 					config_reg <= x"0039" & x"03";	  --oscoutx path enable[0]=0x1, oscoutx divider ratio [2:1]
 					                                                                --00 divide by 1
                                                                                --01 divide by 2
                                                                                --10 divide by 4
-                                                                               --11 divide by 8																										 
+                                                                               --11 divide by 8
 				when x"02C" =>
 					config_reg <= x"003A" & x"20";	--oscout0 driver enable[0]=0x1,    oscout0 driver impedance selection for cml[2:1]        oscout0 driver mode[5:4]
 					                                                                 --00 internal resistor disable                            --00 cml mode
@@ -245,7 +245,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"02D" =>
 					config_reg <= x"003B" & x"20";	----oscout1 driver enable[0]=0x1, oscout1 driver impedance[2:1],                 oscout1 driver mode[5-4]
 				when x"02E" =>
-					config_reg <= x"0046" & x"00";     ---gpix control , bit[0] gpix enable,gpix selection[4:1] 
+					config_reg <= x"0046" & x"00";     ---gpix control , bit[0] gpix enable,gpix selection[4:1]
 				when x"02F" =>
 					config_reg <= x"0047" & x"00";	 --gpix
 				when x"030" =>
@@ -253,7 +253,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"031" =>
 					config_reg <= x"0049" & x"00";	 --gpix
 				when x"032" =>
-				
+
 					config_reg <= x"0050" & x"37";	--gpox control gpox selection[7:2],bit[1] 0 for open drain mode 1 for cmos mode, bit[0] gpox driver enable
 				when x"033" =>
 					config_reg <= x"0051" & x"37";	--gpox control
@@ -269,7 +269,7 @@ H7044_SDATA <=HMC7044_SDIO;
 					config_reg <= x"005B" & x"06";	--bit[0] sync polarity 0 for positive 1 for negative ,if not using clkin0 as input,must be 0
 					                                 --bit[1]	 sync through pll2
 																--bit[2]	 sync retime  0 for bypass the retime(if using sync path with onchip vco),1 for retime the external sync from reference 0
-																
+
 				when x"039" =>
 					config_reg <= x"005C" & x"00";	 --sysref timer[7:0]
 				when x"03A" =>
@@ -299,7 +299,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"046" =>
 					config_reg <= x"0082" & x"0F";	---only read
 				when x"047" =>
-					config_reg <= x"0083" & x"10";	---only read	
+					config_reg <= x"0083" & x"10";	---only read
 
            	when x"048" =>
 					config_reg <= x"0084" & x"11";	---only read
@@ -328,7 +328,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"054" =>
 					config_reg <= x"009A" & x"00";	--reserved
 				when x"055" =>
-					config_reg <= x"009B" & x"AA";	--reserved	
+					config_reg <= x"009B" & x"AA";	--reserved
 
                    	when x"056" =>
 					config_reg <= x"009C" & x"AA";	 --reserved
@@ -390,12 +390,12 @@ H7044_SDATA <=HMC7044_SDIO;
 																 ---bit 1
 																 ---bit[3:2]
 																 -- bit 5
-																 ---bit 6 
+																 ---bit 6
 																 -- bit 7
 		       when x"072" =>
 		 --	   config_reg <= x"00C9" & x"28";	-- 12bit channel divider[7:0]  60mhz
-         --    config_reg <= x"00C9" & x"4B";	-- 12bit channel divider[7:0]		     
-				   config_reg <= x"00C9" & x"03";----1GHZ            
+         --    config_reg <= x"00C9" & x"4B";	-- 12bit channel divider[7:0]
+				   config_reg <= x"00C9" & x"03";----1GHZ
 				when x"073" =>
 					config_reg <= x"00CA" & x"00";	--bit[3:0] for 12bit channel divider[11:8]
 				when x"074" =>
@@ -417,242 +417,242 @@ H7044_SDATA <=HMC7044_SDIO;
 																										--10   froce to logic 0
 																										--11  force output to float,goes naturally to vcm
 				when x"07A" =>
-					config_reg <= x"00D2" & x"F3";	--channel1   PLCLK 125MHz
-				when x"07B" =>
-				   config_reg <= x"00D3" & x"18";	--       
+						config_reg <= x"00D2" & x"F3";	--channel1   PLCLK 100MHz
+					when x"07B" =>
+					   config_reg <= x"00D3" & x"20";	--
 				when x"07C" =>
-				   config_reg <= x"00D4" & x"00";	 --             
+				   config_reg <= x"00D4" & x"00";	 --
 				when x"07D" =>
-					config_reg <= x"00D5" & x"00";	
+					config_reg <= x"00D5" & x"00";
 				when x"07E" =>
-					config_reg <= x"00D6" & x"00";	
-				when x"07F" => 
-					config_reg <= x"00D7" & x"00";								
+					config_reg <= x"00D6" & x"00";
+				when x"07F" =>
+					config_reg <= x"00D7" & x"00";
 		      when x"080" =>
-					config_reg <= x"00D8" & x"00";	
+					config_reg <= x"00D8" & x"00";
 				when x"081" =>
-					config_reg <= x"00D9" & x"00";	
+					config_reg <= x"00D9" & x"00";
 				when x"082" =>
-					config_reg <= x"00DA" & x"10";	
+					config_reg <= x"00DA" & x"10";
 				when x"083" =>
-					config_reg <= x"00DC" & x"F3";	--channel2  m clk 10MHz
-				when x"084" =>
-					config_reg <= x"00DD" & x"2C";	               
+						config_reg <= x"00DC" & x"F3";	--channel2  m clk 10MHz
+					when x"084" =>
+						config_reg <= x"00DD" & x"40";
 				when x"085" =>
-					config_reg <= x"00DE" & x"01";	
+					config_reg <= x"00DE" & x"01";
 				when x"086" =>
-					config_reg <= x"00DF" & x"00";	
+					config_reg <= x"00DF" & x"00";
 				when x"087" =>
-					config_reg <= x"00E0" & x"00";	
+					config_reg <= x"00E0" & x"00";
 				when x"088" =>
-					config_reg <= x"00E1" & x"00";	
+					config_reg <= x"00E1" & x"00";
 				when x"089" =>
 					config_reg <= x"00E2" & x"00";	--
 				when x"08A" =>
-					config_reg <= x"00E3" & x"00";	
+					config_reg <= x"00E3" & x"00";
 				when x"08B" =>
-					config_reg <= x"00E4" & x"10";	
+					config_reg <= x"00E4" & x"10";
 				when x"08C" =>
 					config_reg <= x"00E6" & x"00";  --channel3	 not use
-				when x"08D" =>	
+				when x"08D" =>
 					config_reg <= x"00E7" & x"00";
 				when x"08E" =>
-					config_reg <= x"00E8" & x"01";	
+					config_reg <= x"00E8" & x"01";
 				when x"08F" =>
-					config_reg <= x"00E9" & x"00";	
+					config_reg <= x"00E9" & x"00";
 				when x"090" =>
-					config_reg <= x"00EA" & x"00";	
+					config_reg <= x"00EA" & x"00";
 				when x"091" =>
-					config_reg <= x"00EB" & x"00";	
+					config_reg <= x"00EB" & x"00";
 				when x"092" =>
-					config_reg <= x"00EC" & x"00";	
+					config_reg <= x"00EC" & x"00";
 				when x"093" =>
-					config_reg <= x"00ED" & x"00";	
+					config_reg <= x"00ED" & x"00";
 				when x"094" =>
-					config_reg <= x"00EE" & x"09";	
+					config_reg <= x"00EE" & x"09";
 ---------------------------------------------------------------------------------------
 				when x"095" =>
-					config_reg <= x"00F0" & x"F3";	--channel4  dac refclk 0 120MHz
+						config_reg <= x"00F0" & x"F3";	--channel4  dac refclk 0 128MHz
 				when x"096" =>
 					config_reg <= x"00F1" & x"19";
 				when x"097" =>
 					config_reg <= x"00F2" & x"00";	--
 				when x"098" =>
-					config_reg <= x"00F3" & x"00";	
+					config_reg <= x"00F3" & x"00";
 				when x"099" =>
-					config_reg <= x"00F4" & x"00";	
+					config_reg <= x"00F4" & x"00";
 				when x"09A" =>
-					config_reg <= x"00F5" & x"00";	
+					config_reg <= x"00F5" & x"00";
 				when x"09B" =>
-					config_reg <= x"00F6" & x"00";						
+					config_reg <= x"00F6" & x"00";
 				when x"09C" =>
-					config_reg <= x"00F7" & x"00";	
+					config_reg <= x"00F7" & x"00";
 				when x"09D" =>
-					config_reg <= x"00F8" & x"10";	
+					config_reg <= x"00F8" & x"10";
 				when x"09E" =>
-					config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2.5MHz
-				when x"09F" =>				  
-					config_reg <= x"00FB" & x"B0";
-				when x"0A0" =>				 
-					config_reg <= x"00FC" & x"04";	
+						config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2.5MHz
+					when x"09F" =>
+						config_reg <= x"00FB" & x"00";
+					when x"0A0" =>
+						config_reg <= x"00FC" & x"05";
 				when x"0A1" =>
-					config_reg <= x"00FD" & x"00";	
+					config_reg <= x"00FD" & x"00";
 				when x"0A2" =>
-					config_reg <= x"00FE" & x"00";	
+					config_reg <= x"00FE" & x"00";
 				when x"0A3" =>
-					config_reg <= x"00FF" & x"00";	
+					config_reg <= x"00FF" & x"00";
 				when x"0A4" =>
-					config_reg <= x"0100" & x"00";	
+					config_reg <= x"0100" & x"00";
 				when x"0A5" =>
 					config_reg <= x"0101" & x"00";	--
 				when x"0A6" =>
-					config_reg <= x"0102" & x"10";	
+					config_reg <= x"0102" & x"10";
 				when x"0A7" =>
-					config_reg <= x"0104" & x"F3";	--channel6  dac refclk 1 120MHz
-				when x"0A8" =>					  
+						config_reg <= x"0104" & x"F3";	--channel6  dac refclk 1 128MHz
+				when x"0A8" =>
 					config_reg <= x"0105" & x"19";
 				when x"0A9" =>
-					config_reg <= x"0106" & x"00";						
+					config_reg <= x"0106" & x"00";
 				when x"0AA" =>
-					config_reg <= x"0107" & x"00";	
+					config_reg <= x"0107" & x"00";
 				when x"0AB" =>
-					config_reg <= x"0108" & x"00";	
+					config_reg <= x"0108" & x"00";
 				when x"0AC" =>
-					config_reg <= x"0109" & x"00";	
+					config_reg <= x"0109" & x"00";
 				when x"0AD" =>
-					config_reg <= x"010A" & x"00";	
+					config_reg <= x"010A" & x"00";
 				when x"0AE" =>
-					config_reg <= x"010B" & x"00";	
+					config_reg <= x"010B" & x"00";
 				when x"0AF" =>
-					config_reg <= x"010C" & x"10";	
+					config_reg <= x"010C" & x"10";
 				when x"0B0" =>
-					config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2.5MHz
-				when x"0B1" =>				
-					      config_reg <= x"010F" & x"B0";
-				when x"0B2" =>					
-					      config_reg <= x"0110" & x"04";
+						config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2.5MHz
+					when x"0B1" =>
+						      config_reg <= x"010F" & x"00";
+					when x"0B2" =>
+						      config_reg <= x"0110" & x"05";
 				when x"0B3" =>
 					config_reg <= x"0111" & x"00";	--
 				when x"0B4" =>
-					config_reg <= x"0112" & x"00";	
+					config_reg <= x"0112" & x"00";
 				when x"0B5" =>
-					config_reg <= x"0113" & x"00";	
+					config_reg <= x"0113" & x"00";
 				when x"0B6" =>
-					config_reg <= x"0114" & x"00";	
+					config_reg <= x"0114" & x"00";
 				when x"0B7" =>
-					config_reg <= x"0115" & x"00";	
-					
+					config_reg <= x"0115" & x"00";
+
 				when x"0B8" =>
-					config_reg <= x"0116" & x"10";	
+					config_reg <= x"0116" & x"10";
 				when x"0B9" =>
 					config_reg <= x"0118" & x"F3";	--channel8 adc-refclk0-1gsps
 				when x"0BA" =>
 					config_reg <= x"0119" & x"03";
 				when x"0BB" =>
-					config_reg <= x"011A" & x"00";	
+					config_reg <= x"011A" & x"00";
 				when x"0BC" =>
-					config_reg <= x"011B" & x"00";	
+					config_reg <= x"011B" & x"00";
 				when x"0BD" =>
-					config_reg <= x"011C" & x"00";	
+					config_reg <= x"011C" & x"00";
 				when x"0BE" =>
-					config_reg <= x"011D" & x"00";	
+					config_reg <= x"011D" & x"00";
 				when x"0BF" =>
-					config_reg <= x"011E" & x"00";	
+					config_reg <= x"011E" & x"00";
 				when x"0C0" =>
-					config_reg <= x"011F" & x"00";	
+					config_reg <= x"011F" & x"00";
 				when x"0C1" =>
 					config_reg <= x"0120" & x"08";	--
 				when x"0C2" =>
 					config_reg <= x"0122" & x"00";	--channel9 not use
-				when x"0C3" =>					
+				when x"0C3" =>
 					     config_reg <= x"0123" & x"80";
-				when x"0C4" =>					
+				when x"0C4" =>
 					     config_reg <= x"0124" & x"01";
 				when x"0C5" =>
-					config_reg <= x"0125" & x"00";	
+					config_reg <= x"0125" & x"00";
 				when x"0C6" =>
-					config_reg <= x"0126" & x"00";	
-					
+					config_reg <= x"0126" & x"00";
+
 				when x"0C7" =>
-					config_reg <= x"0127" & x"00";	
+					config_reg <= x"0127" & x"00";
 				when x"0C8" =>
-					config_reg <= x"0128" & x"00";	
+					config_reg <= x"0128" & x"00";
 				when x"0C9" =>
-					config_reg <= x"0129" & x"00";	
+					config_reg <= x"0129" & x"00";
 				when x"0CA" =>
-					config_reg <= x"012A" & x"09";	
+					config_reg <= x"012A" & x"09";
 				when x"0CB" =>
 					config_reg <= x"012C" & x"F3";	--channel0  adc-refclk1-1gsps
 				when x"0CC" =>
 					 config_reg <= x"012D" & x"03";
 				when x"0CD" =>
-					config_reg <= x"012E" & x"00";	
+					config_reg <= x"012E" & x"00";
 				when x"0CE" =>
-					config_reg <= x"012F" & x"00";	
+					config_reg <= x"012F" & x"00";
 				when x"0CF" =>
-					config_reg <= x"0130" & x"00";	
+					config_reg <= x"0130" & x"00";
 				when x"0D0" =>
 					config_reg <= x"0131" & x"00";	--
 				when x"0D1" =>
-					config_reg <= x"0132" & x"00";	
+					config_reg <= x"0132" & x"00";
 				when x"0D2" =>
-					config_reg <= x"0133" & x"00";	
+					config_reg <= x"0133" & x"00";
 				when x"0D3" =>
-					config_reg <= x"0134" & x"08";	
+					config_reg <= x"0134" & x"08";
 				when x"0D4" =>
-					config_reg <= x"0136" & x"00";	--channel11  NOT							
+					config_reg <= x"0136" & x"00";	--channel11  NOT
 				when x"0D5" =>
 					config_reg <= x"0137" & x"00";
 				when x"0D6" =>
-					config_reg <= x"0138" & x"01"; 
+					config_reg <= x"0138" & x"01";
 				when x"0D7" =>
-					config_reg <= x"0139" & x"00";	
+					config_reg <= x"0139" & x"00";
 				when x"0D8" =>
-					config_reg <= x"013A" & x"00";	
+					config_reg <= x"013A" & x"00";
 				when x"0D9" =>
-					config_reg <= x"013B" & x"00";	
+					config_reg <= x"013B" & x"00";
 				when x"0DA" =>
-					config_reg <= x"013C" & x"00";	
+					config_reg <= x"013C" & x"00";
 				when x"0DB" =>
-					config_reg <= x"013D" & x"00";	
+					config_reg <= x"013D" & x"00";
 				when x"0DC" =>
-					config_reg <= x"013E" & x"10";	
+					config_reg <= x"013E" & x"10";
 				when x"0DD" =>
 					config_reg <= x"0140" & x"F3";	--channel12  adc-refclk2-1gsps
 				when x"0DE" =>
-					config_reg <= x"0141" & x"03"; ---					
+					config_reg <= x"0141" & x"03"; ---
 				when x"0DF" =>
-					config_reg <= x"0142" & x"00";	
+					config_reg <= x"0142" & x"00";
 				when x"0E0" =>
-					config_reg <= x"0143" & x"00";	
+					config_reg <= x"0143" & x"00";
 				when x"0E1" =>
-					config_reg <= x"0144" & x"00";	
+					config_reg <= x"0144" & x"00";
 				when x"0E2" =>
-					config_reg <= x"0145" & x"00";						
+					config_reg <= x"0145" & x"00";
 				when x"0E3" =>
-					config_reg <= x"0146" & x"00";	
+					config_reg <= x"0146" & x"00";
 				when x"0E4" =>
-					config_reg <= x"0147" & x"00";	
+					config_reg <= x"0147" & x"00";
 				when x"0E5" =>
-					config_reg <= x"0148" & x"08";	
+					config_reg <= x"0148" & x"08";
 				when x"0E6" =>
 					config_reg <= x"014A" & x"00";	--channel 13 NOT USE
 				when x"0E7" =>
-				    config_reg <= x"014B" & x"08";   --	
-				when x"0E8" =>					 
-					config_reg <= x"014C" & x"00";	
+				    config_reg <= x"014B" & x"08";   --
+				when x"0E8" =>
+					config_reg <= x"014C" & x"00";
 				when x"0E9" =>
-					config_reg <= x"014D" & x"00";	
+					config_reg <= x"014D" & x"00";
 				when x"0EA" =>
-					config_reg <= x"014E" & x"00";	
+					config_reg <= x"014E" & x"00";
 				when x"0EB" =>
-					config_reg <= x"014F" & x"00";	
+					config_reg <= x"014F" & x"00";
 				when x"0EC" =>
 					config_reg <= x"0150" & x"00";	--
 				when x"0ED" =>
-					config_reg <= x"0151" & x"00";	
+					config_reg <= x"0151" & x"00";
 				when x"0EE" =>
-					config_reg <= x"0152" & x"08";	
+					config_reg <= x"0152" & x"08";
 					------------------------------------------------------------------------
 			   when x"0EF" =>
 				   config_reg <= x"0001" & x"20";
@@ -665,22 +665,22 @@ H7044_SDATA <=HMC7044_SDIO;
 --				when x"0F2" =>
 --				   config_reg <= x"0050" & x"60";
 --				when x"0F3" =>
---					config_reg <= x"0001" & x"62";	
+--					config_reg <= x"0001" & x"62";
 --				when x"0F4" =>
 --					config_reg <= x"0001" & x"60";
 --				when x"0F5" =>
---					config_reg <= x"0001" & x"E0";	
+--					config_reg <= x"0001" & x"E0";
 --				when x"0F6" =>
 --					config_reg <= x"0001" & x"60";
 
 
-					
+
 				when others =>
 					config_reg <= x"000000";
 			end case;
 		end if;
 	end process;
-	
+
 	process(clk,rst)
 	begin
 		if rst = '0' then
@@ -695,75 +695,75 @@ H7044_SDATA <=HMC7044_SDIO;
 			wr_reg_cnt		<= (others => '0');
 		elsif rising_edge(clk) then
 			case spi_cntr_status is
-				when config_wait => 
+				when config_wait =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
-					
-					spi_cntr_status <= config_start;	
-				when config_start => 
+
+					spi_cntr_status <= config_start;
+				when config_start =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
-					
+
 					spi_cntr_status <= idle0;
-				when idle0 => 
+				when idle0 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
-					
+
 					spi_cntr_status <= idle1;
-				when idle1 => 
+				when idle1 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
-					
+
 					spi_cntr_status <= idle2;
-				when idle2 => 
+				when idle2 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
-					
+
 					spi_cntr_status <= idle3;
-				when idle3 => 
+				when idle3 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '0';
 					HMC7044_SDIO		<= '0';
-					
+
 					spi_reg <= config_reg;
 					spi_cntr_status <= wr_clkl0;
-				when wr_clkl0 => 
+				when wr_clkl0 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '0';
 					HMC7044_SDIO		<= spi_reg(23);
-					
+
 					spi_cntr_status <= wr_clkl1;
-				when wr_clkl1 => 
+				when wr_clkl1 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '0';
 					HMC7044_SDIO		<= spi_reg(23);
-					
+
 					spi_cntr_status <= wr_clkh0;
-				when wr_clkh0 => 
+				when wr_clkh0 =>
 					HMC7044_SCLK		<= '1';
 					HMC7044_CS_N		<= '0';
 					HMC7044_SDIO		<= spi_reg(23);
-					
+
 					spi_cntr_status <= wr_clkh1;
-				when wr_clkh1 => 
+				when wr_clkh1 =>
 					HMC7044_SCLK		<= '1';
 					HMC7044_CS_N		<= '0';
 					HMC7044_SDIO		<= spi_reg(23);
-					
+
 					spi_reg 		<= spi_reg(22 downto 0)&spi_reg(23);
 					wr_reg_cnt 		<= wr_reg_cnt + 1;
-					spi_cntr_status <= config_wait1;			
+					spi_cntr_status <= config_wait1;
 				when config_wait1 =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '0';
 					if wr_reg_cnt = x"18" then
-						wr_reg_cnt <= (others => '0');	
-				 
+						wr_reg_cnt <= (others => '0');
+
 						if config_reg_cnt = x"0F1" then
 							spi_cntr_status <= config_end;
 							config_reg_cnt <= (others => '0');
@@ -780,26 +780,26 @@ H7044_SDATA <=HMC7044_SDIO;
 					else
 						spi_cntr_status <= wr_clkl0;
 					end if;
-					
+
 				when config_end =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
 					SET_FINISH<='1';
-					
+
 					spi_cntr_status <= config_end;
 				when others =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
 					spi_cntr_status <= config_wait;
-				end case;		
+				end case;
 		end if;
 	end process;
-	                 
-				   
 
-                 
+
+
+
  -------------------------------------------------------------------------
 
 end MAPPED;

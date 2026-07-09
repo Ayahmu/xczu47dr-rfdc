@@ -2,6 +2,9 @@
 
 module udp_waveform_ddr_writer #(
     parameter [63:0] MAGIC = 64'h5741564544445230,
+    parameter [63:0] TRIGGER_WORD = 64'h3152454747495254,
+    parameter [63:0] LEGACY_TRIGGER_HEADER = 64'h0000000200000002,
+    parameter [63:0] LEGACY_TRIGGER_GO = 64'h0000000000004F47,
     parameter [63:0] DDR_ADDR_BASE = 64'd0,
     parameter FIFO_DEPTH_LOG2 = 4
 ) (
@@ -13,6 +16,7 @@ module udp_waveform_ddr_writer #(
 
     output reg          instr_tvalid,
     output reg  [63:0]  instr_tdata,
+    output reg          trigger_pulse,
 
     output reg  [63:0]  m_axi_awaddr,
     output wire [1:0]   m_axi_awburst,
@@ -25,10 +29,10 @@ module udp_waveform_ddr_writer #(
     output wire [2:0]   m_axi_awsize,
     output reg          m_axi_awvalid,
 
-    output reg  [127:0] m_axi_wdata,
+    output reg  [255:0] m_axi_wdata,
     output wire         m_axi_wlast,
     input  wire         m_axi_wready,
-    output wire [15:0]  m_axi_wstrb,
+    output wire [31:0]  m_axi_wstrb,
     output reg          m_axi_wvalid,
 
     output wire         m_axi_bready,
@@ -41,11 +45,12 @@ module udp_waveform_ddr_writer #(
     output reg  [31:0]  dbg_write_count,
     output reg  [31:0]  dbg_bresp_count,
     output wire [31:0]  dbg_drop_count_o,
+    output wire [31:0]  dbg_align_error_count_o,
     output wire [15:0]  dbg_fifo_count_o,
     output reg  [31:0]  dbg_resync_count,
     output reg  [1:0]   dbg_last_bresp,
     output reg  [63:0]  dbg_last_addr,
-    output reg  [127:0] dbg_last_wdata
+    output reg  [255:0] dbg_last_wdata
 );
 
   localparam [FIFO_DEPTH_LOG2:0] FIFO_DEPTH = (1 << FIFO_DEPTH_LOG2);
@@ -53,18 +58,24 @@ module udp_waveform_ddr_writer #(
   localparam [2:0] ST_IDLE     = 3'd0;
   localparam [2:0] ST_ADDR     = 3'd1;
   localparam [2:0] ST_DATA_LOW = 3'd2;
-  localparam [2:0] ST_DATA_HI  = 3'd3;
+  localparam [2:0] ST_DATA_1   = 3'd3;
+  localparam [2:0] ST_DATA_2   = 3'd4;
+  localparam [2:0] ST_DATA_3   = 3'd5;
 
   reg [63:0] write_addr;
-  reg [63:0] data_low;
+  reg [63:0] data_word0;
+  reg [63:0] data_word1;
+  reg [63:0] data_word2;
 
   reg [63:0]  fifo_addr [0:(1 << FIFO_DEPTH_LOG2)-1];
-  reg [127:0] fifo_data [0:(1 << FIFO_DEPTH_LOG2)-1];
+  reg [255:0] fifo_data [0:(1 << FIFO_DEPTH_LOG2)-1];
   reg [FIFO_DEPTH_LOG2-1:0] fifo_wr_ptr;
   reg [FIFO_DEPTH_LOG2-1:0] fifo_rd_ptr;
   reg [FIFO_DEPTH_LOG2:0] fifo_count;
   reg [31:0] dbg_drop_count;
+  reg [31:0] dbg_align_error_count;
   reg write_resp_pending;
+  reg drop_legacy_trigger_payload;
 
   wire fifo_full = fifo_count == FIFO_DEPTH;
   wire fifo_empty = fifo_count == {FIFO_DEPTH_LOG2+1{1'b0}};
@@ -72,7 +83,11 @@ module udp_waveform_ddr_writer #(
   wire launch_write = axi_idle && !write_resp_pending && !fifo_empty;
   wire pop_write = launch_write;
   wire resync_word = udp_tvalid && (udp_tdata == MAGIC) && (dbg_state != ST_IDLE);
-  wire push_write = udp_tvalid && !resync_word && (dbg_state == ST_DATA_HI) && (!fifo_full || pop_write);
+  wire write_addr_aligned = (write_addr[4:0] == 5'd0);
+  wire push_write = udp_tvalid && !resync_word && (dbg_state == ST_DATA_3) && write_addr_aligned && (!fifo_full || pop_write);
+  wire trigger_word = (udp_tdata == TRIGGER_WORD) || (udp_tdata == LEGACY_TRIGGER_HEADER);
+  wire trigger_word_in_idle = udp_tvalid && (dbg_state == ST_IDLE) && trigger_word;
+  wire drop_legacy_go_word = udp_tvalid && (dbg_state == ST_IDLE) && drop_legacy_trigger_payload && (udp_tdata == LEGACY_TRIGGER_GO);
   wire aw_fire = m_axi_awvalid && m_axi_awready;
   wire w_fire = m_axi_wvalid && m_axi_wready;
   wire b_fire = m_axi_bvalid && m_axi_bready;
@@ -83,19 +98,20 @@ module udp_waveform_ddr_writer #(
   assign m_axi_awlock  = 1'b0;
   assign m_axi_awprot  = 3'b000;
   assign m_axi_awqos   = 4'b0000;
-  assign m_axi_awsize  = 3'b100;
+  assign m_axi_awsize  = 3'b101;
 
   assign m_axi_wlast   = 1'b1;
-  assign m_axi_wstrb   = 16'hffff;
+  assign m_axi_wstrb   = 32'hffff_ffff;
   assign m_axi_bready  = 1'b1;
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       instr_tvalid  <= 1'b0;
       instr_tdata   <= 64'd0;
+      trigger_pulse <= 1'b0;
       m_axi_awaddr  <= 64'd0;
       m_axi_awvalid <= 1'b0;
-      m_axi_wdata   <= 128'd0;
+      m_axi_wdata   <= 256'd0;
       m_axi_wvalid  <= 1'b0;
       dbg_wave_pkt  <= 1'b0;
       dbg_instr_word <= 1'b0;
@@ -104,19 +120,27 @@ module udp_waveform_ddr_writer #(
       dbg_bresp_count <= 32'd0;
       dbg_last_bresp  <= 2'd0;
       dbg_last_addr   <= 64'd0;
-      dbg_last_wdata  <= 128'd0;
+      dbg_last_wdata  <= 256'd0;
       fifo_wr_ptr <= {FIFO_DEPTH_LOG2{1'b0}};
       fifo_rd_ptr <= {FIFO_DEPTH_LOG2{1'b0}};
       fifo_count  <= {FIFO_DEPTH_LOG2+1{1'b0}};
       dbg_drop_count <= 32'd0;
+      dbg_align_error_count <= 32'd0;
       dbg_resync_count <= 32'd0;
       write_resp_pending <= 1'b0;
+      drop_legacy_trigger_payload <= 1'b0;
       write_addr   <= 64'd0;
-      data_low     <= 64'd0;
+      data_word0   <= 64'd0;
+      data_word1   <= 64'd0;
+      data_word2   <= 64'd0;
     end else begin
       instr_tvalid  <= 1'b0;
+      trigger_pulse <= 1'b0;
       dbg_wave_pkt  <= 1'b0;
       dbg_instr_word <= 1'b0;
+      if (udp_tvalid && dbg_state == ST_IDLE && drop_legacy_trigger_payload && (udp_tdata != LEGACY_TRIGGER_GO)) begin
+        drop_legacy_trigger_payload <= 1'b0;
+      end
 
       if (aw_fire) begin
         m_axi_awvalid <= 1'b0;
@@ -141,7 +165,12 @@ module udp_waveform_ddr_writer #(
         write_resp_pending <= 1'b1;
       end
 
-      if (resync_word) begin
+      if (drop_legacy_go_word) begin
+        drop_legacy_trigger_payload <= 1'b0;
+      end else if (trigger_word_in_idle) begin
+        trigger_pulse <= 1'b1;
+        drop_legacy_trigger_payload <= (udp_tdata == LEGACY_TRIGGER_HEADER);
+      end else if (resync_word) begin
         dbg_state <= ST_ADDR;
         dbg_wave_pkt <= 1'b1;
         dbg_resync_count <= dbg_resync_count + 32'd1;
@@ -164,14 +193,27 @@ module udp_waveform_ddr_writer #(
           end
 
           ST_DATA_LOW: begin
-            data_low  <= udp_tdata;
-            dbg_state <= ST_DATA_HI;
+            data_word0 <= udp_tdata;
+            dbg_state  <= ST_DATA_1;
           end
 
-          ST_DATA_HI: begin
-            if (!fifo_full || pop_write) begin
+          ST_DATA_1: begin
+            data_word1 <= udp_tdata;
+            dbg_state  <= ST_DATA_2;
+          end
+
+          ST_DATA_2: begin
+            data_word2 <= udp_tdata;
+            dbg_state  <= ST_DATA_3;
+          end
+
+          ST_DATA_3: begin
+            if (!write_addr_aligned) begin
+              dbg_align_error_count <= dbg_align_error_count + 32'd1;
+              dbg_drop_count <= dbg_drop_count + 32'd1;
+            end else if (!fifo_full || pop_write) begin
               fifo_addr[fifo_wr_ptr] <= write_addr;
-              fifo_data[fifo_wr_ptr] <= {udp_tdata, data_low};
+              fifo_data[fifo_wr_ptr] <= {udp_tdata, data_word2, data_word1, data_word0};
               fifo_wr_ptr <= fifo_wr_ptr + {{FIFO_DEPTH_LOG2-1{1'b0}}, 1'b1};
               dbg_write_count <= dbg_write_count + 32'd1;
             end else begin
@@ -195,6 +237,7 @@ module udp_waveform_ddr_writer #(
   end
 
   assign dbg_drop_count_o = dbg_drop_count;
+  assign dbg_align_error_count_o = dbg_align_error_count;
   assign dbg_fifo_count_o = {11'd0, fifo_count};
 
 endmodule
