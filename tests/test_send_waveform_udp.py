@@ -63,6 +63,24 @@ class SendWaveformUdpTests(unittest.TestCase):
         self.assertEqual(metadata["ch4_freq_hz"], 50e6)
         self.assertEqual(metadata["ch8_freq_hz"], 90e6)
 
+    def test_sine_cli_loop_flag_reaches_metadata_and_uploader(self):
+        output_dir = Path("/tmp/send-waveform-loop-test")
+        argv = [
+            "send_waveform_udp.py",
+            "sine",
+            "--loop",
+            "--output-dir", str(output_dir),
+        ]
+
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.waveform_tools, "save_waveform_bundle") as save_bundle, \
+             mock.patch.object(send_waveform_udp.waveform_tools, "upload_and_play") as upload:
+            self.assertEqual(send_waveform_udp.main(), 0)
+
+        metadata = save_bundle.call_args.args[3]
+        self.assertTrue(metadata["loop"])
+        self.assertTrue(upload.call_args.kwargs["loop"])
+
     def test_pypulse_cli_generates_eight_interleaved_iq_buffers_and_metadata(self):
         args = send_waveform_udp.build_parser().parse_args([
             "pypulse",
@@ -238,6 +256,36 @@ class SendWaveformUdpTests(unittest.TestCase):
             self.assertEqual(sorted(channel_sequences), [1])
             self.assertEqual(int(channel_sequences[1][0][1]), len(wave) // 4)
             self.assertEqual(loaded_metadata["mode"], "iq-sine")
+
+    def test_ezq_cli_loop_flag_reaches_play_commands(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_dir = Path(temp_dir) / "artifacts"
+            output_dir = Path(temp_dir) / "upload"
+            wave = np.array([1, 10, 2, 20, 3, 30, 4, 40], dtype=np.int16)
+            waveform_tools.save_ezq_wave_bundle(
+                artifact_dir,
+                {1: wave},
+                {"mode": "ezq", "layout": host.DDR_LAYOUT_INTERLEAVED_512B},
+                channel_format="interleaved_iq",
+                stem="ezq",
+            )
+            controller = mock.Mock()
+            argv = [
+                "send_waveform_udp.py",
+                "ezq",
+                "--artifact-dir", str(artifact_dir),
+                "--wave-format", "interleaved_iq",
+                "--channels", "1",
+                "--loop",
+                "--output-dir", str(output_dir),
+            ]
+
+            with mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                self.assertEqual(send_waveform_udp.main(), 0)
+
+            commands = controller.send_instructions.call_args.args[0]
+            self.assertEqual(commands[-1], [3, 15, 0, 0, 1])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ module TopCustomXczu47dr (
 
     output RST_88E1111,
     output TRIG_1,
+    output HMC7044_CLK,
 
     // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
     input  PL_CLK_P_0,
@@ -72,6 +73,7 @@ module TopCustomXczu47dr (
 
   Top top_i (
       .TRIG_1(TRIG_1),
+      .HMC7044_CLK(HMC7044_CLK),
 
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),

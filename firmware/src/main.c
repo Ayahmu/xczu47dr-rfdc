@@ -40,6 +40,7 @@ int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
 int Configure_Custom_DAC_NCO(void);
 int Report_Custom_DAC_Status(const char *Stage);
+int Report_Custom_DAC_Clock_Status(const char *Stage);
 int Poll_Rfdc_Nco_Mailbox(void);
 
 /* Default 6.4 GS/s role map:
@@ -215,6 +216,85 @@ int Report_Custom_DAC_Status(const char *Stage)
 			   MixerStatus,
 			   (unsigned long)OutputCurr,
 			   CurrentStatus);
+	}
+
+	return XST_SUCCESS;
+}
+
+int Report_Custom_DAC_Clock_Status(const char *Stage)
+{
+	XRFdc *RFdcInstPtr = &RFdcInst;
+	XRFdc_IPStatus IpStatus;
+	unsigned int Tile_Id;
+	unsigned int i;
+
+	xil_printf("RFDC DAC clock/raw register readback (%s):\r\n", Stage);
+	if (XRFdc_GetIPStatus(RFdcInstPtr, &IpStatus) == XST_SUCCESS)
+	{
+		for (Tile_Id = 0; Tile_Id < 4U; Tile_Id++)
+		{
+			XRFdc_PLL_Settings PllSettings;
+			u32 LockStatus = 0U;
+			u32 ClockSource = 0U;
+			u16 FabClkDiv = 0U;
+			double FabClkFreq = XRFdc_GetFabClkFreq(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id);
+			int PllStatus = XRFdc_GetPLLConfig(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, &PllSettings);
+			int LockReadStatus = XRFdc_GetPLLLockStatus(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, &LockStatus);
+			int ClockSourceStatus = XRFdc_GetClockSource(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, &ClockSource);
+			int FabClkDivStatus = XRFdc_GetFabClkOutDiv(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, &FabClkDiv);
+			u32 PllFreqReg = XRFdc_ReadReg(RFdcInstPtr, XRFDC_CTRL_STS_BASE(XRFDC_DAC_TILE, Tile_Id), XRFDC_PLL_FREQ);
+			u32 PllFsReg = XRFdc_ReadReg(RFdcInstPtr, XRFDC_CTRL_STS_BASE(XRFDC_DAC_TILE, Tile_Id), XRFDC_PLL_FS);
+
+			xil_printf("  Tile%u enabled=%lu state=0x%08lx pll_state=0x%08lx "
+				   "pll_status=%d refclk=%d MHz sample=%d MSPS fbdiv=%lu outdiv=%lu refdiv=%lu "
+				   "lock=%lu(status=%d) clk_src=%lu(status=%d) fabclk=%d MHz div=%u(status=%d) "
+				   "raw_pll_freq=0x%08lx raw_pll_fs=0x%08lx\r\n",
+				   Tile_Id,
+				   (unsigned long)IpStatus.DACTileStatus[Tile_Id].IsEnabled,
+				   (unsigned long)IpStatus.DACTileStatus[Tile_Id].TileState,
+				   (unsigned long)IpStatus.DACTileStatus[Tile_Id].PLLState,
+				   PllStatus,
+				   (PllStatus == XST_SUCCESS) ? (int)(PllSettings.RefClkFreq + 0.5) : 0,
+				   (PllStatus == XST_SUCCESS) ? (int)((PllSettings.SampleRate * 1000.0) + 0.5) : 0,
+				   (PllStatus == XST_SUCCESS) ? (unsigned long)PllSettings.FeedbackDivider : 0UL,
+				   (PllStatus == XST_SUCCESS) ? (unsigned long)PllSettings.OutputDivider : 0UL,
+				   (PllStatus == XST_SUCCESS) ? (unsigned long)PllSettings.RefClkDivider : 0UL,
+				   (unsigned long)LockStatus,
+				   LockReadStatus,
+				   (unsigned long)ClockSource,
+				   ClockSourceStatus,
+				   (int)(FabClkFreq + 0.5),
+				   (unsigned int)FabClkDiv,
+				   FabClkDivStatus,
+				   (unsigned long)PllFreqReg,
+				   (unsigned long)PllFsReg);
+		}
+	}
+	else
+	{
+		xil_printf("  XRFdc_GetIPStatus failed\r\n");
+	}
+
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
+	{
+		u32 Tile_Id = CustomDacChannels[i].Tile_Id;
+		u32 Block_Id = CustomDacChannels[i].Block_Id;
+		UINTPTR BaseAddr = XRFDC_BLOCK_BASE(XRFDC_DAC_TILE, Tile_Id, Block_Id);
+		u32 DatapathMode = XRFdc_RDReg(RFdcInstPtr, BaseAddr, XRFDC_DAC_DATAPATH_OFFSET, XRFDC_DATAPATH_MODE_MASK);
+		u32 InterpData = XRFdc_ReadReg16(RFdcInstPtr, BaseAddr, XRFDC_DAC_ITERP_DATA_OFFSET);
+		u64 FreqWord = ((u64)XRFdc_ReadReg16(RFdcInstPtr, BaseAddr, XRFDC_ADC_NCO_FQWD_UPP_OFFSET) << 32) |
+				((u64)XRFdc_ReadReg16(RFdcInstPtr, BaseAddr, XRFDC_ADC_NCO_FQWD_MID_OFFSET) << 16) |
+				(u64)XRFdc_ReadReg16(RFdcInstPtr, BaseAddr, XRFDC_ADC_NCO_FQWD_LOW_OFFSET);
+
+		xil_printf("  %s Tile%lu Block%lu role=%s datapath=0x%08lx interp_data=0x%08lx raw_nco_fqwd=0x%04lx%08lx\r\n",
+			   CustomDacChannels[i].Channel,
+			   (unsigned long)Tile_Id,
+			   (unsigned long)Block_Id,
+			   CustomDacChannels[i].Role,
+			   (unsigned long)DatapathMode,
+			   (unsigned long)InterpData,
+			   (unsigned long)((FreqWord >> 32) & 0xFFFFULL),
+			   (unsigned long)(FreqWord & 0xFFFFFFFFULL));
 	}
 
 	return XST_SUCCESS;
@@ -416,6 +496,7 @@ int Poll_Rfdc_Nco_Mailbox(void)
 
 	LastSeq = Seq;
 	Report_Custom_DAC_Status("after RFDC mailbox retune");
+	Report_Custom_DAC_Clock_Status("after RFDC mailbox retune");
 	return XST_SUCCESS;
 }
 
@@ -529,6 +610,7 @@ int main(void)
 		return Status;
 	}
 	Report_Custom_DAC_Status("after startup");
+	Report_Custom_DAC_Clock_Status("after startup");
 	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
 	{
 		return XST_FAILURE;
@@ -542,6 +624,7 @@ int main(void)
 		return XST_FAILURE;
 	}
 	Report_Custom_DAC_Status("after custom config");
+	Report_Custom_DAC_Clock_Status("after custom config");
 
 	// init_dma_ip(&AxiDma, CH0_DMA_DEV_ID, CH0_MM2S_INTR_ID, &INST);
 
@@ -549,7 +632,7 @@ int main(void)
 		return XST_FAILURE;
 
 #if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
-		// Host uploads all PL DDR waveform slots; firmware must not preload them.
+	// Host uploads all PL DDR waveform slots; firmware must not preload them.
 	preload_debug_waveforms();
 #endif
 

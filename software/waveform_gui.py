@@ -472,7 +472,7 @@ class WaveformSenderApp(ttk.Frame):
         self.axis_freq_hz = tk.StringVar(value=to_display_mhz(defaults.axis_freq_hz))
         default_source = "ezq-quantum" if defaults.mode == "ezq-quantum" or not settings_exists else "manual-channels"
         self.waveform_source = tk.StringVar(value=default_source)
-        self.loop = tk.BooleanVar(value=False)
+        self.loop = tk.BooleanVar(value=defaults.loop)
         self.wait_for_trigger = tk.BooleanVar(value=defaults.wait_for_trigger)
         self.dry_run = tk.BooleanVar(value=defaults.dry_run)
         self.ezq_fields = self._make_ezq_field_variables(defaults.ezq)
@@ -839,11 +839,12 @@ class WaveformSenderApp(ttk.Frame):
         form.entry(GLOBAL_RFDC_INTERPOLATION_LABEL, self.rfdc_interpolation, 11)
         form.entry(GLOBAL_AXIS_FREQ_LABEL, self.axis_freq_hz, 12)
         form.checkbutton("Wait for trigger", self.wait_for_trigger, 13)
-        form.checkbutton("Dry run, do not send UDP", self.dry_run, 14)
+        form.checkbutton("Loop playback", self.loop, 14)
+        form.checkbutton("Dry run, do not send UDP", self.dry_run, 15)
 
-        form.section("Artifacts", 15)
-        form.entry("Output dir", self.output_dir, 16)
-        form.browse_row(self._browse_output_dir, 17)
+        form.section("Artifacts", 16)
+        form.entry("Output dir", self.output_dir, 17)
+        form.browse_row(self._browse_output_dir, 18)
 
     def _build_channels_tab(self, parent: ttk.Frame) -> None:
         self.channel_frames = {}
@@ -1063,7 +1064,7 @@ class WaveformSenderApp(ttk.Frame):
         return int(value.strip(), 0)
 
     def _preview_variables(self) -> list[Any]:
-        variables: list[Any] = [self.sample_rate_hz, self.axis_freq_hz, self.wait_for_trigger, self.dry_run, self.waveform_source]
+        variables: list[Any] = [self.sample_rate_hz, self.axis_freq_hz, self.loop, self.wait_for_trigger, self.dry_run, self.waveform_source]
         variables.extend(self.ezq_fields.values())
         variables.extend(self.ezq_channel_enabled.values())
         variables.extend(self.ezq_channel_waveform.values())
@@ -1252,7 +1253,7 @@ class WaveformSenderApp(ttk.Frame):
             "sample_rate_hz": from_display_gsps(self.sample_rate_hz.get()),
             "rfdc_interpolation": self._parse_int(self.rfdc_interpolation.get()),
             "axis_freq_hz": from_display_mhz(self.axis_freq_hz.get()),
-            "loop": False,
+            "loop": bool(self.loop.get()),
             "wait_for_trigger": bool(self.wait_for_trigger.get()),
             "dry_run": bool(self.dry_run.get() if dry_run is None else dry_run),
             "ezq": ezq,

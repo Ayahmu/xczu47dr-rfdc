@@ -47,6 +47,7 @@ module Top (
     output vout32_v_n,
     output vout32_v_p,
     output TRIG_1,
+    output HMC7044_CLK,
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -576,6 +577,15 @@ module Top (
     else                dac_rstff <= {dac_rstff[1:0], 1'b1};
   end
   wire dac_rst_n = dac_rstff[2];
+
+  // Debug clock output for checking the RFDC-derived DAC AXIS clock without
+  // probing the board-internal HMC7044 differential refclk nets.
+  reg [4:0] hmc7044_clk_dbg_div;
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if (!dac_rst_n) hmc7044_clk_dbg_div <= 5'd0;
+    else            hmc7044_clk_dbg_div <= hmc7044_clk_dbg_div + 5'd1;
+  end
+  assign HMC7044_CLK = hmc7044_clk_dbg_div[3]; // dac_axis_clk / 16
 
   // ==========================================================
   // DDR 域：配置帧打包，commit 时写入 cfg FIFO

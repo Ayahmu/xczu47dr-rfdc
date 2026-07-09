@@ -211,16 +211,16 @@ H7044_SDATA <=HMC7044_SDIO;
 					config_reg <= x"0032" & x"01";	--     bit[0] bypass frequency doubler, 0---enable frequency doubler before r2 divider ,1----bypass frequency doubler
 
 				when x"025" =>
-					config_reg <= x"0033" & x"01";	--12bit r2 divider[7:0]
+					config_reg <= x"0033" & x"19";	--12bit r2 divider[7:0]: 25
 				when x"026" =>
 					config_reg <= x"0034" & x"00";	--[3:0]======r2 divider[11:8]
 				when x"027" =>
 				--	config_reg <= x"0035" & x"18";	--12bit n2 divider[7:0]
 
-					  config_reg <= x"0035" & x"20";  -------VCO 3.2G, for 128MHz DAC refclk
+					  config_reg <= x"0035" & x"00";  -------PLL2 VCO 3.072G: 100MHz / R2(25) * N2(768)
 
 				when x"028" =>
-					config_reg <= x"0036" & x"00";	--[3:0]======n2 divider[11:8]
+					config_reg <= x"0036" & x"03";	--[3:0]======n2 divider[11:8]
 				when x"029" =>
 					config_reg <= x"0037" & x"0F";	--[3:0]=======pll2 cp current[3:0]
 				when x"02A" =>
@@ -417,7 +417,7 @@ H7044_SDATA <=HMC7044_SDIO;
 																										--10   froce to logic 0
 																										--11  force output to float,goes naturally to vcm
 				when x"07A" =>
-						config_reg <= x"00D2" & x"F3";	--channel1   PLCLK 100MHz
+						config_reg <= x"00D2" & x"F3";	--channel1   PLCLK 96MHz, unused by current top
 					when x"07B" =>
 					   config_reg <= x"00D3" & x"20";	--
 				when x"07C" =>
@@ -474,7 +474,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"095" =>
 						config_reg <= x"00F0" & x"F3";	--channel4  dac refclk 0 128MHz
 				when x"096" =>
-					config_reg <= x"00F1" & x"19";
+					config_reg <= x"00F1" & x"18";	--3.072GHz / 24 = 128MHz
 				when x"097" =>
 					config_reg <= x"00F2" & x"00";	--
 				when x"098" =>
@@ -490,11 +490,11 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"09D" =>
 					config_reg <= x"00F8" & x"10";
 				when x"09E" =>
-						config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2.5MHz
+						config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2MHz
 					when x"09F" =>
 						config_reg <= x"00FB" & x"00";
 					when x"0A0" =>
-						config_reg <= x"00FC" & x"05";
+						config_reg <= x"00FC" & x"06";
 				when x"0A1" =>
 					config_reg <= x"00FD" & x"00";
 				when x"0A2" =>
@@ -510,7 +510,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"0A7" =>
 						config_reg <= x"0104" & x"F3";	--channel6  dac refclk 1 128MHz
 				when x"0A8" =>
-					config_reg <= x"0105" & x"19";
+					config_reg <= x"0105" & x"18";	--3.072GHz / 24 = 128MHz
 				when x"0A9" =>
 					config_reg <= x"0106" & x"00";
 				when x"0AA" =>
@@ -526,11 +526,11 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"0AF" =>
 					config_reg <= x"010C" & x"10";
 				when x"0B0" =>
-						config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2.5MHz
+						config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2MHz
 					when x"0B1" =>
 						      config_reg <= x"010F" & x"00";
 					when x"0B2" =>
-						      config_reg <= x"0110" & x"05";
+						      config_reg <= x"0110" & x"06";
 				when x"0B3" =>
 					config_reg <= x"0111" & x"00";	--
 				when x"0B4" =>

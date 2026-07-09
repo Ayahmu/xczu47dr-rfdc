@@ -186,7 +186,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(loaded.connection.port, 4321)
             self.assertEqual(loaded.connection.udp_interface, "eth-local")
             self.assertEqual(loaded.waveform.output_dir, Path("/tmp/custom-waveforms"))
-            self.assertFalse(loaded.waveform.loop)
+            self.assertTrue(loaded.waveform.loop)
             self.assertFalse(loaded.waveform.dry_run)
             self.assertEqual(loaded.waveform.ch1.waveform_type, "iq-gaussian-sine")
             self.assertEqual(loaded.waveform.ch1.pypulse_waveform, "xy")
@@ -687,7 +687,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch2_freq_hz"], 80e6)
         self.assertNotIn("x_freq_hz", result.metadata)
         self.assertNotIn("y_freq_hz", result.metadata)
-        self.assertFalse(result.metadata["loop"])
+        self.assertTrue(result.metadata["loop"])
         self.assertEqual(result.metadata["zero_tail_s"], 50e-9)
 
     def test_per_channel_iq_gaussian_sine_generates_finite_iq_record(self):
@@ -1100,7 +1100,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(kwargs["udp_source_ip"], "192.0.2.1")
             self.assertEqual(kwargs["timeout_s"], 1.25)
             self.assertEqual(kwargs["post_upload_sleep_s"], 0.05)
-            self.assertFalse(kwargs["loop"])
+            self.assertTrue(kwargs["loop"])
             self.assertFalse(kwargs["auto_start"])
             self.assertIn("ch3", kwargs)
             self.assertIn("ch4", kwargs)

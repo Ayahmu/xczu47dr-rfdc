@@ -27,6 +27,11 @@ set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
 set_property PACKAGE_PIN A6 [get_ports TRIG_1]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
 
+# XS18/TRIG_2 debug clock output.  This carries dac_axis_clk / 16 so the DAC
+# clock chain can be checked from an external scope without probing RFDC refclk.
+set_property PACKAGE_PIN D10 [get_ports HMC7044_CLK]
+set_property IOSTANDARD LVCMOS25 [get_ports HMC7044_CLK]
+
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_P_0]
