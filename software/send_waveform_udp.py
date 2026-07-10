@@ -27,6 +27,24 @@ CHANNEL_DEFAULTS = {
 }
 
 
+def parse_byte_count(value: str) -> int:
+    text = str(value).strip().lower()
+    if text == "max":
+        return host.DDR_MAX_BYTES_PER_CHANNEL
+    scales = {
+        "kib": 1024,
+        "mib": 1024**2,
+        "gib": 1024**3,
+        "kb": 1000,
+        "mb": 1000**2,
+        "gb": 1000**3,
+    }
+    for suffix, scale in scales.items():
+        if text.endswith(suffix):
+            return int(float(text[:-len(suffix)]) * scale)
+    return int(text, 0)
+
+
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ip", default=host.DEFAULT_BOARD_IP, help="RFSoC board IPv4 address")
     parser.add_argument("--port", type=int, default=host.DEFAULT_BOARD_PORT, help="RFSoC UDP port")
@@ -125,6 +143,31 @@ def build_parser() -> argparse.ArgumentParser:
     ezq = subparsers.add_parser("ezq", help="upload ez-Q style wave/seq artifacts through the RFSoC 10G path")
     add_common_args(ezq)
     add_ezq_args(ezq)
+
+    max_length = subparsers.add_parser("max-length", help="stream a deterministic 8-channel record up to the usable DDR limit")
+    add_common_args(max_length)
+    max_length.add_argument(
+        "--bytes-per-channel",
+        type=parse_byte_count,
+        default=host.DDR_MAX_BYTES_PER_CHANNEL,
+        help="Logical bytes per channel; accepts max, integer, KiB, MiB, or GiB",
+    )
+    max_length.add_argument("--beats-per-datagram", type=int, default=128, help="512-bit DDR beats in each bulk UDP datagram")
+    max_length.add_argument("--batch-pause-us", type=float, default=0.0, help="Optional pacing delay after each bulk UDP datagram")
+    max_length.add_argument("--marker-bytes-per-channel", type=int, default=4096, help="Per-channel size of start/middle/end marker regions")
+    max_length.add_argument(
+        "--pattern",
+        choices=[host.MAX_LENGTH_PATTERN_CW_MARKER, host.MAX_LENGTH_PATTERN_LOWFREQ_SINE],
+        default=host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+        help="Streaming max-length payload pattern",
+    )
+    max_length.add_argument("--sine-freq-hz", type=float, default=10.0, help="Low-frequency sine rate used by --pattern lowfreq-sine")
+    max_length.add_argument("--sine-amplitude", type=int, default=4096, help="Low-frequency sine I-code amplitude")
+    max_length.add_argument("--waveform-cache-dir", default="", help="Directory for pre-generated max-length waveform payload files")
+    max_length.add_argument("--no-waveform-cache", action="store_true", help="Generate max-length payload in memory while sending")
+    max_length.add_argument("--force-waveform-cache", action="store_true", help="Regenerate the waveform cache before sending")
+    max_length.add_argument("--generate-cache-only", action="store_true", help="Generate/reuse the waveform cache and exit without uploading")
+    max_length.add_argument("--no-full-dump", action="store_true", help="Compatibility option; max-length mode never writes a full hex dump")
 
     return parser
 
@@ -291,8 +334,120 @@ def _load_ezq_channel_artifacts(args: argparse.Namespace) -> tuple[dict[int, np.
     return channel_waves, channel_sequences, metadata
 
 
+def max_length_metadata(args: argparse.Namespace) -> dict[str, object]:
+    bytes_per_channel = int(args.bytes_per_channel)
+    if bytes_per_channel <= 0 or bytes_per_channel > host.DDR_MAX_BYTES_PER_CHANNEL:
+        raise ValueError(
+            f"bytes_per_channel must be in [32, {host.DDR_MAX_BYTES_PER_CHANNEL}], got {bytes_per_channel}"
+        )
+    host.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+    total_bytes = bytes_per_channel * host.DDR_INTERLEAVED_CHANNELS
+    return {
+        "mode": "max-length",
+        "layout": host.DDR_LAYOUT_INTERLEAVED_512B,
+        "pattern": args.pattern,
+        "ddr_phys_bytes": host.DDR_PHYS_BYTES,
+        "ddr_reserved_top_bytes": host.DDR_RESERVED_TOP_BYTES,
+        "ddr_usable_waveform_bytes": host.DDR_USABLE_WAVEFORM_BYTES,
+        "rfdc_mailbox_offset": host.RFDC_CTRL_MAILBOX_OFFSET,
+        "bytes_per_channel": bytes_per_channel,
+        "physical_ddr_bytes": total_bytes,
+        "complex_samples_per_channel": bytes_per_channel // 4,
+        "expected_rfdc_beats_per_channel": bytes_per_channel // host.BEAT_BYTES,
+        "expected_datamover_beats": total_bytes // host.DDR_INTERLEAVED_BEAT_BYTES,
+        "expected_duration_s": bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
+        "axis_hz": host.DAC_AXIS_HZ,
+        "bytes_per_axis_beat": host.BEAT_BYTES,
+        "marker_bytes_per_channel": int(args.marker_bytes_per_channel),
+        "sine_freq_hz": float(args.sine_freq_hz),
+        "sine_amplitude": int(args.sine_amplitude),
+        "beats_per_datagram": int(args.beats_per_datagram),
+        "use_waveform_cache": not bool(args.no_waveform_cache),
+        "force_waveform_cache": bool(args.force_waveform_cache),
+        "waveform_cache_dir": args.waveform_cache_dir,
+        "loop": False,
+        "wait_for_trigger": bool(args.wait_for_trigger),
+    }
+
+
+def run_max_length(args: argparse.Namespace) -> int:
+    if args.ddr_layout != host.DDR_LAYOUT_INTERLEAVED_512B:
+        raise ValueError("max-length mode requires ddr-layout=interleaved_512b")
+    if args.loop:
+        raise ValueError("max-length mode is a single-shot measurement and does not support --loop")
+    metadata = max_length_metadata(args)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = output_dir / "max_length_metadata.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    print(
+        f"[max-length] per_channel={metadata['bytes_per_channel']} bytes, "
+        f"total={metadata['physical_ddr_bytes']} bytes, "
+        f"duration={float(metadata['expected_duration_s']):.9f}s"
+    )
+    print(f"[max-length] metadata={metadata_path}")
+    cache_dir = Path(args.waveform_cache_dir).expanduser() if args.waveform_cache_dir else output_dir / "waveform_cache"
+    if args.dry_run and not args.generate_cache_only:
+        return 0
+    if not args.no_waveform_cache:
+        cache_path = host.ensure_max_length_waveform_cache(
+            cache_dir,
+            int(metadata["bytes_per_channel"]),
+            marker_bytes_per_channel=int(args.marker_bytes_per_channel),
+            pattern=args.pattern,
+            sine_freq_hz=float(args.sine_freq_hz),
+            sine_amplitude=int(args.sine_amplitude),
+            force=bool(args.force_waveform_cache),
+        )
+        print(f"[max-length] waveform cache={cache_path}")
+        if args.generate_cache_only:
+            return 0
+
+    ctrl = host.RFSocController(
+        args.ip,
+        port=args.port,
+        timeout_s=args.timeout_s,
+        transport="udp",
+        udp_interface=args.udp_interface,
+        udp_source_ip=args.udp_source_ip,
+    )
+    try:
+        datagrams = ctrl.upload_max_length_udp(
+            int(metadata["bytes_per_channel"]),
+            base_addr=host.DDR_BASE,
+            beats_per_datagram=int(args.beats_per_datagram),
+            marker_bytes_per_channel=int(args.marker_bytes_per_channel),
+            pattern=args.pattern,
+            sine_freq_hz=float(args.sine_freq_hz),
+            sine_amplitude=int(args.sine_amplitude),
+            batch_pause_s=max(0.0, float(args.batch_pause_us)) * 1e-6,
+            use_waveform_cache=not bool(args.no_waveform_cache),
+            waveform_cache_dir=cache_dir,
+            force_waveform_cache=False,
+        )
+        print(f"[max-length] upload complete, datagrams={datagrams}")
+        if args.post_upload_sleep_s > 0:
+            time.sleep(args.post_upload_sleep_s)
+        lengths = {channel: int(metadata["bytes_per_channel"]) for channel in range(1, 9)}
+        ctrl.send_instructions(
+            waveform_tools.build_play_commands(
+                loop=False,
+                auto_start=not args.wait_for_trigger,
+                channel_lengths=lengths,
+                channel_delays={channel: 0 for channel in range(1, 9)},
+                layout=host.DDR_LAYOUT_INTERLEAVED_512B,
+            )
+        )
+        print("[max-length] PLAY instructions sent")
+        return 0
+    finally:
+        ctrl.close()
+
+
 def main() -> int:
     args = build_parser().parse_args()
+    if args.mode == "max-length":
+        return run_max_length(args)
     if args.mode == "ezq":
         channel_waves, channel_sequences, metadata = _load_ezq_channel_artifacts(args)
         layout = str(metadata.get("layout", args.ddr_layout))

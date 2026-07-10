@@ -27,6 +27,64 @@ class SendWaveformUdpTests(unittest.TestCase):
 
         self.assertEqual(args.axis_freq_hz, 50_000_000.0)
 
+    def test_max_length_cli_defaults_to_usable_ddr_limit(self):
+        args = send_waveform_udp.build_parser().parse_args(["max-length", "--dry-run"])
+        metadata = send_waveform_udp.max_length_metadata(args)
+
+        self.assertEqual(args.bytes_per_channel, host.DDR_MAX_BYTES_PER_CHANNEL)
+        self.assertEqual(metadata["physical_ddr_bytes"], 0x1FFF00000)
+        self.assertEqual(metadata["expected_rfdc_beats_per_channel"], 33_550_336)
+        self.assertEqual(metadata["expected_datamover_beats"], 134_201_344)
+        self.assertAlmostEqual(metadata["expected_duration_s"], 0.67100672)
+
+    def test_max_length_cli_streams_without_allocating_channel_arrays(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = mock.Mock()
+            argv = [
+                "send_waveform_udp.py",
+                "max-length",
+                "--bytes-per-channel", "4KiB",
+                "--wait-for-trigger",
+                "--output-dir", temp_dir,
+            ]
+            with mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                self.assertEqual(send_waveform_udp.main(), 0)
+
+            controller.upload_max_length_udp.assert_called_once()
+            self.assertEqual(controller.upload_max_length_udp.call_args.args[0], 4096)
+            commands = controller.send_instructions.call_args.args[0]
+            play_commands = [command for command in commands if command[0] == 2]
+            self.assertEqual(len(play_commands), 8)
+            self.assertTrue(all(command[2] == 4096 for command in play_commands))
+            self.assertEqual(commands[-1], [3, 0, 0, 0, 0])
+            metadata_path = Path(temp_dir) / "max_length_metadata.json"
+            self.assertTrue(metadata_path.exists())
+
+    def test_max_length_cli_dry_run_does_not_generate_cache_unless_requested(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            argv = [
+                "send_waveform_udp.py",
+                "max-length",
+                "--bytes-per-channel", "4KiB",
+                "--dry-run",
+                "--output-dir", temp_dir,
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(send_waveform_udp.main(), 0)
+            self.assertFalse((Path(temp_dir) / "waveform_cache").exists())
+
+            argv = [
+                "send_waveform_udp.py",
+                "max-length",
+                "--bytes-per-channel", "4KiB",
+                "--generate-cache-only",
+                "--output-dir", temp_dir,
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(send_waveform_udp.main(), 0)
+            self.assertTrue(any((Path(temp_dir) / "waveform_cache").glob("*.bin")))
+
     def test_sine_cli_generates_eight_channels_and_metadata(self):
         args = send_waveform_udp.build_parser().parse_args([
             "sine",

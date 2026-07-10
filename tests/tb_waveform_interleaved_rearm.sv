@@ -21,6 +21,8 @@ module tb_waveform_interleaved_rearm;
 
   wire [2:0] dbg_st;
   wire       fifo_clear;
+  wire [63:0] dbg_inter_bytes_left;
+  wire [63:0] dbg_inter_total_bytes;
   integer cmd_count = 0;
   reg [63:0] last_cmd_addr = 64'd0;
 
@@ -107,8 +109,8 @@ module tb_waveform_interleaved_rearm;
     .dbg_dm_sel_ch1(),
     .dbg_dm_chunk_beats(),
     .dbg_dm_beats_sent(),
-    .dbg_ch1_bytes_left(),
-    .dbg_ch2_bytes_left(),
+    .dbg_ch1_bytes_left(dbg_inter_bytes_left),
+    .dbg_ch2_bytes_left(dbg_inter_total_bytes),
     .dbg_ch1_base_addr(),
     .dbg_ch2_base_addr(),
     .dbg_ch1_need_hard(),
@@ -171,6 +173,21 @@ module tb_waveform_interleaved_rearm;
   endtask
 
   initial begin
+    repeat(4) @(negedge clk);
+    rst_n = 1'b1;
+    repeat(4) @(negedge clk);
+
+    send_instr({64'd0, 32'h3FFE0000, 32'h00000412});
+    send_instr(128'h00000000000000000000000000000003);
+    wait(cmd_count == 1);
+    repeat(2) @(negedge clk);
+    check_condition(dbg_inter_total_bytes == 64'h00000001FFF00000,
+                    "interleaved total length must retain all 33 address bits");
+    check_condition(dbg_inter_bytes_left == 64'h00000001FFEff000,
+                    "first 4KiB command must decrement the 64-bit remaining length");
+
+    @(negedge clk);
+    rst_n = 1'b0;
     repeat(4) @(negedge clk);
     rst_n = 1'b1;
     repeat(4) @(negedge clk);

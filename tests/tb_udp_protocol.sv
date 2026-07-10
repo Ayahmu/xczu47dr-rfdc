@@ -2,7 +2,7 @@
 
 module tb_udp_protocol;
   localparam [63:0] MAGIC = 64'h5741564544445230;
-  localparam [63:0] DDR_X_ADDR = 64'h0000000500000000;
+  localparam [63:0] DDR_X_ADDR = 64'h0000004800000000;
 
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -126,7 +126,7 @@ module tb_udp_protocol;
     repeat (2) @(negedge clk);
 
     check_condition(captured_instr_valid == 1'b1, "instruction adapter did not emit one 128-bit instruction");
-    check_condition(captured_instr_tdata == 128'h00000005000000000000100000000012, "instruction packing mismatch");
+    check_condition(captured_instr_tdata == 128'h00000048000000000000100000000012, "instruction packing mismatch");
     check_condition(captured_instr_tdata[3:0] == 4'h2, "PLAY opcode decode mismatch");
     check_condition(captured_instr_tdata[7:4] == 4'h1, "PLAY channel decode mismatch");
     check_condition(captured_instr_tdata[63:32] == 32'd4096, "PLAY length decode mismatch");

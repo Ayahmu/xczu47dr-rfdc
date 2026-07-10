@@ -1,4 +1,6 @@
 import argparse
+import hashlib
+import json
 import os
 import socket
 import struct
@@ -48,6 +50,8 @@ DDR_LAYOUT_CONTIGUOUS = "contiguous"
 DDR_LAYOUT_INTERLEAVED_512B = "interleaved_512b"
 DDR_LAYOUT_TILED = "tiled"
 DEFAULT_DDR_LAYOUT = DDR_LAYOUT_INTERLEAVED_512B
+MAX_LENGTH_PATTERN_CW_MARKER = "cw-marker"
+MAX_LENGTH_PATTERN_LOWFREQ_SINE = "lowfreq-sine"
 DDR_TILE_BYTES = FIXED_DATA_BYTES = 4096
 DDR_TILE_CHANNELS = 8
 DDR_SUPERBLOCK_BYTES = DDR_TILE_BYTES * DDR_TILE_CHANNELS
@@ -57,6 +61,11 @@ PLAY_FLAG_INTERLEAVED = 0x4
 DDR_INTERLEAVED_LANE_BYTES = 8
 DDR_INTERLEAVED_BEAT_BYTES = DDR_INTERLEAVED_LANE_BYTES * DDR_TILE_CHANNELS
 DDR_INTERLEAVED_CHANNELS = DDR_TILE_CHANNELS
+DDR_PHYS_BYTES = 8 * 1024 * 1024 * 1024
+DDR_RESERVED_TOP_BYTES = 1 * 1024 * 1024
+DDR_USABLE_WAVEFORM_BYTES = DDR_PHYS_BYTES - DDR_RESERVED_TOP_BYTES
+DDR_MAX_BYTES_PER_CHANNEL = (DDR_USABLE_WAVEFORM_BYTES // DDR_INTERLEAVED_CHANNELS) & ~(BEAT_BYTES - 1)
+DDR_MAX_INTERLEAVED_BYTES = DDR_MAX_BYTES_PER_CHANNEL * DDR_INTERLEAVED_CHANNELS
 DEFAULT_RECORD_DURATION_S = 10e-6
 DEFAULT_BASEBAND_OFFSET_LIMIT_HZ = 160e6
 DEFAULT_XY_TARGET_RF_HZ = 4.5e9
@@ -77,7 +86,7 @@ CHANNEL_ROLES = {
 }
 
 DDR_BASE = 0x0000000000000000
-DDR_CH1_ADDR = 0x0000000000000000
+DDR_CH1_ADDR = DDR_BASE
 DDR_CH2_ADDR = DDR_CH1_ADDR + DDR_CH_STRIDE
 DDR_CH3_ADDR = DDR_CH2_ADDR + DDR_CH_STRIDE
 DDR_CH4_ADDR = DDR_CH3_ADDR + DDR_CH_STRIDE
@@ -113,10 +122,12 @@ DEFAULT_BOARD_PORT = int(os.environ.get("RFSOC_BOARD_PORT", "1234"))
 DEFAULT_UDP_WRITE_SETTLE_S = float(os.environ.get("RFSOC_UDP_WRITE_SETTLE_S", "0.25"))
 DEFAULT_UDP_INTERFACE = os.environ.get("RFSOC_UDP_INTERFACE", "")
 DEFAULT_UDP_SOURCE_IP = os.environ.get("RFSOC_UDP_SOURCE_IP", "")
+DEFAULT_WAVEFORM_CACHE_DIR = Path(os.environ.get("RFSOC_WAVEFORM_CACHE_DIR", "/tmp/opencode/rfsoc_waveform_cache"))
 SO_BINDTODEVICE = 25
 UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
+UDP_WAVE_BULK_MAGIC = 0x5741564553545230  # WAVESTR0
 UDP_TRIGGER_WORD = 0x3152454747495254  # ASCII "TRIGGER1" on the UDP byte stream
-RFDC_CTRL_MAILBOX_OFFSET = 0x0FF00000
+RFDC_CTRL_MAILBOX_OFFSET = DDR_MAX_INTERLEAVED_BYTES
 RFDC_CTRL_MAILBOX_MAGIC = 0x304F434E43444652  # ASCII "RFDCNCO0" little-endian
 RFDC_CTRL_MAILBOX_HEADER_BYTES = 32
 RFDC_CTRL_MAILBOX_ENTRY_BYTES = 16
@@ -357,6 +368,317 @@ def iter_interleaved_udp_waveform_packets(
         yield struct.pack("<QQQQQQ", UDP_WAVE_DDR_MAGIC, base_addr + offset, *data_words)
 
 
+def max_length_marker_amplitude(channel: int, region: str) -> int:
+    """Return a unique, low-amplitude CW code for one channel/marker region."""
+    if channel < 1 or channel > DDR_INTERLEAVED_CHANNELS:
+        raise ValueError("channel must be in 1..8")
+    region_bases = {
+        "body": 0x0800,
+        "start": 0x1000,
+        "middle": 0x2000,
+        "end": 0x3000,
+    }
+    if region not in region_bases:
+        raise ValueError(f"unsupported marker region: {region}")
+    return region_bases[region] + channel * 0x80
+
+
+def max_length_marker_region(
+    physical_offset: int,
+    total_physical_bytes: int,
+    marker_bytes_per_channel: int = 4096,
+) -> str:
+    marker_physical_bytes = marker_bytes_per_channel * DDR_INTERLEAVED_CHANNELS
+    middle_start = max(0, (total_physical_bytes // 2) - (marker_physical_bytes // 2))
+    if physical_offset < marker_physical_bytes:
+        return "start"
+    if middle_start <= physical_offset < middle_start + marker_physical_bytes:
+        return "middle"
+    if physical_offset >= total_physical_bytes - marker_physical_bytes:
+        return "end"
+    return "body"
+
+
+def max_length_interleaved_beat(
+    beat_index: int,
+    total_beats: int,
+    marker_bytes_per_channel: int = 4096,
+) -> bytes:
+    """Build one 512-bit beat containing 8 unique DC-IQ channel lanes."""
+    if beat_index < 0 or beat_index >= total_beats:
+        raise ValueError("beat_index must select an existing 512-bit beat")
+    total_physical_bytes = total_beats * DDR_INTERLEAVED_BEAT_BYTES
+    physical_offset = beat_index * DDR_INTERLEAVED_BEAT_BYTES
+    region = max_length_marker_region(
+        physical_offset,
+        total_physical_bytes,
+        marker_bytes_per_channel=marker_bytes_per_channel,
+    )
+    return b"".join(
+        struct.pack("<hhhh", max_length_marker_amplitude(channel, region), 0,
+                    max_length_marker_amplitude(channel, region), 0)
+        for channel in range(1, DDR_INTERLEAVED_CHANNELS + 1)
+    )
+
+
+def max_length_lowfreq_sine_payload(
+    start_beat: int,
+    beat_count: int,
+    sine_freq_hz: float = 10.0,
+    sine_amplitude: int = 0x1000,
+    sample_rate_hz: float = DAC_IQ_SAMPLE_RATE_HZ,
+) -> bytes:
+    """Build interleaved 512-bit beats containing I-only low-frequency sine."""
+    if beat_count <= 0:
+        return b""
+    amp = max(-32768, min(32767, int(round(sine_amplitude))))
+    sample_offsets = np.arange(int(beat_count), dtype=np.float64)[:, None] * 2.0 + np.array([0.0, 1.0])
+    sample_indices = float(start_beat) * 2.0 + sample_offsets
+    base_angle = (2.0 * np.pi * float(sine_freq_hz) / float(sample_rate_hz)) * sample_indices
+    payload = np.zeros((int(beat_count), DDR_INTERLEAVED_CHANNELS, 4), dtype="<i2")
+    for channel in range(DDR_INTERLEAVED_CHANNELS):
+        phase = (2.0 * np.pi * channel) / DDR_INTERLEAVED_CHANNELS
+        i_wave = np.rint(float(amp) * np.sin(base_angle + phase)).astype("<i2")
+        payload[:, channel, 0] = i_wave[:, 0]
+        payload[:, channel, 2] = i_wave[:, 1]
+    return payload.tobytes()
+
+
+def iter_max_length_payload_chunks(
+    bytes_per_channel: int,
+    chunk_beats: int = 8192,
+    marker_bytes_per_channel: int = 4096,
+    pattern: str = MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+    sine_freq_hz: float = 10.0,
+    sine_amplitude: int = 0x1000,
+):
+    """Yield ``(beat_index, payload)`` chunks of raw interleaved 512-bit data."""
+    bytes_per_channel = require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+    if bytes_per_channel <= 0 or bytes_per_channel > DDR_MAX_BYTES_PER_CHANNEL:
+        raise ValueError(
+            f"bytes_per_channel must be in [32, {DDR_MAX_BYTES_PER_CHANNEL}], got {bytes_per_channel}"
+        )
+    if chunk_beats <= 0:
+        raise ValueError("chunk_beats must be positive")
+    if marker_bytes_per_channel <= 0 or marker_bytes_per_channel % BEAT_BYTES != 0:
+        raise ValueError("marker_bytes_per_channel must be a positive 32B multiple")
+    if pattern not in {MAX_LENGTH_PATTERN_CW_MARKER, MAX_LENGTH_PATTERN_LOWFREQ_SINE}:
+        raise ValueError(f"unsupported max-length pattern: {pattern}")
+
+    total_physical_bytes = bytes_per_channel * DDR_INTERLEAVED_CHANNELS
+    total_beats = total_physical_bytes // DDR_INTERLEAVED_BEAT_BYTES
+    beat_index = 0
+    while beat_index < total_beats:
+        count = min(chunk_beats, total_beats - beat_index)
+        if pattern == MAX_LENGTH_PATTERN_CW_MARKER:
+            region = max_length_marker_region(
+                beat_index * DDR_INTERLEAVED_BEAT_BYTES,
+                total_physical_bytes,
+                marker_bytes_per_channel=marker_bytes_per_channel,
+            )
+            while count > 1:
+                end_region = max_length_marker_region(
+                    (beat_index + count - 1) * DDR_INTERLEAVED_BEAT_BYTES,
+                    total_physical_bytes,
+                    marker_bytes_per_channel=marker_bytes_per_channel,
+                )
+                if end_region == region:
+                    break
+                count -= 1
+            beat = max_length_interleaved_beat(
+                beat_index,
+                total_beats,
+                marker_bytes_per_channel=marker_bytes_per_channel,
+            )
+            payload = beat * count
+        else:
+            payload = max_length_lowfreq_sine_payload(
+                beat_index,
+                count,
+                sine_freq_hz=sine_freq_hz,
+                sine_amplitude=sine_amplitude,
+            )
+        yield beat_index, payload
+        beat_index += count
+
+
+def max_length_waveform_cache_key(
+    bytes_per_channel: int,
+    marker_bytes_per_channel: int = 4096,
+    pattern: str = MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+    sine_freq_hz: float = 10.0,
+    sine_amplitude: int = 0x1000,
+) -> str:
+    params = {
+        "axis_hz": DAC_AXIS_HZ,
+        "bytes_per_channel": int(bytes_per_channel),
+        "channels": DDR_INTERLEAVED_CHANNELS,
+        "lane_bytes": DDR_INTERLEAVED_LANE_BYTES,
+        "marker_bytes_per_channel": int(marker_bytes_per_channel),
+        "pattern": pattern,
+        "sample_rate_hz": DAC_IQ_SAMPLE_RATE_HZ,
+        "sine_amplitude": int(sine_amplitude),
+        "sine_freq_hz": float(sine_freq_hz),
+    }
+    encoded = json.dumps(params, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def max_length_waveform_cache_path(
+    cache_dir: str | Path,
+    bytes_per_channel: int,
+    marker_bytes_per_channel: int = 4096,
+    pattern: str = MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+    sine_freq_hz: float = 10.0,
+    sine_amplitude: int = 0x1000,
+) -> Path:
+    key = max_length_waveform_cache_key(
+        bytes_per_channel,
+        marker_bytes_per_channel=marker_bytes_per_channel,
+        pattern=pattern,
+        sine_freq_hz=sine_freq_hz,
+        sine_amplitude=sine_amplitude,
+    )
+    safe_pattern = pattern.replace("-", "_")
+    return Path(cache_dir).expanduser() / (
+        f"max_length_{safe_pattern}_{int(bytes_per_channel)}B_ch_"
+        f"{float(sine_freq_hz):.9g}Hz_{int(sine_amplitude)}_{key}.bin"
+    )
+
+
+def ensure_max_length_waveform_cache(
+    cache_dir: str | Path,
+    bytes_per_channel: int,
+    marker_bytes_per_channel: int = 4096,
+    pattern: str = MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+    sine_freq_hz: float = 10.0,
+    sine_amplitude: int = 0x1000,
+    force: bool = False,
+    generation_chunk_beats: int = 8192,
+) -> Path:
+    """Generate or reuse a raw interleaved max-length payload cache file."""
+    bytes_per_channel = require_beat_aligned(int(bytes_per_channel), "bytes_per_channel")
+    expected_size = bytes_per_channel * DDR_INTERLEAVED_CHANNELS
+    cache_path = max_length_waveform_cache_path(
+        cache_dir,
+        bytes_per_channel,
+        marker_bytes_per_channel=marker_bytes_per_channel,
+        pattern=pattern,
+        sine_freq_hz=sine_freq_hz,
+        sine_amplitude=sine_amplitude,
+    )
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if cache_path.exists() and cache_path.stat().st_size == expected_size and not force:
+        return cache_path
+
+    tmp_path = cache_path.with_name(f".{cache_path.name}.tmp.{os.getpid()}")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    written = 0
+    start_time = time.monotonic()
+    with tmp_path.open("wb") as f:
+        for _beat_index, payload in iter_max_length_payload_chunks(
+            bytes_per_channel,
+            chunk_beats=int(generation_chunk_beats),
+            marker_bytes_per_channel=marker_bytes_per_channel,
+            pattern=pattern,
+            sine_freq_hz=sine_freq_hz,
+            sine_amplitude=sine_amplitude,
+        ):
+            f.write(payload)
+            written += len(payload)
+    if written != expected_size:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"cache generation wrote {written} bytes, expected {expected_size}")
+    tmp_path.replace(cache_path)
+    metadata = {
+        "bytes_per_channel": bytes_per_channel,
+        "created_unix_s": time.time(),
+        "generation_elapsed_s": time.monotonic() - start_time,
+        "marker_bytes_per_channel": int(marker_bytes_per_channel),
+        "pattern": pattern,
+        "physical_ddr_bytes": expected_size,
+        "sine_amplitude": int(sine_amplitude),
+        "sine_freq_hz": float(sine_freq_hz),
+    }
+    cache_path.with_suffix(cache_path.suffix + ".json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return cache_path
+
+
+def iter_max_length_udp_batches(
+    bytes_per_channel: int,
+    base_addr: int = DDR_BASE,
+    beats_per_datagram: int = 128,
+    marker_bytes_per_channel: int = 4096,
+    pattern: str = MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+    sine_freq_hz: float = 10.0,
+    sine_amplitude: int = 0x1000,
+):
+    """Yield bulk UDP datagrams for a large deterministic interleaved record.
+
+    Each datagram contains a 24-byte bulk header followed by consecutive
+    512-bit DDR beats. The board writer converts each four 64-bit data words
+    into one 32-byte AXI write and increments the address automatically.
+    """
+    base_addr = require_beat_aligned(base_addr, "base_addr")
+    if beats_per_datagram <= 0 or 24 + beats_per_datagram * DDR_INTERLEAVED_BEAT_BYTES > 9216:
+        raise ValueError("beats_per_datagram must produce a UDP payload no larger than 9216 bytes")
+    for beat_index, payload in iter_max_length_payload_chunks(
+        bytes_per_channel,
+        chunk_beats=beats_per_datagram,
+        marker_bytes_per_channel=marker_bytes_per_channel,
+        pattern=pattern,
+        sine_freq_hz=sine_freq_hz,
+        sine_amplitude=sine_amplitude,
+    ):
+        yield struct.pack(
+            "<QQQ",
+            UDP_WAVE_BULK_MAGIC,
+            base_addr + beat_index * DDR_INTERLEAVED_BEAT_BYTES,
+            len(payload) // 8,
+        ) + payload
+
+
+def iter_max_length_udp_batches_from_cache(
+    cache_path: str | Path,
+    bytes_per_channel: int,
+    base_addr: int = DDR_BASE,
+    beats_per_datagram: int = 128,
+):
+    bytes_per_channel = require_beat_aligned(int(bytes_per_channel), "bytes_per_channel")
+    base_addr = require_beat_aligned(base_addr, "base_addr")
+    if beats_per_datagram <= 0 or 24 + beats_per_datagram * DDR_INTERLEAVED_BEAT_BYTES > 9216:
+        raise ValueError("beats_per_datagram must produce a UDP payload no larger than 9216 bytes")
+    expected_size = bytes_per_channel * DDR_INTERLEAVED_CHANNELS
+    path = Path(cache_path).expanduser()
+    if path.stat().st_size != expected_size:
+        raise ValueError(f"cache file size {path.stat().st_size} does not match expected {expected_size}")
+    chunk_bytes = beats_per_datagram * DDR_INTERLEAVED_BEAT_BYTES
+    beat_index = 0
+    read_bytes = 0
+    with path.open("rb") as f:
+        while read_bytes < expected_size:
+            payload = f.read(min(chunk_bytes, expected_size - read_bytes))
+            if not payload:
+                break
+            if len(payload) % DDR_INTERLEAVED_BEAT_BYTES != 0:
+                raise ValueError("cache chunk is not 512-bit beat aligned")
+            yield struct.pack(
+                "<QQQ",
+                UDP_WAVE_BULK_MAGIC,
+                base_addr + beat_index * DDR_INTERLEAVED_BEAT_BYTES,
+                len(payload) // 8,
+            ) + payload
+            beats = len(payload) // DDR_INTERLEAVED_BEAT_BYTES
+            beat_index += beats
+            read_bytes += len(payload)
+    if read_bytes != expected_size:
+        raise RuntimeError(f"cache read {read_bytes} bytes, expected {expected_size}")
+
+
 def decode_udp_waveform_packet(packet: bytes) -> tuple[int, int, bytes]:
     """Decode one board-facing UDP DDR write packet for tests/ILA correlation."""
     if len(packet) != 48:
@@ -366,6 +688,19 @@ def decode_udp_waveform_packet(packet: bytes) -> tuple[int, int, bytes]:
         raise ValueError(f"bad UDP DDR magic 0x{magic:016X}")
     require_beat_aligned(ddr_addr, "ddr_addr")
     return magic, ddr_addr, struct.pack("<QQQQ", word0, word1, word2, word3)
+
+
+def decode_udp_bulk_datagram(datagram: bytes) -> tuple[int, bytes]:
+    if len(datagram) < 24:
+        raise ValueError("bulk UDP datagram must contain a 24-byte header")
+    magic, ddr_addr, word_count = struct.unpack("<QQQ", datagram[:24])
+    if magic != UDP_WAVE_BULK_MAGIC:
+        raise ValueError(f"bad bulk UDP magic 0x{magic:016X}")
+    require_beat_aligned(ddr_addr, "ddr_addr")
+    payload = datagram[24:]
+    if word_count == 0 or word_count % 4 != 0 or len(payload) != word_count * 8:
+        raise ValueError("bulk UDP word_count does not match the aligned payload")
+    return ddr_addr, payload
 
 
 # ============================================================
@@ -507,6 +842,68 @@ class RFSocController:
         )
         return packet_count
 
+    def upload_max_length_udp(
+        self,
+        bytes_per_channel: int,
+        base_addr: int = DDR_BASE,
+        beats_per_datagram: int = 128,
+        marker_bytes_per_channel: int = 4096,
+        pattern: str = MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+        sine_freq_hz: float = 10.0,
+        sine_amplitude: int = 0x1000,
+        batch_pause_s: float = 0.0,
+        progress_bytes: int = 256 * 1024 * 1024,
+        use_waveform_cache: bool = False,
+        waveform_cache_dir: str | Path | None = None,
+        force_waveform_cache: bool = False,
+    ) -> int:
+        total_bytes = int(bytes_per_channel) * DDR_INTERLEAVED_CHANNELS
+        datagram_count = 0
+        sent_bytes = 0
+        next_progress = max(1, int(progress_bytes))
+        start_time = time.monotonic()
+        if use_waveform_cache:
+            cache_path = ensure_max_length_waveform_cache(
+                waveform_cache_dir or DEFAULT_WAVEFORM_CACHE_DIR,
+                bytes_per_channel,
+                marker_bytes_per_channel=marker_bytes_per_channel,
+                pattern=pattern,
+                sine_freq_hz=sine_freq_hz,
+                sine_amplitude=sine_amplitude,
+                force=force_waveform_cache,
+            )
+            print(f"[udp-upload:max-length] using waveform cache {cache_path}")
+            datagrams = iter_max_length_udp_batches_from_cache(
+                cache_path,
+                bytes_per_channel,
+                base_addr=base_addr,
+                beats_per_datagram=beats_per_datagram,
+            )
+        else:
+            datagrams = iter_max_length_udp_batches(
+                bytes_per_channel,
+                base_addr=base_addr,
+                beats_per_datagram=beats_per_datagram,
+                marker_bytes_per_channel=marker_bytes_per_channel,
+                pattern=pattern,
+                sine_freq_hz=sine_freq_hz,
+                sine_amplitude=sine_amplitude,
+            )
+        for datagram in datagrams:
+            self.sock.sendto(datagram, (self.ip, self.port))
+            datagram_count += 1
+            sent_bytes += len(datagram) - 24
+            if batch_pause_s > 0:
+                time.sleep(batch_pause_s)
+            if sent_bytes >= next_progress or sent_bytes == total_bytes:
+                elapsed = max(time.monotonic() - start_time, 1e-9)
+                print(
+                    f"[udp-upload:max-length] {sent_bytes}/{total_bytes} bytes "
+                    f"({100.0 * sent_bytes / total_bytes:.1f}%), {sent_bytes / elapsed / 1e6:.1f} MB/s"
+                )
+                next_progress += max(1, int(progress_bytes))
+        return datagram_count
+
     def upload_rfdc_nco_mailbox(
         self,
         per_channel_nco_hz: dict[int, float] | dict[str, float],
@@ -533,7 +930,7 @@ class RFSocController:
             if packet_count % 8 == 0:
                 time.sleep(0.00001)
         print(
-            f"[udp-rfdc-mailbox] offset=0x{RFDC_CTRL_MAILBOX_OFFSET:08X}, "
+            f"[udp-rfdc-mailbox] offset=0x{RFDC_CTRL_MAILBOX_OFFSET:09X}, "
             f"seq={int(seq) & 0xFFFFFFFF}, apply_mask=0x{int(apply_mask) & 0xFF:02X}, packets={packet_count}"
         )
         return packet_count

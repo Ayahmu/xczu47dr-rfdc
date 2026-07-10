@@ -12,7 +12,7 @@ import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any
+from typing import Any, cast
 
 import host
 import waveform_gui_model as model
@@ -65,6 +65,7 @@ GLOBAL_SAMPLE_RATE_LABEL = "IQ sample rate (GS/s)"
 GLOBAL_RFDC_INTERPOLATION_LABEL = "RFDC interpolation (x)"
 GLOBAL_AXIS_FREQ_LABEL = "AXIS clock (MHz)"
 ILA_CAPTURE_BUTTON_TEXT = "Run ILA Capture + Report"
+EXTREME_TEST_BUTTON_TEXT = "Run Extreme Test"
 ILA_PROGRAM_MODES = ("never", "auto", "always")
 DEFAULT_ILA_PROGRAM_MODE = "never"
 CONTROL_TABS = ("Setup", "Quantum", "Channels", "ILA Report")
@@ -475,6 +476,14 @@ class WaveformSenderApp(ttk.Frame):
         self.loop = tk.BooleanVar(value=defaults.loop)
         self.wait_for_trigger = tk.BooleanVar(value=defaults.wait_for_trigger)
         self.dry_run = tk.BooleanVar(value=defaults.dry_run)
+        self.extreme_bytes_per_channel = tk.StringVar(value="max")
+        self.extreme_pattern = tk.StringVar(value=host.MAX_LENGTH_PATTERN_LOWFREQ_SINE)
+        self.extreme_sine_freq_hz = tk.StringVar(value="10")
+        self.extreme_sine_amplitude = tk.StringVar(value="4096")
+        self.extreme_beats_per_datagram = tk.StringVar(value="128")
+        self.extreme_marker_bytes_per_channel = tk.StringVar(value="4096")
+        self.extreme_use_waveform_cache = tk.BooleanVar(value=True)
+        self.extreme_force_waveform_cache = tk.BooleanVar(value=False)
         self.ezq_fields = self._make_ezq_field_variables(defaults.ezq)
         self.ezq_channel_fields = self._make_ezq_channel_field_variables(defaults.ezq)
         self.ezq_channel_enabled = {
@@ -806,6 +815,7 @@ class WaveformSenderApp(ttk.Frame):
                 (ACTION_BUTTONS[1], self.test_connection, "TButton"),
                 (ACTION_BUTTONS[2], self.save_or_dry_run, "TButton"),
                 (ACTION_BUTTONS[3], self.send_to_board, "TButton"),
+                (EXTREME_TEST_BUTTON_TEXT, self.run_extreme_test, "TButton"),
                 (ILA_CAPTURE_BUTTON_TEXT, self.run_ila_capture_report, "TButton"),
             ),
             COLOR_LOG_BACKGROUND,
@@ -842,9 +852,25 @@ class WaveformSenderApp(ttk.Frame):
         form.checkbutton("Loop playback", self.loop, 14)
         form.checkbutton("Dry run, do not send UDP", self.dry_run, 15)
 
-        form.section("Artifacts", 16)
-        form.entry("Output dir", self.output_dir, 17)
-        form.browse_row(self._browse_output_dir, 18)
+        form.section("Extreme Playback Test", 16)
+        form.entry("Bytes / channel", self.extreme_bytes_per_channel, 17)
+        form.combobox(
+            "Pattern",
+            self.extreme_pattern,
+            (host.MAX_LENGTH_PATTERN_LOWFREQ_SINE, host.MAX_LENGTH_PATTERN_CW_MARKER),
+            18,
+            self._disable_combobox_mousewheel,
+        )
+        form.entry("Sine freq (Hz)", self.extreme_sine_freq_hz, 19)
+        form.entry("Sine amplitude", self.extreme_sine_amplitude, 20)
+        form.entry("Beats / UDP datagram", self.extreme_beats_per_datagram, 21)
+        form.entry("Marker bytes / channel", self.extreme_marker_bytes_per_channel, 22)
+        form.checkbutton("Use waveform cache", self.extreme_use_waveform_cache, 23)
+        form.checkbutton("Regenerate cache", self.extreme_force_waveform_cache, 24)
+
+        form.section("Artifacts", 25)
+        form.entry("Output dir", self.output_dir, 26)
+        form.browse_row(self._browse_output_dir, 25)
 
     def _build_channels_tab(self, parent: ttk.Frame) -> None:
         self.channel_frames = {}
@@ -1292,6 +1318,22 @@ class WaveformSenderApp(ttk.Frame):
             program_mode=self.ila_program_mode.get(),
         )
 
+    def _collect_extreme_config(self) -> model.ExtremePlaybackConfig:
+        return model.ExtremePlaybackConfig(
+            output_dir=Path(self.output_dir.get()).expanduser(),
+            bytes_per_channel=self.extreme_bytes_per_channel.get().strip(),
+            pattern=self.extreme_pattern.get().strip(),
+            sine_freq_hz=float(self.extreme_sine_freq_hz.get()),
+            sine_amplitude=self._parse_int(self.extreme_sine_amplitude.get()),
+            beats_per_datagram=self._parse_int(self.extreme_beats_per_datagram.get()),
+            marker_bytes_per_channel=self._parse_int(self.extreme_marker_bytes_per_channel.get()),
+            use_waveform_cache=bool(self.extreme_use_waveform_cache.get()),
+            force_waveform_cache=bool(self.extreme_force_waveform_cache.get()),
+            waveform_cache_dir=Path(self.output_dir.get()).expanduser() / "waveform_cache",
+            wait_for_trigger=bool(self.wait_for_trigger.get()),
+            dry_run=bool(self.dry_run.get()),
+        )
+
     def _collect_settings(self) -> model.GuiSettings:
         return model.GuiSettings(
             waveform=self._collect_config(),
@@ -1364,6 +1406,41 @@ class WaveformSenderApp(ttk.Frame):
         except Exception as exc:
             self.messages.put(("error", exc))
 
+    def run_extreme_test(self) -> None:
+        try:
+            extreme_config = self._collect_extreme_config()
+            waveform_config = self._collect_config(dry_run=True)
+            connection = self._collect_connection()
+            summary = model.build_extreme_playback_summary(extreme_config, connection)
+        except Exception as exc:
+            messagebox.showerror("Invalid extreme test settings", str(exc))
+            return
+        if not messagebox.askyesno(
+            "Confirm extreme playback test",
+            f"This will stream a long max-length CW marker record to DDR.\n\n{summary}\n\nContinue?",
+        ):
+            return
+        self._append_log("extreme: starting max-length playback test...")
+        self._append_log(f"extreme summary:\n{summary}")
+        worker = threading.Thread(
+            target=self._worker_extreme_test,
+            args=(extreme_config, waveform_config, connection),
+            daemon=True,
+        )
+        worker.start()
+
+    def _worker_extreme_test(
+        self,
+        extreme_config: model.ExtremePlaybackConfig,
+        waveform_config: model.WaveformConfig,
+        connection: model.ConnectionConfig,
+    ) -> None:
+        try:
+            result = model.run_extreme_playback(extreme_config, connection, waveform_config=waveform_config)
+            self.messages.put(("extreme", result))
+        except Exception as exc:
+            self.messages.put(("error", exc))
+
     def send_to_board(self) -> None:
         try:
             config = self._collect_config(dry_run=False)
@@ -1421,6 +1498,15 @@ class WaveformSenderApp(ttk.Frame):
                     self._append_log(line)
                 if not result.ok:
                     messagebox.showerror("ILA capture/report failed", f"Exit {result.returncode}; status {result.overall_status}")
+            elif kind == "extreme":
+                result = cast(model.ExtremePlaybackResult, payload)
+                for line in result.log_lines:
+                    self._append_log(line)
+                self._append_log(
+                    f"extreme complete: expected_duration={result.expected_duration_s:.9f}s, "
+                    f"beats/channel={result.expected_rfdc_beats_per_channel}, "
+                    f"bytes/channel={result.bytes_per_channel}"
+                )
             else:
                 self._append_log(f"operation failed: {payload}")
                 messagebox.showerror("Operation failed", str(payload))

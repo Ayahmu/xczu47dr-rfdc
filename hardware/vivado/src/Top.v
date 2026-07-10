@@ -111,18 +111,10 @@ module Top (
   );
 
 
-  reg  [1:0]  hmc7044_clk_div;
-  wire        hmc7044_clk_25m;
   wire        hmc7044_set_finish;
-  always @(posedge pl_clk or negedge pl_aresetn) begin
-    if (!pl_aresetn) hmc7044_clk_div <= 2'b00;
-    else             hmc7044_clk_div <= hmc7044_clk_div + 2'b01;
-  end
-
-  assign hmc7044_clk_25m = hmc7044_clk_div[1];
 
   hmc7044 hmc7044_i (
-      .clk(hmc7044_clk_25m),
+      .clk(pl_clk),
       .rst(pl_aresetn),
       .H7044_SLEN(H7044_SLEN_0),
       .H7044_SCLK(H7044_SCLK_0),
@@ -149,7 +141,7 @@ module Top (
   assign udp_instr_tready = udp_instr_tvalid && instr_tready;
   assign ps_instr_tready  = !udp_instr_tvalid && instr_tready;
 
-  localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0005_0000_0000;
+  localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
   // ========== Reference 10G UDP receiver ==========
   wire        udp64_rcv_vld;
@@ -327,22 +319,26 @@ module Top (
       udp_trigger_stretched <= 1'b0;
     end
   end
-  wire trigger_raw = ps_trigger_raw | udp_trigger_stretched;
-
   // ========== trigger CDC ==========
-  (* ASYNCHRONOUS_REG="TRUE" *) reg [2:0] trigger_ddr_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if(!ddr4_ui_aresetn) trigger_ddr_sync_ff <= 3'b000;
-    else                trigger_ddr_sync_ff <= {trigger_ddr_sync_ff[1:0], trigger_raw};
+    if(!ddr4_ui_aresetn) ps_trigger_ddr_sync_ff <= 3'b000;
+    else                 ps_trigger_ddr_sync_ff <= {ps_trigger_ddr_sync_ff[1:0], ps_trigger_raw};
   end
-  wire ps_trigger_ddr_sync = trigger_ddr_sync_ff[2];
+  wire ps_trigger_ddr_sync = ps_trigger_ddr_sync_ff[2] | udp_trigger_stretched;
 
-  (* ASYNCHRONOUS_REG="TRUE" *) reg [2:0] trigger_dac_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_dac_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] udp_trigger_dac_sync_ff;
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
-    if(!clk104_aresetn) trigger_dac_sync_ff <= 3'b000;
-    else                trigger_dac_sync_ff <= {trigger_dac_sync_ff[1:0], trigger_raw};
+    if(!clk104_aresetn) begin
+      ps_trigger_dac_sync_ff <= 3'b000;
+      udp_trigger_dac_sync_ff <= 3'b000;
+    end else begin
+      ps_trigger_dac_sync_ff <= {ps_trigger_dac_sync_ff[1:0], ps_trigger_raw};
+      udp_trigger_dac_sync_ff <= {udp_trigger_dac_sync_ff[1:0], udp_trigger_stretched};
+    end
   end
-  wire ps_trigger_dac_sync = trigger_dac_sync_ff[2];
+  wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] | udp_trigger_dac_sync_ff[2];
 
 
   // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========
@@ -441,8 +437,8 @@ module Top (
   wire        ex_dbg_dm_sel_ch1;
   wire [31:0] ex_dbg_dm_chunk_beats;
   wire [31:0] ex_dbg_dm_beats_sent;
-  wire [31:0] ex_dbg_ch1_bytes_left;
-  wire [31:0] ex_dbg_ch2_bytes_left;
+  wire [63:0] ex_dbg_ch1_bytes_left;
+  wire [63:0] ex_dbg_ch2_bytes_left;
   wire [63:0] ex_dbg_ch1_base_addr;
   wire [63:0] ex_dbg_ch2_base_addr;
   wire        ex_dbg_ch1_need_hard, ex_dbg_ch2_need_hard;
@@ -795,6 +791,10 @@ module Top (
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start, pc_started;
   wire [15:0] pc_last_seq_id;
+  wire        pc_done_pulse;
+  wire [7:0]  pc_underflow_seen;
+  wire [31:0] pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count;
+  wire [31:0] pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count;
 
   dac_play_ctrl #(
     .BEAT_BYTES(32)
@@ -879,7 +879,17 @@ module Top (
     .dbg_new_cfg    (pc_new_cfg),
     .dbg_trig_start (pc_trig_start),
     .dbg_started    (pc_started),
-    .dbg_last_seq_id(pc_last_seq_id)
+    .dbg_last_seq_id(pc_last_seq_id),
+    .dbg_done_pulse(pc_done_pulse),
+    .dbg_underflow_seen(pc_underflow_seen),
+    .dbg_ch1_fire_count(pc_ch1_fire_count),
+    .dbg_ch2_fire_count(pc_ch2_fire_count),
+    .dbg_ch3_fire_count(pc_ch3_fire_count),
+    .dbg_ch4_fire_count(pc_ch4_fire_count),
+    .dbg_ch5_fire_count(pc_ch5_fire_count),
+    .dbg_ch6_fire_count(pc_ch6_fire_count),
+    .dbg_ch7_fire_count(pc_ch7_fire_count),
+    .dbg_ch8_fire_count(pc_ch8_fire_count)
   );
 
   wire [31:0] ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count;
@@ -1197,7 +1207,7 @@ module Top (
   wire [3:0]  M_AXI_RFDC_wstrb;
   wire        M_AXI_RFDC_wvalid;
 
-  wire [34:0]  M_AXI_DDR4_araddr;
+  wire [39:0]  M_AXI_DDR4_araddr;
   wire [1:0]   M_AXI_DDR4_arburst;
   wire [3:0]   M_AXI_DDR4_arcache;
   wire [7:0]   M_AXI_DDR4_arlen;
@@ -1208,7 +1218,7 @@ module Top (
   wire [2:0]   M_AXI_DDR4_arsize;
   wire         M_AXI_DDR4_arvalid;
 
-  wire [34:0]  M_AXI_DDR4_awaddr;
+  wire [39:0]  M_AXI_DDR4_awaddr;
   wire [1:0]   M_AXI_DDR4_awburst;
   wire [3:0]   M_AXI_DDR4_awcache;
   wire [7:0]   M_AXI_DDR4_awlen;
@@ -1812,7 +1822,7 @@ module Top (
     .probe5(dm_cmd_tdata),
     .probe6(dm_data_tdata),
     .probe7({ex_dbg_ch1_base_addr, ex_dbg_ch2_base_addr}),
-    .probe8({ex_dbg_ch1_bytes_left, ex_dbg_ch2_bytes_left, ex_dbg_dm_chunk_beats, ex_dbg_bad_instr_count}),
+    .probe8({ex_dbg_ch1_bytes_left, ex_dbg_ch2_bytes_left}),
     .probe9(ch1_wave_tdata),
     .probe10(ch2_wave_tdata),
     .probe11(udp_wave_last_wdata)
@@ -1821,7 +1831,9 @@ module Top (
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      21'd0,
+      12'd0,
+      pc_done_pulse,
+      pc_underflow_seen,
       trig_1_dac_valid_pulse,
       trig_1_dac_valid,
       ps_trigger_dac_sync,
@@ -1888,7 +1900,7 @@ module Top (
              ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count}),
     .probe10({ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,
               ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac}),
-    .probe11({ch1_delay_dac, ch2_delay_dac, ch3_delay_dac, ch4_delay_dac,
-              ch5_delay_dac, ch6_delay_dac, ch7_delay_dac, ch8_delay_dac})
+    .probe11({pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count,
+              pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count})
   );
 endmodule

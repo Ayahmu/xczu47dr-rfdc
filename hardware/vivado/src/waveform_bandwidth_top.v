@@ -9,7 +9,7 @@ module waveform_bandwidth_top #(
   parameter integer OUTSTANDING_LIMIT = 15,
   parameter integer MAX_CONSECUTIVE_CHUNKS = 4,
   parameter integer INTERLEAVED_MODE = 1,
-  parameter [63:0] DDR_ADDR_BASE = 64'h0000_0005_0000_0000
+  parameter [63:0] DDR_ADDR_BASE = 64'h0000_0048_0000_0000
 )(
     input  wire         aclk,
     input  wire         aresetn,

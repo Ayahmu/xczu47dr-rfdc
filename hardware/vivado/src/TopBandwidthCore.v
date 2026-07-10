@@ -18,7 +18,7 @@ module TopBandwidthCore (
     output          c0_ddr4_reset_n
 );
 
-  localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0005_0000_0000;
+  localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
   wire pl_clk;
   wire pl_resetn0;
@@ -294,7 +294,7 @@ module TopBandwidthCore (
     .m_axis_mm2s_sts_tvalid(dm_mm2s_sts_tvalid), .m_axis_mm2s_sts_tready(1'b1), .m_axis_mm2s_sts_tdata(dm_mm2s_sts_tdata), .m_axis_mm2s_sts_tkeep(dm_mm2s_sts_tkeep), .m_axis_mm2s_sts_tlast(dm_mm2s_sts_tlast)
   );
 
-  wire [34:0] DDR_awaddr;
+  wire [39:0] DDR_awaddr;
   wire [7:0] DDR_awlen;
   wire [2:0] DDR_awsize;
   wire [1:0] DDR_awburst;
@@ -309,7 +309,7 @@ module TopBandwidthCore (
   wire DDR_bready;
   wire [1:0] DDR_bresp;
   wire DDR_bvalid;
-  wire [34:0] DDR_araddr;
+  wire [39:0] DDR_araddr;
   wire [7:0] DDR_arlen;
   wire [2:0] DDR_arsize;
   wire [1:0] DDR_arburst;

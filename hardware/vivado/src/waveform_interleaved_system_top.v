@@ -94,8 +94,8 @@ module Waveform_Interleaved_System_Top #(
     output wire         dbg_dm_sel_ch1,
     output wire [31:0]  dbg_dm_chunk_beats,
     output wire [31:0]  dbg_dm_beats_sent,
-    output wire [31:0]  dbg_ch1_bytes_left,
-    output wire [31:0]  dbg_ch2_bytes_left,
+    output wire [63:0]  dbg_ch1_bytes_left,
+    output wire [63:0]  dbg_ch2_bytes_left,
     output wire [63:0]  dbg_ch1_base_addr,
     output wire [63:0]  dbg_ch2_base_addr,
     output wire         dbg_ch1_need_hard,
@@ -164,8 +164,8 @@ module Waveform_Interleaved_System_Top #(
   reg        prefill_auto_start;
   reg        loop_enable;
   reg [31:0] max_ch_bytes;
-  reg [31:0] inter_total_bytes;
-  reg [31:0] inter_bytes_left;
+  reg [63:0] inter_total_bytes;
+  reg [63:0] inter_bytes_left;
   reg [63:0] inter_base_addr;
   reg [63:0] inter_rd_addr;
   reg [31:0] dm_chunk_beats;
@@ -179,8 +179,8 @@ module Waveform_Interleaved_System_Top #(
   reg [31:0] cmd_prep_beats;
   reg [31:0] cmd_active_bytes;
   reg [31:0] cmd_active_beats;
-  reg [31:0] dbg_ch1_bytes_left_r;
-  reg [31:0] dbg_ch2_bytes_left_r;
+  reg [63:0] dbg_ch1_bytes_left_r;
+  reg [63:0] dbg_ch2_bytes_left_r;
 
   reg [255:0] pack_ch1;
   reg [255:0] pack_ch2;
@@ -257,7 +257,7 @@ module Waveform_Interleaved_System_Top #(
   wire packer_pending = pack_valid || (pack_phase != 2'd0);
   wire rearm_safe = !m_axis_dm_cmd_tvalid && !cmd_prep_valid && (outstanding_beats == 32'd0) && !packer_pending;
   wire rearm_frame = (st != ST_BUILD) && main_tvalid && rearm_safe;
-  wire read_complete = (inter_bytes_left == 32'd0) && (outstanding_beats == 32'd0) && !packer_pending;
+  wire read_complete = (inter_bytes_left == 64'd0) && (outstanding_beats == 32'd0) && !packer_pending;
   wire [31:0] frame_beats_w = bytes_to_rfdc_beats(max_ch_bytes);
   wire [31:0] prefill_target_beats_w = min_u32(frame_beats_w, HIGH_WM[31:0]);
   wire prefill_target_reached =
@@ -275,11 +275,11 @@ module Waveform_Interleaved_System_Top #(
       (!ch7_arm || (ch7_fifo_level_beats == 16'd0)) &&
       (!ch8_arm || (ch8_fifo_level_beats == 16'd0));
 
-  wire prefill_want_read = (st == ST_PREFILL) && (inter_bytes_left != 32'd0) && !prefill_target_reached;
-  wire playing_want_read = (st == ST_PLAYING) && (inter_bytes_left != 32'd0);
+  wire prefill_want_read = (st == ST_PREFILL) && (inter_bytes_left != 64'd0) && !prefill_target_reached;
+  wire playing_want_read = (st == ST_PLAYING) && (inter_bytes_left != 64'd0);
   wire want_read = prefill_want_read || playing_want_read;
-  wire [31:0] remaining_dm_beats_w = {6'd0, inter_bytes_left[31:6]};
-  wire [31:0] chunk_beats_w = (inter_bytes_left > CHUNK_BYTES_U32) ? CHUNK_DM_BEATS_U32 : remaining_dm_beats_w;
+  wire [31:0] remaining_dm_beats_w = inter_bytes_left[37:6];
+  wire [31:0] chunk_beats_w = (inter_bytes_left > {32'd0, CHUNK_BYTES_U32}) ? CHUNK_DM_BEATS_U32 : remaining_dm_beats_w;
   wire [31:0] chunk_bytes_w = {chunk_beats_w[25:0], 6'd0};
   wire can_prepare_cmd = want_read && !cmd_prep_valid && !m_axis_dm_cmd_tvalid &&
                          (chunk_beats_w != 32'd0) &&
@@ -384,8 +384,8 @@ module Waveform_Interleaved_System_Top #(
       prefill_auto_start <= 1'b0;
       loop_enable <= 1'b0;
       max_ch_bytes <= 32'd0;
-      inter_total_bytes <= 32'd0;
-      inter_bytes_left <= 32'd0;
+      inter_total_bytes <= 64'd0;
+      inter_bytes_left <= 64'd0;
       inter_base_addr <= 64'd0;
       inter_rd_addr <= 64'd0;
       dm_chunk_beats <= 32'd0;
@@ -399,8 +399,8 @@ module Waveform_Interleaved_System_Top #(
       cmd_prep_beats <= 32'd0;
       cmd_active_bytes <= 32'd0;
       cmd_active_beats <= 32'd0;
-      dbg_ch1_bytes_left_r <= 32'd0;
-      dbg_ch2_bytes_left_r <= 32'd0;
+      dbg_ch1_bytes_left_r <= 64'd0;
+      dbg_ch2_bytes_left_r <= 64'd0;
 	      m_axis_dm_cmd_tdata <= 104'd0;
 	      m_axis_dm_cmd_tvalid <= 1'b0;
 	      cfg_commit <= 1'b0;
@@ -426,8 +426,8 @@ module Waveform_Interleaved_System_Top #(
 	        prefill_auto_start <= 1'b0;
 	        loop_enable <= 1'b0;
 	        max_ch_bytes <= 32'd0;
-	        inter_total_bytes <= 32'd0;
-	        inter_bytes_left <= 32'd0;
+	        inter_total_bytes <= 64'd0;
+	        inter_bytes_left <= 64'd0;
 	        inter_base_addr <= 64'd0;
 	        inter_rd_addr <= 64'd0;
 	        dm_chunk_beats <= 32'd0;
@@ -455,7 +455,7 @@ module Waveform_Interleaved_System_Top #(
 	      if(cmd_fire) begin
 	        m_axis_dm_cmd_tvalid <= 1'b0;
 	        inter_rd_addr <= inter_rd_addr + cmd_active_bytes;
-	        inter_bytes_left <= inter_bytes_left - cmd_active_bytes;
+	        inter_bytes_left <= inter_bytes_left - {32'd0, cmd_active_bytes};
         dm_chunk_beats <= cmd_active_beats;
       end else if(cmd_prep_valid) begin
         m_axis_dm_cmd_tdata <= make_dm_cmd(cmd_prep_addr, cmd_prep_bytes);
@@ -528,8 +528,8 @@ module Waveform_Interleaved_System_Top #(
               cfg_auto_start <= (instr_ch == CH_AUTO_START);
               loop_enable <= instr_loop;
               pending_valid <= active_valid;
-              inter_total_bytes <= (max_ch_bytes << 3);
-              inter_bytes_left <= (max_ch_bytes << 3);
+              inter_total_bytes <= {29'd0, max_ch_bytes, 3'd0};
+              inter_bytes_left <= {29'd0, max_ch_bytes, 3'd0};
               inter_rd_addr <= inter_base_addr;
               prefill_beats_written <= 32'd0;
               if(active_valid && any_arm && (max_ch_bytes != 32'd0)) begin
@@ -572,8 +572,8 @@ module Waveform_Interleaved_System_Top #(
               prefill_auto_start <= 1'b0;
               loop_enable <= 1'b0;
               max_ch_bytes <= 32'd0;
-              inter_total_bytes <= 32'd0;
-              inter_bytes_left <= 32'd0;
+              inter_total_bytes <= 64'd0;
+              inter_bytes_left <= 64'd0;
               ch1_arm <= 1'b0; ch2_arm <= 1'b0; ch3_arm <= 1'b0; ch4_arm <= 1'b0;
               ch5_arm <= 1'b0; ch6_arm <= 1'b0; ch7_arm <= 1'b0; ch8_arm <= 1'b0;
             end

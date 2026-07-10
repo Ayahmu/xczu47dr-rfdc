@@ -11,6 +11,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import time
 from typing import Any, Callable, TypedDict
 
 import numpy as np
@@ -56,6 +57,22 @@ class ConnectionConfig:
     udp_source_ip: str = host.DEFAULT_UDP_SOURCE_IP or "192.168.1.10"
     timeout_s: float = 5.0
     post_upload_sleep_s: float = 0.5
+
+
+@dataclass(slots=True)
+class ExtremePlaybackConfig:
+    output_dir: Path = Path("/tmp/opencode/rfsoc_waveform_gui")
+    bytes_per_channel: str = "max"
+    pattern: str = host.MAX_LENGTH_PATTERN_LOWFREQ_SINE
+    sine_freq_hz: float = 10.0
+    sine_amplitude: int = 4096
+    beats_per_datagram: int = 128
+    marker_bytes_per_channel: int = 4096
+    use_waveform_cache: bool = True
+    force_waveform_cache: bool = False
+    waveform_cache_dir: Path | None = None
+    wait_for_trigger: bool = False
+    dry_run: bool = False
 
 
 @dataclass(slots=True)
@@ -354,6 +371,18 @@ class ControllerResult:
     generated: GeneratedWaveforms
     output_dir: Path
     dry_run: bool
+    log_lines: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ExtremePlaybackResult:
+    output_dir: Path
+    dry_run: bool
+    bytes_per_channel: int
+    total_bytes: int
+    expected_rfdc_beats_per_channel: int
+    expected_duration_s: float
+    datagrams: int = 0
     log_lines: list[str] = field(default_factory=list)
 
 
@@ -2167,6 +2196,183 @@ def preview_series(wave: np.ndarray, max_points: int = 512) -> tuple[np.ndarray,
     step = max(1, int(np.ceil(len(wave) / max_points)))
     indices = np.arange(0, len(wave), step, dtype=np.int32)
     return indices, wave[indices]
+
+
+def parse_byte_count(value: str | int) -> int:
+    text = str(value).strip().lower()
+    if text == "max":
+        return host.DDR_MAX_BYTES_PER_CHANNEL
+    scales = {
+        "kib": 1024,
+        "mib": 1024**2,
+        "gib": 1024**3,
+        "kb": 1000,
+        "mb": 1000**2,
+        "gb": 1000**3,
+    }
+    for suffix, scale in scales.items():
+        if text.endswith(suffix):
+            return int(float(text[:-len(suffix)]) * scale)
+    return int(text, 0)
+
+
+def extreme_playback_metadata(config: ExtremePlaybackConfig, bytes_per_channel: int) -> dict[str, object]:
+    bytes_per_channel = host.require_beat_aligned(int(bytes_per_channel), "bytes_per_channel")
+    total_bytes = bytes_per_channel * host.DDR_INTERLEAVED_CHANNELS
+    return {
+        "mode": "gui-extreme-playback",
+        "layout": host.DDR_LAYOUT_INTERLEAVED_512B,
+        "pattern": config.pattern,
+        "bytes_per_channel": bytes_per_channel,
+        "physical_ddr_bytes": total_bytes,
+        "expected_rfdc_beats_per_channel": bytes_per_channel // host.BEAT_BYTES,
+        "expected_datamover_beats": total_bytes // host.DDR_INTERLEAVED_BEAT_BYTES,
+        "expected_duration_s": bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
+        "axis_hz": host.DAC_AXIS_HZ,
+        "bytes_per_axis_beat": host.BEAT_BYTES,
+        "marker_bytes_per_channel": int(config.marker_bytes_per_channel),
+        "sine_freq_hz": float(config.sine_freq_hz),
+        "sine_amplitude": int(config.sine_amplitude),
+        "beats_per_datagram": int(config.beats_per_datagram),
+        "use_waveform_cache": bool(config.use_waveform_cache),
+        "force_waveform_cache": bool(config.force_waveform_cache),
+        "waveform_cache_dir": str(config.waveform_cache_dir) if config.waveform_cache_dir else "",
+        "wait_for_trigger": bool(config.wait_for_trigger),
+        "loop": False,
+        "ddr_phys_bytes": host.DDR_PHYS_BYTES,
+        "ddr_reserved_top_bytes": host.DDR_RESERVED_TOP_BYTES,
+        "ddr_usable_waveform_bytes": host.DDR_USABLE_WAVEFORM_BYTES,
+    }
+
+
+def build_extreme_playback_summary(config: ExtremePlaybackConfig, connection: ConnectionConfig) -> str:
+    bytes_per_channel = parse_byte_count(config.bytes_per_channel)
+    host.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+    total_bytes = bytes_per_channel * host.DDR_INTERLEAVED_CHANNELS
+    duration_s = bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES)
+    return "\n".join(
+        [
+            f"Target: {connection.ip}:{connection.port}",
+            f"UDP interface: {connection.udp_interface or '<default route>'}",
+            f"Source IP: {connection.udp_source_ip or '<auto>'}",
+            f"Bytes/channel: {bytes_per_channel:,}",
+            f"Total DDR upload: {total_bytes:,} bytes",
+            f"Expected playback: {duration_s:.9f} s",
+            f"RFDC beats/channel: {bytes_per_channel // host.BEAT_BYTES:,}",
+            f"Pattern: {config.pattern}",
+            f"Sine freq: {float(config.sine_freq_hz):g} Hz",
+            f"Waveform cache: {'enabled' if config.use_waveform_cache else 'disabled'}",
+            f"Auto start: {'no, wait for trigger' if config.wait_for_trigger else 'yes'}",
+        ]
+    )
+
+
+def run_extreme_playback(
+    config: ExtremePlaybackConfig,
+    connection: ConnectionConfig,
+    waveform_config: WaveformConfig | None = None,
+    controller_cls: Any = host.RFSocController,
+) -> ExtremePlaybackResult:
+    bytes_per_channel = parse_byte_count(config.bytes_per_channel)
+    if bytes_per_channel <= 0 or bytes_per_channel > host.DDR_MAX_BYTES_PER_CHANNEL:
+        raise ValueError(f"bytes_per_channel must be in [32, {host.DDR_MAX_BYTES_PER_CHANNEL}], got {bytes_per_channel}")
+    bytes_per_channel = host.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+    if config.pattern not in {host.MAX_LENGTH_PATTERN_CW_MARKER, host.MAX_LENGTH_PATTERN_LOWFREQ_SINE}:
+        raise ValueError(f"unsupported extreme playback pattern: {config.pattern}")
+    if int(config.beats_per_datagram) <= 0:
+        raise ValueError("beats_per_datagram must be positive")
+    if int(config.marker_bytes_per_channel) <= 0:
+        raise ValueError("marker_bytes_per_channel must be positive")
+
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metadata = extreme_playback_metadata(config, bytes_per_channel)
+    if waveform_config is not None:
+        generated = generate_waveforms(replace(waveform_config, dry_run=True))
+        for key in ("per_channel_nco", "per_channel_zone", "per_channel_target_rf_hz"):
+            if key in generated.metadata:
+                metadata[key] = generated.metadata[key]
+    (output_dir / "extreme_playback_metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    log_lines = [
+        f"extreme: prepared max-length {config.pattern} playback",
+        f"extreme: metadata={output_dir / 'extreme_playback_metadata.json'}",
+        f"extreme: bytes_per_channel={bytes_per_channel}",
+        f"extreme: total_bytes={metadata['physical_ddr_bytes']}",
+        f"extreme: expected_duration_s={float(metadata['expected_duration_s']):.9f}",
+    ]
+    if config.dry_run:
+        log_lines.append("extreme dry-run: not sending UDP packets")
+        return ExtremePlaybackResult(
+            output_dir=output_dir,
+            dry_run=True,
+            bytes_per_channel=bytes_per_channel,
+            total_bytes=int(metadata["physical_ddr_bytes"]),
+            expected_rfdc_beats_per_channel=int(metadata["expected_rfdc_beats_per_channel"]),
+            expected_duration_s=float(metadata["expected_duration_s"]),
+            log_lines=log_lines,
+        )
+
+    ctrl = controller_cls(
+        connection.ip,
+        port=connection.port,
+        timeout_s=connection.timeout_s,
+        transport="udp",
+        udp_interface=connection.udp_interface,
+        udp_source_ip=connection.udp_source_ip,
+    )
+    try:
+        per_channel_nco = metadata.get("per_channel_nco")
+        per_channel_zone = metadata.get("per_channel_zone")
+        if isinstance(per_channel_nco, dict) and isinstance(per_channel_zone, dict):
+            ctrl.upload_rfdc_nco_mailbox(per_channel_nco, per_channel_zone)
+            log_lines.append("extreme: RFDC NCO mailbox updated from current GUI channel plan")
+            if connection.post_upload_sleep_s > 0:
+                time.sleep(connection.post_upload_sleep_s)
+        datagrams = ctrl.upload_max_length_udp(
+            bytes_per_channel,
+            base_addr=host.DDR_BASE,
+            beats_per_datagram=int(config.beats_per_datagram),
+            marker_bytes_per_channel=int(config.marker_bytes_per_channel),
+            pattern=config.pattern,
+            sine_freq_hz=float(config.sine_freq_hz),
+            sine_amplitude=int(config.sine_amplitude),
+            use_waveform_cache=bool(config.use_waveform_cache),
+            waveform_cache_dir=config.waveform_cache_dir or (output_dir / "waveform_cache"),
+            force_waveform_cache=bool(config.force_waveform_cache),
+        )
+        log_lines.append(f"extreme: uploaded {datagrams} UDP bulk datagrams")
+        if connection.post_upload_sleep_s > 0:
+            time.sleep(connection.post_upload_sleep_s)
+        ctrl.send_instructions(
+            waveform_tools.build_play_commands(
+                loop=False,
+                auto_start=not config.wait_for_trigger,
+                channel_lengths={channel: bytes_per_channel for channel in range(1, 9)},
+                channel_delays={channel: 0 for channel in range(1, 9)},
+                layout=host.DDR_LAYOUT_INTERLEAVED_512B,
+            )
+        )
+        log_lines.append("extreme: PLAY instructions sent")
+        if config.wait_for_trigger:
+            log_lines.append("extreme: waiting for external trigger")
+        else:
+            log_lines.append("extreme: playback auto-started")
+        return ExtremePlaybackResult(
+            output_dir=output_dir,
+            dry_run=False,
+            bytes_per_channel=bytes_per_channel,
+            total_bytes=int(metadata["physical_ddr_bytes"]),
+            expected_rfdc_beats_per_channel=int(metadata["expected_rfdc_beats_per_channel"]),
+            expected_duration_s=float(metadata["expected_duration_s"]),
+            datagrams=datagrams,
+            log_lines=log_lines,
+        )
+    finally:
+        ctrl.close()
 
 
 class WaveformController:

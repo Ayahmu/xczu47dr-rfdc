@@ -116,7 +116,7 @@ connect_bd_net [get_bd_ports ddr4_ui_clk] [get_bd_pins zynq_ultra_ps_e_0/maxihpm
 
 assign_bd_address -offset 0xA0000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_CTRL/Reg] -force
 assign_bd_address -offset 0xA0020000 -range 0x00008000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_INST/Reg] -force
-assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_PS_DDR/Reg] -force
+assign_bd_address -offset 0x004800000000 -range 0x000200000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_PS_DDR/Reg] -force
 
 validate_bd_design
 save_bd_design

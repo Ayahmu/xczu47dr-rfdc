@@ -78,7 +78,7 @@ proc create_ddr_axi_smartconnect_design {} {
 
   set M_AXI_DDR [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_DDR ]
   set_property -dict [ list \
-    CONFIG.ADDR_WIDTH {35} \
+    CONFIG.ADDR_WIDTH {40} \
     CONFIG.DATA_WIDTH {512} \
     CONFIG.HAS_BRESP {1} \
     CONFIG.HAS_BURST {1} \
@@ -114,9 +114,10 @@ proc create_ddr_axi_smartconnect_design {} {
   connect_bd_net [get_bd_ports aclk] [get_bd_pins smartconnect_0/aclk]
   connect_bd_net [get_bd_ports aresetn] [get_bd_pins smartconnect_0/aresetn]
 
-  assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_PS] [get_bd_addr_segs M_AXI_DDR/Reg] -force
-  assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_DM] [get_bd_addr_segs M_AXI_DDR/Reg] -force
-  assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces S_AXI_WAVE] [get_bd_addr_segs M_AXI_DDR/Reg] -force
+  # 0x48_0000_0000 is inside the PS high aperture and is 8 GiB aligned.
+  assign_bd_address -offset 0x004800000000 -range 0x000200000000 -target_address_space [get_bd_addr_spaces S_AXI_PS] [get_bd_addr_segs M_AXI_DDR/Reg] -force
+  assign_bd_address -offset 0x004800000000 -range 0x000200000000 -target_address_space [get_bd_addr_spaces S_AXI_DM] [get_bd_addr_segs M_AXI_DDR/Reg] -force
+  assign_bd_address -offset 0x004800000000 -range 0x000200000000 -target_address_space [get_bd_addr_spaces S_AXI_WAVE] [get_bd_addr_segs M_AXI_DDR/Reg] -force
 
   validate_bd_design
   save_bd_design

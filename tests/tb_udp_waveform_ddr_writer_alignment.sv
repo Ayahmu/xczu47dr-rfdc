@@ -2,6 +2,7 @@
 
 module tb_udp_waveform_ddr_writer_alignment;
   localparam [63:0] MAGIC = 64'h5741564544445230;
+  localparam [63:0] BULK_MAGIC = 64'h5741564553545230;
 
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -109,7 +110,24 @@ module tb_udp_waveform_ddr_writer_alignment;
     check_condition(m_axi_wdata == 256'h0000000000000004000000000000000300000000000000020000000000000001,
                     "UDP data words should pack into one 256-bit AXI beat");
 
-    $display("PASS: UDP DDR writer rejects unaligned writes and preserves aligned 256-bit payloads");
+    send_word(BULK_MAGIC);
+    send_word(64'h0000000000002000);
+    send_word(64'd8);
+    send_word(64'h0000000000000011);
+    send_word(64'h0000000000000012);
+    send_word(64'h0000000000000013);
+    send_word(64'h0000000000000014);
+    send_word(64'h0000000000000021);
+    send_word(64'h0000000000000022);
+    send_word(64'h0000000000000023);
+    send_word(64'h0000000000000024);
+    repeat(16) @(negedge clk);
+    check_condition(dbg_write_count == 3, "bulk UDP write should enqueue two consecutive AXI beats");
+    check_condition(m_axi_awaddr == 64'h0000000000002020, "bulk UDP write should increment the AXI address by 32 bytes");
+    check_condition(m_axi_wdata == 256'h0000000000000024000000000000002300000000000000220000000000000021,
+                    "bulk UDP second beat data order mismatch");
+
+    $display("PASS: UDP DDR writer preserves legacy writes and bulk sequential writes");
     $finish;
   end
 endmodule

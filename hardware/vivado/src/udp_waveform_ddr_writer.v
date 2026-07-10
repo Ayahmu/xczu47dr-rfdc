@@ -2,6 +2,7 @@
 
 module udp_waveform_ddr_writer #(
     parameter [63:0] MAGIC = 64'h5741564544445230,
+    parameter [63:0] BULK_MAGIC = 64'h5741564553545230,
     parameter [63:0] TRIGGER_WORD = 64'h3152454747495254,
     parameter [63:0] LEGACY_TRIGGER_HEADER = 64'h0000000200000002,
     parameter [63:0] LEGACY_TRIGGER_GO = 64'h0000000000004F47,
@@ -61,6 +62,7 @@ module udp_waveform_ddr_writer #(
   localparam [2:0] ST_DATA_1   = 3'd3;
   localparam [2:0] ST_DATA_2   = 3'd4;
   localparam [2:0] ST_DATA_3   = 3'd5;
+  localparam [2:0] ST_BULK_COUNT = 3'd6;
 
   reg [63:0] write_addr;
   reg [63:0] data_word0;
@@ -76,13 +78,16 @@ module udp_waveform_ddr_writer #(
   reg [31:0] dbg_align_error_count;
   reg write_resp_pending;
   reg drop_legacy_trigger_payload;
+  reg bulk_mode;
+  reg [31:0] bulk_words_left;
 
   wire fifo_full = fifo_count == FIFO_DEPTH;
   wire fifo_empty = fifo_count == {FIFO_DEPTH_LOG2+1{1'b0}};
   wire axi_idle = !m_axi_awvalid && !m_axi_wvalid;
   wire launch_write = axi_idle && !write_resp_pending && !fifo_empty;
   wire pop_write = launch_write;
-  wire resync_word = udp_tvalid && (udp_tdata == MAGIC) && (dbg_state != ST_IDLE);
+  wire waveform_magic = (udp_tdata == MAGIC) || (udp_tdata == BULK_MAGIC);
+  wire resync_word = udp_tvalid && waveform_magic && (dbg_state != ST_IDLE);
   wire write_addr_aligned = (write_addr[4:0] == 5'd0);
   wire push_write = udp_tvalid && !resync_word && (dbg_state == ST_DATA_3) && write_addr_aligned && (!fifo_full || pop_write);
   wire trigger_word = (udp_tdata == TRIGGER_WORD) || (udp_tdata == LEGACY_TRIGGER_HEADER);
@@ -129,6 +134,8 @@ module udp_waveform_ddr_writer #(
       dbg_resync_count <= 32'd0;
       write_resp_pending <= 1'b0;
       drop_legacy_trigger_payload <= 1'b0;
+      bulk_mode <= 1'b0;
+      bulk_words_left <= 32'd0;
       write_addr   <= 64'd0;
       data_word0   <= 64'd0;
       data_word1   <= 64'd0;
@@ -174,12 +181,16 @@ module udp_waveform_ddr_writer #(
         dbg_state <= ST_ADDR;
         dbg_wave_pkt <= 1'b1;
         dbg_resync_count <= dbg_resync_count + 32'd1;
+        bulk_mode <= (udp_tdata == BULK_MAGIC);
+        bulk_words_left <= 32'd0;
       end else if (udp_tvalid) begin
         case (dbg_state)
           ST_IDLE: begin
-            if (udp_tdata == MAGIC) begin
+            if (waveform_magic) begin
               dbg_state    <= ST_ADDR;
               dbg_wave_pkt <= 1'b1;
+              bulk_mode <= (udp_tdata == BULK_MAGIC);
+              bulk_words_left <= 32'd0;
             end else begin
               instr_tdata    <= udp_tdata;
               instr_tvalid   <= 1'b1;
@@ -189,7 +200,20 @@ module udp_waveform_ddr_writer #(
 
           ST_ADDR: begin
             write_addr <= udp_tdata;
-            dbg_state  <= ST_DATA_LOW;
+            dbg_state  <= bulk_mode ? ST_BULK_COUNT : ST_DATA_LOW;
+          end
+
+          ST_BULK_COUNT: begin
+            if ((udp_tdata[63:32] != 32'd0) || (udp_tdata[31:0] == 32'd0) ||
+                (udp_tdata[1:0] != 2'd0)) begin
+              dbg_drop_count <= dbg_drop_count + 32'd1;
+              bulk_mode <= 1'b0;
+              bulk_words_left <= 32'd0;
+              dbg_state <= ST_IDLE;
+            end else begin
+              bulk_words_left <= udp_tdata[31:0];
+              dbg_state <= ST_DATA_LOW;
+            end
           end
 
           ST_DATA_LOW: begin
@@ -219,7 +243,15 @@ module udp_waveform_ddr_writer #(
             end else begin
               dbg_drop_count <= dbg_drop_count + 32'd1;
             end
-            dbg_state <= ST_IDLE;
+            if (bulk_mode && (bulk_words_left > 32'd4)) begin
+              write_addr <= write_addr + 64'd32;
+              bulk_words_left <= bulk_words_left - 32'd4;
+              dbg_state <= ST_DATA_LOW;
+            end else begin
+              bulk_mode <= 1'b0;
+              bulk_words_left <= 32'd0;
+              dbg_state <= ST_IDLE;
+            end
           end
 
           default: begin

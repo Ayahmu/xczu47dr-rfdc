@@ -90,7 +90,17 @@ module dac_play_ctrl #(
     output wire        dbg_new_cfg,
     output wire        dbg_trig_start,
     output wire        dbg_started,
-    output wire [15:0] dbg_last_seq_id
+    output wire [15:0] dbg_last_seq_id,
+    output reg         dbg_done_pulse,
+    output reg  [7:0]  dbg_underflow_seen,
+    output reg  [31:0] dbg_ch1_fire_count,
+    output reg  [31:0] dbg_ch2_fire_count,
+    output reg  [31:0] dbg_ch3_fire_count,
+    output reg  [31:0] dbg_ch4_fire_count,
+    output reg  [31:0] dbg_ch5_fire_count,
+    output reg  [31:0] dbg_ch6_fire_count,
+    output reg  [31:0] dbg_ch7_fire_count,
+    output reg  [31:0] dbg_ch8_fire_count
 );
 
   reg started;
@@ -175,10 +185,21 @@ module dac_play_ctrl #(
       ch6_active  <= 1'b0;
       ch7_active  <= 1'b0;
       ch8_active  <= 1'b0;
+      dbg_done_pulse <= 1'b0;
+      dbg_underflow_seen <= 8'd0;
+      dbg_ch1_fire_count <= 32'd0;
+      dbg_ch2_fire_count <= 32'd0;
+      dbg_ch3_fire_count <= 32'd0;
+      dbg_ch4_fire_count <= 32'd0;
+      dbg_ch5_fire_count <= 32'd0;
+      dbg_ch6_fire_count <= 32'd0;
+      dbg_ch7_fire_count <= 32'd0;
+      dbg_ch8_fire_count <= 32'd0;
 
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
     end else begin
+      dbg_done_pulse <= 1'b0;
       if(trig_pulse && !started && !start_pending) begin
         trigger_pending <= 1'b1;
       end
@@ -208,6 +229,15 @@ module dac_play_ctrl #(
         beats6        <= ch6_len_beats;
         beats7        <= ch7_len_beats;
         beats8        <= ch8_len_beats;
+        dbg_underflow_seen <= 8'd0;
+        dbg_ch1_fire_count <= 32'd0;
+        dbg_ch2_fire_count <= 32'd0;
+        dbg_ch3_fire_count <= 32'd0;
+        dbg_ch4_fire_count <= 32'd0;
+        dbg_ch5_fire_count <= 32'd0;
+        dbg_ch6_fire_count <= 32'd0;
+        dbg_ch7_fire_count <= 32'd0;
+        dbg_ch8_fire_count <= 32'd0;
 
         cfg_seen      <= 1'b1;
         last_seq_id   <= cfg_seq_id;
@@ -231,12 +261,30 @@ module dac_play_ctrl #(
         if(ch6_fire && beats6 != 0) beats6 <= beats6 - 1;
         if(ch7_fire && beats7 != 0) beats7 <= beats7 - 1;
         if(ch8_fire && beats8 != 0) beats8 <= beats8 - 1;
+        if(ch1_fire) dbg_ch1_fire_count <= dbg_ch1_fire_count + 32'd1;
+        if(ch2_fire) dbg_ch2_fire_count <= dbg_ch2_fire_count + 32'd1;
+        if(ch3_fire) dbg_ch3_fire_count <= dbg_ch3_fire_count + 32'd1;
+        if(ch4_fire) dbg_ch4_fire_count <= dbg_ch4_fire_count + 32'd1;
+        if(ch5_fire) dbg_ch5_fire_count <= dbg_ch5_fire_count + 32'd1;
+        if(ch6_fire) dbg_ch6_fire_count <= dbg_ch6_fire_count + 32'd1;
+        if(ch7_fire) dbg_ch7_fire_count <= dbg_ch7_fire_count + 32'd1;
+        if(ch8_fire) dbg_ch8_fire_count <= dbg_ch8_fire_count + 32'd1;
+
+        if(ch1_allow && dac_ch1_ready_in && !ch1_fifo_tvalid) dbg_underflow_seen[0] <= 1'b1;
+        if(ch2_allow && dac_ch2_ready_in && !ch2_fifo_tvalid) dbg_underflow_seen[1] <= 1'b1;
+        if(ch3_allow && dac_ch3_ready_in && !ch3_fifo_tvalid) dbg_underflow_seen[2] <= 1'b1;
+        if(ch4_allow && dac_ch4_ready_in && !ch4_fifo_tvalid) dbg_underflow_seen[3] <= 1'b1;
+        if(ch5_allow && dac_ch5_ready_in && !ch5_fifo_tvalid) dbg_underflow_seen[4] <= 1'b1;
+        if(ch6_allow && dac_ch6_ready_in && !ch6_fifo_tvalid) dbg_underflow_seen[5] <= 1'b1;
+        if(ch7_allow && dac_ch7_ready_in && !ch7_fifo_tvalid) dbg_underflow_seen[6] <= 1'b1;
+        if(ch8_allow && dac_ch8_ready_in && !ch8_fifo_tvalid) dbg_underflow_seen[7] <= 1'b1;
 
         // 所有启用通道都发完才结束
         if((beats1 == 0) && (beats2 == 0) && (beats3 == 0) && (beats4 == 0) &&
            (beats5 == 0) && (beats6 == 0) && (beats7 == 0) && (beats8 == 0)) begin
           started <= 1'b0;
           start_pending <= 1'b0;
+          dbg_done_pulse <= 1'b1;
         end
       end
 

@@ -30,6 +30,20 @@ DEFAULT_VALID_PROBES = {channel: (f"top_i/dac_ch{channel}_valid_gated", f"top_i/
 DEFAULT_DATA_PROBES = {channel: (f"top_i/dac_in_ch{channel}_tdata",) for channel in CHANNELS}
 DEFAULT_DELAY_PROBES = {channel: (f"top_i/ch{channel}_delay_dac", f"top_i/ch{channel}_delay_cycles") for channel in CHANNELS}
 DEFAULT_LEN_PROBES = {channel: (f"top_i/ch{channel}_len_dac",) for channel in CHANNELS}
+DEFAULT_FIRE_COUNT_PROBES = {channel: (f"top_i/pc_ch{channel}_fire_count",) for channel in CHANNELS}
+DEFAULT_UNDERFLOW_PROBES = ("top_i/pc_underflow_seen",)
+DEFAULT_DONE_PROBES = ("top_i/pc_done_pulse",)
+
+
+def parse_byte_count(value: str) -> int:
+    text = str(value).strip().lower()
+    if text == "max":
+        return host.DDR_MAX_BYTES_PER_CHANNEL
+    scales = {"kib": 1024, "mib": 1024**2, "gib": 1024**3}
+    for suffix, scale in scales.items():
+        if text.endswith(suffix):
+            return int(float(text[:-len(suffix)]) * scale)
+    return int(text, 0)
 
 
 @dataclass
@@ -103,13 +117,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--capture-depth", type=int, default=4096, help="Requested ILA capture depth when the core supports CONTROL.DATA_DEPTH.")
     parser.add_argument("--trigger-position", type=int, default=1024, help="Requested ILA trigger position when the core supports CONTROL.TRIGGER_POSITION.")
     parser.add_argument("--timeout-s", type=int, default=120, help="Vivado capture process timeout in seconds.")
-    parser.add_argument("--trigger-probe", help="Override trigger/reference probe name. Default prefers top_i/pc_trig_start.")
+    parser.add_argument("--trigger-probe", help="Override trigger/reference probe name. Default follows --trigger-event.")
+    parser.add_argument("--trigger-event", choices=("start", "done"), default="start", help="Use playback start or playback completion as the default trigger.")
     parser.add_argument("--probe-map", type=Path, help="JSON map overriding logical probe names: trigger, ch1_valid, ch1_data, ...")
     parser.add_argument("--expected-delay-cycles", default="", help="Comma list such as ch1=0,ch2=32,ch3=64,ch4=96.")
     parser.add_argument("--setup-tcl", type=Path, help="Optional Tcl snippet sourced after ILA selection and before run_hw_ila.")
     parser.add_argument("--skip-trigger-setup", action="store_true", help="Do not set a default ILA trigger compare value; use the current Vivado ILA setup.")
     parser.add_argument("--report-prefix", default="ila_capture_report", help="Output report filename prefix.")
-    return parser.parse_args()
+    parser.add_argument("--max-length", action="store_true", help="After ILA arm, stream the deterministic max-length DDR test instead of loading waveform artifacts.")
+    parser.add_argument("--max-length-bytes-per-channel", type=parse_byte_count, default=host.DDR_MAX_BYTES_PER_CHANNEL)
+    parser.add_argument("--max-length-beats-per-datagram", type=int, default=128)
+    parser.add_argument("--max-length-batch-pause-us", type=float, default=0.0)
+    parser.add_argument("--capture-only", action="store_true", help="Write the raw ILA CSV without normal artifact comparison.")
+    args = parser.parse_args()
+    if args.trigger_probe is None:
+        args.trigger_probe = DEFAULT_DONE_PROBES[0] if args.trigger_event == "done" else DEFAULT_TRIGGER_PROBES[0]
+    return args
 
 
 def load_probe_map(path: Path | None) -> dict[str, str]:
@@ -409,6 +432,63 @@ def send_artifacts_to_board(args: argparse.Namespace) -> None:
         ctrl.close()
 
 
+def send_max_length_to_board(args: argparse.Namespace) -> None:
+    bytes_per_channel = host.require_beat_aligned(
+        int(args.max_length_bytes_per_channel),
+        "max_length_bytes_per_channel",
+    )
+    if bytes_per_channel <= 0 or bytes_per_channel > host.DDR_MAX_BYTES_PER_CHANNEL:
+        raise ValueError(f"max-length bytes per channel exceeds {host.DDR_MAX_BYTES_PER_CHANNEL}")
+    total_bytes = bytes_per_channel * host.DDR_INTERLEAVED_CHANNELS
+    metadata = {
+        "mode": "max-length",
+        "layout": host.DDR_LAYOUT_INTERLEAVED_512B,
+        "pattern": "cw-marker",
+        "bytes_per_channel": bytes_per_channel,
+        "physical_ddr_bytes": total_bytes,
+        "expected_rfdc_beats_per_channel": bytes_per_channel // host.BEAT_BYTES,
+        "expected_datamover_beats": total_bytes // host.DDR_INTERLEAVED_BEAT_BYTES,
+        "expected_duration_s": bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
+        "marker_bytes_per_channel": 4096,
+        "trigger_event": args.trigger_event,
+    }
+    (args.out_dir / "max_length_metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    ctrl = host.RFSocController(
+        args.ip,
+        port=args.port,
+        transport="udp",
+        udp_interface=args.udp_interface,
+        udp_source_ip=args.udp_source_ip,
+        timeout_s=float(args.timeout_s),
+    )
+    try:
+        ctrl.upload_max_length_udp(
+            bytes_per_channel,
+            base_addr=host.DDR_BASE,
+            beats_per_datagram=int(args.max_length_beats_per_datagram),
+            marker_bytes_per_channel=4096,
+            batch_pause_s=max(0.0, float(args.max_length_batch_pause_us)) * 1e-6,
+        )
+        if args.post_upload_sleep_s > 0:
+            time.sleep(args.post_upload_sleep_s)
+        ctrl.send_instructions(
+            waveform_tools.build_play_commands(
+                loop=False,
+                auto_start=not args.wait_for_trigger,
+                channel_lengths={channel: bytes_per_channel for channel in CHANNELS},
+                channel_delays={channel: 0 for channel in CHANNELS},
+                layout=host.DDR_LAYOUT_INTERLEAVED_512B,
+            )
+        )
+        if args.wait_for_trigger:
+            ctrl.trigger()
+    finally:
+        ctrl.close()
+
+
 def wait_for_armed_file(path: Path, process: subprocess.Popen[str], timeout_s: int) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -422,7 +502,7 @@ def wait_for_armed_file(path: Path, process: subprocess.Popen[str], timeout_s: i
 
 def run_capture(args: argparse.Namespace) -> Path:
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    if args.send_after_arm:
+    if args.send_after_arm and not args.max_length:
         ensure_send_artifacts(args)
     if args.bit is None and args.program_mode in {"always", "auto"}:
         raise ValueError("--program-mode always/auto requires --bit")
@@ -438,7 +518,10 @@ def run_capture(args: argparse.Namespace) -> Path:
     try:
         wait_for_armed_file(armed_path, process, args.timeout_s)
         if args.send_after_arm:
-            send_artifacts_to_board(args)
+            if args.max_length:
+                send_max_length_to_board(args)
+            else:
+                send_artifacts_to_board(args)
         stdout, stderr = process.communicate(timeout=args.timeout_s)
     except Exception:
         process.kill()
@@ -944,6 +1027,106 @@ def render_markdown(details: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def analyze_max_length_capture(args: argparse.Namespace, csv_path: Path) -> tuple[dict[str, Any], str]:
+    metadata_path = args.out_dir / "max_length_metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Missing max-length metadata: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    expected_beats = int(metadata["expected_rfdc_beats_per_channel"])
+    header, rows = read_ila_csv(csv_path)
+    if not rows:
+        raise ValueError(f"No sample rows found in {csv_path}")
+    probe_map = load_probe_map(args.probe_map)
+    trigger_probe, _trigger_values, trigger_index = resolve_trigger(
+        header,
+        rows,
+        (str(args.trigger_probe),),
+        probe_map,
+    )
+    if trigger_index is None:
+        trigger_index = len(rows) - 1
+
+    underflow_probe = resolve_probe(header, "underflow", DEFAULT_UNDERFLOW_PROBES, probe_map)
+    underflow_values = column_values(rows, underflow_probe) if underflow_probe.resolved else []
+    underflow_value = underflow_values[trigger_index] if trigger_index < len(underflow_values) else None
+    channel_results: list[dict[str, Any]] = []
+    all_ok = trigger_probe.resolved and underflow_value == 0
+
+    marker_region = "end" if args.trigger_event == "done" else "start"
+    for channel in CHANNELS:
+        len_probe = resolve_probe(header, f"ch{channel}_len", DEFAULT_LEN_PROBES[channel], probe_map)
+        fire_probe = resolve_probe(header, f"ch{channel}_fire", DEFAULT_FIRE_COUNT_PROBES[channel], probe_map)
+        valid_probe = resolve_probe(header, f"ch{channel}_valid", DEFAULT_VALID_PROBES[channel], probe_map)
+        data_probe = resolve_probe(header, f"ch{channel}_data", DEFAULT_DATA_PROBES[channel], probe_map)
+        len_values = column_values(rows, len_probe) if len_probe.resolved else []
+        fire_values = column_values(rows, fire_probe) if fire_probe.resolved else []
+        valid_values = column_values(rows, valid_probe) if valid_probe.resolved else []
+        data_values = column_values(rows, data_probe) if data_probe.resolved else []
+        captured_len = len_values[trigger_index] if trigger_index < len(len_values) else None
+        captured_fire = fire_values[trigger_index] if trigger_index < len(fire_values) else None
+
+        valid_indices = [idx for idx, value in enumerate(valid_values) if value]
+        if args.trigger_event == "done":
+            candidates = [idx for idx in valid_indices if idx <= trigger_index]
+            data_index = candidates[-1] if candidates else None
+        else:
+            candidates = [idx for idx in valid_indices if idx >= trigger_index]
+            data_index = candidates[0] if candidates else None
+        captured_word = data_values[data_index] if data_index is not None and data_index < len(data_values) else None
+        amplitude = host.max_length_marker_amplitude(channel, marker_region)
+        expected_lanes = np.array([amplitude, 0] * 8, dtype="<i2")
+        expected_word = int.from_bytes(expected_lanes.tobytes(), byteorder="little", signed=False)
+
+        checks = [
+            len_probe.resolved and captured_len == expected_beats,
+            valid_probe.resolved and data_probe.resolved and captured_word == expected_word,
+        ]
+        if args.trigger_event == "done":
+            checks.append(fire_probe.resolved and captured_fire == expected_beats)
+        channel_ok = all(checks)
+        all_ok = all_ok and channel_ok
+        channel_results.append({
+            "channel": channel,
+            "status": "PASS" if channel_ok else "FAIL",
+            "captured_len_beats": captured_len,
+            "captured_fire_count": captured_fire,
+            "expected_beats": expected_beats,
+            "marker_region": marker_region,
+            "marker_match": captured_word == expected_word if captured_word is not None else False,
+            "data_index": data_index,
+        })
+
+    details = {
+        "overall_status": "PASS" if all_ok else "FAIL",
+        "csv": str(csv_path),
+        "trigger_event": args.trigger_event,
+        "trigger_probe": trigger_probe.label if trigger_probe.resolved else None,
+        "trigger_index": trigger_index,
+        "underflow_probe": underflow_probe.label if underflow_probe.resolved else None,
+        "underflow_seen": underflow_value,
+        "metadata": metadata,
+        "channels": channel_results,
+    }
+    lines = [
+        "# RFDC Max-Length ILA Report",
+        "",
+        f"- Overall: `{details['overall_status']}`",
+        f"- Trigger event: `{args.trigger_event}`",
+        f"- Trigger probe: `{details['trigger_probe']}`",
+        f"- Underflow seen: `{underflow_value}`",
+        f"- Expected beats/channel: `{expected_beats}`",
+        "",
+        "| Channel | Status | Length beats | Fire count | Marker |",
+        "|---:|:---:|---:|---:|:---:|",
+    ]
+    for channel in channel_results:
+        lines.append(
+            f"| {channel['channel']} | {channel['status']} | {channel['captured_len_beats']} | "
+            f"{channel['captured_fire_count']} | {'PASS' if channel['marker_match'] else 'FAIL'} |"
+        )
+    return details, "\n".join(lines) + "\n"
+
+
 def main() -> int:
     args = parse_args()
     if not args.capture and args.csv_file is None:
@@ -953,7 +1136,10 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = run_capture(args) if args.capture else args.csv_file
     assert csv_path is not None
-    details, markdown = analyze(args, csv_path)
+    if args.capture_only:
+        print(f"csv_report={csv_path}")
+        return 0
+    details, markdown = analyze_max_length_capture(args, csv_path) if args.max_length else analyze(args, csv_path)
     json_path = args.out_dir / f"{args.report_prefix}.json"
     md_path = args.out_dir / f"{args.report_prefix}.md"
     json_path.write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")

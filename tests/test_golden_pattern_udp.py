@@ -38,7 +38,7 @@ class GoldenPatternTests(unittest.TestCase):
 
         magic, addr, word0, word1, word2, word3 = struct.unpack("<QQQQQQ", packet)
         self.assertEqual(magic, host.UDP_WAVE_DDR_MAGIC)
-        self.assertEqual(addr, 0x0000000000000000)
+        self.assertEqual(addr, host.DDR_BASE)
         self.assertEqual(word0, 0x0003000200010000)
         self.assertEqual(word1, 0x0007000600050004)
         self.assertEqual(word2, 0x000b000a00090008)
@@ -47,7 +47,7 @@ class GoldenPatternTests(unittest.TestCase):
     def test_play_instruction_hex_matches_executor_decode(self):
         instruction = waveform_tools.play_instruction_words(channel=1, length_bytes=host.FIXED_DATA_BYTES, ddr_addr=host.DDR_X_ADDR)
 
-        self.assertEqual(instruction, (0x0000100000000012, 0x0000000000000000))
+        self.assertEqual(instruction, (0x0000100000000012, host.DDR_BASE))
         self.assertEqual(waveform_tools.rtl_instruction_tdata_hex(instruction), "0x00000000000000000000100000000012")
 
     def test_loop_end_instruction_uses_reserved_bit(self):

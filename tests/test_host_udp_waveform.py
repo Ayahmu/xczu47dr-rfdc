@@ -1,5 +1,6 @@
 import struct
 import sys
+import tempfile
 import unittest
 from importlib import util
 from pathlib import Path
@@ -61,6 +62,19 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(host.DDR_X_ADDR, host.DDR_CH1_ADDR)
         self.assertEqual(host.DDR_Y_ADDR, host.DDR_CH2_ADDR)
 
+    def test_extreme_length_capacity_matches_8gib_ddr_with_top_reserve(self):
+        self.assertEqual(host.DDR_PHYS_BYTES, 0x200000000)
+        self.assertEqual(host.DDR_RESERVED_TOP_BYTES, 0x100000)
+        self.assertEqual(host.DDR_USABLE_WAVEFORM_BYTES, 0x1FFF00000)
+        self.assertEqual(host.DDR_MAX_BYTES_PER_CHANNEL, 0x3FFE0000)
+        self.assertEqual(host.DDR_MAX_INTERLEAVED_BYTES, 0x1FFF00000)
+        self.assertEqual(host.RFDC_CTRL_MAILBOX_OFFSET, 0x1FFF00000)
+        self.assertEqual(host.DDR_MAX_BYTES_PER_CHANNEL // host.BEAT_BYTES, 33_550_336)
+        self.assertAlmostEqual(
+            host.DDR_MAX_BYTES_PER_CHANNEL / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
+            0.67100672,
+        )
+
     def test_tiled_ddr_address_mapping(self):
         self.assertEqual(host.tiled_ddr_addr(1, 0), host.DDR_BASE)
         self.assertEqual(host.tiled_ddr_addr(2, 0), host.DDR_BASE + host.DDR_TILE_BYTES)
@@ -102,6 +116,74 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(lanes[0], [100, 101, 102, 103])
         self.assertEqual(lanes[1], [200, 201, 202, 203])
         self.assertEqual(lanes[7], [800, 801, 802, 803])
+
+    def test_max_length_bulk_stream_preserves_marker_lane_order_and_addresses(self):
+        bytes_per_channel = 16 * 1024
+        datagrams = list(host.iter_max_length_udp_batches(
+            bytes_per_channel,
+            beats_per_datagram=8,
+            marker_bytes_per_channel=4096,
+            pattern=host.MAX_LENGTH_PATTERN_CW_MARKER,
+        ))
+        decoded = [host.decode_udp_bulk_datagram(datagram) for datagram in datagrams]
+        self.assertEqual(decoded[0][0], host.DDR_BASE)
+        self.assertEqual(decoded[-1][0] + len(decoded[-1][1]), host.DDR_BASE + bytes_per_channel * 8)
+
+        payload = b"".join(data for _addr, data in decoded)
+        total_beats = len(payload) // 64
+        for beat_index, region in ((0, "start"), (total_beats // 2, "middle"), (total_beats - 1, "end")):
+            beat = payload[beat_index * 64:(beat_index + 1) * 64]
+            lanes = [np.frombuffer(beat[ch * 8:(ch + 1) * 8], dtype="<i2").tolist() for ch in range(8)]
+            for channel, lane in enumerate(lanes, start=1):
+                amplitude = host.max_length_marker_amplitude(channel, region)
+                self.assertEqual(lane, [amplitude, 0, amplitude, 0])
+
+    def test_max_length_lowfreq_sine_stream_uses_i_only_lanes(self):
+        datagram = next(host.iter_max_length_udp_batches(
+            4096,
+            beats_per_datagram=4,
+            pattern=host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+            sine_freq_hz=10_000_000.0,
+            sine_amplitude=4096,
+        ))
+        _addr, payload = host.decode_udp_bulk_datagram(datagram)
+
+        first_beat = payload[:64]
+        lanes = [np.frombuffer(first_beat[ch * 8:(ch + 1) * 8], dtype="<i2").tolist() for ch in range(8)]
+
+        self.assertTrue(any(lane[0] != 0 or lane[2] != 0 for lane in lanes))
+        self.assertTrue(all(lane[1] == 0 and lane[3] == 0 for lane in lanes))
+        self.assertNotEqual(lanes[0], lanes[2])
+
+    def test_max_length_waveform_cache_reuses_raw_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = host.ensure_max_length_waveform_cache(
+                temp_dir,
+                4096,
+                pattern=host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+                sine_freq_hz=10_000_000.0,
+                sine_amplitude=4096,
+                generation_chunk_beats=4,
+            )
+            self.assertEqual(cache_path.stat().st_size, 4096 * 8)
+            second_path = host.ensure_max_length_waveform_cache(
+                temp_dir,
+                4096,
+                pattern=host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+                sine_freq_hz=10_000_000.0,
+                sine_amplitude=4096,
+            )
+            self.assertEqual(second_path, cache_path)
+
+            datagram = next(host.iter_max_length_udp_batches_from_cache(cache_path, 4096, beats_per_datagram=4))
+            _addr, payload = host.decode_udp_bulk_datagram(datagram)
+            lanes = [np.frombuffer(payload[ch * 8:(ch + 1) * 8], dtype="<i2").tolist() for ch in range(8)]
+            self.assertTrue(any(lane[0] != 0 or lane[2] != 0 for lane in lanes))
+            self.assertTrue(all(lane[1] == 0 and lane[3] == 0 for lane in lanes))
+
+    def test_max_length_bulk_stream_rejects_over_capacity(self):
+        with self.assertRaisesRegex(ValueError, "bytes_per_channel"):
+            next(host.iter_max_length_udp_batches(host.DDR_MAX_BYTES_PER_CHANNEL + 32))
 
     def test_rfdc_nco_plan_maps_zone1_and_zone2_targets(self):
         self.assertEqual(host.rfdc_nco_plan_for_target(3.5e9)["nco_hz"], -2.9e9)

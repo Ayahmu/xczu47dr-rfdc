@@ -1069,6 +1069,121 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / "sine_metadata.json").exists())
             controller.uploader.assert_not_called()
 
+    def test_extreme_playback_dry_run_writes_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = waveform_gui_model.ExtremePlaybackConfig(
+                output_dir=Path(temp_dir),
+                bytes_per_channel="64MiB",
+                dry_run=True,
+            )
+
+            result = waveform_gui_model.run_extreme_playback(config, waveform_gui_model.ConnectionConfig())
+
+            metadata = json.loads((Path(temp_dir) / "extreme_playback_metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue(result.dry_run)
+            self.assertEqual(result.bytes_per_channel, 64 * 1024 * 1024)
+            self.assertEqual(metadata["layout"], host.DDR_LAYOUT_INTERLEAVED_512B)
+            self.assertEqual(metadata["expected_rfdc_beats_per_channel"], (64 * 1024 * 1024) // host.BEAT_BYTES)
+
+    def test_extreme_playback_send_uses_bulk_upload_and_play_commands(self):
+        instances = []
+
+        class FakeController:
+            def __init__(self, ip, port, timeout_s, transport, udp_interface, udp_source_ip):
+                self.args = (ip, port, timeout_s, transport, udp_interface, udp_source_ip)
+                self.mailbox_calls = []
+                self.upload_calls = []
+                self.instruction_calls = []
+                self.closed = False
+                instances.append(self)
+
+            def upload_rfdc_nco_mailbox(self, nco, zones):
+                self.mailbox_calls.append((nco, zones))
+
+            def upload_max_length_udp(
+                self,
+                bytes_per_channel,
+                base_addr,
+                beats_per_datagram,
+                marker_bytes_per_channel,
+                pattern,
+                sine_freq_hz,
+                sine_amplitude,
+                use_waveform_cache,
+                waveform_cache_dir,
+                force_waveform_cache,
+            ):
+                self.upload_calls.append((
+                    bytes_per_channel,
+                    base_addr,
+                    beats_per_datagram,
+                    marker_bytes_per_channel,
+                    pattern,
+                    sine_freq_hz,
+                    sine_amplitude,
+                    use_waveform_cache,
+                    waveform_cache_dir,
+                    force_waveform_cache,
+                ))
+                return 123
+
+            def send_instructions(self, commands):
+                self.instruction_calls.append(commands)
+
+            def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            extreme = waveform_gui_model.ExtremePlaybackConfig(
+                output_dir=Path(temp_dir),
+                bytes_per_channel="4096",
+                beats_per_datagram=16,
+                marker_bytes_per_channel=4096,
+                wait_for_trigger=True,
+                dry_run=False,
+            )
+            waveform = waveform_gui_model.WaveformConfig(mode="ezq-quantum", output_dir=Path(temp_dir), dry_run=True)
+            connection = waveform_gui_model.ConnectionConfig(
+                ip="192.0.2.90",
+                port=9090,
+                udp_interface="eth-test",
+                udp_source_ip="192.0.2.2",
+                timeout_s=2.0,
+                post_upload_sleep_s=0.0,
+            )
+
+            result = waveform_gui_model.run_extreme_playback(
+                extreme,
+                connection,
+                waveform_config=waveform,
+                controller_cls=FakeController,
+            )
+
+        ctrl = instances[0]
+        self.assertFalse(result.dry_run)
+        self.assertEqual(result.datagrams, 123)
+        self.assertEqual(ctrl.args, ("192.0.2.90", 9090, 2.0, "udp", "eth-test", "192.0.2.2"))
+        self.assertEqual(
+            ctrl.upload_calls,
+            [(
+                4096,
+                host.DDR_BASE,
+                16,
+                4096,
+                host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
+                10.0,
+                4096,
+                True,
+                Path(temp_dir) / "waveform_cache",
+                False,
+            )],
+        )
+        self.assertEqual(len(ctrl.mailbox_calls), 1)
+        self.assertEqual(len(ctrl.instruction_calls), 1)
+        self.assertEqual(ctrl.instruction_calls[0][-1][1], 0)
+        self.assertEqual(ctrl.instruction_calls[0][1], [2, 1, 4096, 0, host.PLAY_FLAG_INTERLEAVED])
+        self.assertTrue(ctrl.closed)
+
     def test_send_uses_upload_helper_with_connection_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = waveform_gui_model.WaveformConfig(

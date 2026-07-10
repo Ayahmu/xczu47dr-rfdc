@@ -15,6 +15,9 @@ module tb_dac_play_ctrl;
   wire ch1_allow;
   wire dbg_started;
   wire dbg_trig_start;
+  wire dbg_done_pulse;
+  wire [7:0] dbg_underflow_seen;
+  wire [31:0] dbg_ch1_fire_count;
 
   always #5 clk = ~clk;
 
@@ -94,7 +97,17 @@ module tb_dac_play_ctrl;
     .dbg_new_cfg(),
     .dbg_trig_start(dbg_trig_start),
     .dbg_started(dbg_started),
-    .dbg_last_seq_id()
+    .dbg_last_seq_id(),
+    .dbg_done_pulse(dbg_done_pulse),
+    .dbg_underflow_seen(dbg_underflow_seen),
+    .dbg_ch1_fire_count(dbg_ch1_fire_count),
+    .dbg_ch2_fire_count(),
+    .dbg_ch3_fire_count(),
+    .dbg_ch4_fire_count(),
+    .dbg_ch5_fire_count(),
+    .dbg_ch6_fire_count(),
+    .dbg_ch7_fire_count(),
+    .dbg_ch8_fire_count()
   );
 
   initial begin
@@ -107,6 +120,10 @@ module tb_dac_play_ctrl;
     end
 
     wait (dbg_started == 1'b0);
+    if (!dbg_done_pulse || dbg_ch1_fire_count != 32'd8 || dbg_underflow_seen != 8'd0) begin
+      $error("dac_play_ctrl completion counters must report exactly eight clean CH1 handshakes");
+      $finish;
+    end
 
     auto_start = 1'b0;
     repeat (4) @(posedge clk);
@@ -128,7 +145,18 @@ module tb_dac_play_ctrl;
       $finish;
     end
 
-    $display("PASS: dac_play_ctrl starts short frames and preserves early trigger until cfg arrival");
+    @(negedge clk);
+    ch1_fifo_tvalid = 1'b0;
+    repeat (2) @(posedge clk);
+    @(negedge clk);
+    ch1_fifo_tvalid = 1'b1;
+    repeat (2) @(posedge clk);
+    if (!dbg_underflow_seen[0]) begin
+      $error("dac_play_ctrl must retain a sticky underflow indication when an allowed channel has no data");
+      $finish;
+    end
+
+    $display("PASS: dac_play_ctrl starts short frames and reports completion/fire/underflow debug state");
     $finish;
   end
 endmodule

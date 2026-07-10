@@ -70,7 +70,7 @@ $body
     output          c0_ddr4_ui_clk_sync_rst,
     input           c0_ddr4_aresetn,
 
-    input  [34:0]   s_axi_awaddr,
+    input  [39:0]   s_axi_awaddr,
     input  [7:0]    s_axi_awlen,
     input  [2:0]    s_axi_awsize,
     input  [1:0]    s_axi_awburst,
@@ -88,7 +88,7 @@ $body
     input           s_axi_bready,
     output [1:0]    s_axi_bresp,
     output          s_axi_bvalid,
-    input  [34:0]   s_axi_araddr,
+    input  [39:0]   s_axi_araddr,
     input  [7:0]    s_axi_arlen,
     input  [2:0]    s_axi_arsize,
     input  [1:0]    s_axi_arburst,
@@ -109,8 +109,8 @@ $body
   wire [511:0] dbg_bus;
   wire [0:0]  s_axi_bid;
   wire [0:0]  s_axi_rid;
-  wire [34:0] s_axi_awaddr_local = s_axi_awaddr - 35'h5_0000_0000;
-  wire [34:0] s_axi_araddr_local = s_axi_araddr - 35'h5_0000_0000;
+  wire [39:0] s_axi_awaddr_local = s_axi_awaddr - 40'h48_0000_0000;
+  wire [39:0] s_axi_araddr_local = s_axi_araddr - 40'h48_0000_0000;
 
   ddr_custom_xczu47dr_ip ddr4_i (
       .sys_rst(sys_rst),

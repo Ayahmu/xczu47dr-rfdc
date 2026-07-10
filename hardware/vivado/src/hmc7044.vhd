@@ -58,6 +58,7 @@ signal HMC7043_SDATA4 :		STD_LOGIC;
 
 	signal rst_cnt				:	std_logic_vector(27 downto 0);
 	signal reset 				:	std_logic;
+	signal clk_div				:	std_logic_vector(1 downto 0);
 
 
 begin
@@ -66,11 +67,23 @@ H7044_SLEN  <=HMC7044_CS_N;
 H7044_SCLK  <=HMC7044_SCLK;
 H7044_SDATA <=HMC7044_SDIO;
 
+	-- Preserve the original 25 MHz state-machine cadence while keeping all
+	-- sequential logic on the timing-constrained input clock.
+	process(clk,rst)
+	begin
+		if rst = '0' then
+			clk_div <= (others => '0');
+		elsif rising_edge(clk) then
+			clk_div <= clk_div + 1;
+		end if;
+	end process;
+
 
 
 	process(clk)
 	begin
 		if rising_edge(clk) then
+			if clk_div = "01" then
 			case config_reg_cnt is
 				when x"000" =>
 					config_reg <= x"0000" & x"00";	--	soft reset[0] = 0,
@@ -678,6 +691,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when others =>
 					config_reg <= x"000000";
 			end case;
+			end if;
 		end if;
 	end process;
 
@@ -694,6 +708,7 @@ H7044_SDATA <=HMC7044_SDIO;
 			config_reg_cnt	<= (others => '0');
 			wr_reg_cnt		<= (others => '0');
 		elsif rising_edge(clk) then
+			if clk_div = "01" then
 			case spi_cntr_status is
 				when config_wait =>
 					HMC7044_SCLK		<= '0';
@@ -794,6 +809,7 @@ H7044_SDATA <=HMC7044_SDIO;
 					HMC7044_SDIO		<= '0';
 					spi_cntr_status <= config_wait;
 				end case;
+			end if;
 		end if;
 	end process;
 

@@ -261,7 +261,7 @@ proc create_root_design { parentCell } {
 
     set M_AXI_PS_DDR [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_PS_DDR ]
     set_property -dict [ list \
-     CONFIG.ADDR_WIDTH {35} \
+      CONFIG.ADDR_WIDTH {40} \
      CONFIG.DATA_WIDTH {128} \
      CONFIG.HAS_BRESP {1} \
      CONFIG.HAS_BURST {1} \
@@ -770,7 +770,7 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   assign_bd_address -offset 0xA0000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_DMA/Reg] -force
   assign_bd_address -offset 0xA0010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_GPIO/Reg] -force
   assign_bd_address -offset 0xA0020000 -range 0x00008000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_INST/Reg] -force
-    assign_bd_address -offset 0x000500000000 -range 0x000100000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_PS_DDR/Reg] -force
+    assign_bd_address -offset 0x004800000000 -range 0x000200000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_PS_DDR/Reg] -force
     assign_bd_address -offset 0xA0040000 -range 0x00040000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_RFDC/Reg] -force
 
   # Exclude Address Segments

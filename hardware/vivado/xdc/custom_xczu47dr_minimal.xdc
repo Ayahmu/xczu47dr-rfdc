@@ -32,6 +32,9 @@ set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
 set_property PACKAGE_PIN D10 [get_ports HMC7044_CLK]
 set_property IOSTANDARD LVCMOS25 [get_ports HMC7044_CLK]
 
+# These scope-only outputs are not sampled by an external synchronous interface.
+set_false_path -to [get_ports {HMC7044_CLK TRIG_1}]
+
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_P_0]
@@ -70,8 +73,9 @@ set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get
 
 # PS GPIO trigger is synchronized into DDR and DAC fabric domains in Top.v.
 # Only the first synchronizer stage is asynchronous; downstream stages remain timed.
-set_false_path -quiet -to [get_pins -quiet top_i/trigger_ddr_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/trigger_dac_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_ddr_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_dac_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/udp_trigger_dac_sync_ff_reg[0]/D]
 
 # Single-DDR bring-up constraints adapted from the user-provided XCZU47DR
 # reference project MIG implementation. The custom card uses a 64-bit C0 DDR4

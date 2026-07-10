@@ -50,7 +50,7 @@ int Poll_Rfdc_Nco_Mailbox(void);
  * NCO = target - 6.4 GHz.
  */
 #define CUSTOM_DAC_FS_GHZ (6.4)
-#define RFDC_CTRL_MAILBOX_OFFSET 0x0FF00000U
+#define RFDC_CTRL_MAILBOX_OFFSET 0x00000001FFF00000ULL
 #define RFDC_CTRL_MAILBOX_MAGIC_LO 0x43444652U /* "RFDCNCO0" little-endian */
 #define RFDC_CTRL_MAILBOX_MAGIC_HI 0x304F434EU
 #define RFDC_CTRL_MAILBOX_BYTES 160U
@@ -530,8 +530,9 @@ int main(void)
 	xil_printf("\n\r###############################################\n\r");
 	xil_printf("Hello RFSoC World!\n\r\n");
 	xil_printf("RFDC playback target: Fs=6.4 GS/s, interpolation=16x, IQ sample=400 MS/s, AXIS=50 MHz, layout=interleaved_512b\r\n");
-	xil_printf("RFDC runtime retune mailbox: DDR offset=0x%08lx magic=RFDCNCO0\r\n",
-		   (unsigned long)RFDC_CTRL_MAILBOX_OFFSET);
+	xil_printf("RFDC runtime retune mailbox: DDR offset=0x%08lx%08lx magic=RFDCNCO0\r\n",
+		   (unsigned long)(RFDC_CTRL_MAILBOX_OFFSET >> 32),
+		   (unsigned long)(RFDC_CTRL_MAILBOX_OFFSET & 0xFFFFFFFFULL));
 
 	// Display IP version
 	Val = Xil_In32(RFDC_BASE + 0x00000);
