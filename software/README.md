@@ -63,6 +63,37 @@ python3 software/send_waveform_udp.py golden \
   --udp-source-ip 192.168.1.10
 ```
 
+PL RISC-V control-plane V1 smoke commands:
+
+```bash
+# Send PING to the PL control path. Observe rv_dbg_status/last_seq in ila_udp_ddr.
+python3 software/send_waveform_udp.py rvctrl-ping \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --seq 1
+
+# After waveform data is already in DDR, ask the PL control path to emit
+# 8 interleaved PLAY instructions and END. This does not upload waveform data.
+python3 software/send_waveform_udp.py rvctrl-play \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --bytes-per-channel 4096 \
+  --auto-start
+
+# Generate a trigger through the PL control path.
+python3 software/send_waveform_udp.py rvctrl-trigger \
+  --ip 192.168.1.128 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10 \
+  --seq 2
+```
+
+The V1 control path is parallel to the legacy waveform path. `WAVEDDR0` and
+`WAVESTR0` still upload bulk data to DDR; `RVCTRL0\0` only carries small control
+commands such as PING, PLAY_INTERLEAVED, and TRIGGER.
+
 PyPulse-style XY/Z/readout bundle with RFDC C2R I/Q lane packing:
 
 ```bash

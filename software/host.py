@@ -127,6 +127,13 @@ SO_BINDTODEVICE = 25
 UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
 UDP_WAVE_BULK_MAGIC = 0x5741564553545230  # WAVESTR0
 UDP_TRIGGER_WORD = 0x3152454747495254  # ASCII "TRIGGER1" on the UDP byte stream
+UDP_RVCTRL_MAGIC = 0x00304C5254435652  # ASCII "RVCTRL0\\0" on the UDP byte stream
+RV_CMD_PING = 0x00000001
+RV_CMD_PLAY_INTERLEAVED = 0x00000002
+RV_CMD_TRIGGER = 0x00000003
+RV_CMD_WRITE_MMIO = 0x00000004
+RV_PLAY_FLAG_AUTO_START = 0x1
+RV_PLAY_FLAG_LOOP = 0x2
 RFDC_CTRL_MAILBOX_OFFSET = DDR_MAX_INTERLEAVED_BYTES
 RFDC_CTRL_MAILBOX_MAGIC = 0x304F434E43444652  # ASCII "RFDCNCO0" little-endian
 RFDC_CTRL_MAILBOX_HEADER_BYTES = 32
@@ -216,6 +223,46 @@ def iter_rfdc_nco_mailbox_packets(
     header = image[:RFDC_CTRL_MAILBOX_HEADER_BYTES]
     yield from iter_udp_waveform_packets(entries, mailbox_offset + RFDC_CTRL_MAILBOX_HEADER_BYTES)
     yield from iter_udp_waveform_packets(header, mailbox_offset)
+
+
+def pack_rvctrl_packet(words32: list[int] | tuple[int, ...]) -> bytes:
+    """Pack one PL RISC-V control command UDP datagram.
+
+    Datagram layout:
+      u64 magic = "RVCTRL0\\0"
+      u64 word_count, low 32 bits only
+      payload = little-endian uint32 words, padded to an 8B boundary
+    """
+    words = [int(word) & 0xFFFFFFFF for word in words32]
+    if not words:
+        raise ValueError("RVCTRL payload must contain at least one 32-bit word")
+    payload = struct.pack("<" + "I" * len(words), *words)
+    if len(payload) % 8 != 0:
+        payload += b"\x00" * (8 - (len(payload) % 8))
+    return struct.pack("<QQ", UDP_RVCTRL_MAGIC, len(words)) + payload
+
+
+def pack_rvctrl_ping(seq: int = 1) -> bytes:
+    return pack_rvctrl_packet([RV_CMD_PING, int(seq)])
+
+
+def pack_rvctrl_play_interleaved(
+    bytes_per_channel: int,
+    seq: int = 1,
+    auto_start: bool = True,
+    loop: bool = False,
+) -> bytes:
+    require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+    flags = (RV_PLAY_FLAG_AUTO_START if auto_start else 0) | (RV_PLAY_FLAG_LOOP if loop else 0)
+    return pack_rvctrl_packet([RV_CMD_PLAY_INTERLEAVED, int(seq), int(bytes_per_channel), flags])
+
+
+def pack_rvctrl_trigger(seq: int = 1) -> bytes:
+    return pack_rvctrl_packet([RV_CMD_TRIGGER, int(seq)])
+
+
+def pack_rvctrl_write_mmio(addr: int, value: int, seq: int = 1) -> bytes:
+    return pack_rvctrl_packet([RV_CMD_WRITE_MMIO, int(seq), int(addr), int(value)])
 
 
 def align_bytes_to_beat(n_bytes: int) -> int:
@@ -761,6 +808,42 @@ class RFSocController:
             payload += b"\x00" * (8 - (len(payload) % 8))
         print(f"[udp] Sending {len(payload)} bytes ({len(payload) // 8} x 64-bit words) to {self.ip}:{self.port}")
         return self.sock.sendto(payload, (self.ip, self.port))
+
+    def send_rvctrl_words(self, words32: list[int] | tuple[int, ...]):
+        packet = pack_rvctrl_packet(words32)
+        print(f"[rvctrl] Sending {len(words32)} x 32-bit control words to {self.ip}:{self.port}")
+        return self.sock.sendto(packet, (self.ip, self.port))
+
+    def rvctrl_ping(self, seq: int = 1):
+        print(f"[rvctrl] PING seq={int(seq) & 0xFFFFFFFF}")
+        return self.sock.sendto(pack_rvctrl_ping(seq), (self.ip, self.port))
+
+    def rvctrl_play_interleaved(
+        self,
+        bytes_per_channel: int,
+        seq: int = 1,
+        auto_start: bool = True,
+        loop: bool = False,
+    ):
+        print(
+            f"[rvctrl] PLAY_INTERLEAVED seq={int(seq) & 0xFFFFFFFF}, "
+            f"bytes_per_channel={int(bytes_per_channel)}, auto_start={auto_start}, loop={loop}"
+        )
+        return self.sock.sendto(
+            pack_rvctrl_play_interleaved(bytes_per_channel, seq=seq, auto_start=auto_start, loop=loop),
+            (self.ip, self.port),
+        )
+
+    def rvctrl_trigger(self, seq: int = 1):
+        print(f"[rvctrl] TRIGGER seq={int(seq) & 0xFFFFFFFF}")
+        return self.sock.sendto(pack_rvctrl_trigger(seq), (self.ip, self.port))
+
+    def rvctrl_write_mmio(self, addr: int, value: int, seq: int = 1):
+        print(
+            f"[rvctrl] WRITE_MMIO seq={int(seq) & 0xFFFFFFFF}, "
+            f"addr=0x{int(addr) & 0xFFFFFFFF:08X}, value=0x{int(value) & 0xFFFFFFFF:08X}"
+        )
+        return self.sock.sendto(pack_rvctrl_write_mmio(addr, value, seq=seq), (self.ip, self.port))
 
     @staticmethod
     def _save_hex_text(byte_data: bytes, filepath: str, bytes_per_line: int = 16, style: str = "hexdump"):

@@ -132,14 +132,18 @@ module Top (
   wire [127:0] udp_instr_tdata;
   wire         udp_instr_tvalid;
   wire         udp_instr_tready;
+  wire [127:0] rv_instr_tdata;
+  wire         rv_instr_tvalid;
+  wire         rv_instr_tready;
   wire [127:0] instr_tdata;
   wire         instr_tvalid;
   wire         instr_tready;
 
-  assign instr_tdata      = udp_instr_tvalid ? udp_instr_tdata : ps_instr_tdata;
-  assign instr_tvalid     = udp_instr_tvalid | ps_instr_tvalid;
+  assign instr_tdata      = udp_instr_tvalid ? udp_instr_tdata : (rv_instr_tvalid ? rv_instr_tdata : ps_instr_tdata);
+  assign instr_tvalid     = udp_instr_tvalid | rv_instr_tvalid | ps_instr_tvalid;
   assign udp_instr_tready = udp_instr_tvalid && instr_tready;
-  assign ps_instr_tready  = !udp_instr_tvalid && instr_tready;
+  assign rv_instr_tready  = !udp_instr_tvalid && rv_instr_tvalid && instr_tready;
+  assign ps_instr_tready  = !udp_instr_tvalid && !rv_instr_tvalid && instr_tready;
 
   localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
@@ -149,6 +153,11 @@ module Top (
   wire        udp64_fifo_af;
   wire        udp_instr64_tvalid;
   wire [63:0] udp_instr64_tdata;
+  wire        rvctrl64_tvalid;
+  wire [63:0] rvctrl64_tdata;
+  wire        rvctrl64_tfirst;
+  wire        rvctrl64_tlast;
+  wire [31:0] rvctrl64_word_count;
 
   wire [63:0]  M_AXI_WAVE_awaddr;
   wire [1:0]   M_AXI_WAVE_awburst;
@@ -172,6 +181,18 @@ module Top (
   wire         udp_wave_pkt;
   wire         udp_instr_word;
   wire         udp_trigger_pulse;
+  wire         rv_trigger_pulse;
+  wire         control_trigger_pulse;
+  wire [31:0]  rv_dbg_status;
+  wire [31:0]  rv_dbg_last_seq;
+  wire [31:0]  rv_dbg_last_cmd;
+  wire [31:0]  rv_dbg_ping_count;
+  wire [31:0]  rv_dbg_play_count;
+  wire [31:0]  rv_dbg_trigger_count;
+  wire [31:0]  rv_dbg_mmio_write_count;
+  wire [31:0]  rv_dbg_error_count;
+  wire [31:0]  rv_dbg_scratch;
+  wire [3:0]   rv_dbg_state;
   wire [2:0]   udp_wave_state;
   wire [31:0]  udp_wave_write_count;
   wire [31:0]  udp_wave_bresp_count;
@@ -214,6 +235,11 @@ module Top (
       .instr_tvalid     (udp_instr64_tvalid),
       .instr_tdata      (udp_instr64_tdata),
       .trigger_pulse    (udp_trigger_pulse),
+      .rvctrl_tvalid    (rvctrl64_tvalid),
+      .rvctrl_tdata     (rvctrl64_tdata),
+      .rvctrl_tfirst    (rvctrl64_tfirst),
+      .rvctrl_tlast     (rvctrl64_tlast),
+      .rvctrl_word_count(rvctrl64_word_count),
       .m_axi_awaddr     (M_AXI_WAVE_awaddr),
       .m_axi_awburst    (M_AXI_WAVE_awburst),
       .m_axi_awcache    (M_AXI_WAVE_awcache),
@@ -255,6 +281,32 @@ module Top (
       .m_axis_tvalid (udp_instr_tvalid),
       .m_axis_tready (udp_instr_tready)
   );
+
+  pl_riscv_control_v1 pl_riscv_control_v1_i (
+      .clk                 (ddr4_ui_clk),
+      .rst_n               (ddr4_ui_aresetn),
+      .rvctrl_tvalid       (rvctrl64_tvalid),
+      .rvctrl_tdata        (rvctrl64_tdata),
+      .rvctrl_tfirst       (rvctrl64_tfirst),
+      .rvctrl_tlast        (rvctrl64_tlast),
+      .rvctrl_word_count   (rvctrl64_word_count),
+      .m_instr_tdata       (rv_instr_tdata),
+      .m_instr_tvalid      (rv_instr_tvalid),
+      .m_instr_tready      (rv_instr_tready),
+      .trigger_pulse       (rv_trigger_pulse),
+      .dbg_status          (rv_dbg_status),
+      .dbg_last_seq        (rv_dbg_last_seq),
+      .dbg_last_cmd        (rv_dbg_last_cmd),
+      .dbg_ping_count      (rv_dbg_ping_count),
+      .dbg_play_count      (rv_dbg_play_count),
+      .dbg_trigger_count   (rv_dbg_trigger_count),
+      .dbg_mmio_write_count(rv_dbg_mmio_write_count),
+      .dbg_error_count     (rv_dbg_error_count),
+      .dbg_scratch         (rv_dbg_scratch),
+      .dbg_state           (rv_dbg_state)
+  );
+
+  assign control_trigger_pulse = udp_trigger_pulse | rv_trigger_pulse;
 
   // ========== DataMover ==========
   wire [103:0] dm_cmd_tdata;
@@ -309,7 +361,7 @@ module Top (
     if(!ddr4_ui_aresetn) begin
       udp_trigger_stretch_cnt <= 8'd0;
       udp_trigger_stretched <= 1'b0;
-    end else if(udp_trigger_pulse) begin
+    end else if(control_trigger_pulse) begin
       udp_trigger_stretch_cnt <= 8'd64;
       udp_trigger_stretched <= 1'b1;
     end else if(udp_trigger_stretch_cnt != 8'd0) begin
@@ -1769,14 +1821,14 @@ module Top (
       udp_instr_word,                  // 123
       udp_instr_tvalid,                // 122
       udp_instr_tready,                // 121
-      instr_tvalid,                    // 120
-      instr_tready,                    // 119
-      cfg_commit,                      // 118
-      dm_cmd_tvalid,                   // 117
-      dm_cmd_tready,                   // 116
-      dm_data_tvalid,                  // 115
-      dm_data_tready,                  // 114
-      dm_data_tlast,                   // 113
+      rvctrl64_tvalid,                 // 120
+      rvctrl64_tfirst,                 // 119
+      rvctrl64_tlast,                  // 118
+      rv_instr_tvalid,                 // 117
+      rv_instr_tready,                 // 116
+      instr_tvalid,                    // 115
+      instr_tready,                    // 114
+      cfg_commit,                      // 113
       ch1_wave_tvalid,                 // 112
       ch1_wave_tready_internal,        // 111
       ch2_wave_tvalid,                 // 110
@@ -1787,7 +1839,7 @@ module Top (
       M_AXI_DM_rready,                 // 105
       M_AXI_DM_rlast,                  // 104
       dm_mm2s_err,                     // 103
-      udp_trigger_pulse,               // 102
+      control_trigger_pulse,           // 102
       M_AXI_WAVE_awvalid,              // 101
       M_AXI_WAVE_awready,              // 100
       M_AXI_WAVE_wvalid,               // 99
@@ -1807,7 +1859,8 @@ module Top (
       M_AXI_DM_rresp,                  // 80:79
       M_AXI_WAVE_bresp,                // 78:77
       udp_wave_last_bresp,             // 76:75
-      dm_mm2s_sts_tdata,               // 74:67
+      rv_dbg_state,                    // 74:71
+      dm_mm2s_sts_tdata[3:0],          // 70:67
       udp_wave_fifo_count[7:0],        // 66:59
       ch1_fifo_level_beats,            // 58:43
       ch2_fifo_level_beats,            // 42:27
@@ -1817,7 +1870,7 @@ module Top (
     }),
     .probe1(udp64_rcv_dat),
     .probe2(M_AXI_WAVE_wdata),
-    .probe3({24'd0, dm_cmd_tdata}),
+    .probe3({rv_dbg_state, rv_dbg_status[7:0], rv_dbg_play_count[3:0], rv_dbg_trigger_count[3:0], rv_dbg_last_seq[3:0], dm_cmd_tdata}),
     .probe4(instr_tdata),
     .probe5(dm_cmd_tdata),
     .probe6(dm_data_tdata),

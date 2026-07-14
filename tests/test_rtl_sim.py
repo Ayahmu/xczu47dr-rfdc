@@ -46,6 +46,26 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: UDP DDR writer preserves legacy writes and bulk sequential writes",
         )
 
+    def test_udp_writer_routes_rvctrl_packets(self):
+        self.run_sim(
+            "tb_udp_rvctrl_protocol",
+            [
+                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+                ROOT / "tests/tb_udp_rvctrl_protocol.sv",
+            ],
+            "PASS: RVCTRL0 packets route to the PL RISC-V control path without breaking legacy UDP instructions",
+        )
+
+    def test_pl_riscv_control_v1_emits_play_and_trigger(self):
+        self.run_sim(
+            "tb_pl_riscv_control_v1",
+            [
+                ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
+                ROOT / "tests/tb_pl_riscv_control_v1.sv",
+            ],
+            "PASS: PL RISC-V control V1 shim emits PLAY/END instructions and trigger pulses",
+        )
+
     def test_dac_play_completion_and_underflow_counters(self):
         self.run_sim(
             "tb_dac_play_ctrl",

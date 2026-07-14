@@ -169,6 +169,20 @@ def build_parser() -> argparse.ArgumentParser:
     max_length.add_argument("--generate-cache-only", action="store_true", help="Generate/reuse the waveform cache and exit without uploading")
     max_length.add_argument("--no-full-dump", action="store_true", help="Compatibility option; max-length mode never writes a full hex dump")
 
+    rv_ping = subparsers.add_parser("rvctrl-ping", help="send one RVCTRL0 PING command to the PL control CPU path")
+    add_common_args(rv_ping)
+    rv_ping.add_argument("--seq", type=int, default=1)
+
+    rv_play = subparsers.add_parser("rvctrl-play", help="send RVCTRL0 PLAY_INTERLEAVED; waveform data must already be in DDR")
+    add_common_args(rv_play)
+    rv_play.add_argument("--seq", type=int, default=1)
+    rv_play.add_argument("--bytes-per-channel", type=parse_byte_count, default=host.FIXED_DATA_BYTES)
+    rv_play.add_argument("--auto-start", action="store_true", help="Commit END as auto-start instead of waiting for trigger")
+
+    rv_trigger = subparsers.add_parser("rvctrl-trigger", help="send one RVCTRL0 TRIGGER command")
+    add_common_args(rv_trigger)
+    rv_trigger.add_argument("--seq", type=int, default=1)
+
     return parser
 
 
@@ -446,6 +460,46 @@ def run_max_length(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.mode in ("rvctrl-ping", "rvctrl-play", "rvctrl-trigger"):
+        if args.dry_run:
+            if args.mode == "rvctrl-ping":
+                packet = host.pack_rvctrl_ping(args.seq)
+            elif args.mode == "rvctrl-play":
+                packet = host.pack_rvctrl_play_interleaved(
+                    args.bytes_per_channel,
+                    seq=args.seq,
+                    auto_start=bool(args.auto_start),
+                    loop=bool(args.loop),
+                )
+            else:
+                packet = host.pack_rvctrl_trigger(args.seq)
+            print(f"[rvctrl] dry-run mode={args.mode} bytes={len(packet)} hex={packet.hex()}")
+            return 0
+
+        ctrl = host.RFSocController(
+            args.ip,
+            port=args.port,
+            timeout_s=args.timeout_s,
+            transport="udp",
+            udp_interface=args.udp_interface,
+            udp_source_ip=args.udp_source_ip,
+        )
+        try:
+            if args.mode == "rvctrl-ping":
+                ctrl.rvctrl_ping(args.seq)
+            elif args.mode == "rvctrl-play":
+                ctrl.rvctrl_play_interleaved(
+                    args.bytes_per_channel,
+                    seq=args.seq,
+                    auto_start=bool(args.auto_start),
+                    loop=bool(args.loop),
+                )
+            else:
+                ctrl.rvctrl_trigger(args.seq)
+            return 0
+        finally:
+            ctrl.close()
+
     if args.mode == "max-length":
         return run_max_length(args)
     if args.mode == "ezq":

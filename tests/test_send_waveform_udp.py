@@ -61,6 +61,58 @@ class SendWaveformUdpTests(unittest.TestCase):
             metadata_path = Path(temp_dir) / "max_length_metadata.json"
             self.assertTrue(metadata_path.exists())
 
+    def test_rvctrl_cli_commands_use_control_packet_path(self):
+        cases = [
+            (
+                ["send_waveform_udp.py", "rvctrl-ping", "--seq", "11"],
+                "rvctrl_ping",
+                (11,),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl-play", "--bytes-per-channel", "4KiB", "--seq", "12", "--auto-start", "--loop"],
+                "rvctrl_play_interleaved",
+                (4096,),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl-trigger", "--seq", "13"],
+                "rvctrl_trigger",
+                (13,),
+            ),
+        ]
+
+        for argv, method_name, first_args in cases:
+            with self.subTest(method_name=method_name):
+                controller = mock.Mock()
+                with mock.patch.object(sys, "argv", argv), \
+                     mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                    self.assertEqual(send_waveform_udp.main(), 0)
+
+                method = getattr(controller, method_name)
+                method.assert_called_once()
+                for index, expected in enumerate(first_args):
+                    self.assertEqual(method.call_args.args[index], expected)
+
+    def test_rvctrl_play_cli_passes_auto_start_and_loop_flags(self):
+        controller = mock.Mock()
+        argv = [
+            "send_waveform_udp.py",
+            "rvctrl-play",
+            "--bytes-per-channel", "4096",
+            "--seq", "14",
+            "--auto-start",
+            "--loop",
+        ]
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+            self.assertEqual(send_waveform_udp.main(), 0)
+
+        controller.rvctrl_play_interleaved.assert_called_once_with(
+            4096,
+            seq=14,
+            auto_start=True,
+            loop=True,
+        )
+
     def test_max_length_cli_dry_run_does_not_generate_cache_unless_requested(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             argv = [

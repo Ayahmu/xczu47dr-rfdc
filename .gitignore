@@ -38,6 +38,8 @@ hardware/chisel/.bsp/
 hardware/chisel/generated/
 hardware/chisel/Verilog/
 hardware/chisel/test_run_dir/
+hardware/riscv-mini/vendor/
+hardware/riscv-mini/generated/
 
 # Python
 __pycache__/

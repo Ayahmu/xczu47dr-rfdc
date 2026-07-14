@@ -392,6 +392,32 @@ class UdpWaveformPacketTests(unittest.TestCase):
         packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
         self.assertEqual(packet, struct.pack("<Q", host.UDP_TRIGGER_WORD))
 
+    def test_rvctrl_packet_packs_magic_count_and_padding(self):
+        packet = host.pack_rvctrl_packet([host.RV_CMD_PING, 0x12345678, 0xA5A5A5A5])
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        payload = struct.unpack("<IIII", packet[16:32])
+
+        self.assertEqual(magic, host.UDP_RVCTRL_MAGIC)
+        self.assertEqual(word_count, 3)
+        self.assertEqual(payload, (host.RV_CMD_PING, 0x12345678, 0xA5A5A5A5, 0))
+
+    def test_rvctrl_play_interleaved_packs_control_flags(self):
+        packet = host.pack_rvctrl_play_interleaved(
+            4096,
+            seq=9,
+            auto_start=False,
+            loop=True,
+        )
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        cmd, seq, bytes_per_channel, flags = struct.unpack("<IIII", packet[16:32])
+
+        self.assertEqual(magic, host.UDP_RVCTRL_MAGIC)
+        self.assertEqual(word_count, 4)
+        self.assertEqual(cmd, host.RV_CMD_PLAY_INTERLEAVED)
+        self.assertEqual(seq, 9)
+        self.assertEqual(bytes_per_channel, 4096)
+        self.assertEqual(flags, host.RV_PLAY_FLAG_LOOP)
+
     def test_rfdc_nco_mailbox_packs_entries_and_commits_header_last(self):
         nco = {channel: 4.5e9 for channel in range(1, 5)}
         nco.update({5: 0.0, 6: 0.0, 7: -0.6e9, 8: -0.2e9})
