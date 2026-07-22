@@ -18,7 +18,8 @@ rst   :	IN	STD_LOGIC;
 H7044_SLEN  :	OUT	STD_LOGIC;
 H7044_SCLK  :	OUT	STD_LOGIC;
 H7044_SDATA :	OUT	STD_LOGIC;
-SET_FINISH :	OUT	STD_LOGIC
+SET_FINISH :	OUT	STD_LOGIC;
+USE_EXTERNAL_10MHZ : IN STD_LOGIC
 );
 end ;
 architecture MAPPED of hmc7044 is
@@ -101,8 +102,11 @@ H7044_SDATA <=HMC7044_SDIO;
 																													--  01 high
 																													--  10 low
 
-					config_reg <= x"0003" & x"2F";
-                   --  config_reg <= x"0003" & x"37";
+					if USE_EXTERNAL_10MHZ = '1' then
+						config_reg <= x"0003" & x"37"; -- CLKIN1 / XS17 10MHz path
+					else
+						config_reg <= x"0003" & x"2F"; -- existing CLKIN2 100MHz path
+					end if;
 
 				when x"006" =>
 					config_reg <= x"0004" & x"7F";	--seven pairs of 14 channel outputs enable[6:0]
@@ -123,8 +127,11 @@ H7044_SDATA <=HMC7044_SDIO;
 														                                               --10 --pulse generator.request a pulse generator stream from any channels configured for dynamic startup.this behaves in the same way as a gpi requested pulse generator
                                                                                          --11 causes sync if alarm exits,otherwise causes pulse generator
 
-				--    config_reg <= x"0005" & x"5A";--�ⲿ�ο�ʱ��
-				    config_reg <= x"0005" & x"56";---����ʱ��
+				if USE_EXTERNAL_10MHZ = '1' then
+					config_reg <= x"0005" & x"5A"; -- CLKIN1 plus EXT_SYNC
+				else
+					config_reg <= x"0005" & x"56"; -- existing CLKIN2 plus EXT_SYNC
+				end if;
 
 				--config_reg <= x"0005" & x"41";
 
@@ -204,8 +211,11 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"01F" =>
 				--	config_reg <= x"0026" & x"04";		--N1 DIVIDER[7:0]
 
-					--    config_reg <= x"0026" & x"0A";  ---�ⲿ�ο�ʱ��10MHz
-					     config_reg <= x"0026" & x"01";  ---����ʱ��100MHz
+					if USE_EXTERNAL_10MHZ = '1' then
+						config_reg <= x"0026" & x"0A"; -- external 10MHz reference
+					else
+						config_reg <= x"0026" & x"01"; -- existing 100MHz reference
+					end if;
 
 				when x"020" =>
 					config_reg <= x"0027" & x"00";		--N1 DIVIDER[15:8]

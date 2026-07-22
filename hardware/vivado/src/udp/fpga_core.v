@@ -32,7 +32,9 @@ module fpga_core #
 (
     parameter DATA_WIDTH = 64,
     parameter PAYLOAD_LEN = 8192,
-    parameter KEEP_WIDTH = DATA_WIDTH/8
+    parameter KEEP_WIDTH = DATA_WIDTH/8,
+    parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01,
+    parameter [31:0] LOCAL_IP = 32'hC0A8_0180
 )
 ( 
     input  wire        clk,
@@ -41,6 +43,12 @@ module fpga_core #
     input  wire        fifo64_wr,
     input  wire[63:0]  fifo64_din,
     output wire        fifo64_af,
+
+    input  wire        resp64_tvalid,
+    input  wire[63:0]  resp64_tdata,
+    input  wire        resp64_tlast,
+    input  wire[15:0]  resp64_word_count,
+    output wire        resp64_tready,
     
     output wire        rcv_vld,
     output wire[63:0]  rcv_dat,
@@ -203,8 +211,8 @@ wire tx_udp_payload_axis_tuser;
  
 
 // Configuration
-wire [47:0] local_mac   = 48'h02_00_00_00_00_00;
-wire [31:0] local_ip    = {8'd192, 8'd168, 8'd1,   8'd128};
+wire [47:0] local_mac   = LOCAL_MAC;
+wire [31:0] local_ip    = LOCAL_IP;
 wire [31:0] gateway_ip  = {8'd192, 8'd168, 8'd1,   8'd1};
 wire [31:0] subnet_mask = {8'd255, 8'd255, 8'd255, 8'd0};
 
@@ -504,6 +512,62 @@ always @(posedge clk) begin
 end
 
 reg tx_udp_hdr_vld = 0;
+reg tx_resp_mode = 1'b0;
+reg [15:0] tx_udp_length_reg = PAYLOAD_LEN + 8'd8;
+reg [15:0] tx_udp_payload_words = 16'd0;
+reg [31:0] last_rx_source_ip = {8'd192, 8'd168, 8'd1, 8'd3};
+reg [15:0] last_rx_source_port = 16'd1234;
+reg [15:0] last_rx_dest_port = 16'd1234;
+reg [31:0] pending_rx_source_ip = {8'd192, 8'd168, 8'd1, 8'd3};
+reg [15:0] pending_rx_source_port = 16'd1234;
+reg [15:0] pending_rx_dest_port = 16'd1234;
+reg [31:0] control_rx_source_ip = {8'd192, 8'd168, 8'd1, 8'd3};
+reg [15:0] control_rx_source_port = 16'd1234;
+reg [15:0] control_rx_dest_port = 16'd1234;
+reg        control_request_inflight = 1'b0;
+localparam [1:0]
+    STATE_IDLE = 2'd0,
+    STATE_CHECK_HDRDY = 2'd1,
+    STATE_PAYLOAD = 2'd2,
+    STATE_GAP = 2'd3;
+reg [1:0] state_reg = STATE_IDLE;
+
+wire control_request_magic =
+    (rx_udp_payload_axis_tdata == 64'h00304C5254435652) ||
+    (rx_udp_payload_axis_tdata == 64'h00314C5254435652) ||
+    (rx_udp_payload_axis_tdata == 64'h00324C5254434652);
+
+always @(posedge clk) begin
+    if (rst) begin
+        last_rx_source_ip <= {8'd192, 8'd168, 8'd1, 8'd3};
+        last_rx_source_port <= 16'd1234;
+        last_rx_dest_port <= 16'd1234;
+        pending_rx_source_ip <= {8'd192, 8'd168, 8'd1, 8'd3};
+        pending_rx_source_port <= 16'd1234;
+        pending_rx_dest_port <= 16'd1234;
+        control_rx_source_ip <= {8'd192, 8'd168, 8'd1, 8'd3};
+        control_rx_source_port <= 16'd1234;
+        control_rx_dest_port <= 16'd1234;
+        control_request_inflight <= 1'b0;
+    end else if (rx_udp_hdr_valid && rx_udp_hdr_ready && match_cond) begin
+        last_rx_source_ip <= rx_udp_ip_source_ip;
+        last_rx_source_port <= rx_udp_source_port;
+        last_rx_dest_port <= rx_udp_dest_port;
+        pending_rx_source_ip <= rx_udp_ip_source_ip;
+        pending_rx_source_port <= rx_udp_source_port;
+        pending_rx_dest_port <= rx_udp_dest_port;
+    end else begin
+        if (!control_request_inflight && rx_udp_payload_axis_tvalid &&
+            rx_udp_payload_axis_tready && control_request_magic) begin
+            control_rx_source_ip <= pending_rx_source_ip;
+            control_rx_source_port <= pending_rx_source_port;
+            control_rx_dest_port <= pending_rx_dest_port;
+            control_request_inflight <= 1'b1;
+        end
+        if (state_reg == STATE_GAP && tx_resp_mode)
+            control_request_inflight <= 1'b0;
+    end
+end
 
 //wire [15:0]  PAYLOAD_LEN;
 //vio_1 vio_1i (
@@ -513,10 +577,10 @@ reg tx_udp_hdr_vld = 0;
 
 assign tx_udp_hdr_valid   = (loop_en) ? rx_udp_hdr_valid & match_cond : tx_udp_hdr_vld ;
 assign rx_udp_hdr_ready   = (loop_en) ? (tx_udp_hdr_ready & match_cond) | no_match : 1'b1;//tx_eth_hdr_ready
-assign tx_udp_ip_dest_ip  = (loop_en) ? rx_udp_ip_source_ip :  {8'd192, 8'd168, 8'd1,  8'd3};
-assign tx_udp_source_port = (loop_en) ? rx_udp_dest_port : 16'd1234;
-assign tx_udp_dest_port   = (loop_en) ? rx_udp_source_port : 16'd1234;
-assign tx_udp_length      = (loop_en) ? rx_udp_length : PAYLOAD_LEN+8'd8;//16'd1032
+assign tx_udp_ip_dest_ip  = (loop_en) ? rx_udp_ip_source_ip : (tx_resp_mode ? control_rx_source_ip : {8'd192, 8'd168, 8'd1, 8'd3});
+assign tx_udp_source_port = (loop_en) ? rx_udp_dest_port : (tx_resp_mode ? control_rx_dest_port : 16'd1234);
+assign tx_udp_dest_port   = (loop_en) ? rx_udp_source_port : (tx_resp_mode ? control_rx_source_port : 16'd1234);
+assign tx_udp_length      = (loop_en) ? rx_udp_length : tx_udp_length_reg;//16'd1032
  
 
 wire [63:0] rx_fifo_udp_payload_axis_tdata;
@@ -540,6 +604,8 @@ wire [11:0] fifo64_data_count;
 reg         tx_udp_axis_tlast=0;
 reg         tx_udp_axis_tvld;
 
+reg [15:0] fifo_rd_cnt = 0;
+
 // �����·������ݣ�udp�������Ϊfifoд���ź�
 assign rx_fifo_udp_payload_axis_tdata  = rx_udp_payload_axis_tdata;
 assign rx_fifo_udp_payload_axis_tkeep  = rx_udp_payload_axis_tkeep;
@@ -549,12 +615,13 @@ assign rx_fifo_udp_payload_axis_tuser  = rx_udp_payload_axis_tuser;
 assign rx_udp_payload_axis_tready      = (loop_en) ?  (rx_fifo_udp_payload_axis_tready & match_cond_reg) | no_match_reg : 1'b1; 
 
 //��fifo�����Ϊ���͸�udp����(�ϴ������������ź�
-assign tx_udp_payload_axis_tdata       = (loop_en) ?  tx_fifo_udp_payload_axis_tdata : fifo64_dout ;
+assign tx_udp_payload_axis_tdata       = (loop_en) ?  tx_fifo_udp_payload_axis_tdata : (tx_resp_mode ? resp64_tdata : fifo64_dout);
 assign tx_udp_payload_axis_tkeep       = (loop_en) ?  tx_fifo_udp_payload_axis_tkeep : 8'hff;
-assign tx_udp_payload_axis_tvalid      = (loop_en) ?  tx_fifo_udp_payload_axis_tvalid : tx_udp_axis_tvld;
-assign tx_udp_payload_axis_tlast       = (loop_en) ?  tx_fifo_udp_payload_axis_tlast : tx_udp_axis_tlast;
+assign tx_udp_payload_axis_tvalid      = (loop_en) ?  tx_fifo_udp_payload_axis_tvalid : (tx_resp_mode ? (state_reg == STATE_PAYLOAD && resp64_tvalid) : tx_udp_axis_tvld);
+assign tx_udp_payload_axis_tlast       = (loop_en) ?  tx_fifo_udp_payload_axis_tlast : (tx_resp_mode ? ((fifo_rd_cnt == (tx_udp_payload_words - 16'd1)) || resp64_tlast) : tx_udp_axis_tlast);
 assign tx_udp_payload_axis_tuser       = (loop_en) ?  tx_fifo_udp_payload_axis_tuser :  1'b0;
 assign tx_fifo_udp_payload_axis_tready = tx_udp_payload_axis_tready;  
+assign resp64_tready                   = !loop_en && tx_resp_mode && (state_reg == STATE_PAYLOAD) && tx_udp_payload_axis_tready;
 
 
 fifo64 fifo64_i (
@@ -575,19 +642,9 @@ fifo64 fifo64_i (
 
 ////////////// ��fifo���ݷ��͵�M_AXI�ӿ�
 
-localparam [1:0]
-    STATE_IDLE = 2'd0,
-    STATE_CHECK_HDRDY = 2'd1,
-    STATE_PAYLOAD = 2'd2,
-    STATE_GAP = 2'd3; 
-
-reg [1:0] state_reg = STATE_IDLE;
-
-reg [15:0] fifo_rd_cnt = 0;  
-
 reg [11:0] fifo64_data_count2=0; 
 
-assign fifo64_rd_en = tx_udp_payload_axis_tready & tx_udp_axis_tvld;
+assign fifo64_rd_en = !loop_en && !tx_resp_mode && tx_udp_payload_axis_tready & tx_udp_axis_tvld;
 
 always @(posedge clk) begin
     if (rst )                                                 fifo64_data_count2 <= 12'd0;
@@ -603,11 +660,23 @@ always @(posedge clk) begin
         fifo_rd_cnt        <= 'd0;
         tx_udp_axis_tlast  <= 1'b0; 
         tx_udp_axis_tvld   <= 1'b0; 
+        tx_resp_mode       <= 1'b0;
+        tx_udp_length_reg  <= PAYLOAD_LEN + 8'd8;
+        tx_udp_payload_words <= 16'd0;
         gap_cnt  <=   0; 
     end else begin       
        case (state_reg)
           STATE_IDLE  : begin
-                      if(fifo64_data_count>=(PAYLOAD_LEN>>3)) begin //����������4KB  ��fifo�Դ���fifo64_data_count��д��ʱ������ֵ -> 0
+                      if(resp64_tvalid && (resp64_word_count != 16'd0)) begin
+                           tx_resp_mode       <= 1'b1;
+                           tx_udp_payload_words <= resp64_word_count;
+                           tx_udp_length_reg  <= (resp64_word_count << 3) + 16'd8;
+                           tx_udp_hdr_vld     <= 1'b1;
+                           state_reg          <= STATE_CHECK_HDRDY;
+                      end else if(fifo64_data_count>=(PAYLOAD_LEN>>3)) begin //����������4KB  ��fifo�Դ���fifo64_data_count��д��ʱ������ֵ -> 0
+                           tx_resp_mode   <= 1'b0;
+                           tx_udp_length_reg <= PAYLOAD_LEN + 8'd8;
+                           tx_udp_payload_words <= (PAYLOAD_LEN >> 3);
                            tx_udp_hdr_vld <= 1'b1;
                            state_reg      <= STATE_CHECK_HDRDY; 
                       end
@@ -622,7 +691,18 @@ always @(posedge clk) begin
                       end     
                    end
           STATE_PAYLOAD  : begin 
-                      if(tx_udp_payload_axis_tready & ~tx_udp_axis_tlast) begin  
+                      if(tx_resp_mode) begin
+                            if(tx_udp_payload_axis_tready & resp64_tvalid) begin
+                                if((fifo_rd_cnt == (tx_udp_payload_words - 16'd1)) || resp64_tlast) begin
+                                    fifo_rd_cnt        <= 0;
+                                    tx_udp_axis_tvld   <= 1'b0;
+                                    tx_udp_axis_tlast  <= 1'b0;
+                                    state_reg          <= STATE_GAP;
+                                end else begin
+                                    fifo_rd_cnt        <= fifo_rd_cnt + 1'b1;
+                                end
+                            end
+                      end else if(tx_udp_payload_axis_tready & ~tx_udp_axis_tlast) begin
                             tx_udp_axis_tvld        <= 1'b1;  
                             if(fifo_rd_cnt == ((PAYLOAD_LEN>>3)-1)) begin
                                 tx_udp_axis_tlast     <= 1'b1;    
@@ -639,8 +719,12 @@ always @(posedge clk) begin
             end  
 
           STATE_GAP  : begin  
-                          if(gap_cnt>gap_num_vio) state_reg <= STATE_IDLE;  
-                          else                    gap_cnt   <= gap_cnt + 1'b1;                           
+                          if(gap_cnt>gap_num_vio) begin
+                              state_reg <= STATE_IDLE;
+                              tx_resp_mode <= 1'b0;
+                          end else begin
+                              gap_cnt   <= gap_cnt + 1'b1;
+                          end
                    end 
            default: begin
                         state_reg          <= STATE_IDLE; 
@@ -648,6 +732,7 @@ always @(posedge clk) begin
                         fifo_rd_cnt        <= 'd0;
                         tx_udp_axis_tlast  <= 1'b0;     
                         tx_udp_axis_tvld   <= 1'b0;        
+                        tx_resp_mode       <= 1'b0;
                    end
        endcase
                     

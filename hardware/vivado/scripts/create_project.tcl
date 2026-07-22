@@ -17,6 +17,7 @@ set proj_dir "${vivado_dir}/work"
 set target_part [target_config_get $target part]
 set target_board_part [target_config_get $target board_part]
 set target_top_module [target_config_get $target top_module]
+set target_generics [target_config_get $target generics]
 set is_bandwidth_target [expr {$target eq "custom_xczu47dr_bw"}]
 
 puts "INFO: Creating Vivado project..."
@@ -354,6 +355,10 @@ if {[file exists ${ddr_axi_bd_script}]} {
 # Update compile order
 update_compile_order -fileset sources_1
 set_property top ${target_top_module} [current_fileset]
+if {$target_generics ne ""} {
+    puts "INFO: Top-level generics: ${target_generics}"
+    set_property generic ${target_generics} [current_fileset]
+}
 update_compile_order -fileset sources_1
 
 puts "INFO: Project creation complete"

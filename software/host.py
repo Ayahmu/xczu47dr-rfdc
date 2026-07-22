@@ -26,7 +26,8 @@ import matplotlib.pyplot as plt
 #   物理 DAC slice。
 #   DDR 播放侧默认按 interleaved_512b 组织。每个 512-bit DDR beat
 #   包含 8 路各一个 64-bit lane，硬件每 4 个 DDR beat 拼出 8 路
-#   256-bit RFDC AXIS 字。NCO 频率由固件启动默认值或 DDR mailbox 设置。
+#   256-bit RFDC AXIS 字。网页运行时 NCO 由 PL RFCTRL2 闭环设置；下方
+#   mailbox helpers 仅为旧桌面工具兼容，当前固件不会轮询这些区域。
 #
 # 当前硬件主线是单 dac_axis_clk + interleaved_512b，所有通道共享同一
 # RFDC 输入采样率。CH7/CH8 的 Readout RF 频点通过 NCO/mailbox 调谐，
@@ -128,10 +129,68 @@ UDP_WAVE_DDR_MAGIC = 0x5741564544445230  # WAVEDDR0
 UDP_WAVE_BULK_MAGIC = 0x5741564553545230  # WAVESTR0
 UDP_TRIGGER_WORD = 0x3152454747495254  # ASCII "TRIGGER1" on the UDP byte stream
 UDP_RVCTRL_MAGIC = 0x00304C5254435652  # ASCII "RVCTRL0\\0" on the UDP byte stream
+UDP_RVCTRL1_MAGIC = 0x00314C5254435652  # ASCII "RVCTRL1\\0" on the UDP byte stream
+UDP_RVRESP1_MAGIC = 0x0031505345525652  # ASCII "RVRESP1\\0" on the UDP byte stream
+RVCTRL1_VERSION = 1
+UDP_RFCTRL2_MAGIC = 0x00324C5254434652  # ASCII "RFCTRL2\\0" on the UDP byte stream
+UDP_RFRESP2_MAGIC = 0x0032505345524652  # ASCII "RFRESP2\\0" on the UDP byte stream
+RFCTRL2_VERSION = 2
 RV_CMD_PING = 0x00000001
 RV_CMD_PLAY_INTERLEAVED = 0x00000002
 RV_CMD_TRIGGER = 0x00000003
 RV_CMD_WRITE_MMIO = 0x00000004
+RV1_OP_PING = 0x00000001
+RV1_OP_MMIO_READ32 = 0x00000002
+RV1_OP_MMIO_WRITE32 = 0x00000003
+RV1_OP_MMIO_RMW32 = 0x00000004
+RV1_OP_MMIO_BATCH = 0x00000005
+RV1_OP_PLAY_INTERLEAVED = 0x00000006
+RV1_OP_TRIGGER = 0x00000007
+RV1_OP_RFDC_CH_ENABLE = 0x00000008
+RV1_OP_RFDC_SET_NCO = 0x00000009
+RV1_OP_STATUS_READ = 0x0000000A
+RF2_OP_HELLO = 0x00000001
+RF2_OP_STATUS = 0x00000002
+RF2_OP_RFDC_APPLY = 0x00000003
+# Kept as a source-compatible name for older scripts. Opcode 0x03 now always
+# means the structured PL RFDC apply command, never the old fake SET_NCO path.
+RF2_OP_SET_NCO = RF2_OP_RFDC_APPLY
+RF2_OP_UPLOAD_BEGIN = 0x00000004
+RF2_OP_UPLOAD_COMMIT = 0x00000005
+RF2_OP_ARM = 0x00000006
+RF2_OP_SYNC_EPOCH = 0x00000007
+RF2_OP_START_AT = 0x00000008
+RF2_OP_TRIGGER = 0x00000009
+RF2_OP_ABORT_MUTE = 0x0000000A
+RF2_OP_RFDC_GET_CONFIG = 0x0000000B
+
+RF2_CAP_PL_RFDC_CONFIG = 0x00010000
+RF2_CAP_RFDC_GET_CONFIG = 0x00020000
+RF2_STATUS_RFDC_READY = 0x00000001
+RF2_STATUS_RFDC_BUSY = 0x00000002
+RF2_STATUS_ARMED = 0x00000004
+RF2_STATUS_RUNNING = 0x00000008
+
+RF2_STATUS_OK = 0x0000
+RF2_STATUS_BAD_VERSION = 0x0001
+RF2_STATUS_UNSUPPORTED = 0x0002
+RF2_STATUS_BAD_REQUEST = 0x0003
+RF2_STATUS_BUSY = 0x0004
+RF2_STATUS_RFDC_NOT_READY = 0x0005
+RF2_STATUS_UNSAFE_STATE = 0x0006
+RF2_STATUS_RANGE = 0x0007
+RF2_STATUS_AXI_ERROR = 0x0008
+RF2_STATUS_AXI_TIMEOUT = 0x0009
+RF2_STATUS_READBACK = 0x000A
+RF2_STATUS_PARTIAL = 0x000B
+
+RFDC_APPLY_CHANNELS = 8
+RFDC_APPLY_REQUEST_HEADER_BYTES = 8
+RFDC_APPLY_REQUEST_ENTRY_BYTES = 24
+RFDC_APPLY_RESPONSE_HEADER_BYTES = 32
+RFDC_APPLY_RESPONSE_ENTRY_BYTES = 40
+RFDC_NCO_MIN_HZ = -3_200_000_000
+RFDC_NCO_MAX_HZ = 3_200_000_000
 RV_PLAY_FLAG_AUTO_START = 0x1
 RV_PLAY_FLAG_LOOP = 0x2
 RFDC_CTRL_MAILBOX_OFFSET = DDR_MAX_INTERLEAVED_BYTES
@@ -141,6 +200,10 @@ RFDC_CTRL_MAILBOX_ENTRY_BYTES = 16
 RFDC_CTRL_MAILBOX_CHANNELS = 8
 RFDC_CTRL_MAILBOX_BYTES = RFDC_CTRL_MAILBOX_HEADER_BYTES + RFDC_CTRL_MAILBOX_ENTRY_BYTES * RFDC_CTRL_MAILBOX_CHANNELS
 RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE = 0x1
+RFDC_RUNTIME_MAILBOX_MAGIC = 0x31474643444652  # ASCII "RFDCFG1" little-endian
+RFDC_RUNTIME_MAILBOX_HEADER_BYTES = 32
+RFDC_RUNTIME_MAILBOX_ENTRY_BYTES = 32
+RFDC_RUNTIME_MAILBOX_BYTES = RFDC_RUNTIME_MAILBOX_HEADER_BYTES + RFDC_RUNTIME_MAILBOX_ENTRY_BYTES * RFDC_CTRL_MAILBOX_CHANNELS
 
 
 def rfdc_nco_plan_for_target(target_rf_hz: float, dac_fs_hz: float = DAC_TILE_FS) -> dict[str, float | int | str]:
@@ -225,6 +288,59 @@ def iter_rfdc_nco_mailbox_packets(
     yield from iter_udp_waveform_packets(header, mailbox_offset)
 
 
+def pack_rfdc_runtime_mailbox(
+    per_channel_nco_hz: dict[int, float] | dict[str, float],
+    per_channel_nyquist_zone: dict[int, int] | dict[str, int],
+    per_channel_phase_deg: dict[int, float] | dict[str, float],
+    per_channel_output_current_ma: dict[int, float] | dict[str, float],
+    seq: int,
+    apply_mask: int = 0xFF,
+    flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
+) -> bytes:
+    """Pack the runtime RFDC configuration mailbox used by the web console.
+
+    Each entry is 32 bytes: signed NCO Hz, Nyquist zone, phase in milli-degrees,
+    DAC output current in microamps, and reserved words. The header is written
+    last by the packet iterator so firmware never observes a partial update.
+    """
+    def get(mapping, channel: int, default):
+        return mapping.get(channel, mapping.get(f"ch{channel}", default))
+
+    entries = bytearray()
+    for channel in range(1, RFDC_CTRL_MAILBOX_CHANNELS + 1):
+        nco_hz = int(round(float(get(per_channel_nco_hz, channel, 0.0))))
+        zone = int(get(per_channel_nyquist_zone, channel, 1))
+        phase_mdeg = int(round(float(get(per_channel_phase_deg, channel, 0.0)) * 1000.0))
+        current_ua = int(round(float(get(per_channel_output_current_ma, channel, 20.0)) * 1000.0))
+        if zone not in (1, 2):
+            raise ValueError(f"RFDC runtime CH{channel} nyquist_zone must be 1 or 2")
+        if not 2250 <= current_ua <= 40500:
+            raise ValueError(f"RFDC runtime CH{channel} output current must be 2.25..40.5 mA")
+        entries += struct.pack("<qIiIIII", nco_hz, zone, phase_mdeg, current_ua, 0, 0, 0)
+    header = struct.pack(
+        "<QIII12s", RFDC_RUNTIME_MAILBOX_MAGIC, int(seq) & 0xFFFFFFFF,
+        int(apply_mask) & 0xFF, int(flags) & 0xFFFFFFFF, b"\x00" * 12,
+    )
+    image = header + bytes(entries)
+    if len(image) != RFDC_RUNTIME_MAILBOX_BYTES:
+        raise AssertionError("RFDC runtime mailbox has an unexpected size")
+    return image
+
+
+def iter_rfdc_runtime_mailbox_packets(
+    per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
+    per_channel_output_current_ma, seq: int, apply_mask: int = 0xFF,
+    flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
+    mailbox_offset: int = RFDC_CTRL_MAILBOX_OFFSET,
+):
+    image = pack_rfdc_runtime_mailbox(
+        per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
+        per_channel_output_current_ma, seq=seq, apply_mask=apply_mask, flags=flags,
+    )
+    yield from iter_udp_waveform_packets(image[RFDC_RUNTIME_MAILBOX_HEADER_BYTES:], mailbox_offset + RFDC_RUNTIME_MAILBOX_HEADER_BYTES)
+    yield from iter_udp_waveform_packets(image[:RFDC_RUNTIME_MAILBOX_HEADER_BYTES], mailbox_offset)
+
+
 def pack_rvctrl_packet(words32: list[int] | tuple[int, ...]) -> bytes:
     """Pack one PL RISC-V control command UDP datagram.
 
@@ -263,6 +379,339 @@ def pack_rvctrl_trigger(seq: int = 1) -> bytes:
 
 def pack_rvctrl_write_mmio(addr: int, value: int, seq: int = 1) -> bytes:
     return pack_rvctrl_packet([RV_CMD_WRITE_MMIO, int(seq), int(addr), int(value)])
+
+
+def pack_rvctrl1_packet(opcode: int, payload: bytes = b"", seq: int = 1, flags: int = 0) -> bytes:
+    """Pack one RVCTRL1 command datagram.
+
+    Layout:
+      u64 magic = "RVCTRL1\\0"
+      u64 hdr0  = version[15:0], flags[15:0], opcode[31:0]
+      u64 hdr1  = seq[31:0], payload_bytes[31:0]
+      payload padded to 8B
+    """
+    raw_payload = bytes(payload)
+    payload_bytes = len(raw_payload)
+    payload = raw_payload
+    if len(payload) % 8:
+        payload += b"\x00" * (8 - (len(payload) % 8))
+    hdr0 = ((int(opcode) & 0xFFFFFFFF) << 32) | ((int(flags) & 0xFFFF) << 16) | RVCTRL1_VERSION
+    hdr1 = ((payload_bytes & 0xFFFFFFFF) << 32) | (int(seq) & 0xFFFFFFFF)
+    return struct.pack("<QQQ", UDP_RVCTRL1_MAGIC, hdr0, hdr1) + payload
+
+
+def pack_rvctrl1_ping(seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(RV1_OP_PING, seq=seq)
+
+
+def pack_rvctrl1_mmio_read32(addr: int, seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(RV1_OP_MMIO_READ32, struct.pack("<I", int(addr) & 0xFFFFFFFF), seq=seq)
+
+
+def pack_rvctrl1_mmio_write32(addr: int, value: int, seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(
+        RV1_OP_MMIO_WRITE32,
+        struct.pack("<II", int(addr) & 0xFFFFFFFF, int(value) & 0xFFFFFFFF),
+        seq=seq,
+    )
+
+
+def pack_rvctrl1_mmio_rmw32(addr: int, mask: int, value: int, seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(
+        RV1_OP_MMIO_RMW32,
+        struct.pack("<III", int(addr) & 0xFFFFFFFF, int(mask) & 0xFFFFFFFF, int(value) & 0xFFFFFFFF),
+        seq=seq,
+    )
+
+
+def pack_rvctrl1_mmio_batch(writes: list[tuple[int, int]] | tuple[tuple[int, int], ...], seq: int = 1) -> bytes:
+    payload = bytearray(struct.pack("<I", len(writes)))
+    for addr, value in writes:
+        payload += struct.pack("<II", int(addr) & 0xFFFFFFFF, int(value) & 0xFFFFFFFF)
+    return pack_rvctrl1_packet(RV1_OP_MMIO_BATCH, bytes(payload), seq=seq)
+
+
+def pack_rvctrl1_play_interleaved(
+    bytes_per_channel: int,
+    seq: int = 1,
+    auto_start: bool = True,
+    loop: bool = False,
+) -> bytes:
+    require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+    flags = (RV_PLAY_FLAG_AUTO_START if auto_start else 0) | (RV_PLAY_FLAG_LOOP if loop else 0)
+    return pack_rvctrl1_packet(
+        RV1_OP_PLAY_INTERLEAVED,
+        struct.pack("<II", int(bytes_per_channel) & 0xFFFFFFFF, flags),
+        seq=seq,
+    )
+
+
+def pack_rvctrl1_trigger(seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(RV1_OP_TRIGGER, seq=seq)
+
+
+def pack_rvctrl1_rfdc_ch_enable(channel_mask: int, enable_mask: int, seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(
+        RV1_OP_RFDC_CH_ENABLE,
+        struct.pack("<II", int(channel_mask) & 0xFF, int(enable_mask) & 0xFF),
+        seq=seq,
+    )
+
+
+def pack_rvctrl1_rfdc_set_nco(
+    per_channel_nco_hz: dict[int, float] | dict[str, float],
+    per_channel_nyquist_zone: dict[int, int] | dict[str, int],
+    seq: int = 1,
+    apply_mask: int = 0xFF,
+) -> bytes:
+    def _get(mapping, channel: int, default):
+        return mapping.get(channel, mapping.get(f"ch{channel}", default))
+
+    payload = bytearray(struct.pack("<I", int(apply_mask) & 0xFF))
+    for channel in range(1, RFDC_CTRL_MAILBOX_CHANNELS + 1):
+        nco_hz = int(round(float(_get(per_channel_nco_hz, channel, 0.0))))
+        zone = int(_get(per_channel_nyquist_zone, channel, 1))
+        if zone not in (1, 2):
+            raise ValueError(f"RVCTRL1 NCO CH{channel} nyquist_zone must be 1 or 2, got {zone}")
+        payload += struct.pack("<qII", nco_hz, zone, 0)
+    return pack_rvctrl1_packet(RV1_OP_RFDC_SET_NCO, bytes(payload), seq=seq)
+
+
+def pack_rvctrl1_status_read(seq: int = 1) -> bytes:
+    return pack_rvctrl1_packet(RV1_OP_STATUS_READ, seq=seq)
+
+
+def parse_rvresp1_packet(packet: bytes) -> dict[str, int | bytes]:
+    if len(packet) < 24:
+        raise ValueError("RVRESP1 packet is too short")
+    magic, hdr0, hdr1 = struct.unpack("<QQQ", packet[:24])
+    if magic != UDP_RVRESP1_MAGIC:
+        raise ValueError(f"unexpected RVRESP1 magic 0x{magic:016X}")
+    payload_bytes = (hdr1 >> 32) & 0xFFFFFFFF
+    if len(packet) < 24 + payload_bytes:
+        raise ValueError(f"RVRESP1 payload is truncated: expected {payload_bytes} bytes")
+    payload = packet[24:24 + payload_bytes]
+    return {
+        "version": hdr0 & 0xFFFF,
+        "status": (hdr0 >> 16) & 0xFFFF,
+        "opcode": (hdr0 >> 32) & 0xFFFFFFFF,
+        "seq": hdr1 & 0xFFFFFFFF,
+        "payload_bytes": payload_bytes,
+        "payload": payload,
+    }
+
+
+def pack_rfctrl2_packet(opcode: int, payload: bytes = b"", seq: int = 1, flags: int = 0) -> bytes:
+    """Pack a versioned multi-board RFCTRL2 UDP command."""
+    raw_payload = bytes(payload)
+    padded_payload = raw_payload
+    if len(padded_payload) % 8:
+        padded_payload += b"\x00" * (8 - (len(padded_payload) % 8))
+    hdr0 = ((int(opcode) & 0xFFFFFFFF) << 32) | ((int(flags) & 0xFFFF) << 16) | RFCTRL2_VERSION
+    hdr1 = ((len(raw_payload) & 0xFFFFFFFF) << 32) | (int(seq) & 0xFFFFFFFF)
+    return struct.pack("<QQQ", UDP_RFCTRL2_MAGIC, hdr0, hdr1) + padded_payload
+
+
+def pack_rfctrl2_hello(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_HELLO, seq=seq)
+
+
+def pack_rfctrl2_status(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_STATUS, seq=seq)
+
+
+def normalize_rfdc_phase_mdeg(phase_deg: float) -> int:
+    """Normalize a mixer phase to the signed RFDC -180..180 degree range."""
+    phase = ((float(phase_deg) + 180.0) % 360.0) - 180.0
+    return int(round(phase * 1000.0))
+
+
+def _rfdc_channel_value(mapping, channel: int, default):
+    if isinstance(mapping, dict):
+        return mapping.get(channel, mapping.get(f"ch{channel}", default))
+    values = list(mapping)
+    if len(values) != RFDC_APPLY_CHANNELS:
+        raise ValueError("RFDC configuration requires exactly eight channel values")
+    return values[channel - 1]
+
+
+def pack_rfctrl2_rfdc_apply(
+    per_channel_nco_hz,
+    per_channel_nyquist_zone,
+    per_channel_phase_deg,
+    per_channel_output_current_ma,
+    revision: int,
+    channel_mask: int = 0xFF,
+    seq: int = 1,
+) -> bytes:
+    """Pack the fixed CH1..CH8 structured RFDC runtime request.
+
+    Payload layout (little-endian):
+      u32 revision, u32 channel_mask
+      8 x {s64 nco_hz, u32 nyquist_zone, s32 phase_mdeg,
+           u32 dac_output_current_ua, u32 reserved}
+    """
+    mask = int(channel_mask)
+    if mask < 1 or mask > 0xFF:
+        raise ValueError(f"RFDC channel_mask must select CH1..CH8, got 0x{mask:X}")
+    payload = bytearray(struct.pack("<II", int(revision) & 0xFFFFFFFF, mask))
+    for channel in range(1, RFDC_APPLY_CHANNELS + 1):
+        nco_hz = int(round(float(_rfdc_channel_value(per_channel_nco_hz, channel, 0.0))))
+        if not RFDC_NCO_MIN_HZ <= nco_hz <= RFDC_NCO_MAX_HZ:
+            raise ValueError(
+                f"RFDC CH{channel} nco_hz must be in [{RFDC_NCO_MIN_HZ}, {RFDC_NCO_MAX_HZ}]"
+            )
+        zone = int(_rfdc_channel_value(per_channel_nyquist_zone, channel, 1))
+        if zone not in (1, 2):
+            raise ValueError(f"RFDC CH{channel} nyquist_zone must be 1 or 2")
+        phase_mdeg = normalize_rfdc_phase_mdeg(
+            float(_rfdc_channel_value(per_channel_phase_deg, channel, 0.0))
+        )
+        current_ua = int(round(
+            float(_rfdc_channel_value(per_channel_output_current_ma, channel, 20.0)) * 1000.0
+        ))
+        current_min, current_max = ((6400, 32000) if channel in (5, 6) else (2250, 40500))
+        if not current_min <= current_ua <= current_max:
+            coupling = "DC" if channel in (5, 6) else "AC"
+            raise ValueError(
+                f"RFDC CH{channel} {coupling}-coupled DAC current must be in "
+                f"[{current_min / 1000:g}, {current_max / 1000:g}] mA"
+            )
+        payload += struct.pack("<qIiII", nco_hz, zone, phase_mdeg, current_ua, 0)
+    if len(payload) != RFDC_APPLY_REQUEST_HEADER_BYTES + RFDC_APPLY_CHANNELS * RFDC_APPLY_REQUEST_ENTRY_BYTES:
+        raise AssertionError("RFDC apply request packing produced an unexpected size")
+    return pack_rfctrl2_packet(RF2_OP_RFDC_APPLY, payload, seq=seq)
+
+
+def pack_rfctrl2_rfdc_get_config(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_RFDC_GET_CONFIG, seq=seq)
+
+
+def pack_rfctrl2_arm(run_id: int, channel_mask: int = 0xFF, seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(
+        RF2_OP_ARM,
+        struct.pack("<II", int(run_id) & 0xFFFFFFFF, int(channel_mask) & 0xFF),
+        seq=seq,
+    )
+
+
+def pack_rfctrl2_sync_epoch(epoch: int, seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_SYNC_EPOCH, struct.pack("<Q", int(epoch) & 0xFFFFFFFFFFFFFFFF), seq=seq)
+
+
+def pack_rfctrl2_start_at(start_tick: int, seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_START_AT, struct.pack("<Q", int(start_tick) & 0xFFFFFFFFFFFFFFFF), seq=seq)
+
+
+def pack_rfctrl2_trigger(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_TRIGGER, seq=seq)
+
+
+def pack_rfctrl2_abort_mute(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_ABORT_MUTE, seq=seq)
+
+
+def parse_rfresp2_packet(packet: bytes) -> dict[str, int | bytes]:
+    if len(packet) < 24:
+        raise ValueError("RFRESP2 packet is too short")
+    magic, hdr0, hdr1 = struct.unpack("<QQQ", packet[:24])
+    if magic != UDP_RFRESP2_MAGIC:
+        raise ValueError(f"unexpected RFRESP2 magic 0x{magic:016X}")
+    payload_bytes = (hdr1 >> 32) & 0xFFFFFFFF
+    if len(packet) < 24 + payload_bytes:
+        raise ValueError(f"RFRESP2 payload is truncated: expected {payload_bytes} bytes")
+    return {
+        "version": hdr0 & 0xFFFF,
+        "status": (hdr0 >> 16) & 0xFFFF,
+        "opcode": (hdr0 >> 32) & 0xFFFFFFFF,
+        "seq": hdr1 & 0xFFFFFFFF,
+        "payload_bytes": payload_bytes,
+        "payload": packet[24:24 + payload_bytes],
+    }
+
+
+def parse_rfctrl2_status_payload(response: dict) -> dict:
+    """Decode HELLO/STATUS capability data while tolerating old bitstreams."""
+    payload = bytes(response.get("payload", b""))
+    result = dict(response)
+    result.update({
+        "capabilities": 0,
+        "state_flags": 0,
+        "config_valid_mask": 0,
+        "last_revision": 0,
+        "last_error": 0,
+        "last_error_stage": 0,
+        "last_error_addr": 0,
+    })
+    if len(payload) >= 32:
+        (
+            result["capabilities"],
+            result["state_flags"],
+            result["config_valid_mask"],
+            result["last_revision"],
+            result["last_error"],
+            result["last_error_stage"],
+            result["last_error_addr"],
+            _reserved,
+        ) = struct.unpack_from("<IIIIIIII", payload)
+    result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
+    result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
+    result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)
+    result["running"] = bool(result["state_flags"] & RF2_STATUS_RUNNING)
+    return result
+
+
+def parse_rfctrl2_rfdc_config_response(response: dict) -> dict:
+    """Decode a hardware-confirmed RFDC_APPLY/RFDC_GET_CONFIG response."""
+    payload = bytes(response.get("payload", b""))
+    result = dict(response)
+    result.update({
+        "revision": 0,
+        "applied_mask": 0,
+        "error_mask": 0,
+        "config_valid_mask": 0,
+        "failure_stage": 0,
+        "failure_address": 0,
+        "axi_response": 0,
+        "state_flags": 0,
+        "channels": [],
+    })
+    # Unsupported old bitstreams are allowed to return only the RFRESP2 header.
+    if not payload and int(result.get("status", RF2_STATUS_BAD_REQUEST)) != RF2_STATUS_OK:
+        return result
+    expected = RFDC_APPLY_RESPONSE_HEADER_BYTES + RFDC_APPLY_CHANNELS * RFDC_APPLY_RESPONSE_ENTRY_BYTES
+    if len(payload) != expected:
+        raise ValueError(f"RFDC response payload must be {expected} bytes, got {len(payload)}")
+    (
+        result["revision"],
+        result["applied_mask"],
+        result["error_mask"],
+        result["config_valid_mask"],
+        result["failure_stage"],
+        result["failure_address"],
+        result["axi_response"],
+        result["state_flags"],
+    ) = struct.unpack_from("<IIIIIIII", payload)
+    offset = RFDC_APPLY_RESPONSE_HEADER_BYTES
+    for channel in range(1, RFDC_APPLY_CHANNELS + 1):
+        nco_hz, zone, phase_mdeg, current_ua, channel_status, nco_word, phase_word, vop_code = struct.unpack_from(
+            "<qIiIIQII", payload, offset
+        )
+        result["channels"].append({
+            "channel": channel,
+            "nco_hz": nco_hz,
+            "nyquist_zone": zone,
+            "nco_phase_mdeg": phase_mdeg,
+            "nco_phase_deg": phase_mdeg / 1000.0,
+            "dac_output_current_ua": current_ua,
+            "dac_output_current_ma": current_ua / 1000.0,
+            "status": channel_status,
+            "nco_word": nco_word,
+            "phase_word": phase_word,
+            "vop_code": vop_code,
+        })
+        offset += RFDC_APPLY_RESPONSE_ENTRY_BYTES
+    return result
 
 
 def align_bytes_to_beat(n_bytes: int) -> int:
@@ -845,6 +1294,238 @@ class RFSocController:
         )
         return self.sock.sendto(pack_rvctrl_write_mmio(addr, value, seq=seq), (self.ip, self.port))
 
+    def send_rvctrl1_packet(self, opcode: int, payload: bytes = b"", seq: int = 1, flags: int = 0):
+        packet = pack_rvctrl1_packet(opcode, payload=payload, seq=seq, flags=flags)
+        print(
+            f"[rvctrl1] opcode=0x{int(opcode) & 0xFFFFFFFF:08X}, "
+            f"seq={int(seq) & 0xFFFFFFFF}, payload={len(payload)} bytes"
+        )
+        return self.sock.sendto(packet, (self.ip, self.port))
+
+    def recv_rvresp1(self, expected_seq: int | None = None, expected_opcode: int | None = None):
+        while True:
+            packet, addr = self.sock.recvfrom(2048)
+            resp = parse_rvresp1_packet(packet)
+            if expected_seq is not None and resp["seq"] != (int(expected_seq) & 0xFFFFFFFF):
+                print(f"[rvresp1] skip seq={resp['seq']} from {addr}")
+                continue
+            if expected_opcode is not None and resp["opcode"] != (int(expected_opcode) & 0xFFFFFFFF):
+                print(f"[rvresp1] skip opcode=0x{resp['opcode']:08X} from {addr}")
+                continue
+            resp["addr"] = addr
+            return resp
+
+    def _send_rvctrl1_and_maybe_recv(self, packet: bytes, opcode: int, seq: int, wait_response: bool):
+        sent = self.sock.sendto(packet, (self.ip, self.port))
+        if not wait_response:
+            return sent
+        return self.recv_rvresp1(expected_seq=seq, expected_opcode=opcode)
+
+    def rvctrl1_ping(self, seq: int = 1, wait_response: bool = False):
+        print(f"[rvctrl1] PING seq={int(seq) & 0xFFFFFFFF}")
+        return self._send_rvctrl1_and_maybe_recv(pack_rvctrl1_ping(seq), RV1_OP_PING, seq, wait_response)
+
+    def rvctrl1_mmio_read32(self, addr: int, seq: int = 1, wait_response: bool = False):
+        print(f"[rvctrl1] MMIO_READ32 seq={int(seq) & 0xFFFFFFFF}, addr=0x{int(addr) & 0xFFFFFFFF:08X}")
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_mmio_read32(addr, seq=seq),
+            RV1_OP_MMIO_READ32,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_mmio_write32(self, addr: int, value: int, seq: int = 1, wait_response: bool = False):
+        print(
+            f"[rvctrl1] MMIO_WRITE32 seq={int(seq) & 0xFFFFFFFF}, "
+            f"addr=0x{int(addr) & 0xFFFFFFFF:08X}, value=0x{int(value) & 0xFFFFFFFF:08X}"
+        )
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_mmio_write32(addr, value, seq=seq),
+            RV1_OP_MMIO_WRITE32,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_mmio_rmw32(self, addr: int, mask: int, value: int, seq: int = 1, wait_response: bool = False):
+        print(
+            f"[rvctrl1] MMIO_RMW32 seq={int(seq) & 0xFFFFFFFF}, "
+            f"addr=0x{int(addr) & 0xFFFFFFFF:08X}, mask=0x{int(mask) & 0xFFFFFFFF:08X}, "
+            f"value=0x{int(value) & 0xFFFFFFFF:08X}"
+        )
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_mmio_rmw32(addr, mask, value, seq=seq),
+            RV1_OP_MMIO_RMW32,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_mmio_batch(
+        self,
+        writes: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+        seq: int = 1,
+        wait_response: bool = False,
+    ):
+        print(f"[rvctrl1] MMIO_BATCH seq={int(seq) & 0xFFFFFFFF}, writes={len(writes)}")
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_mmio_batch(writes, seq=seq),
+            RV1_OP_MMIO_BATCH,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_play_interleaved(
+        self,
+        bytes_per_channel: int,
+        seq: int = 1,
+        auto_start: bool = True,
+        loop: bool = False,
+        wait_response: bool = False,
+    ):
+        print(
+            f"[rvctrl1] PLAY_INTERLEAVED seq={int(seq) & 0xFFFFFFFF}, "
+            f"bytes_per_channel={int(bytes_per_channel)}, auto_start={auto_start}, loop={loop}"
+        )
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_play_interleaved(bytes_per_channel, seq=seq, auto_start=auto_start, loop=loop),
+            RV1_OP_PLAY_INTERLEAVED,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_trigger(self, seq: int = 1, wait_response: bool = False):
+        print(f"[rvctrl1] TRIGGER seq={int(seq) & 0xFFFFFFFF}")
+        return self._send_rvctrl1_and_maybe_recv(pack_rvctrl1_trigger(seq), RV1_OP_TRIGGER, seq, wait_response)
+
+    def rvctrl1_rfdc_ch_enable(
+        self,
+        channel_mask: int,
+        enable_mask: int,
+        seq: int = 1,
+        wait_response: bool = False,
+    ):
+        print(
+            f"[rvctrl1] RFDC_CH_ENABLE seq={int(seq) & 0xFFFFFFFF}, "
+            f"channel_mask=0x{int(channel_mask) & 0xFF:02X}, enable_mask=0x{int(enable_mask) & 0xFF:02X}"
+        )
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_rfdc_ch_enable(channel_mask, enable_mask, seq=seq),
+            RV1_OP_RFDC_CH_ENABLE,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_status_read(self, seq: int = 1, wait_response: bool = True):
+        print(f"[rvctrl1] STATUS_READ seq={int(seq) & 0xFFFFFFFF}")
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_status_read(seq=seq),
+            RV1_OP_STATUS_READ,
+            seq,
+            wait_response,
+        )
+
+    def rvctrl1_rfdc_set_nco(self, nco_hz, nyquist_zones, seq: int = 1, apply_mask: int = 0xFF, wait_response: bool = False):
+        print(f"[rvctrl1] RFDC_SET_NCO seq={int(seq) & 0xFFFFFFFF}, apply_mask=0x{int(apply_mask) & 0xFF:02X}")
+        return self._send_rvctrl1_and_maybe_recv(
+            pack_rvctrl1_rfdc_set_nco(nco_hz, nyquist_zones, seq=seq, apply_mask=apply_mask),
+            RV1_OP_RFDC_SET_NCO,
+            seq,
+            wait_response,
+        )
+
+    def recv_rfresp2(self, expected_seq: int | None = None, expected_opcode: int | None = None):
+        while True:
+            packet, addr = self.sock.recvfrom(2048)
+            response = parse_rfresp2_packet(packet)
+            if expected_seq is not None and response["seq"] != (int(expected_seq) & 0xFFFFFFFF):
+                continue
+            if expected_opcode is not None and response["opcode"] != (int(expected_opcode) & 0xFFFFFFFF):
+                continue
+            response["addr"] = addr
+            return response
+
+    def _send_rfctrl2(
+        self,
+        packet: bytes,
+        opcode: int,
+        seq: int,
+        wait_response: bool,
+        retries: int = 0,
+    ):
+        """Send one immutable request, retrying with the same sequence number."""
+        attempts = max(0, int(retries)) + 1
+        for attempt in range(attempts):
+            sent = self.sock.sendto(packet, (self.ip, self.port))
+            if not wait_response:
+                return sent
+            try:
+                return self.recv_rfresp2(expected_seq=seq, expected_opcode=opcode)
+            except socket.timeout:
+                if attempt + 1 >= attempts:
+                    raise
+        raise AssertionError("unreachable RFCTRL2 retry state")
+
+    def rfctrl2_hello(self, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_hello(seq), RF2_OP_HELLO, seq, wait_response)
+
+    def rfctrl2_status(self, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_status(seq), RF2_OP_STATUS, seq, wait_response)
+
+    def rfctrl2_rfdc_apply(
+        self,
+        per_channel_nco_hz,
+        per_channel_nyquist_zone,
+        per_channel_phase_deg,
+        per_channel_output_current_ma,
+        revision: int,
+        channel_mask: int = 0xFF,
+        seq: int = 1,
+        wait_response: bool = True,
+        retries: int = 2,
+    ):
+        packet = pack_rfctrl2_rfdc_apply(
+            per_channel_nco_hz,
+            per_channel_nyquist_zone,
+            per_channel_phase_deg,
+            per_channel_output_current_ma,
+            revision=revision,
+            channel_mask=channel_mask,
+            seq=seq,
+        )
+        response = self._send_rfctrl2(
+            packet, RF2_OP_RFDC_APPLY, seq, wait_response, retries=retries
+        )
+        return parse_rfctrl2_rfdc_config_response(response) if wait_response else response
+
+    def rfctrl2_rfdc_get_config(
+        self,
+        seq: int = 1,
+        wait_response: bool = True,
+        retries: int = 2,
+    ):
+        response = self._send_rfctrl2(
+            pack_rfctrl2_rfdc_get_config(seq),
+            RF2_OP_RFDC_GET_CONFIG,
+            seq,
+            wait_response,
+            retries=retries,
+        )
+        return parse_rfctrl2_rfdc_config_response(response) if wait_response else response
+
+    def rfctrl2_arm(self, run_id: int, channel_mask: int = 0xFF, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_arm(run_id, channel_mask, seq), RF2_OP_ARM, seq, wait_response)
+
+    def rfctrl2_sync_epoch(self, epoch: int, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_sync_epoch(epoch, seq), RF2_OP_SYNC_EPOCH, seq, wait_response)
+
+    def rfctrl2_start_at(self, start_tick: int, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_start_at(start_tick, seq), RF2_OP_START_AT, seq, wait_response)
+
+    def rfctrl2_trigger(self, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_trigger(seq), RF2_OP_TRIGGER, seq, wait_response)
+
+    def rfctrl2_abort_mute(self, seq: int = 1, wait_response: bool = True):
+        return self._send_rfctrl2(pack_rfctrl2_abort_mute(seq), RF2_OP_ABORT_MUTE, seq, wait_response)
+
     @staticmethod
     def _save_hex_text(byte_data: bytes, filepath: str, bytes_per_line: int = 16, style: str = "hexdump"):
         with open(filepath, "w", encoding="utf-8") as f:
@@ -1016,6 +1697,24 @@ class RFSocController:
             f"[udp-rfdc-mailbox] offset=0x{RFDC_CTRL_MAILBOX_OFFSET:09X}, "
             f"seq={int(seq) & 0xFFFFFFFF}, apply_mask=0x{int(apply_mask) & 0xFF:02X}, packets={packet_count}"
         )
+        return packet_count
+
+    def upload_rfdc_runtime_mailbox(
+        self,
+        per_channel_nco_hz,
+        per_channel_nyquist_zone,
+        per_channel_phase_deg,
+        per_channel_output_current_ma,
+        seq: int,
+        apply_mask: int = 0xFF,
+    ):
+        packet_count = 0
+        for packet in iter_rfdc_runtime_mailbox_packets(
+            per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
+            per_channel_output_current_ma, seq=seq, apply_mask=apply_mask,
+        ):
+            self.sock.sendto(packet, (self.ip, self.port))
+            packet_count += 1
         return packet_count
 
     def upload_waveform_interleaved(self, channel_waves: dict[int, np.ndarray],

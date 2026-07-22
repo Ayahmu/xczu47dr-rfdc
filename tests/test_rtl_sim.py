@@ -1,34 +1,40 @@
 import shutil
 import subprocess
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VIVADO_BIN = Path(os.environ.get("VIVADO_BIN", "/tools/Xilinx/Vivado/2024.2/bin"))
 
 
-@unittest.skipUnless(all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")), "Vivado simulator is unavailable")
+def vivado_tool(name: str) -> str | None:
+    return shutil.which(name) or (str(VIVADO_BIN / name) if (VIVADO_BIN / name).is_file() else None)
+
+
+@unittest.skipUnless(all(vivado_tool(tool) for tool in ("xvlog", "xelab", "xsim")), "Vivado simulator is unavailable")
 class RtlSimulationTests(unittest.TestCase):
     def run_sim(self, top: str, sources: list[Path], expected: str) -> None:
         with tempfile.TemporaryDirectory(prefix=f"{top}-") as temp_dir:
             workdir = Path(temp_dir)
             subprocess.run(
-                ["xvlog", "-sv", *(str(source) for source in sources)],
+                [vivado_tool("xvlog"), "-sv", *(str(source) for source in sources)],
                 cwd=workdir,
                 check=True,
                 text=True,
                 capture_output=True,
             )
             subprocess.run(
-                ["xelab", top, "-s", "sim"],
+                [vivado_tool("xelab"), top, "-s", "sim"],
                 cwd=workdir,
                 check=True,
                 text=True,
                 capture_output=True,
             )
             result = subprocess.run(
-                ["xsim", "sim", "-runall"],
+                [vivado_tool("xsim"), "sim", "-runall"],
                 cwd=workdir,
                 check=True,
                 text=True,
@@ -53,7 +59,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
                 ROOT / "tests/tb_udp_rvctrl_protocol.sv",
             ],
-            "PASS: RVCTRL0 packets route to the PL RISC-V control path without breaking legacy UDP instructions",
+            "PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path without breaking legacy UDP instructions",
         )
 
     def test_pl_riscv_control_v1_emits_play_and_trigger(self):
@@ -63,7 +69,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
                 ROOT / "tests/tb_pl_riscv_control_v1.sv",
             ],
-            "PASS: PL RISC-V control V1 shim emits PLAY/END instructions and trigger pulses",
+            "PASS: PL control shim emits legacy commands plus RFCTRL2 ARM, RFDC_APPLY, and SYNC_EPOCH",
         )
 
     def test_dac_play_completion_and_underflow_counters(self):
@@ -74,6 +80,36 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "tests/tb_dac_play_ctrl.sv",
             ],
             "PASS: dac_play_ctrl starts short frames and reports completion/fire/underflow debug state",
+        )
+
+    def test_rfctrl2_sync_controller_uses_external_epoch(self):
+        self.run_sim(
+            "tb_rfctrl2_sync_controller",
+            [
+                ROOT / "hardware/vivado/src/rfctrl2_sync_controller.v",
+                ROOT / "tests/tb_rfctrl2_sync_controller.sv",
+            ],
+            "PASS: RFCTRL2 master epoch, external sync, START_AT, and abort are deterministic",
+        )
+
+    def test_pl_rfdc_runtime_controller_closes_the_axi_readback_loop(self):
+        self.run_sim(
+            "tb_rfdc_runtime_config_pl",
+            [
+                ROOT / "hardware/vivado/src/rfdc_runtime_config_pl.v",
+                ROOT / "tests/tb_rfdc_runtime_config_pl.sv",
+            ],
+            "PASS: PL RFDC controller validates, writes, reads back, caches retries, and reports AXI failures",
+        )
+
+    def test_axilite_arbiter_locks_complete_transactions(self):
+        self.run_sim(
+            "tb_axilite_arbiter_2to1",
+            [
+                ROOT / "hardware/vivado/src/axilite_arbiter_2to1.v",
+                ROOT / "tests/tb_axilite_arbiter_2to1.sv",
+            ],
+            "PASS: AXI-Lite arbiter locks each write and read transaction to one master",
         )
 
     def test_interleaved_executor_retains_33bit_total_length(self):

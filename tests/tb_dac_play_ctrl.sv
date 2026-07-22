@@ -4,6 +4,7 @@ module tb_dac_play_ctrl;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
   reg trigger = 1'b0;
+  reg abort = 1'b0;
   reg [15:0] cfg_seq_id = 16'd1;
   reg auto_start = 1'b1;
   reg [31:0] ch1_len_beats = 32'd8;
@@ -27,6 +28,7 @@ module tb_dac_play_ctrl;
     .clk(clk),
     .rst_n(rst_n),
     .trigger(trigger),
+    .abort(abort),
     .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start),
     .ch1_delay_cycles(32'd0),

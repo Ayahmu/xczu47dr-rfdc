@@ -1,4 +1,3 @@
-import re
 import unittest
 from pathlib import Path
 
@@ -15,12 +14,13 @@ class ExtremeLengthConfigTests(unittest.TestCase):
         self.assertIn("CONFIG.C0.DDR4_AxiDataWidth {512}", config)
         self.assertIn("CONFIG.C0.DDR4_AxiAddressWidth {33}", config)
 
-    def test_firmware_mailbox_is_in_reserved_top_mebibyte(self):
+    def test_firmware_has_no_runtime_rfdc_mailbox_or_uart_confirmation(self):
         source = (ROOT / "firmware/src/main.c").read_text(encoding="utf-8")
-        match = re.search(r"#define\s+RFDC_CTRL_MAILBOX_OFFSET\s+(0x[0-9A-Fa-f]+)ULL", source)
 
-        self.assertIsNotNone(match)
-        self.assertEqual(int(match.group(1), 16), 0x1FFF00000)
+        self.assertNotIn("RFDC_CTRL_MAILBOX_OFFSET", source)
+        self.assertNotIn("Poll_Rfdc_Nco_Mailbox", source)
+        self.assertNotIn("RFDC_APPLY", source)
+        self.assertIn("PL RFCTRL2 UDP engine", source)
 
     def test_interleaved_executor_uses_64bit_total_byte_counters(self):
         source = (ROOT / "hardware/vivado/src/waveform_interleaved_system_top.v").read_text(encoding="utf-8")

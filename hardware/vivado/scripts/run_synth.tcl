@@ -74,6 +74,10 @@ if {[llength ${bd_file}] > 0} {
 
 puts "INFO: Starting synthesis..."
 reset_run synth_1
+# Never let an automatically imported prior DCP hide RTL changes. This is
+# especially important for the RFDC runtime FSM, which must match the UDP
+# protocol and cannot safely reuse a stale incremental partition.
+set_property incremental_checkpoint {} [get_runs synth_1]
 launch_runs synth_1 -jobs 8
 wait_on_run synth_1
 

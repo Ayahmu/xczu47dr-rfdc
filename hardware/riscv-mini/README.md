@@ -40,7 +40,7 @@ This runs upstream `make compile`, then copies
 `Top.v` in V1; the checked-in synthesizable control behavior is still
 `pl_riscv_control_v1.v`.
 
-## V1 Control Packet
+## V0 Control Packet
 
 UDP datagram:
 
@@ -74,5 +74,38 @@ WRITE_MMIO:
   word3 = value
 ```
 
-V1 does not move waveform data through RISC-V. Waveform data still uses the
-existing `WAVEDDR0/WAVESTR0` DDR writer path.
+## RVCTRL1 Control Packet
+
+`RVCTRL1` is the stable control-plane envelope for register-like operations.
+It is still interpreted by the checked-in shim today; a real RISC-V firmware
+can later drive the same instruction, trigger, and MMIO interfaces.
+
+```text
+u64 magic       "RVCTRL1\0"
+u64 hdr0        version[15:0], flags[15:0], opcode[31:0]
+u64 hdr1        seq[31:0], payload_bytes[31:0]
+u8  payload     opcode-specific, padded to 8B
+```
+
+Supported opcodes:
+
+```text
+0x01 PING
+0x02 MMIO_READ32      payload: u32 addr
+0x03 MMIO_WRITE32     payload: u32 addr, u32 value
+0x04 MMIO_RMW32       payload: u32 addr, u32 mask, u32 value
+0x05 MMIO_BATCH       payload: u32 count, count x {u32 addr, u32 value}
+0x06 PLAY_INTERLEAVED payload: u32 bytes_per_channel, u32 flags
+0x07 TRIGGER
+0x08 RFDC_CH_ENABLE   payload: u32 channel_mask, u32 enable_mask
+0x09 RFDC_SET_NCO     payload: u32 apply_mask, 8 x {s64 nco_hz, u32 zone, u32 reserved}
+0x0A STATUS_READ
+```
+
+`RVRESP1\0` has the same 24B envelope with `status` in `hdr0[31:16]` and an
+opcode-specific payload. Host-side parsing is implemented, but the current
+hardware still exposes read/status results through debug signals until the UDP
+TX response path is wired.
+
+V1/RVCTRL1 does not move waveform data through RISC-V. Waveform data still uses
+the existing `WAVEDDR0/WAVESTR0` DDR writer path.

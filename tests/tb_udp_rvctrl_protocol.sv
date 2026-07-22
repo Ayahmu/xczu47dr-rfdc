@@ -2,6 +2,8 @@
 
 module tb_udp_rvctrl_protocol;
   localparam [63:0] RVCTRL_MAGIC = 64'h00304C5254435652;
+  localparam [63:0] RVCTRL1_MAGIC = 64'h00314C5254435652;
+  localparam [63:0] RFCTRL2_MAGIC = 64'h00324C5254434652;
 
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -21,6 +23,8 @@ module tb_udp_rvctrl_protocol;
   reg [31:0] rv_beats = 32'd0;
   reg [63:0] first_rv_data = 64'd0;
   reg [63:0] last_rv_data = 64'd0;
+  reg [31:0] first_rv_count = 32'd0;
+  reg [31:0] last_rv_count = 32'd0;
   reg        first_seen = 1'b0;
   reg        last_seen = 1'b0;
   reg        legacy_seen = 1'b0;
@@ -85,10 +89,12 @@ module tb_udp_rvctrl_protocol;
       if (rvctrl_tfirst) begin
         first_seen <= 1'b1;
         first_rv_data <= rvctrl_tdata;
+        first_rv_count <= rvctrl_word_count;
       end
       if (rvctrl_tlast) begin
         last_seen <= 1'b1;
         last_rv_data <= rvctrl_tdata;
+        last_rv_count <= rvctrl_word_count;
       end
     end else if (instr_tvalid) begin
       legacy_seen <= 1'b1;
@@ -101,6 +107,28 @@ module tb_udp_rvctrl_protocol;
       @(negedge clk);
       udp_tdata = word;
       udp_tvalid = 1'b1;
+      @(negedge clk);
+      udp_tvalid = 1'b0;
+      udp_tdata = 64'd0;
+    end
+  endtask
+
+  task send_four_words_contiguous(
+    input [63:0] word0,
+    input [63:0] word1,
+    input [63:0] word2,
+    input [63:0] word3
+  );
+    begin
+      @(negedge clk);
+      udp_tdata = word0;
+      udp_tvalid = 1'b1;
+      @(negedge clk);
+      udp_tdata = word1;
+      @(negedge clk);
+      udp_tdata = word2;
+      @(negedge clk);
+      udp_tdata = word3;
       @(negedge clk);
       udp_tvalid = 1'b0;
       udp_tdata = 64'd0;
@@ -140,7 +168,47 @@ module tb_udp_rvctrl_protocol;
     check_condition(legacy_seen == 1'b1, "legacy instruction path should still work after RVCTRL0 packet");
     check_condition(legacy_data == 64'h0000100000000012, "legacy instruction word mismatch after RVCTRL0 packet");
 
-    $display("PASS: RVCTRL0 packets route to the PL RISC-V control path without breaking legacy UDP instructions");
+    rv_beats = 32'd0;
+    first_seen = 1'b0;
+    last_seen = 1'b0;
+    first_rv_data = 64'd0;
+    last_rv_data = 64'd0;
+    first_rv_count = 32'd0;
+    last_rv_count = 32'd0;
+
+    send_four_words_contiguous(
+        RVCTRL1_MAGIC,
+        64'h0000000300000001, // opcode=MMIO_WRITE32, flags=0, version=1
+        64'h0000000800000077, // payload_bytes=8, seq=0x77
+        64'h1234567800000010  // addr=0x10, value=0x12345678
+    );
+    repeat (4) @(negedge clk);
+
+    check_condition(rv_beats == 32'd3, "RVCTRL1 packet should emit header0/header1/payload beats");
+    check_condition(first_seen == 1'b1, "RVCTRL1 first beat flag missing");
+    check_condition(last_seen == 1'b1, "RVCTRL1 last beat flag missing");
+    check_condition(first_rv_data == 64'h0000000300000001, "RVCTRL1 header0 mismatch");
+    check_condition(last_rv_data == 64'h1234567800000010, "RVCTRL1 payload mismatch");
+    check_condition(first_rv_count == 32'h80000006, "RVCTRL1 first word_count should mark v1 and report six 32-bit words");
+    check_condition(last_rv_count == 32'h80000006, "RVCTRL1 last word_count should mark v1 and report six 32-bit words");
+
+    rv_beats = 32'd0;
+    first_seen = 1'b0;
+    last_seen = 1'b0;
+    send_four_words_contiguous(
+        RFCTRL2_MAGIC,
+        64'h0000000600000002, // opcode=ARM, flags=0, version=2
+        64'h0000000800000079, // payload_bytes=8, seq=0x79
+        64'h000000FF0000CAFE  // run_id=0xCAFE, channel_mask=0xFF
+    );
+    repeat (4) @(negedge clk);
+    check_condition(rv_beats == 32'd3, "RFCTRL2 packet should emit header0/header1/payload beats");
+    check_condition(first_seen == 1'b1, "RFCTRL2 first beat flag missing");
+    check_condition(last_seen == 1'b1, "RFCTRL2 last beat flag missing");
+    check_condition(first_rv_count == 32'hA0000006, "RFCTRL2 first word_count should mark v2 and report six 32-bit words");
+    check_condition(last_rv_count == 32'hA0000006, "RFCTRL2 last word_count should mark v2 and report six 32-bit words");
+
+    $display("PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path without breaking legacy UDP instructions");
     $finish;
   end
 endmodule

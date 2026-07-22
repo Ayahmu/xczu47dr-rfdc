@@ -113,6 +113,74 @@ class SendWaveformUdpTests(unittest.TestCase):
             loop=True,
         )
 
+    def test_rvctrl1_cli_commands_use_control_packet_path(self):
+        cases = [
+            (
+                ["send_waveform_udp.py", "rvctrl1-ping", "--seq", "21"],
+                "rvctrl1_ping",
+                (21,),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-mmio-write", "--addr", "0x120", "--value", "0xCAFE1234", "--seq", "22"],
+                "rvctrl1_mmio_write32",
+                (0x120, 0xCAFE1234),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-mmio-rmw", "--addr", "0x124", "--mask", "0xff", "--value", "0x55", "--seq", "23"],
+                "rvctrl1_mmio_rmw32",
+                (0x124, 0xff, 0x55),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-mmio-batch", "--write", "0x10=0x11", "--write", "0x20=0x22", "--seq", "24"],
+                "rvctrl1_mmio_batch",
+                ([(0x10, 0x11), (0x20, 0x22)],),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-rfdc-ch-enable", "--channel-mask", "0x03", "--enable-mask", "0x01", "--seq", "25"],
+                "rvctrl1_rfdc_ch_enable",
+                (0x03, 0x01),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-rfdc-set-nco", "--nco", "1=100e6", "--zone", "1=2", "--apply-mask", "0x01", "--seq", "26"],
+                "rvctrl1_rfdc_set_nco",
+                ({1: 100e6}, {1: 2}),
+            ),
+        ]
+
+        for argv, method_name, expected_args in cases:
+            with self.subTest(method_name=method_name):
+                controller = mock.Mock()
+                with mock.patch.object(sys, "argv", argv), \
+                     mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                    self.assertEqual(send_waveform_udp.main(), 0)
+
+                method = getattr(controller, method_name)
+                method.assert_called_once()
+                for index, expected in enumerate(expected_args):
+                    self.assertEqual(method.call_args.args[index], expected)
+
+    def test_rvctrl1_play_cli_passes_auto_start_and_loop_flags(self):
+        controller = mock.Mock()
+        argv = [
+            "send_waveform_udp.py",
+            "rvctrl1-play",
+            "--bytes-per-channel", "4096",
+            "--seq", "25",
+            "--auto-start",
+            "--loop",
+        ]
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+            self.assertEqual(send_waveform_udp.main(), 0)
+
+        controller.rvctrl1_play_interleaved.assert_called_once_with(
+            4096,
+            seq=25,
+            auto_start=True,
+            loop=True,
+            wait_response=False,
+        )
+
     def test_max_length_cli_dry_run_does_not_generate_cache_unless_requested(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             argv = [

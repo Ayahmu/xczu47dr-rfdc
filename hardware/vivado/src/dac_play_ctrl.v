@@ -13,6 +13,7 @@ module dac_play_ctrl #(
     input  wire        rst_n,
 
     input  wire        trigger,      // DAC 域同步后的 trigger 电平
+    input  wire        abort,        // DAC 域同步后的 emergency mute pulse
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
 
@@ -198,6 +199,17 @@ module dac_play_ctrl #(
 
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
+    end else if(abort) begin
+      started       <= 1'b0;
+      start_pending <= 1'b0;
+      trigger_pending <= 1'b0;
+      dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
+      dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+      beats1 <= 32'd0; beats2 <= 32'd0; beats3 <= 32'd0; beats4 <= 32'd0;
+      beats5 <= 32'd0; beats6 <= 32'd0; beats7 <= 32'd0; beats8 <= 32'd0;
+      ch1_active <= 1'b0; ch2_active <= 1'b0; ch3_active <= 1'b0; ch4_active <= 1'b0;
+      ch5_active <= 1'b0; ch6_active <= 1'b0; ch7_active <= 1'b0; ch8_active <= 1'b0;
+      dbg_done_pulse <= 1'b0;
     end else begin
       dbg_done_pulse <= 1'b0;
       if(trig_pulse && !started && !start_pending) begin

@@ -4,7 +4,10 @@
 `timescale 1ns / 1ps
 //`default_nettype none
  
-module udp_10G  
+module udp_10G #(
+    parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01,
+    parameter [31:0] LOCAL_IP = 32'hC0A8_0180
+)
 (  
     input   wire      gt_rxp_in       ,
     input   wire      gt_rxn_in       ,
@@ -22,6 +25,12 @@ module udp_10G
     input  wire        fifo64_wr,
     input  wire[63:0]  fifo64_din,
     output wire        fifo64_af,
+
+    input  wire        resp64_tvalid,
+    input  wire[63:0]  resp64_tdata,
+    input  wire        resp64_tlast,
+    input  wire[15:0]  resp64_word_count,
+    output wire        resp64_tready,
     
     output wire        rcv_vld,
     output wire[63:0]  rcv_dat,
@@ -239,7 +248,10 @@ xxv_ethernet DUT
 
       
 
-    fpga_core    core_inst ( 
+    fpga_core #(
+        .LOCAL_MAC(LOCAL_MAC),
+        .LOCAL_IP (LOCAL_IP)
+    ) core_inst (
         .clk(clk),
         .rst(rst),         
          
@@ -249,6 +261,12 @@ xxv_ethernet DUT
         .fifo64_wr (fifo64_wr ),
         .fifo64_din(fifo64_din),
         .fifo64_af (fifo64_af ),
+
+        .resp64_tvalid(resp64_tvalid),
+        .resp64_tdata(resp64_tdata),
+        .resp64_tlast(resp64_tlast),
+        .resp64_word_count(resp64_word_count),
+        .resp64_tready(resp64_tready),
         
         .rcv_vld   (rcv_vld),
         .rcv_dat   (rcv_dat), 
