@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Activity, AlarmSmoke, Boxes, Cable, CircleCheck, CircleX, ClipboardList, Copy, Cpu, Crosshair, Download, Gauge, Info, KeyRound, LogOut, Pause, Play, RadioTower, RefreshCw, Save, Search, Settings2, ShieldCheck, Square, Terminal, Trash2, TriangleAlert, Upload, UserCog, Waves } from 'lucide-vue-next'
 import { ElMessage } from 'element-plus'
 import WavePreview from './components/WavePreview.vue'
-import type { ArtifactRecord, AuditEvent, BoardOverride, BoardPreflight, BoardProfile, BoardRfdcConfig, BoardStatus, DiscoveryResource, EzqChannel, InventoryScanResult, ManualChannel, PerformancePointRecord, PerformanceTestRecord, PreflightCheck, PreviewResponse, ProgramJob, RfdcChannelConfig, RunEvent, RunRecord, SerialLogLine, SerialPortInfo, UserRecord, WaveformRequest } from './types'
+import type { ArtifactRecord, AuditEvent, BoardOverride, BoardPreflight, BoardProfile, BoardRfdcConfig, BoardStatus, DiscoveryResource, EzqChannel, InventoryScanResult, ManualChannel, NetworkInterfaceInfo, PerformancePointRecord, PerformanceTestRecord, PreflightCheck, PreviewResponse, ProgramJob, RfdcChannelConfig, RunEvent, RunRecord, SerialLogLine, SerialPortInfo, UserRecord, WaveformRequest } from './types'
 
 type View = 'overview' | 'editor' | 'run' | 'performance' | 'monitor' | 'boards' | 'serial' | 'program' | 'history' | 'users'
 const activeView = ref<View>('overview')
@@ -16,6 +16,7 @@ const statuses = ref<BoardStatus[]>([])
 const runs = ref<RunRecord[]>([])
 const events = ref<RunEvent[]>([])
 const discoveries = ref<DiscoveryResource[]>([])
+const networkInterfaces = ref<NetworkInterfaceInfo[]>([])
 const inventoryScan = ref<InventoryScanResult | null>(null)
 const preflight = ref<BoardPreflight | null>(null)
 const preflightArtifactId = ref('')
@@ -35,7 +36,7 @@ const testPointSpec = ref('2.25, 20, 40.5')
 const testAuxSpec = ref('0.5')
 const testAmplitudeAxis = ref<'dac_current' | 'data_amplitude'>('dac_current')
 const measurementText = ref('{}')
-const testForm = reactive({ name: 'RFDC 幅值测试', kind: 'amplitude' as 'amplitude' | 'frequency' | 'phase', mode: 'automatic' as 'automatic' | 'manual', channel: 1, channels: [1], settle_ms: 100, auto_mute: true, dry_run: true })
+const testForm = reactive({ name: 'RFDC 幅值测试', kind: 'amplitude' as 'amplitude' | 'frequency' | 'phase', mode: 'automatic' as 'automatic' | 'manual', channel: 1, channels: [1], settle_ms: 100, auto_mute: true, dry_run: false })
 const users = ref<UserRecord[]>([])
 const preview = ref<PreviewResponse | null>(null)
 const selectedBoardId = ref('')
@@ -43,7 +44,7 @@ const selectedRunId = ref('')
 const loadingPreview = ref(false)
 const creatingRun = ref(false)
 const scanning = ref(false)
-const dryRun = ref(true)
+const dryRun = ref(false)
 const websocketState = ref<'connected' | 'offline'>('offline')
 const boardDialog = ref(false)
 const editingBoardId = ref<string | null>(null)
@@ -67,14 +68,21 @@ const waveform = reactive<WaveformRequest>({ name: '单板 8 通道任务', mode
 const override = reactive<BoardOverride>({ board_id: '', channel_enabled: {}, nco_offset_hz: {}, phase_offset_deg: {}, start_offset_ns: {} })
 const boardForm = reactive({
   name: '', model: 'XCZU47DR RFDC', role: 'master' as 'master' | 'follower', ip: '192.168.1.128', port: 1234, mac: '',
-  udp_interface: 'enp225s0f0', udp_source_ip: '192.168.1.10', clock_source: 'onboard' as 'onboard' | 'master-10mhz',
+  udp_interface: 'enp225s0f0' as 'enp225s0f0' | 'enp225s0f1', udp_source_ip: '192.168.1.10', clock_source: 'onboard' as 'onboard' | 'master-10mhz',
   target_profile: 'custom_xczu47dr', sync_group: '', jtag_cable_serial: '', serial_path: '', baud_rate: 115200,
   location: '', notes: '', enabled: true,
 })
 
 const selectedBoard = computed(() => boards.value.find((item) => item.id === selectedBoardId.value) ?? null)
+const selectedBoardFormInterface = computed(() => networkInterfaces.value.find((item) => item.name === boardForm.udp_interface) ?? null)
 const selectedRun = computed(() => runs.value.find((item) => item.id === selectedRunId.value) ?? null)
 const latestStatus = computed(() => new Map(statuses.value.map((item) => [item.board_id, item])))
+const detectedJtagSerials = computed(() => new Set(
+  discoveries.value
+    .filter((item) => item.kind === 'jtag' && item.details.scan_scope === 'linux-usb')
+    .map((item) => String(item.details.cable_serial ?? ''))
+    .filter(Boolean),
+))
 const selectedRunBoardStatus = computed(() => {
   const boardId = selectedRun.value?.board_ids[0]
   return boardId ? latestStatus.value.get(boardId) ?? null : null
@@ -110,6 +118,21 @@ function stateType(state?: string) {
   if (['FAULT', 'OFFLINE', 'FAILED'].includes(state || '')) return 'danger'
   if (state === 'MUTED') return 'warning'
   return 'info'
+}
+function boardIsDetected(board: BoardProfile) {
+  return Boolean(board.jtag_cable_serial && detectedJtagSerials.value.has(board.jtag_cable_serial))
+}
+function boardPresenceLabel(board: BoardProfile) {
+  if (!board.jtag_cable_serial) return '未绑定'
+  return boardIsDetected(board) ? 'ONLINE' : '未检测'
+}
+function networkStateLabel(status?: BoardStatus | null) {
+  return status?.online ? status.state : '未响应'
+}
+function networkInterfaceLabel(item: NetworkInterfaceInfo) {
+  const state = item.carrier ? '已连接' : item.present ? '无载波' : '不存在'
+  const addresses = item.ipv4_addresses.length ? item.ipv4_addresses.join(', ') : '无 IPv4'
+  return `${item.name} · ${state} · ${addresses}`
 }
 function roleLabel(channel: number) { return channel <= 4 ? 'XY' : channel <= 6 ? 'Z' : 'RO' }
 function preflightIcon(state: PreflightCheck['state']) {
@@ -165,8 +188,9 @@ async function refreshAll() {
     const basic = await Promise.all([
       api<BoardProfile[]>('/api/boards'), api<BoardStatus[]>('/api/boards/status'), api<RunRecord[]>('/api/runs'),
       api<ArtifactRecord[]>('/api/artifacts'), api<ProgramJob[]>('/api/programs'), api<DiscoveryResource[]>('/api/discovery'), api<PerformanceTestRecord[]>('/api/tests'),
+      api<NetworkInterfaceInfo[]>('/api/network/interfaces'),
     ])
-    boards.value = basic[0]; statuses.value = basic[1]; runs.value = basic[2]; artifacts.value = basic[3]; programJobs.value = basic[4]; discoveries.value = basic[5]; performanceTests.value = basic[6]
+    boards.value = basic[0]; statuses.value = basic[1]; runs.value = basic[2]; artifacts.value = basic[3]; programJobs.value = basic[4]; discoveries.value = basic[5]; performanceTests.value = basic[6]; networkInterfaces.value = basic[7]
     syncSelection(boards.value)
     if (!selectedRunId.value && runs.value[0]) selectedRunId.value = runs.value[0].id
     if (!selectedTestId.value && performanceTests.value[0]) selectedTestId.value = performanceTests.value[0].id
@@ -512,12 +536,12 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
     <div class="workspace">
       <header class="topbar">
         <div class="product-title"><span class="eyebrow">单板优先控制台</span><h1>XCZU47DR RFDC</h1></div>
-        <div class="board-strip"><el-select v-model="selectedBoardId" class="board-select" placeholder="选择板卡"><el-option v-for="board in boards" :key="board.id" :label="board.name" :value="board.id" /></el-select><div v-if="selectedBoard" class="board-indicator"><span class="state-dot" :class="latestStatus.get(selectedBoard.id)?.online ? 'online' : 'offline'"></span><span>{{ selectedBoard.ip }}</span><el-tag size="small" :type="stateType(latestStatus.get(selectedBoard.id)?.state)">{{ latestStatus.get(selectedBoard.id)?.state ?? 'OFFLINE' }}</el-tag></div><el-tag size="small" :type="websocketState === 'connected' ? 'success' : 'info'">{{ websocketState === 'connected' ? 'LIVE' : 'RECONNECTING' }}</el-tag><div class="user-chip"><ShieldCheck :size="16" />{{ user.username }}</div></div>
+        <div class="board-strip"><el-select v-model="selectedBoardId" class="board-select" placeholder="选择板卡"><el-option v-for="board in boards" :key="board.id" :label="board.name" :value="board.id" /></el-select><div v-if="selectedBoard" class="board-indicator"><span class="state-dot" :class="{ online: boardIsDetected(selectedBoard) }"></span><span>{{ selectedBoard.ip }}</span><el-tag size="small" :type="boardIsDetected(selectedBoard) ? 'success' : 'info'">{{ boardPresenceLabel(selectedBoard) }}</el-tag></div><el-tag size="small" :type="websocketState === 'connected' ? 'success' : 'info'">{{ websocketState === 'connected' ? 'LIVE' : 'RECONNECTING' }}</el-tag><div class="user-chip"><ShieldCheck :size="16" />{{ user.username }}</div></div>
       </header>
       <main class="main-content">
         <section v-if="activeView === 'overview'" class="view-stack">
           <div class="section-heading"><div><span class="eyebrow">设备与使用权</span><h2>板卡总览</h2></div><el-button :icon="RefreshCw" @click="refreshAll">刷新</el-button></div>
-          <div class="board-grid"><article v-for="board in boards" :key="board.id" class="board-card" :class="{ selected: board.id === selectedBoardId }" @click="selectedBoardId = board.id"><div class="board-card-head"><div><h3>{{ board.name }}</h3><span>{{ board.model }} · {{ board.location || '服务器' }}</span></div><el-tag :type="stateType(latestStatus.get(board.id)?.state)">{{ latestStatus.get(board.id)?.state ?? 'OFFLINE' }}</el-tag></div><dl class="metric-list"><div><dt>网络</dt><dd>{{ board.ip }}:{{ board.port }}</dd></div><div><dt>JTAG</dt><dd>{{ board.jtag_cable_serial || '未登记' }}</dd></div><div><dt>串口</dt><dd>{{ board.serial_status }}</dd></div><div><dt>配置</dt><dd>{{ board.target_profile }}</dd></div></dl><div class="lease-row"><span>{{ board.lease ? `${board.lease.username} 正在使用` : '当前空闲' }}</span><el-button v-if="!board.lease" size="small" type="primary" @click.stop="toggleLease(board)">申请使用</el-button><el-button v-else-if="board.lease.user_id === user.id" size="small" @click.stop="toggleLease(board)">释放</el-button><el-button v-else-if="user.role === 'admin'" size="small" type="danger" plain @click.stop="toggleLease(board, true)">强制释放</el-button></div></article></div>
+          <div class="board-grid"><article v-for="board in boards" :key="board.id" class="board-card" :class="{ selected: board.id === selectedBoardId }" @click="selectedBoardId = board.id"><div class="board-card-head"><div><h3>{{ board.name }}</h3><span>{{ board.model }} · {{ board.location || '服务器' }}</span></div><el-tag :type="boardIsDetected(board) ? 'success' : 'info'">{{ boardPresenceLabel(board) }}</el-tag></div><dl class="metric-list"><div><dt>网络</dt><dd>{{ board.ip }}:{{ board.port }}</dd></div><div><dt>JTAG</dt><dd>{{ board.jtag_cable_serial || '未登记' }}</dd></div><div><dt>串口</dt><dd>{{ board.serial_status }}</dd></div><div><dt>配置</dt><dd>{{ board.target_profile }}</dd></div></dl><div class="lease-row"><span>{{ board.lease ? `${board.lease.username} 正在使用` : '当前空闲' }}</span><el-button v-if="!board.lease" size="small" type="primary" @click.stop="toggleLease(board)">申请使用</el-button><el-button v-else-if="board.lease.user_id === user.id" size="small" @click.stop="toggleLease(board)">释放</el-button><el-button v-else-if="user.role === 'admin'" size="small" type="danger" plain @click.stop="toggleLease(board, true)">强制释放</el-button></div></article></div>
           <section class="surface"><div class="surface-head"><h3>最近单板任务</h3><ClipboardList :size="18" /></div><el-table :data="runs.slice(0, 6)" size="small"><el-table-column prop="name" label="任务" /><el-table-column label="板卡"><template #default="scope">{{ scope.row.board_ids[0] }}</template></el-table-column><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="stateType(scope.row.state)">{{ scope.row.state }}</el-tag></template></el-table-column></el-table></section>
         </section>
 
@@ -546,7 +570,7 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
                 <span>{{ selectedRun.dry_run ? 'DRY RUN' : 'LIVE' }}</span>
                 <span>{{ selectedRun.board_ids[0] }}</span>
                 <span>{{ runPayloadLabel(selectedRun) }}</span>
-                <span v-if="!selectedRun.dry_run">板卡 {{ selectedRunBoardStatus?.state ?? 'UNKNOWN' }} · {{ selectedRunBoardStatus?.playback_prepared ? 'PREPARED' : selectedRunBoardStatus?.playback_armed ? '预取中' : selectedRunBoardStatus?.playback_running ? '发波' : '静音' }}</span>
+                <span v-if="!selectedRun.dry_run">RFCTRL2 {{ networkStateLabel(selectedRunBoardStatus) }} · {{ selectedRunBoardStatus?.playback_prepared ? 'PREPARED' : selectedRunBoardStatus?.playback_armed ? '预取中' : selectedRunBoardStatus?.playback_running ? '发波' : '静音' }}</span>
               </div>
             </div>
             <el-alert v-if="selectedRun.dry_run && selectedRun.state === 'DONE'" class="run-result" title="生成校验已完成，没有向板卡发送 UDP 数据" type="success" show-icon :closable="false" />
@@ -582,10 +606,36 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
             <div class="preflight-toolbar"><div><strong>{{ selectedBoard?.name }}</strong><span>{{ preflight ? new Date(preflight.checked_at).toLocaleString() : '尚未检查' }}</span></div><el-select v-model="preflightArtifactId" clearable placeholder="可选：校验烧写发布"><el-option v-for="artifact in artifacts" :key="artifact.id" :label="`${artifact.label} · ${artifact.target_profile}`" :value="artifact.id" /></el-select><el-tag size="large" :type="preflight?.can_start_live ? 'success' : 'warning'">{{ preflight?.can_start_live ? '满足真实发波条件' : '需要处理预检项' }}</el-tag></div>
             <div class="preflight-list"><article v-for="check in preflight?.checks ?? []" :key="check.key" :class="['preflight-row', check.state]"><component :is="preflightIcon(check.state)" :size="18" /><div><strong>{{ check.label }}</strong><span>{{ check.message }}</span></div></article></div>
           </section>
-          <section class="surface"><div class="surface-head"><h3>全部板卡状态</h3><Activity :size="18" /></div><el-table :data="statuses"><el-table-column prop="board_id" label="板卡" /><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="stateType(scope.row.state)">{{ scope.row.state }}</el-tag></template></el-table-column><el-table-column label="播放状态"><template #default="scope">{{ scope.row.playback_prepared ? 'PREPARED' : scope.row.playback_running ? 'RUNNING' : scope.row.playback_armed ? '预取中' : '静音' }}</template></el-table-column><el-table-column prop="protocol_version" label="RFCTRL" /><el-table-column prop="hmc_locked" label="HMC"><template #default="scope">{{ scope.row.hmc_locked === true ? 'LOCKED' : scope.row.hmc_locked === false ? 'UNLOCKED' : '---' }}</template></el-table-column><el-table-column prop="underflow_mask" label="Underflow" /><el-table-column prop="message" label="消息" /></el-table></section>
+          <section class="surface"><div class="surface-head"><h3>RFCTRL2 状态</h3><Activity :size="18" /></div><el-table :data="statuses"><el-table-column prop="board_id" label="板卡" /><el-table-column label="控制链路"><template #default="scope"><el-tag :type="scope.row.online ? stateType(scope.row.state) : 'warning'">{{ networkStateLabel(scope.row) }}</el-tag></template></el-table-column><el-table-column label="播放状态"><template #default="scope">{{ scope.row.playback_prepared ? 'PREPARED' : scope.row.playback_running ? 'RUNNING' : scope.row.playback_armed ? '预取中' : '静音' }}</template></el-table-column><el-table-column prop="protocol_version" label="RFCTRL" /><el-table-column prop="hmc_locked" label="HMC"><template #default="scope">{{ scope.row.hmc_locked === true ? 'LOCKED' : scope.row.hmc_locked === false ? 'UNLOCKED' : '---' }}</template></el-table-column><el-table-column prop="underflow_mask" label="Underflow" /><el-table-column prop="message" label="消息" /></el-table></section>
         </section>
 
-        <section v-else-if="activeView === 'boards'" class="view-stack"><div class="section-heading"><div><span class="eyebrow">服务器资源</span><h2>板卡登记</h2></div><div class="heading-actions"><el-button :icon="Search" :loading="scanning" @click="scanInventory">扫描服务器</el-button><el-button type="primary" @click="openBoardEditor()">登记板卡</el-button></div></div><el-alert v-if="inventoryScan?.vivado_error" :title="inventoryScan.vivado_error" type="error" show-icon :closable="false" /><div v-if="inventoryScan" class="scan-summary"><span>JTAG {{ inventoryScan.jtag.length }}</span><span>UART {{ inventoryScan.serial.length }}</span><span>RFCTRL2 在线 {{ inventoryScan.network.filter(item => item.online).length }} / {{ inventoryScan.network.length }}</span></div><section class="surface"><el-table :data="boards"><el-table-column prop="name" label="板卡" /><el-table-column prop="ip" label="IP" /><el-table-column prop="jtag_cable_serial" label="JTAG serial" /><el-table-column prop="serial_path" label="UART" /><el-table-column prop="target_profile" label="构建配置" /><el-table-column label="操作" width="100"><template #default="scope"><el-button size="small" @click="openBoardEditor(scope.row)">编辑</el-button></template></el-table-column></el-table></section><section class="surface"><div class="surface-head"><h3>发现资源</h3><Cable :size="18" /></div><el-table :data="discoveries"><el-table-column prop="kind" label="类型" /><el-table-column prop="label" label="标识" /><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="scope.row.state === 'registered' ? 'success' : 'warning'">{{ scope.row.state }}</el-tag></template></el-table-column><el-table-column prop="last_seen_at" label="最近发现"><template #default="scope">{{ new Date(scope.row.last_seen_at).toLocaleString() }}</template></el-table-column></el-table></section></section>
+        <section v-else-if="activeView === 'boards'" class="view-stack">
+          <div class="section-heading"><div><span class="eyebrow">服务器资源</span><h2>板卡登记</h2></div><div class="heading-actions"><el-button :icon="Search" :loading="scanning" @click="scanInventory">检测 USB 设备</el-button><el-button type="primary" @click="openBoardEditor()">登记板卡</el-button></div></div>
+          <el-alert v-if="inventoryScan?.scan_error" :title="inventoryScan.scan_error" type="error" show-icon :closable="false" />
+          <div v-if="inventoryScan" class="scan-summary"><span>ONLINE 板卡 {{ inventoryScan.jtag.length }}</span><span>ttyUSB 串口 {{ inventoryScan.serial.length }}</span></div>
+          <section class="surface">
+            <el-table :data="boards">
+              <el-table-column prop="name" label="板卡" />
+              <el-table-column label="状态"><template #default="scope"><el-tag :type="boardIsDetected(scope.row) ? 'success' : 'info'">{{ boardPresenceLabel(scope.row) }}</el-tag></template></el-table-column>
+              <el-table-column prop="ip" label="板卡 IP" />
+              <el-table-column prop="udp_interface" label="UDP 网卡" />
+              <el-table-column prop="udp_source_ip" label="源 IP" />
+              <el-table-column prop="jtag_cable_serial" label="JTAG serial" />
+              <el-table-column prop="serial_path" label="UART" />
+              <el-table-column label="操作" width="100"><template #default="scope"><el-button size="small" @click="openBoardEditor(scope.row)">编辑</el-button></template></el-table-column>
+            </el-table>
+          </section>
+          <section class="surface">
+            <div class="surface-head"><h3>服务器 UDP 网卡</h3><Cable :size="18" /></div>
+            <el-table :data="networkInterfaces">
+              <el-table-column prop="name" label="网卡" />
+              <el-table-column label="载波"><template #default="scope"><el-tag :type="scope.row.carrier ? 'success' : 'warning'">{{ scope.row.carrier ? '已连接' : '未连接' }}</el-tag></template></el-table-column>
+              <el-table-column label="IPv4"><template #default="scope">{{ scope.row.ipv4_addresses.join(', ') || '未配置' }}</template></el-table-column>
+              <el-table-column prop="message" label="状态" />
+            </el-table>
+          </section>
+          <section class="surface"><div class="surface-head"><h3>发现资源</h3><Cable :size="18" /></div><el-table :data="discoveries"><el-table-column prop="kind" label="类型" /><el-table-column prop="label" label="标识" /><el-table-column label="状态"><template #default><el-tag type="success">ONLINE</el-tag></template></el-table-column><el-table-column label="绑定"><template #default="scope">{{ scope.row.board_id || '待绑定' }}</template></el-table-column><el-table-column prop="last_seen_at" label="最近发现"><template #default="scope">{{ new Date(scope.row.last_seen_at).toLocaleString() }}</template></el-table-column></el-table></section>
+        </section>
 
         <section v-else-if="activeView === 'serial'" class="view-stack">
           <div class="section-heading">
@@ -598,7 +648,7 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
               <el-tooltip content="重新读取历史"><el-button :icon="RefreshCw" aria-label="刷新" @click="refreshSerial" /></el-tooltip>
             </div>
           </div>
-          <section v-if="user.role === 'admin'" class="surface"><div class="serial-bind"><span>绑定到 {{ selectedBoard?.name }}</span><el-select placeholder="选择服务器串口" @change="bindSerial"><el-option v-for="port in serialPorts" :key="port.path" :label="`${port.stable_path || port.path}${port.bound_board_id ? ' · 已绑定' : ''}`" :value="port.stable_path || port.path" :disabled="Boolean(port.bound_board_id)" /></el-select></div></section>
+          <section v-if="user.role === 'admin'" class="surface"><div class="serial-bind"><span>绑定到 {{ selectedBoard?.name }}</span><el-select placeholder="选择 ttyUSB 串口" @change="bindSerial"><el-option v-for="port in serialPorts" :key="port.path" :label="`${port.path}${port.bound_board_id ? ' · 已绑定' : ''}`" :value="port.path" :disabled="Boolean(port.bound_board_id)" /></el-select></div></section>
           <pre class="serial-console"><span v-for="(line, index) in serialLines" :key="line.created_at + index"><time>{{ new Date(line.created_at).toLocaleTimeString() }}</time> {{ line.line }}</span></pre>
         </section>
 
@@ -621,6 +671,29 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
         <section v-else class="view-stack"><div class="section-heading"><div><span class="eyebrow">Artifact 与记录</span><h2>单板任务历史</h2></div><el-button :icon="RefreshCw" @click="refreshAll">刷新</el-button></div><section class="surface"><el-table :data="runs" @row-click="(row: RunRecord) => { selectedRunId = row.id; activeView = 'run' }"><el-table-column prop="name" label="任务" /><el-table-column label="板卡"><template #default="scope">{{ scope.row.board_ids[0] }}</template></el-table-column><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="stateType(scope.row.state)">{{ scope.row.state }}</el-tag></template></el-table-column><el-table-column prop="created_at" label="创建时间"><template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template></el-table-column><el-table-column prop="artifact_dir" label="Artifact" /></el-table></section></section>
       </main>
     </div>
-    <el-dialog v-model="boardDialog" :title="editingBoardId ? '编辑板卡' : '登记板卡'" width="min(760px, 92vw)"><div class="board-form"><el-input v-model="boardForm.name" placeholder="板卡名称" /><el-input v-model="boardForm.model" placeholder="型号" /><el-input v-model="boardForm.ip" placeholder="控制 IP" /><el-input-number v-model="boardForm.port" :min="1" :max="65535" /><el-input v-model="boardForm.mac" placeholder="MAC" /><el-select v-model="boardForm.role"><el-option label="独立/主板" value="master" /><el-option label="从板（预留）" value="follower" /></el-select><el-select v-model="boardForm.target_profile"><el-option label="custom_xczu47dr" value="custom_xczu47dr" /><el-option label="custom_xczu47dr_b" value="custom_xczu47dr_b" /><el-option label="custom_xczu47dr_bw" value="custom_xczu47dr_bw" /></el-select><el-input v-model="boardForm.jtag_cable_serial" placeholder="JTAG cable serial" /><el-input v-model="boardForm.serial_path" placeholder="/dev/serial/by-id/..." /><el-input-number v-model="boardForm.baud_rate" :min="300" :max="4000000" /><el-input v-model="boardForm.location" placeholder="位置" /><el-input v-model="boardForm.sync_group" placeholder="同步组（预留）" /><el-input v-model="boardForm.notes" type="textarea" placeholder="备注" /><el-switch v-model="boardForm.enabled" active-text="启用" /></div><template #footer><el-button @click="boardDialog = false">取消</el-button><el-button type="primary" @click="saveBoard">保存</el-button></template></el-dialog>
+    <el-dialog v-model="boardDialog" :title="editingBoardId ? '编辑板卡' : '登记板卡'" width="min(760px, 92vw)">
+      <div class="board-form">
+        <el-input v-model="boardForm.name" placeholder="板卡名称" />
+        <el-input v-model="boardForm.model" placeholder="型号" />
+        <el-input v-model="boardForm.ip" placeholder="板卡控制 IP" />
+        <el-input-number v-model="boardForm.port" :min="1" :max="65535" />
+        <el-select v-model="boardForm.udp_interface" placeholder="选择服务器 UDP 网卡">
+          <el-option v-for="item in networkInterfaces" :key="item.name" :label="networkInterfaceLabel(item)" :value="item.name" />
+        </el-select>
+        <el-input v-model="boardForm.udp_source_ip" placeholder="服务器源 IP，例如 192.168.1.10" />
+        <el-alert v-if="selectedBoardFormInterface && (!selectedBoardFormInterface.carrier || !selectedBoardFormInterface.ipv4_addresses.includes(boardForm.udp_source_ip))" class="network-warning" :title="`${selectedBoardFormInterface.message}；保存档案不会自动修改服务器网络配置`" type="warning" show-icon :closable="false" />
+        <el-input v-model="boardForm.mac" placeholder="MAC" />
+        <el-select v-model="boardForm.role"><el-option label="独立/主板" value="master" /><el-option label="从板（预留）" value="follower" /></el-select>
+        <el-select v-model="boardForm.target_profile"><el-option label="custom_xczu47dr" value="custom_xczu47dr" /><el-option label="custom_xczu47dr_b" value="custom_xczu47dr_b" /><el-option label="custom_xczu47dr_bw" value="custom_xczu47dr_bw" /></el-select>
+        <el-input v-model="boardForm.jtag_cable_serial" placeholder="JTAG cable serial" />
+        <el-input v-model="boardForm.serial_path" placeholder="/dev/ttyUSB0" />
+        <el-input-number v-model="boardForm.baud_rate" :min="300" :max="4000000" />
+        <el-input v-model="boardForm.location" placeholder="位置" />
+        <el-input v-model="boardForm.sync_group" placeholder="同步组（预留）" />
+        <el-input v-model="boardForm.notes" type="textarea" placeholder="备注" />
+        <el-switch v-model="boardForm.enabled" active-text="启用" />
+      </div>
+      <template #footer><el-button @click="boardDialog = false">取消</el-button><el-button type="primary" @click="saveBoard">保存</el-button></template>
+    </el-dialog>
   </div>
 </template>

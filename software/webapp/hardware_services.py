@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -42,35 +42,31 @@ class SerialService:
 
     def discover(self) -> list[SerialPortInfo]:
         serial = self._serial_module()
-        stable_by_target: dict[str, str] = {}
-        stable_dir = Path("/dev/serial/by-id")
-        if stable_dir.exists():
-            for link in stable_dir.iterdir():
-                if link.is_symlink():
-                    try:
-                        stable_by_target[str(link.resolve())] = str(link)
-                    except OSError:
-                        continue
         bound = {board.serial_path: board.id for board in self.store.list_boards() if board.serial_path}
         ports: list[SerialPortInfo] = []
+        fingerprints: set[str] = set()
         for port in serial.tools.list_ports.comports():
             path = str(port.device)
-            stable_path = stable_by_target.get(str(Path(path).resolve()), "")
+            if re.fullmatch(r"ttyUSB\d+", Path(path).name) is None:
+                continue
             info = SerialPortInfo(
                 path=path,
-                stable_path=stable_path,
+                stable_path="",
                 manufacturer=port.manufacturer or "",
                 serial_number=port.serial_number or "",
                 vendor_id=port.vid and f"{port.vid:04x}" or "",
                 product_id=port.pid and f"{port.pid:04x}" or "",
-                bound_board_id=bound.get(stable_path) or bound.get(path),
+                bound_board_id=bound.get(path),
             )
+            fingerprint = f"serial:{path}"
+            fingerprints.add(fingerprint)
             self.store.upsert_discovery(
-                "serial", f"serial:{stable_path or path}", stable_path or path,
-                {"path": path, "stable_path": stable_path, "serial_number": info.serial_number,
+                "serial", fingerprint, path,
+                {"path": path, "stable_path": "", "serial_number": info.serial_number,
                  "manufacturer": info.manufacturer, "vendor_id": info.vendor_id, "product_id": info.product_id},
             )
             ports.append(info)
+        self.store.prune_discoveries("serial", fingerprints)
         return sorted(ports, key=lambda item: item.path)
 
     def start(self) -> None:
@@ -135,118 +131,74 @@ class SerialService:
 
 
 class DiscoveryService:
+    DIGILENT_JTAG_IDS = {("0403", "6014")}
+
     def __init__(self, store: ManagementStore, boards: BoardGateway, serial: SerialService, events: EventHub) -> None:
         self.store = store
         self.boards = boards
         self.serial = serial
         self.events = events
-        self.vivado_bin = os.environ.get("RFSOC_WEB_VIVADO_BIN", shutil.which("vivado") or "/tools/Xilinx/Vivado/2024.2/bin/vivado")
-        self.hw_server_url = os.environ.get("RFSOC_WEB_HW_SERVER_URL", "localhost:3121")
-        self.timeout_s = int(os.environ.get("RFSOC_WEB_VIVADO_TIMEOUT_S", "30"))
+        self.usb_devices_root = Path(os.environ.get("RFSOC_WEB_USB_SYSFS_ROOT", "/sys/bus/usb/devices"))
 
     def scan(self) -> dict[str, object]:
         serial_ports = self.serial.discover()
-        jtag, vivado_error = self.scan_jtag()
-        statuses = self.boards.all_statuses(refresh=True)
+        jtag, scan_error = self.scan_jtag()
+        statuses = self.boards.all_statuses(refresh=False)
         result = {
             "serial": [item.model_dump(mode="json") for item in serial_ports],
             "jtag": jtag,
             "network": [item.model_dump(mode="json") for item in statuses],
-            "vivado_error": vivado_error,
+            "scan_error": scan_error,
         }
         emit(self.events, "inventory.scanned", result)
         return result
 
     def scan_jtag(self) -> tuple[list[dict[str, str]], str]:
-        if not Path(self.vivado_bin).is_file():
-            return [], f"Vivado not found: {self.vivado_bin}"
-        script = f"""
-set status_ok 1
-if {{[catch {{
-  open_hw_manager
-  connect_hw_server -url {{{self.hw_server_url}}}
-  foreach target [get_hw_targets *] {{
-    set cable ""
-    catch {{ set cable [get_property SERIAL_NUMBER $target] }}
-    puts "RFWEB_TARGET|$target|$cable"
-    if {{[catch {{current_hw_target $target; open_hw_target}} target_error]}} {{
-      puts "RFWEB_TARGET_ERROR|$target|$target_error"
-      continue
-    }}
-    foreach device [get_hw_devices *] {{
-      set part ""; set programmed "0"; set program_file ""
-      catch {{set part [get_property PART $device]}}
-      catch {{set programmed [get_property IS_PROGRAMMED $device]}}
-      catch {{set program_file [get_property PROGRAM.FILE $device]}}
-      puts "RFWEB_DEVICE|$target|$device|$part|$programmed|$program_file"
-    }}
-  }}
-  disconnect_hw_server
-}} error_message]}} {{ puts "RFWEB_ERROR|$error_message" }}
-exit
-"""
-        fd, source = tempfile.mkstemp(prefix="rfsoc-web-scan-", suffix=".tcl")
-        os.close(fd)
-        path = Path(source)
-        path.write_text(script, encoding="utf-8")
-        try:
-            completed = subprocess.run([self.vivado_bin, "-mode", "batch", "-source", str(path)], text=True, capture_output=True, timeout=self.timeout_s, check=False)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return [], str(exc)
-        finally:
-            path.unlink(missing_ok=True)
-        resources: list[dict[str, str]] = []
-        errors: list[str] = []
-        target_serials: dict[str, str] = {}
-        target_errors: dict[str, str] = {}
-        device_targets: set[str] = set()
-        for line in completed.stdout.splitlines():
-            if line.startswith("RFWEB_ERROR|"):
-                errors.append(line.split("|", 1)[1])
-            elif line.startswith("RFWEB_TARGET_ERROR|"):
-                _, target, target_error = (line.split("|", 2) + [""] * 3)[:3]
-                target_errors[target] = target_error
-                errors.append(f"{target}: {target_error}")
-            elif line.startswith("RFWEB_TARGET|"):
-                _, target, cable = (line.split("|", 2) + [""] * 3)[:3]
-                target_serials[target] = cable
-            elif line.startswith("RFWEB_DEVICE|"):
-                _, target, device, part, programmed, program_file = (line.split("|", 5) + [""] * 6)[:6]
-                device_targets.add(target)
-                cable = target_serials.get(target) or self._cable_from_target(target)
-                details = {
-                    "target": target, "device": device, "part": part, "programmed": programmed,
-                    "program_file": program_file, "cable_serial": cable, "availability": "available",
-                }
-                discovered = self.store.upsert_discovery("jtag", f"jtag:{cable or target}:{device}", cable or target, details)
-                resources.append({**details, "state": discovered.state, "board_id": discovered.board_id or ""})
-        for target, reported_cable in target_serials.items():
-            if target in device_targets:
-                continue
-            cable = reported_cable or self._cable_from_target(target)
-            details = {
-                "target": target, "device": "", "part": "", "programmed": "unknown",
-                "program_file": "", "cable_serial": cable, "availability": "busy_or_unopened",
-                "error": target_errors.get(target, "target could not be opened"),
-            }
-            discovered = self.store.upsert_discovery("jtag", f"jtag:{cable or target}:target", cable or target, details)
-            resources.append({**details, "state": discovered.state, "board_id": discovered.board_id or ""})
-        if completed.returncode and not errors:
-            errors.append(completed.stderr.strip() or f"Vivado exited with {completed.returncode}")
-        return resources, "; ".join(item for item in errors if item)
+        """Enumerate Digilent JTAG adapters directly from Linux USB sysfs."""
+        if not self.usb_devices_root.is_dir():
+            return [], f"USB sysfs path not found: {self.usb_devices_root}"
 
-    @staticmethod
-    def _cable_from_target(target: str) -> str:
-        return target.rstrip("/").split("/")[-1]
+        def read_attribute(device: Path, name: str) -> str:
+            try:
+                return (device / name).read_text(encoding="utf-8").strip()
+            except OSError:
+                return ""
+
+        resources: list[dict[str, str]] = []
+        fingerprints: set[str] = set()
+        try:
+            devices = tuple(self.usb_devices_root.iterdir())
+        except OSError as exc:
+            return [], str(exc)
+
+        for device in devices:
+            vendor_id = read_attribute(device, "idVendor").lower()
+            product_id = read_attribute(device, "idProduct").lower()
+            if (vendor_id, product_id) not in self.DIGILENT_JTAG_IDS:
+                continue
+            manufacturer = read_attribute(device, "manufacturer")
+            product = read_attribute(device, "product")
+            if "digilent" not in f"{manufacturer} {product}".lower():
+                continue
+            cable = read_attribute(device, "serial")
+            if not cable:
+                continue
+            details = {
+                "target": "", "device": device.name, "part": "", "programmed": "unknown",
+                "program_file": "", "cable_serial": cable, "availability": "present",
+                "scan_scope": "linux-usb", "usb_path": str(device),
+                "vendor_id": vendor_id, "product_id": product_id,
+                "manufacturer": manufacturer, "product": product,
+            }
+            fingerprint = f"jtag:{cable}:usb"
+            fingerprints.add(fingerprint)
+            discovered = self.store.upsert_discovery("jtag", fingerprint, cable, details)
+            resources.append({**details, "state": discovered.state, "board_id": discovered.board_id or ""})
+        self.store.prune_discoveries("jtag", fingerprints)
+        return sorted(resources, key=lambda item: item["cable_serial"]), ""
 
 
 class ProgrammerService:
-    TARGET_PARTS = {
-        "custom_xczu47dr": "xczu47dr-ffvg1517-2-i",
-        "custom_xczu47dr_b": "xczu47dr-ffvg1517-2-i",
-        "custom_xczu47dr_bw": "xczu47dr-ffvg1517-2-i",
-    }
-
     def __init__(self, store: ManagementStore, boards: BoardGateway, runs: RunCoordinator,
                  events: EventHub, discovery: DiscoveryService, serial: SerialService) -> None:
         self.store = store
@@ -298,20 +250,9 @@ class ProgrammerService:
             if error:
                 raise ManagementError(f"JTAG preflight failed: {error}")
             raise ManagementError(f"registered JTAG cable serial {board.jtag_cable_serial} was not found")
-        available = [
-            item for item in matches
-            if item.get("availability") != "busy_or_unopened" and item.get("part")
-        ]
-        if not available:
-            reason = "; ".join(item.get("error", "") for item in matches if item.get("error"))
-            raise ManagementError(
-                f"registered JTAG cable serial {board.jtag_cable_serial} is unavailable: "
-                f"{reason or error or 'target could not be opened'}"
-            )
-        expected_part = self.TARGET_PARTS.get(board.target_profile)
-        if expected_part and not any(item.get("part", "").lower() == expected_part for item in available):
-            found = ", ".join(sorted({item.get("part", "unknown") or "unknown" for item in available}))
-            raise ManagementError(f"JTAG device mismatch: expected {expected_part}, found {found}")
+        # Linux USB inventory confirms the physical Digilent cable only.  The
+        # board profile still gates the artifact, while controlled XSCT
+        # deployment selects the exact serial and performs target operations.
 
     def _command(self, board: BoardProfile, artifact_id: str) -> list[str]:
         bit, elf = self.store.artifact_paths(artifact_id)

@@ -28,6 +28,7 @@ from .models import (
     RunState,
 )
 from .store import RunStore
+from .network import udp_path_error
 from .waveforms import to_waveform_config
 
 
@@ -158,6 +159,17 @@ class BoardGateway:
                 playback_prepared=bool(simulated.get("playback_prepared", False)),
                 playback_running=bool(simulated.get("playback_running", False)),
             )
+        path_error = udp_path_error(board)
+        if path_error:
+            return self._set_status(
+                board_id,
+                state=BoardState.OFFLINE,
+                online=False,
+                message=(
+                    f"{path_error}；控制目标 {board.ip}:{board.port}。"
+                    "请在板卡档案中选择实际连接的网卡并配置对应源 IP"
+                ),
+            )
         try:
             with self._board_control_lock(board_id):
                 controller = self._controller(board, timeout_s=0.5)
@@ -198,6 +210,8 @@ class BoardGateway:
                     if decoded["prepared"]
                     else "RFCTRL2 ARM accepted; prefetching waveform"
                     if decoded["armed"]
+                    else "RFCTRL2 online; RFDC tiles are not ready"
+                    if not decoded["rfdc_ready"]
                     else "RFCTRL2 PL RFDC control ready"
                     if int(decoded["capabilities"]) & host.RF2_CAP_PL_RFDC_CONFIG
                     else "RFCTRL2 online; bitstream does not advertise PL RFDC configuration"

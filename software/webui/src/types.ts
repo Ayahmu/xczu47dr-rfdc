@@ -28,7 +28,7 @@ export interface BoardProfile {
   ip: string
   port: number
   mac: string
-  udp_interface: string
+  udp_interface: 'enp225s0f0' | 'enp225s0f1'
   udp_source_ip: string
   clock_source: 'onboard' | 'master-10mhz'
   target_profile: string
@@ -42,6 +42,15 @@ export interface BoardProfile {
   notes: string
   enabled: boolean
   lease?: LeaseRecord | null
+}
+
+export interface NetworkInterfaceInfo {
+  name: 'enp225s0f0' | 'enp225s0f1'
+  present: boolean
+  operstate: string
+  carrier: boolean
+  ipv4_addresses: string[]
+  message: string
 }
 
 export interface BoardStatus {
@@ -263,7 +272,7 @@ export interface InventoryScanResult {
   serial: SerialPortInfo[]
   jtag: Array<Record<string, string>>
   network: BoardStatus[]
-  vivado_error: string
+  scan_error: string
 }
 
 export interface SerialPortInfo {

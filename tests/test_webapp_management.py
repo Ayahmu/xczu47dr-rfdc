@@ -1,12 +1,20 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
+
+from pydantic import ValidationError
 
 from software.webapp.controller import EventHub
-from software.webapp.hardware_services import DiscoveryService, ProgrammerService
+from software.webapp.hardware_services import DiscoveryService, ProgrammerService, SerialService
 from software.webapp.management import ManagementError, ManagementStore, PermissionError
-from software.webapp.models import BoardUpdateRequest, UserCreateRequest, UserRole
+from software.webapp.models import (
+    BoardUpdateRequest,
+    PerformanceTestCreateRequest,
+    RunCreateRequest,
+    UserCreateRequest,
+    UserRole,
+)
 
 
 class ManagementStoreTests(unittest.TestCase):
@@ -30,6 +38,20 @@ class ManagementStoreTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.store.release_board("board-a", bob)
         self.assertIsNone(self.store.release_board("board-a", self.admin, force=True).lease)
+
+    def test_live_execution_is_the_api_default(self):
+        self.assertFalse(RunCreateRequest.model_fields["dry_run"].default)
+        self.assertFalse(PerformanceTestCreateRequest.model_fields["dry_run"].default)
+
+    def test_board_profile_accepts_only_the_two_server_udp_ports(self):
+        board = self.store.board("board-a")
+        values = board.model_dump(exclude={"id", "lease", "serial_status", "serial_error"})
+        values["udp_interface"] = "enp225s0f1"
+        request = BoardUpdateRequest(**values)
+        self.assertEqual(request.udp_interface, "enp225s0f1")
+        values["udp_interface"] = "eno1np0"
+        with self.assertRaises(ValidationError):
+            BoardUpdateRequest(**values)
 
     def test_discovery_moves_to_registered_after_exact_binding(self):
         pending = self.store.upsert_discovery(
@@ -70,7 +92,7 @@ class ManagementStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ManagementError, first_job.id):
             self.store.create_program_job("board-a", artifact.id, self.admin)
 
-    def test_programming_preflight_requires_exact_cable_and_part(self):
+    def test_programming_preflight_requires_exact_cable(self):
         board = self.store.board("board-a")
         request = BoardUpdateRequest(
             **board.model_dump(exclude={"id", "lease", "serial_status", "serial_error", "jtag_cable_serial"}),
@@ -81,16 +103,9 @@ class ManagementStoreTests(unittest.TestCase):
         programmer = ProgrammerService(self.store, Mock(), Mock(), Mock(), discovery, Mock())
 
         discovery.scan_jtag.return_value = ([{
-            "cable_serial": "210512180081", "part": "xczu47dr-ffvg1517-2-i",
-        }], "another target is already opened")
+            "cable_serial": "210512180081", "part": "", "availability": "present",
+        }], "")
         programmer._verify_jtag(board)
-
-        discovery.scan_jtag.return_value = ([{
-            "cable_serial": "210512180081", "part": "", "availability": "busy_or_unopened",
-            "error": "Target is already opened",
-        }], "Target is already opened")
-        with self.assertRaisesRegex(ManagementError, "is unavailable.*already opened"):
-            programmer._verify_jtag(board)
 
         discovery.scan_jtag.return_value = ([{
             "cable_serial": "210512180082", "part": "xczu47dr-ffvg1517-2-i",
@@ -98,28 +113,49 @@ class ManagementStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ManagementError, "was not found"):
             programmer._verify_jtag(board)
 
-        discovery.scan_jtag.return_value = ([{
-            "cable_serial": "210512180081", "part": "xczu48dr-ffvg1517-2-i",
-        }], "")
-        with self.assertRaisesRegex(ManagementError, "device mismatch"):
-            programmer._verify_jtag(board)
-
-    def test_jtag_scan_keeps_busy_target_as_discovered_resource(self):
+    def test_jtag_scan_uses_linux_usb_sysfs(self):
         serial = Mock()
         boards = Mock()
         discovery = DiscoveryService(self.store, boards, serial, EventHub())
-        discovery.vivado_bin = "/bin/true"
-        output = "\n".join([
-            "RFWEB_TARGET|localhost:3121/xilinx_tcf/Digilent/210512180081|210512180081",
-            "RFWEB_TARGET_ERROR|localhost:3121/xilinx_tcf/Digilent/210512180081|Target is already opened",
-        ])
-        completed = Mock(stdout=output, stderr="", returncode=0)
-        with patch("software.webapp.hardware_services.subprocess.run", return_value=completed):
-            resources, error = discovery.scan_jtag()
-        self.assertIn("already opened", error)
-        self.assertEqual(resources[0]["cable_serial"], "210512180081")
-        self.assertEqual(resources[0]["availability"], "busy_or_unopened")
-        self.assertEqual(DiscoveryService._cable_from_target("localhost:3121/xilinx_tcf/Digilent/210251A08870"), "210251A08870")
+        usb_root = Path(self.temp_dir.name) / "usb"
+        for name, vendor, product, manufacturer, serial_number in (
+            ("1-1", "0403", "6014", "Digilent", "210251A08870"),
+            ("3-1", "0403", "6014", "Digilent", "210512180081"),
+            ("1-2", "0403", "6001", "FTDI", "AQ04KVC8"),
+        ):
+            device = usb_root / name
+            device.mkdir(parents=True)
+            (device / "idVendor").write_text(vendor, encoding="utf-8")
+            (device / "idProduct").write_text(product, encoding="utf-8")
+            (device / "manufacturer").write_text(manufacturer, encoding="utf-8")
+            (device / "product").write_text("Digilent USB Device", encoding="utf-8")
+            (device / "serial").write_text(serial_number, encoding="utf-8")
+        discovery.usb_devices_root = usb_root
+
+        resources, error = discovery.scan_jtag()
+        self.assertEqual(error, "")
+        self.assertEqual({item["cable_serial"] for item in resources}, {"210512180081", "210251A08870"})
+        self.assertTrue(all(item["availability"] == "present" for item in resources))
+        self.assertTrue(all(item["scan_scope"] == "linux-usb" for item in resources))
+        self.assertTrue(all(item["part"] == "" and item["programmed"] == "unknown" for item in resources))
+
+    def test_serial_discovery_only_returns_ttyusb_paths(self):
+        serial_module = Mock()
+        serial_module.tools.list_ports.comports.return_value = [
+            Mock(device="/dev/ttyUSB0", manufacturer="FTDI", serial_number="UART0", vid=0x0403, pid=0x6001),
+            Mock(device="/dev/ttyUSB12", manufacturer="FTDI", serial_number="UART12", vid=0x0403, pid=0x6001),
+            Mock(device="/dev/ttyS0", manufacturer=None, serial_number=None, vid=None, pid=None),
+            Mock(device="/dev/ttyACM0", manufacturer="Other", serial_number="ACM0", vid=0x1234, pid=0x5678),
+        ]
+        service = SerialService(self.store, EventHub())
+        service._serial_module = lambda: serial_module  # type: ignore[method-assign]
+
+        ports = service.discover()
+
+        self.assertEqual([item.path for item in ports], ["/dev/ttyUSB0", "/dev/ttyUSB12"])
+        self.assertTrue(all(item.stable_path == "" for item in ports))
+        serial_resources = [item for item in self.store.discoveries() if item.kind == "serial"]
+        self.assertEqual({item.label for item in serial_resources}, {"/dev/ttyUSB0", "/dev/ttyUSB12"})
 
 
 if __name__ == "__main__":

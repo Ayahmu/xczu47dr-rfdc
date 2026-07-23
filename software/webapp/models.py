@@ -58,6 +58,15 @@ class BoardProfile(BaseModel):
     lease: "LeaseRecord | None" = None
 
 
+class NetworkInterfaceInfo(BaseModel):
+    name: Literal["enp225s0f0", "enp225s0f1"]
+    present: bool
+    operstate: str
+    carrier: bool
+    ipv4_addresses: list[str] = Field(default_factory=list)
+    message: str = ""
+
+
 class BoardStatus(BaseModel):
     board_id: str
     state: BoardState
@@ -282,7 +291,7 @@ class BoardUpdateRequest(BaseModel):
     ip: str = Field(min_length=1, max_length=64)
     port: int = Field(1234, ge=1, le=65535)
     mac: str = Field(default="", max_length=32)
-    udp_interface: str = Field(default="enp225s0f0", max_length=64)
+    udp_interface: Literal["enp225s0f0", "enp225s0f1"] = "enp225s0f0"
     udp_source_ip: str = Field(default="192.168.1.10", max_length=64)
     clock_source: Literal["onboard", "master-10mhz"] = "onboard"
     target_profile: str = Field(default="custom_xczu47dr", max_length=64)
@@ -394,7 +403,7 @@ class PreviewResponse(BaseModel):
 
 class RunCreateRequest(BaseModel):
     jobs: list[BoardWaveformJob] = Field(min_length=1)
-    dry_run: bool = True
+    dry_run: bool = False
     execution_mode: Literal["single", "synchronized"] = "single"
     completion_mode: Literal["upload", "one_shot"] = "upload"
     one_shot_duration_ms: float = Field(0.0, ge=0.0, le=3_600_000.0)
@@ -455,7 +464,7 @@ class PerformanceTestCreateRequest(BaseModel):
     points: list[dict[str, object]] = Field(min_length=1)
     settle_ms: float = Field(100.0, ge=0.0, le=60_000.0)
     auto_mute: bool = True
-    dry_run: bool = True
+    dry_run: bool = False
 
     @field_validator("channels")
     @classmethod
@@ -480,7 +489,7 @@ class PerformanceTestRecord(BaseModel):
     total_points: int = 0
     settle_ms: float = 100.0
     auto_mute: bool = True
-    dry_run: bool = True
+    dry_run: bool = False
     created_at: str
     updated_at: str
     error: str = ""

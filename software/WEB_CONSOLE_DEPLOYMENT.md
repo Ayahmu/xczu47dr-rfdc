@@ -53,8 +53,11 @@ group membership.
    with `RFSOC_WEB_ADMIN_USERNAME` / `RFSOC_WEB_ADMIN_PASSWORD`.
 2. Create individual user accounts. Do not share the administrator account for
    normal waveform work.
-3. Run an inventory scan, then register or edit each board with its exact IP,
-   JTAG cable serial, target profile, and stable UART path.
+3. Run the Linux USB inventory scan, then register or edit each board with its
+   exact IP, server UDP interface (`enp225s0f0` or `enp225s0f1`), UDP source IP,
+   Digilent JTAG serial, target profile, and `/dev/ttyUSBx` UART path. This scan
+   reads sysfs only and does not start Vivado, connect to `hw_server`, or open a
+   hardware target.
 4. Verify the RFCTRL2 PL capability and RFDC-ready state, acquire one board,
    refresh its hardware RFDC configuration, and run a Dry Run with only the
    intended channels enabled. UART state is optional diagnostic information.
@@ -64,6 +67,24 @@ group membership.
 The bootstrap administrator is created only when the database has no users.
 Changing the environment password later does not overwrite an existing account;
 use user administration or start with a new runtime database when reprovisioning.
+
+The board editor reports carrier and IPv4 state for both supported UDP ports,
+but it does not change the server network configuration. Configure the source
+address on the physically connected port before attempting RFCTRL2 or waveform
+traffic. For example:
+
+```bash
+ip -brief link show dev enp225s0f0
+ip -brief link show dev enp225s0f1
+ip -brief address show dev enp225s0f0
+ip -brief address show dev enp225s0f1
+sudo ip link set enp225s0f1 up
+sudo ip address replace 192.168.1.10/24 dev enp225s0f1
+```
+
+Select the same interface and `192.168.1.10` source IP in every board profile
+reachable through that physical port. Persist the address with the server's
+normal network manager after validating the link.
 
 ## Environment Variables
 
@@ -75,13 +96,15 @@ use user administration or start with a new runtime database when reprovisioning
 | `RFSOC_WEB_ADMIN_PASSWORD` | `admin12345` | Bootstrap password; always override in deployment |
 | `RFSOC_WEB_COOKIE_SECURE` | `0` | Set to `1` only when browsers access the service through HTTPS |
 | `RFSOC_WEB_ARTIFACT_MAX_BYTES` | `1073741824` | Maximum size of each uploaded `.bit` or `.elf` file |
-| `RFSOC_WEB_VIVADO_BIN` | Xilinx 2024.2 path | Vivado executable used for JTAG discovery |
-| `RFSOC_WEB_VIVADO_TIMEOUT_S` | `30` | JTAG discovery timeout |
-| `RFSOC_WEB_HW_SERVER_URL` | `localhost:3121` | Existing `hw_server` endpoint |
+| `RFSOC_WEB_USB_SYSFS_ROOT` | `/sys/bus/usb/devices` | Linux sysfs path used to enumerate Digilent JTAG adapters without Vivado |
 | `RFSOC_WEB_XSCT_BIN` | Xilinx 2024.2 path | XSCT executable used for controlled temporary deployment |
 | `RFSOC_WEB_PROGRAM_TIMEOUT_S` | `900` | Maximum total XSCT deployment time before termination |
 | `RFSOC_WEB_PROGRAM_VERIFY_TIMEOUT_S` | `20` | RFCTRL2/UART post-deployment verification window |
 | `RFSOC_WEB_SERIAL_RECONNECT_S` | `3` | Delay before reopening a disconnected UART |
+
+Linux USB inventory is independent of Xilinx tools. `hw_server` and XSCT are
+used only when an administrator explicitly starts a temporary `.bit + .elf`
+deployment.
 
 ## Security And Data
 

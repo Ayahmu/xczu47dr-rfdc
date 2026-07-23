@@ -32,6 +32,7 @@ from .models import (
     BoardRfdcConfig,
     DiscoveryResource,
     LoginRequest,
+    NetworkInterfaceInfo,
     PreviewRequest,
     PreviewResponse,
     PreflightCheck,
@@ -54,6 +55,7 @@ from .models import (
     UserUpdateRequest,
 )
 from .store import RunStore
+from .network import list_udp_interfaces
 from .waveforms import preview_waveforms
 
 
@@ -225,6 +227,11 @@ def boards(_user: UserRecord = Depends(require_user)) -> list[BoardProfile]:
     return services().management.list_boards()
 
 
+@app.get("/api/network/interfaces", response_model=list[NetworkInterfaceInfo])
+def network_interfaces(_user: UserRecord = Depends(require_user)) -> list[NetworkInterfaceInfo]:
+    return list_udp_interfaces()
+
+
 @app.get("/api/boards/status", response_model=list[BoardStatus])
 def board_statuses(refresh: bool = False, _user: UserRecord = Depends(require_user)) -> list[BoardStatus]:
     return services().boards.all_statuses(refresh=refresh)
@@ -252,7 +259,7 @@ def board_preflight(board_id: str, artifact_id: str | None = None, refresh: bool
             checks.append(PreflightCheck(key=key, label=label, state=state, message=message))
 
         add("enabled", "板卡档案", "pass" if board.enabled else "fail", "已启用" if board.enabled else "板卡已禁用")
-        add("network", "RFCTRL2 网络", "pass" if status.online else "fail", status.message or ("在线" if status.online else "离线"))
+        add("network", "RFCTRL2 网络", "pass" if status.online else "warning", status.message or ("在线" if status.online else "未响应"))
         protocol_ok = status.online and status.protocol_version == 2
         add("protocol", "控制协议", "pass" if protocol_ok else "fail", f"RFCTRL{status.protocol_version}" if status.protocol_version else "未检测到 RFCTRL2")
         add("hmc", "HMC 时钟", "pass" if status.hmc_locked is True else "fail" if status.hmc_locked is False else "warning",
@@ -270,8 +277,7 @@ def board_preflight(board_id: str, artifact_id: str | None = None, refresh: bool
         if not board.jtag_cable_serial:
             add("jtag", "JTAG 映射", "warning", "未登记 cable serial；不影响已部署板卡的单板发波")
         elif jtag:
-            part = str(jtag[0].details.get("part", "unknown"))
-            add("jtag", "JTAG 映射", "pass", f"{board.jtag_cable_serial} · {part}")
+            add("jtag", "JTAG 映射", "pass", f"{board.jtag_cable_serial} · Linux USB 已检测")
         else:
             add("jtag", "JTAG 映射", "warning", f"已登记 {board.jtag_cable_serial}，最近扫描未发现")
 

@@ -113,6 +113,14 @@ class WebAppApiTests(unittest.TestCase):
         with self.client.websocket_connect("/api/events") as socket:
             self.assertEqual(socket.receive_json()["type"], "service.ready")
 
+    def test_server_udp_interface_inventory_exposes_both_selectable_ports(self):
+        response = self.client.get("/api/network/interfaces")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            [item["name"] for item in response.json()],
+            ["enp225s0f0", "enp225s0f1"],
+        )
+
     def test_preflight_tracks_live_control_lease(self):
         initial = self.client.get("/api/boards/board-a/preflight?refresh=false")
         self.assertEqual(initial.status_code, 200, initial.text)

@@ -524,16 +524,28 @@ class ManagementStore:
                                             (kind, fingerprint, label, json.dumps(details), timestamp, timestamp))
                 existing = {"id": cursor.lastrowid, "first_seen_at": timestamp}
             cable_serial = str(details.get("cable_serial", ""))
-            stable_path = str(details.get("stable_path", ""))
+            serial_path = str(details.get("path") or details.get("stable_path", ""))
             board = connection.execute(
                 """SELECT id FROM boards
                    WHERE (? != '' AND jtag_cable_serial = ?)
                       OR (? != '' AND serial_path = ?)""",
-                (cable_serial, cable_serial, stable_path, stable_path),
+                (cable_serial, cable_serial, serial_path, serial_path),
             ).fetchone()
             return DiscoveryResource(id=int(existing["id"]), kind=kind, fingerprint=fingerprint, label=label, details=details,
                                      state="registered" if board else "pending", board_id=board["id"] if board else None,
                                      first_seen_at=existing["first_seen_at"], last_seen_at=timestamp)
+
+    def prune_discoveries(self, kind: str, fingerprints: set[str]) -> None:
+        """Remove stale entries after a successful complete inventory scan."""
+        with self._transaction() as connection:
+            if fingerprints:
+                placeholders = ",".join("?" for _ in fingerprints)
+                connection.execute(
+                    f"DELETE FROM discoveries WHERE kind=? AND fingerprint NOT IN ({placeholders})",
+                    (kind, *sorted(fingerprints)),
+                )
+            else:
+                connection.execute("DELETE FROM discoveries WHERE kind=?", (kind,))
 
     def discoveries(self) -> list[DiscoveryResource]:
         boards = self.list_boards()
@@ -544,7 +556,8 @@ class ManagementStore:
         result: list[DiscoveryResource] = []
         for row in rows:
             details = json.loads(row["details_json"])
-            board_id = by_jtag.get(str(details.get("cable_serial", ""))) or by_serial.get(str(details.get("stable_path", "")))
+            serial_path = str(details.get("path") or details.get("stable_path", ""))
+            board_id = by_jtag.get(str(details.get("cable_serial", ""))) or by_serial.get(serial_path)
             result.append(DiscoveryResource(id=row["id"], kind=row["kind"], fingerprint=row["fingerprint"], label=row["label"],
                                             details=details, state="registered" if board_id else "pending", board_id=board_id,
                                             first_seen_at=row["first_seen_at"], last_seen_at=row["last_seen_at"]))

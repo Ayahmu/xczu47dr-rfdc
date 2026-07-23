@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
+import sys
+
+SOFTWARE_DIR = Path(__file__).resolve().parents[1]
+if str(SOFTWARE_DIR) not in sys.path:
+    sys.path.insert(0, str(SOFTWARE_DIR))
 
 from .management import ManagementError, ManagementStore
 from .models import BoardRfdcConfig, BoardStatus, RfdcChannelConfig, RfdcConfigApplyRequest
@@ -58,13 +64,19 @@ class RfdcConfigService:
         return refreshed
 
     def apply(self, board_id: str, request: RfdcConfigApplyRequest) -> BoardRfdcConfig:
-        self.store.board(board_id)
+        board = self.store.board(board_id)
         current = self.get(board_id)
         status: BoardStatus = self.boards.status(board_id, refresh=True)
-        allowed_states = {"OFFLINE", "IDLE", "MUTED"} if self.boards.simulation else {"IDLE", "MUTED"}
-        if status.state.value not in allowed_states:
+        if status.playback_armed or status.playback_prepared or status.playback_running:
             raise ManagementError(
-                f"RFDC parameters require a muted or idle board, current state is {status.state.value}"
+                "RFDC parameters require playback to be muted and disarmed "
+                f"(ARM={status.playback_armed}, PREPARED={status.playback_prepared}, "
+                f"RUNNING={status.playback_running})"
+            )
+        if not status.online:
+            raise ManagementError(
+                f"RFCTRL2 UDP 控制不可用：{board.udp_interface} / {board.udp_source_ip} "
+                f"-> {board.ip}:{board.port}；{status.message or 'PL 未响应'}"
             )
 
         channels = sorted(request.channels, key=lambda item: item.channel)

@@ -75,8 +75,8 @@ the old GUI while separating waveform preparation from actual board control:
 
 - Eight-channel manual I/Q waveform editor with preview and spectrum.
 - ez-Q XY / Z / readout editor with the existing fixed channel-role map.
-- Dynamic registered-board inventory with login, exclusive leases, JTAG/UART
-  discovery, RFCTRL2 status, and read-only serial logs.
+- Dynamic registered-board inventory with login, exclusive leases, Linux USB
+  discovery for Digilent JTAG serials, RFCTRL2 status, and read-only UART logs.
 - Single-board waveform jobs: select one leased board, independently enable and
   configure CH1-CH8, preview, upload, ARM, issue the board-local trigger, and
   abort/mute.
