@@ -4,6 +4,8 @@ module tb_dac_play_ctrl;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
   reg trigger = 1'b0;
+  reg rfctrl2_trigger = 1'b0;
+  reg prepare = 1'b0;
   reg abort = 1'b0;
   reg [15:0] cfg_seq_id = 16'd1;
   reg auto_start = 1'b1;
@@ -15,6 +17,7 @@ module tb_dac_play_ctrl;
 
   wire ch1_allow;
   wire dbg_started;
+  wire prepared;
   wire dbg_trig_start;
   wire dbg_done_pulse;
   wire [7:0] dbg_underflow_seen;
@@ -28,6 +31,8 @@ module tb_dac_play_ctrl;
     .clk(clk),
     .rst_n(rst_n),
     .trigger(trigger),
+    .rfctrl2_trigger(rfctrl2_trigger),
+    .prepare(prepare),
     .abort(abort),
     .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start),
@@ -95,6 +100,7 @@ module tb_dac_play_ctrl;
     .ch6_active(),
     .ch7_active(),
     .ch8_active(),
+    .prepared(prepared),
     .dbg_trig_pulse(),
     .dbg_new_cfg(),
     .dbg_trig_start(dbg_trig_start),
@@ -158,7 +164,46 @@ module tb_dac_play_ctrl;
       $finish;
     end
 
-    $display("PASS: dac_play_ctrl starts short frames and reports completion/fire/underflow debug state");
+    // RFCTRL2 ARM prepares the next configuration before Trigger. The FIFO is
+    // intentionally empty first so PREPARED cannot be reported prematurely.
+    @(negedge clk); abort = 1'b1;
+    @(negedge clk); abort = 1'b0;
+    @(negedge clk);
+    auto_start = 1'b0;
+    cfg_seq_id = 16'd3;
+    ch1_len_beats = 32'd4;
+    ch1_fifo_tvalid = 1'b0;
+    prepare = 1'b1;
+    @(negedge clk); prepare = 1'b0;
+    repeat (3) @(posedge clk);
+    if (prepared || dbg_started || ch1_allow) begin
+      $error("RFCTRL2 PREPARED must wait for the first FIFO beat with all output gates closed");
+      $finish;
+    end
+
+    @(negedge clk); ch1_fifo_tvalid = 1'b1;
+    wait (prepared == 1'b1);
+    #1;
+    if (dbg_started || ch1_allow || dbg_ch1_fire_count != 32'd0) begin
+      $error("RFCTRL2 PREPARED must latch launch state without consuming samples");
+      $finish;
+    end
+
+    @(negedge clk); rfctrl2_trigger = 1'b1;
+    @(negedge clk); rfctrl2_trigger = 1'b0;
+    #1;
+    if (!dbg_started || !ch1_allow || prepared) begin
+      $error("RFCTRL2 Trigger must open the already prepared output gate immediately");
+      $finish;
+    end
+    @(posedge clk);
+    #1;
+    if (dbg_ch1_fire_count != 32'd1) begin
+      $error("the first RFCTRL2 sample must handshake on the first DAC cycle after the gate opens");
+      $finish;
+    end
+
+    $display("PASS: dac_play_ctrl preserves legacy startup and opens RFCTRL2 PREPARED gates without restart latency");
     $finish;
   end
 endmodule

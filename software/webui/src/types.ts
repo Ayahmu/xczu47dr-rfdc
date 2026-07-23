@@ -58,6 +58,9 @@ export interface BoardStatus {
   rfdc_capabilities: number
   rfdc_config_valid_mask: number
   rfdc_config_busy: boolean
+  playback_armed: boolean
+  playback_prepared: boolean
+  playback_running: boolean
   rfdc_last_revision: number
   rfdc_last_error: number
   rfdc_last_error_stage: number

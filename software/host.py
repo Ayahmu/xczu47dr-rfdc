@@ -170,6 +170,7 @@ RF2_STATUS_RFDC_READY = 0x00000001
 RF2_STATUS_RFDC_BUSY = 0x00000002
 RF2_STATUS_ARMED = 0x00000004
 RF2_STATUS_RUNNING = 0x00000008
+RF2_STATUS_PREPARED = 0x00000010
 
 RF2_STATUS_OK = 0x0000
 RF2_STATUS_BAD_VERSION = 0x0001
@@ -658,6 +659,7 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)
     result["running"] = bool(result["state_flags"] & RF2_STATUS_RUNNING)
+    result["prepared"] = bool(result["state_flags"] & RF2_STATUS_PREPARED)
     return result
 
 

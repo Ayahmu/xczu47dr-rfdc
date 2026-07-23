@@ -79,7 +79,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/dac_play_ctrl.v",
                 ROOT / "tests/tb_dac_play_ctrl.sv",
             ],
-            "PASS: dac_play_ctrl starts short frames and reports completion/fire/underflow debug state",
+            "PASS: dac_play_ctrl preserves legacy startup and opens RFCTRL2 PREPARED gates without restart latency",
         )
 
     def test_rfctrl2_sync_controller_uses_external_epoch(self):
@@ -89,7 +89,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/rfctrl2_sync_controller.v",
                 ROOT / "tests/tb_rfctrl2_sync_controller.sv",
             ],
-            "PASS: RFCTRL2 master epoch, external sync, START_AT, and abort are deterministic",
+            "PASS: RFCTRL2 master epoch, direct Trigger CDC, START_AT, and abort are deterministic",
         )
 
     def test_pl_rfdc_runtime_controller_closes_the_axi_readback_loop(self):

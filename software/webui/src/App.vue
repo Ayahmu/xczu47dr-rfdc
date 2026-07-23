@@ -321,7 +321,7 @@ async function loadedBoardAction(action: 'arm' | 'trigger' | 'abort') {
   try {
     updateRun(await api<RunRecord>(`/api/boards/${boardId}/${action}`, { method: 'POST' }))
     await refreshRunBoardStatus(boardId)
-    ElMessage.success(action === 'arm' ? '板卡已 ARM，可以触发发波' : action === 'trigger' ? 'TRIGGER 已确认，板卡正在发波' : '板卡已停止并静音')
+    ElMessage.success(action === 'arm' ? 'ARM 已完成，板卡已进入 PREPARED' : action === 'trigger' ? 'TRIGGER 已确认，板卡正在发波' : '板卡已停止并静音')
   }
   catch (error) { ElMessage.error(`${action} 失败: ${(error as Error).message}`) }
 }
@@ -546,7 +546,7 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
                 <span>{{ selectedRun.dry_run ? 'DRY RUN' : 'LIVE' }}</span>
                 <span>{{ selectedRun.board_ids[0] }}</span>
                 <span>{{ runPayloadLabel(selectedRun) }}</span>
-                <span v-if="!selectedRun.dry_run">板卡 {{ selectedRunBoardStatus?.state ?? 'UNKNOWN' }}</span>
+                <span v-if="!selectedRun.dry_run">板卡 {{ selectedRunBoardStatus?.state ?? 'UNKNOWN' }} · {{ selectedRunBoardStatus?.playback_prepared ? 'PREPARED' : selectedRunBoardStatus?.playback_armed ? '预取中' : selectedRunBoardStatus?.playback_running ? '发波' : '静音' }}</span>
               </div>
             </div>
             <el-alert v-if="selectedRun.dry_run && selectedRun.state === 'DONE'" class="run-result" title="生成校验已完成，没有向板卡发送 UDP 数据" type="success" show-icon :closable="false" />
@@ -556,8 +556,8 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
                 <el-button type="primary" :icon="Upload" @click="prepareLiveUpload">切换为真实发送</el-button>
               </template>
               <template v-else-if="selectedRun.loaded && selectedRun.state === 'DONE'">
-                <el-button :icon="AlarmSmoke" :disabled="selectedRunBoardStatus?.state === 'RUNNING'" @click="loadedBoardAction('arm')">ARM 本板</el-button>
-                <el-button :icon="Play" type="primary" :disabled="selectedRunBoardStatus?.state !== 'ARMED'" @click="loadedBoardAction('trigger')">TRIGGER 发波</el-button>
+                <el-button :icon="AlarmSmoke" :disabled="selectedRunBoardStatus?.playback_armed || selectedRunBoardStatus?.playback_running" @click="loadedBoardAction('arm')">ARM 本板</el-button>
+                <el-button :icon="Play" type="primary" :disabled="!selectedRunBoardStatus?.playback_prepared" @click="loadedBoardAction('trigger')">TRIGGER 发波</el-button>
                 <el-button :icon="Square" type="danger" @click="loadedBoardAction('abort')">停止并静音</el-button>
               </template>
               <template v-else>
@@ -582,7 +582,7 @@ onBeforeUnmount(() => { websocket?.close(); window.clearTimeout(reconnectTimer) 
             <div class="preflight-toolbar"><div><strong>{{ selectedBoard?.name }}</strong><span>{{ preflight ? new Date(preflight.checked_at).toLocaleString() : '尚未检查' }}</span></div><el-select v-model="preflightArtifactId" clearable placeholder="可选：校验烧写发布"><el-option v-for="artifact in artifacts" :key="artifact.id" :label="`${artifact.label} · ${artifact.target_profile}`" :value="artifact.id" /></el-select><el-tag size="large" :type="preflight?.can_start_live ? 'success' : 'warning'">{{ preflight?.can_start_live ? '满足真实发波条件' : '需要处理预检项' }}</el-tag></div>
             <div class="preflight-list"><article v-for="check in preflight?.checks ?? []" :key="check.key" :class="['preflight-row', check.state]"><component :is="preflightIcon(check.state)" :size="18" /><div><strong>{{ check.label }}</strong><span>{{ check.message }}</span></div></article></div>
           </section>
-          <section class="surface"><div class="surface-head"><h3>全部板卡状态</h3><Activity :size="18" /></div><el-table :data="statuses"><el-table-column prop="board_id" label="板卡" /><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="stateType(scope.row.state)">{{ scope.row.state }}</el-tag></template></el-table-column><el-table-column prop="protocol_version" label="RFCTRL" /><el-table-column prop="hmc_locked" label="HMC"><template #default="scope">{{ scope.row.hmc_locked === true ? 'LOCKED' : scope.row.hmc_locked === false ? 'UNLOCKED' : '---' }}</template></el-table-column><el-table-column prop="underflow_mask" label="Underflow" /><el-table-column prop="message" label="消息" /></el-table></section>
+          <section class="surface"><div class="surface-head"><h3>全部板卡状态</h3><Activity :size="18" /></div><el-table :data="statuses"><el-table-column prop="board_id" label="板卡" /><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="stateType(scope.row.state)">{{ scope.row.state }}</el-tag></template></el-table-column><el-table-column label="播放状态"><template #default="scope">{{ scope.row.playback_prepared ? 'PREPARED' : scope.row.playback_running ? 'RUNNING' : scope.row.playback_armed ? '预取中' : '静音' }}</template></el-table-column><el-table-column prop="protocol_version" label="RFCTRL" /><el-table-column prop="hmc_locked" label="HMC"><template #default="scope">{{ scope.row.hmc_locked === true ? 'LOCKED' : scope.row.hmc_locked === false ? 'UNLOCKED' : '---' }}</template></el-table-column><el-table-column prop="underflow_mask" label="Underflow" /><el-table-column prop="message" label="消息" /></el-table></section>
         </section>
 
         <section v-else-if="activeView === 'boards'" class="view-stack"><div class="section-heading"><div><span class="eyebrow">服务器资源</span><h2>板卡登记</h2></div><div class="heading-actions"><el-button :icon="Search" :loading="scanning" @click="scanInventory">扫描服务器</el-button><el-button type="primary" @click="openBoardEditor()">登记板卡</el-button></div></div><el-alert v-if="inventoryScan?.vivado_error" :title="inventoryScan.vivado_error" type="error" show-icon :closable="false" /><div v-if="inventoryScan" class="scan-summary"><span>JTAG {{ inventoryScan.jtag.length }}</span><span>UART {{ inventoryScan.serial.length }}</span><span>RFCTRL2 在线 {{ inventoryScan.network.filter(item => item.online).length }} / {{ inventoryScan.network.length }}</span></div><section class="surface"><el-table :data="boards"><el-table-column prop="name" label="板卡" /><el-table-column prop="ip" label="IP" /><el-table-column prop="jtag_cable_serial" label="JTAG serial" /><el-table-column prop="serial_path" label="UART" /><el-table-column prop="target_profile" label="构建配置" /><el-table-column label="操作" width="100"><template #default="scope"><el-button size="small" @click="openBoardEditor(scope.row)">编辑</el-button></template></el-table-column></el-table></section><section class="surface"><div class="surface-head"><h3>发现资源</h3><Cable :size="18" /></div><el-table :data="discoveries"><el-table-column prop="kind" label="类型" /><el-table-column prop="label" label="标识" /><el-table-column prop="state" label="状态"><template #default="scope"><el-tag :type="scope.row.state === 'registered' ? 'success' : 'warning'">{{ scope.row.state }}</el-tag></template></el-table-column><el-table-column prop="last_seen_at" label="最近发现"><template #default="scope">{{ new Date(scope.row.last_seen_at).toLocaleString() }}</template></el-table-column></el-table></section></section>

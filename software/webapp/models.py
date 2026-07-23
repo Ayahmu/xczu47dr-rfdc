@@ -72,6 +72,9 @@ class BoardStatus(BaseModel):
     rfdc_capabilities: int = 0
     rfdc_config_valid_mask: int = 0
     rfdc_config_busy: bool = False
+    playback_armed: bool = False
+    playback_prepared: bool = False
+    playback_running: bool = False
     rfdc_last_revision: int = 0
     rfdc_last_error: int = 0
     rfdc_last_error_stage: int = 0

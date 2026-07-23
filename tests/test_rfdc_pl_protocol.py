@@ -15,6 +15,23 @@ def channel_maps():
 
 
 class RfdcPlProtocolTests(unittest.TestCase):
+    def test_status_payload_reports_prepared_separately_from_armed(self):
+        payload = struct.pack(
+            "<IIIIIIII",
+            host.RF2_CAP_PL_RFDC_CONFIG,
+            host.RF2_STATUS_RFDC_READY | host.RF2_STATUS_ARMED | host.RF2_STATUS_PREPARED,
+            0x31,
+            7,
+            0,
+            0,
+            0,
+            0,
+        )
+        decoded = host.parse_rfctrl2_status_payload({"payload": payload})
+        self.assertTrue(decoded["armed"])
+        self.assertTrue(decoded["prepared"])
+        self.assertFalse(decoded["running"])
+
     def test_apply_packet_has_fixed_eight_channel_layout(self):
         nco, zones, phases, currents = channel_maps()
         packet = host.pack_rfctrl2_rfdc_apply(

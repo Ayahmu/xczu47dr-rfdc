@@ -1438,7 +1438,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_1",
+                                        "name": "top_i/rfctrl2_armed_dac",
                                         "isBus": false
                                     }
                                 ]
@@ -1454,7 +1454,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_2",
+                                        "name": "top_i/rfctrl2_prepared_dac",
                                         "isBus": false
                                     }
                                 ]
@@ -1470,7 +1470,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_3",
+                                        "name": "top_i/rfctrl2_play_abort",
                                         "isBus": false
                                     }
                                 ]
@@ -1486,7 +1486,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_4",
+                                        "name": "top_i/rfctrl2_play_trigger",
                                         "isBus": false
                                     }
                                 ]
@@ -1502,7 +1502,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_5",
+                                        "name": "top_i/rfctrl2_play_prepare",
                                         "isBus": false
                                     }
                                 ]
@@ -1518,7 +1518,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_6",
+                                        "name": "top_i/<const0>_1",
                                         "isBus": false
                                     }
                                 ]
@@ -1534,7 +1534,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_7",
+                                        "name": "top_i/<const0>_2",
                                         "isBus": false
                                     }
                                 ]
@@ -1550,7 +1550,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_8",
+                                        "name": "top_i/<const0>_3",
                                         "isBus": false
                                     }
                                 ]
@@ -1566,7 +1566,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_9",
+                                        "name": "top_i/<const0>_4",
                                         "isBus": false
                                     }
                                 ]
@@ -1582,7 +1582,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_10",
+                                        "name": "top_i/<const0>_5",
                                         "isBus": false
                                     }
                                 ]
@@ -1598,7 +1598,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_11",
+                                        "name": "top_i/<const0>_6",
                                         "isBus": false
                                     }
                                 ]
@@ -13784,28 +13784,13 @@
                                 "direction": "IN",
                                 "isVector": true,
                                 "leftIndex": 0,
-                                "rightIndex": 8,
+                                "rightIndex": 3,
                                 "portIndex": 0,
                                 "nets": [
                                     {
                                         "name": "top_i/udp_wave_align_error_count",
                                         "isBus": true,
                                         "subnets": [
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[8]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[7]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[6]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[5]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[4]"
-                                            },
                                             {
                                                 "name": "top_i/udp_wave_align_error_count[3]"
                                             },
@@ -13825,6 +13810,86 @@
                             {
                                 "name": "probe0",
                                 "id": 144,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 4,
+                                "rightIndex": 4,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_abort_mute_pulse",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 145,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 5,
+                                "rightIndex": 5,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_armed_ddr",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 146,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 6,
+                                "rightIndex": 6,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_prepared_ddr",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 147,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 7,
+                                "rightIndex": 7,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_arm_pulse",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 148,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 8,
+                                "rightIndex": 8,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_trigger_pulse",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 149,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -13869,7 +13934,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 145,
+                                "id": 150,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -13914,7 +13979,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 146,
+                                "id": 151,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -13980,7 +14045,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 147,
+                                "id": 152,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14046,7 +14111,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 148,
+                                "id": 153,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14088,7 +14153,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 149,
+                                "id": 154,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14118,7 +14183,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 150,
+                                "id": 155,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14148,7 +14213,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 151,
+                                "id": 156,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14172,7 +14237,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 152,
+                                "id": 157,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14196,7 +14261,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 153,
+                                "id": 158,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14220,7 +14285,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 154,
+                                "id": 159,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14247,7 +14312,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 155,
+                                "id": 160,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14264,11 +14329,11 @@
                                             },
                                             {
                                                 "name": "top_i/ex_dbg_st[1]",
-                                                "parentNetId": 3946
+                                                "parentNetId": 3951
                                             },
                                             {
                                                 "name": "top_i/ex_dbg_st[0]",
-                                                "parentNetId": 3947
+                                                "parentNetId": 3952
                                             }
                                         ]
                                     }
@@ -14276,7 +14341,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 156,
+                                "id": 161,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14300,7 +14365,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 157,
+                                "id": 162,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14316,7 +14381,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 158,
+                                "id": 163,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14332,7 +14397,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 159,
+                                "id": 164,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14348,7 +14413,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 160,
+                                "id": 165,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14364,7 +14429,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 161,
+                                "id": 166,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14380,7 +14445,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 162,
+                                "id": 167,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14396,7 +14461,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 163,
+                                "id": 168,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14412,7 +14477,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 164,
+                                "id": 169,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14428,7 +14493,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 165,
+                                "id": 170,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14444,7 +14509,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 166,
+                                "id": 171,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14460,7 +14525,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 167,
+                                "id": 172,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14476,7 +14541,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 168,
+                                "id": 173,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14492,7 +14557,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 169,
+                                "id": 174,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14508,7 +14573,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 170,
+                                "id": 175,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14524,7 +14589,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 171,
+                                "id": 176,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14540,7 +14605,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 172,
+                                "id": 177,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14556,7 +14621,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 173,
+                                "id": 178,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14572,7 +14637,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 174,
+                                "id": 179,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14588,7 +14653,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 175,
+                                "id": 180,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14604,7 +14669,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 176,
+                                "id": 181,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14620,7 +14685,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 177,
+                                "id": 182,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14636,7 +14701,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 178,
+                                "id": 183,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14652,7 +14717,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 179,
+                                "id": 184,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14668,7 +14733,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 180,
+                                "id": 185,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14684,7 +14749,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 181,
+                                "id": 186,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14700,7 +14765,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 182,
+                                "id": 187,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14716,7 +14781,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 183,
+                                "id": 188,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14732,7 +14797,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 184,
+                                "id": 189,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14748,7 +14813,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 185,
+                                "id": 190,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14764,7 +14829,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 186,
+                                "id": 191,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14780,7 +14845,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 187,
+                                "id": 192,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14796,7 +14861,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 188,
+                                "id": 193,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14812,7 +14877,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 189,
+                                "id": 194,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14828,7 +14893,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 190,
+                                "id": 195,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14844,7 +14909,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 191,
+                                "id": 196,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14860,7 +14925,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 192,
+                                "id": 197,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14876,7 +14941,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 193,
+                                "id": 198,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14892,7 +14957,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 194,
+                                "id": 199,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14908,7 +14973,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 195,
+                                "id": 200,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14919,13 +14984,13 @@
                                     {
                                         "name": "top_i/ddr4_ui_aresetn",
                                         "isBus": false,
-                                        "parentNetId": 3986
+                                        "parentNetId": 3991
                                     }
                                 ]
                             },
                             {
                                 "name": "probe1",
-                                "id": 196,
+                                "id": 201,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -15135,7 +15200,7 @@
                             },
                             {
                                 "name": "probe2",
-                                "id": 197,
+                                "id": 202,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -15921,7 +15986,7 @@
                             },
                             {
                                 "name": "probe3",
-                                "id": 198,
+                                "id": 203,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -16023,7 +16088,7 @@
                             },
                             {
                                 "name": "probe3",
-                                "id": 199,
+                                "id": 204,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -16137,7 +16202,7 @@
                             },
                             {
                                 "name": "probe3",
-                                "id": 200,
+                                "id": 205,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -16251,7 +16316,7 @@
                             },
                             {
                                 "name": "probe3",
-                                "id": 201,
+                                "id": 206,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -16365,7 +16430,7 @@
                             },
                             {
                                 "name": "probe3",
-                                "id": 202,
+                                "id": 207,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -16395,7 +16460,7 @@
                             },
                             {
                                 "name": "probe4",
-                                "id": 203,
+                                "id": 208,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -16797,7 +16862,7 @@
                             },
                             {
                                 "name": "probe5",
-                                "id": 204,
+                                "id": 209,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -17127,7 +17192,7 @@
                             },
                             {
                                 "name": "probe6",
-                                "id": 205,
+                                "id": 210,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -18681,7 +18746,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 206,
+                                "id": 211,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -18795,7 +18860,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 207,
+                                "id": 212,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -18867,7 +18932,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 208,
+                                "id": 213,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -18981,7 +19046,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 209,
+                                "id": 214,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19053,7 +19118,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 210,
+                                "id": 215,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19077,7 +19142,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 211,
+                                "id": 216,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19101,7 +19166,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 212,
+                                "id": 217,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19117,7 +19182,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 213,
+                                "id": 218,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19133,7 +19198,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 214,
+                                "id": 219,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19149,7 +19214,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 215,
+                                "id": 220,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19165,7 +19230,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 216,
+                                "id": 221,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19181,7 +19246,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 217,
+                                "id": 222,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19197,7 +19262,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 218,
+                                "id": 223,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19213,7 +19278,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 219,
+                                "id": 224,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19229,7 +19294,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 220,
+                                "id": 225,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19245,7 +19310,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 221,
+                                "id": 226,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19261,7 +19326,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 222,
+                                "id": 227,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19277,7 +19342,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 223,
+                                "id": 228,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19293,7 +19358,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 224,
+                                "id": 229,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19309,7 +19374,7 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 225,
+                                "id": 230,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19360,7 +19425,7 @@
                             },
                             {
                                 "name": "probe8",
-                                "id": 226,
+                                "id": 231,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19570,7 +19635,7 @@
                             },
                             {
                                 "name": "probe8",
-                                "id": 227,
+                                "id": 232,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -19780,7 +19845,7 @@
                             },
                             {
                                 "name": "probe9",
-                                "id": 228,
+                                "id": 233,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -20566,7 +20631,7 @@
                             },
                             {
                                 "name": "probe10",
-                                "id": 229,
+                                "id": 234,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -21352,7 +21417,7 @@
                             },
                             {
                                 "name": "probe11",
-                                "id": 230,
+                                "id": 235,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -22141,7 +22206,7 @@
                 ],
                 "parent_nets": [
                     {
-                        "id": 3946,
+                        "id": 3951,
                         "name": "top_i/executor_inst/dbg_st[1]",
                         "state_reg": [
                             {
@@ -22168,7 +22233,7 @@
                         ]
                     },
                     {
-                        "id": 3947,
+                        "id": 3952,
                         "name": "top_i/executor_inst/dbg_st[0]",
                         "state_reg": [
                             {
@@ -22195,27 +22260,27 @@
                         ]
                     },
                     {
-                        "id": 3986,
+                        "id": 3991,
                         "name": "top_i/u_ddr4_ui_reset/io_peripheral_aresetn",
                         "state_reg": [
                             {
-                                "name": "top_i/executor_inst/FSM_onehot_pack_phase_reg[2]",
+                                "name": "top_i/executor_inst/FSM_sequential_st_reg[0]",
                                 "states": [
                                     {
-                                        "name": "iSTATE",
-                                        "val": "1000"
+                                        "name": "ST_WAITTRIG",
+                                        "val": "10"
                                     },
                                     {
-                                        "name": "iSTATE0",
-                                        "val": "0001"
+                                        "name": "ST_PLAYING",
+                                        "val": "11"
                                     },
                                     {
-                                        "name": "iSTATE1",
-                                        "val": "0010"
+                                        "name": "ST_BUILD",
+                                        "val": "00"
                                     },
                                     {
-                                        "name": "iSTATE2",
-                                        "val": "0100"
+                                        "name": "ST_PREFILL",
+                                        "val": "01"
                                     }
                                 ]
                             }

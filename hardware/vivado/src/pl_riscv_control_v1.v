@@ -20,6 +20,7 @@ module pl_riscv_control_v1 #(
     output reg          trigger_pulse,
 
     output reg          rfctrl2_arm_pulse,
+    output reg          rfctrl2_trigger_pulse,
     output reg          rfctrl2_abort_mute_pulse,
     output reg          rfctrl2_sync_epoch_pulse,
     output reg  [63:0]  rfctrl2_epoch,
@@ -46,6 +47,7 @@ module pl_riscv_control_v1 #(
     input  wire [1:0]   rfdc_failure_axi_response,
     input  wire         rfdc_ready,
     input  wire         playback_armed,
+    input  wire         playback_prepared,
     input  wire         playback_running,
     input  wire [511:0] rfdc_actual_nco_hz,
     input  wire [15:0]  rfdc_actual_nyquist_zone,
@@ -263,7 +265,7 @@ module pl_riscv_control_v1 #(
     reg [31:0] state_flags;
     begin
       if (!rvresp_tvalid) begin
-        state_flags = {28'd0, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
+        state_flags = {27'd0, playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
         resp_words[0] <= RFRESP2_MAGIC;
         resp_words[1] <= {opcode, 16'h0000, RF2_VERSION[15:0]};
         resp_words[2] <= {32'd32, resp_seq};
@@ -291,7 +293,7 @@ module pl_riscv_control_v1 #(
     reg [31:0] state_flags;
     begin
       if (!rvresp_tvalid) begin
-        state_flags = {28'd0, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
+        state_flags = {27'd0, playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
         resp_words[0] <= RFRESP2_MAGIC;
         resp_words[1] <= {
             opcode,
@@ -419,6 +421,7 @@ module pl_riscv_control_v1 #(
       m_instr_tvalid <= 1'b0;
       trigger_pulse <= 1'b0;
       rfctrl2_arm_pulse <= 1'b0;
+      rfctrl2_trigger_pulse <= 1'b0;
       rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
       rfctrl2_start_valid <= 1'b0;
@@ -497,6 +500,7 @@ module pl_riscv_control_v1 #(
     end else begin
       trigger_pulse <= 1'b0;
       rfctrl2_arm_pulse <= 1'b0;
+      rfctrl2_trigger_pulse <= 1'b0;
       rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
@@ -652,6 +656,9 @@ module pl_riscv_control_v1 #(
               ((payload_words[5][7:0] & ~rfdc_config_valid_mask) != 8'd0)) begin
             dbg_status <= 32'hBAD2_0006;
             queue_resp0(RF2_OP_ARM, 16'h0006, payload_words[2]);
+          end else if (playback_armed || playback_prepared || playback_running) begin
+            dbg_status <= 32'hBAD2_1006;
+            queue_resp0(RF2_OP_ARM, 16'h0006, payload_words[2]);
           end else begin
             rfctrl2_arm_pulse <= 1'b1;
             dbg_scratch <= payload_words[5];
@@ -669,10 +676,15 @@ module pl_riscv_control_v1 #(
           dbg_status <= 32'h2000_0008;
           queue_resp1(RF2_OP_START_AT, 16'h0000, payload_words[2], 32'd8, {payload_words[5], payload_words[4]});
         end else if (rx_is_v2 && (payload_words[1] == RF2_OP_TRIGGER)) begin
-          trigger_pulse <= 1'b1;
-          dbg_trigger_count <= dbg_trigger_count + 32'd1;
-          dbg_status <= 32'h2000_0009;
-          queue_resp0(RF2_OP_TRIGGER, 16'h0000, payload_words[2]);
+          if (!playback_prepared) begin
+            dbg_status <= 32'hBAD2_0009;
+            queue_resp0(RF2_OP_TRIGGER, 16'h0006, payload_words[2]);
+          end else begin
+            rfctrl2_trigger_pulse <= 1'b1;
+            dbg_trigger_count <= dbg_trigger_count + 32'd1;
+            dbg_status <= 32'h2000_0009;
+            queue_resp0(RF2_OP_TRIGGER, 16'h0000, payload_words[2]);
+          end
         end else if (rx_is_v2 && (payload_words[1] == RF2_OP_ABORT_MUTE)) begin
           rfctrl2_abort_mute_pulse <= 1'b1;
           dbg_status <= 32'h2000_000A;

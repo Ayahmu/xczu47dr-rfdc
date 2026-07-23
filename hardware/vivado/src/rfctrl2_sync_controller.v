@@ -14,6 +14,7 @@ module rfctrl2_sync_controller #(
     input  wire        ddr_clk,
     input  wire        ddr_rst_n,
     input  wire        rfctrl2_arm_pulse,
+    input  wire        rfctrl2_trigger_pulse,
     input  wire        rfctrl2_abort_mute_pulse,
     input  wire        rfctrl2_sync_epoch_pulse,
     input  wire [63:0] rfctrl2_epoch,
@@ -24,6 +25,7 @@ module rfctrl2_sync_controller #(
     input  wire        dac_rst_n,
     input  wire        ext_sync_in,
 
+    output reg         play_prepare_pulse,
     output reg         play_trigger_pulse,
     output reg         play_abort_pulse,
     output reg         sync_out,
@@ -36,6 +38,7 @@ module rfctrl2_sync_controller #(
   // Convert the one-cycle DDR-domain commands into level changes so none are
   // lost while crossing to the unrelated DAC AXIS clock.
   reg arm_toggle;
+  reg trigger_toggle;
   reg abort_toggle;
   reg epoch_toggle;
   reg start_toggle;
@@ -43,11 +46,13 @@ module rfctrl2_sync_controller #(
   always @(posedge ddr_clk or negedge ddr_rst_n) begin
     if (!ddr_rst_n) begin
       arm_toggle   <= 1'b0;
+      trigger_toggle <= 1'b0;
       abort_toggle <= 1'b0;
       epoch_toggle <= 1'b0;
       start_toggle <= 1'b0;
     end else begin
       if (rfctrl2_arm_pulse)        arm_toggle   <= ~arm_toggle;
+      if (rfctrl2_trigger_pulse)    trigger_toggle <= ~trigger_toggle;
       if (rfctrl2_abort_mute_pulse) abort_toggle <= ~abort_toggle;
       if (rfctrl2_sync_epoch_pulse) epoch_toggle <= ~epoch_toggle;
       if (rfctrl2_start_valid)      start_toggle <= ~start_toggle;
@@ -56,6 +61,8 @@ module rfctrl2_sync_controller #(
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg arm_meta;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg arm_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg trigger_meta;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg trigger_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg abort_meta;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg abort_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg epoch_meta;
@@ -66,6 +73,7 @@ module rfctrl2_sync_controller #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg ext_sync_sync;
 
   reg arm_seen;
+  reg trigger_seen;
   reg abort_seen;
   reg epoch_seen;
   reg start_seen;
@@ -89,6 +97,8 @@ module rfctrl2_sync_controller #(
     if (!dac_rst_n) begin
       arm_meta          <= 1'b0;
       arm_sync          <= 1'b0;
+      trigger_meta      <= 1'b0;
+      trigger_sync      <= 1'b0;
       abort_meta        <= 1'b0;
       abort_sync        <= 1'b0;
       epoch_meta        <= 1'b0;
@@ -99,6 +109,7 @@ module rfctrl2_sync_controller #(
       ext_sync_sync     <= 1'b0;
       ext_sync_d        <= 1'b0;
       arm_seen          <= 1'b0;
+      trigger_seen      <= 1'b0;
       abort_seen        <= 1'b0;
       epoch_seen        <= 1'b0;
       start_seen        <= 1'b0;
@@ -110,6 +121,7 @@ module rfctrl2_sync_controller #(
       sync_width_count  <= 32'd0;
       epoch_delay_count <= 32'd0;
       epoch_pending     <= 1'b0;
+      play_prepare_pulse <= 1'b0;
       play_trigger_pulse <= 1'b0;
       play_abort_pulse   <= 1'b0;
       sync_out           <= 1'b0;
@@ -120,6 +132,8 @@ module rfctrl2_sync_controller #(
     end else begin
       arm_meta        <= arm_toggle;
       arm_sync        <= arm_meta;
+      trigger_meta    <= trigger_toggle;
+      trigger_sync    <= trigger_meta;
       abort_meta      <= abort_toggle;
       abort_sync      <= abort_meta;
       epoch_meta      <= epoch_toggle;
@@ -134,6 +148,7 @@ module rfctrl2_sync_controller #(
       start_meta_data <= rfctrl2_start_tick;
       start_sync_data <= start_meta_data;
 
+      play_prepare_pulse <= 1'b0;
       play_trigger_pulse <= 1'b0;
       play_abort_pulse   <= 1'b0;
 
@@ -151,6 +166,15 @@ module rfctrl2_sync_controller #(
           arm_seen      <= arm_sync;
           armed         <= 1'b1;
           start_pending <= 1'b0;
+          play_prepare_pulse <= 1'b1;
+        end
+
+        // RFCTRL2 Trigger crosses the clock boundary as its own toggle. It
+        // deliberately bypasses the legacy stretched GPIO trigger path.
+        if (trigger_sync != trigger_seen) begin
+          trigger_seen <= trigger_sync;
+          if (armed)
+            play_trigger_pulse <= 1'b1;
         end
 
         // The master owns the epoch command and launches the physical sync

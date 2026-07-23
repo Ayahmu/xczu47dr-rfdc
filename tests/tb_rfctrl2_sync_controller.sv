@@ -9,12 +9,14 @@ module tb_rfctrl2_sync_controller;
   always #5 dac_clk = ~dac_clk;
 
   reg master_arm = 1'b0;
+  reg master_trigger = 1'b0;
   reg master_abort = 1'b0;
   reg master_epoch = 1'b0;
   reg [63:0] master_epoch_value = 64'd0;
   reg master_start = 1'b0;
   reg [63:0] master_start_tick = 64'd0;
   reg follower_arm = 1'b0;
+  reg follower_trigger = 1'b0;
   reg follower_abort = 1'b0;
   reg follower_start = 1'b0;
   reg [63:0] follower_start_tick = 64'd0;
@@ -34,10 +36,11 @@ module tb_rfctrl2_sync_controller;
   ) master (
     .ddr_clk(ddr_clk), .ddr_rst_n(ddr_rst_n),
     .rfctrl2_arm_pulse(master_arm), .rfctrl2_abort_mute_pulse(master_abort),
+    .rfctrl2_trigger_pulse(master_trigger),
     .rfctrl2_sync_epoch_pulse(master_epoch), .rfctrl2_epoch(master_epoch_value),
     .rfctrl2_start_valid(master_start), .rfctrl2_start_tick(master_start_tick),
     .dac_clk(dac_clk), .dac_rst_n(dac_rst_n), .ext_sync_in(1'b0),
-    .play_trigger_pulse(master_play_trigger), .play_abort_pulse(),
+    .play_prepare_pulse(), .play_trigger_pulse(master_play_trigger), .play_abort_pulse(),
     .sync_out(master_sync_out), .armed(master_armed), .sync_epoch(),
     .hardware_tick(master_tick), .start_pending()
   );
@@ -49,20 +52,23 @@ module tb_rfctrl2_sync_controller;
   ) follower (
     .ddr_clk(ddr_clk), .ddr_rst_n(ddr_rst_n),
     .rfctrl2_arm_pulse(follower_arm), .rfctrl2_abort_mute_pulse(follower_abort),
+    .rfctrl2_trigger_pulse(follower_trigger),
     .rfctrl2_sync_epoch_pulse(1'b0), .rfctrl2_epoch(64'd0),
     .rfctrl2_start_valid(follower_start), .rfctrl2_start_tick(follower_start_tick),
     .dac_clk(dac_clk), .dac_rst_n(dac_rst_n), .ext_sync_in(master_sync_out),
-    .play_trigger_pulse(follower_play_trigger), .play_abort_pulse(),
+    .play_prepare_pulse(), .play_trigger_pulse(follower_play_trigger), .play_abort_pulse(),
     .sync_out(), .armed(follower_armed), .sync_epoch(),
     .hardware_tick(follower_tick), .start_pending()
   );
 
   integer master_trigger_cycle = -1;
   integer follower_trigger_cycle = -1;
+  integer master_play_trigger_count = 0;
   integer dac_cycle = 0;
   always @(posedge dac_clk) begin
     dac_cycle <= dac_cycle + 1;
     if (master_play_trigger) master_trigger_cycle <= dac_cycle;
+    if (master_play_trigger) master_play_trigger_count <= master_play_trigger_count + 1;
     if (follower_play_trigger) follower_trigger_cycle <= dac_cycle;
   end
 
@@ -118,6 +124,12 @@ module tb_rfctrl2_sync_controller;
     end
 
     @(negedge ddr_clk);
+    master_trigger = 1'b1;
+    @(negedge ddr_clk);
+    master_trigger = 1'b0;
+    wait (master_play_trigger_count == 2);
+
+    @(negedge ddr_clk);
     master_abort = 1'b1;
     follower_abort = 1'b1;
     @(negedge ddr_clk);
@@ -129,7 +141,7 @@ module tb_rfctrl2_sync_controller;
       $finish;
     end
 
-    $display("PASS: RFCTRL2 master epoch, external sync, START_AT, and abort are deterministic");
+    $display("PASS: RFCTRL2 master epoch, direct Trigger CDC, START_AT, and abort are deterministic");
     $finish;
   end
 

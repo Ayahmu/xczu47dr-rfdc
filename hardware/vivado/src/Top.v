@@ -200,16 +200,20 @@ module Top #(
   wire         udp_trigger_pulse;
   wire         rv_trigger_pulse;
   wire         rfctrl2_arm_pulse;
+  wire         rfctrl2_trigger_pulse;
   wire         rfctrl2_abort_mute_pulse;
   wire         rfctrl2_sync_epoch_pulse;
   wire [63:0]  rfctrl2_epoch;
   wire         rfctrl2_start_valid;
   wire [63:0]  rfctrl2_start_tick;
   wire         rfctrl2_armed_dac;
+  wire         rfctrl2_prepared_dac;
   wire         rfctrl2_start_pending_dac;
   wire         pc_started;
   reg          rfctrl2_armed_meta;
   reg          rfctrl2_armed_ddr;
+  reg          rfctrl2_prepared_meta;
+  reg          rfctrl2_prepared_ddr;
   reg          rfctrl2_pending_meta;
   reg          rfctrl2_pending_ddr;
   reg          pc_started_meta;
@@ -433,6 +437,7 @@ module Top #(
       .m_instr_tready      (rv_instr_tready),
       .trigger_pulse       (rv_trigger_pulse),
       .rfctrl2_arm_pulse   (rfctrl2_arm_pulse),
+      .rfctrl2_trigger_pulse(rfctrl2_trigger_pulse),
       .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse),
       .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
       .rfctrl2_epoch       (rfctrl2_epoch),
@@ -458,6 +463,7 @@ module Top #(
       .rfdc_failure_axi_response(rfdc_failure_axi_response),
       .rfdc_ready          (rfdc_runtime_ready),
       .playback_armed      (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      .playback_prepared   (rfctrl2_prepared_ddr),
       .playback_running    (pc_started_ddr),
       .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
       .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
@@ -956,12 +962,15 @@ module Top #(
   );
 
   wire rfctrl2_play_trigger;
+  wire rfctrl2_play_prepare;
   wire rfctrl2_play_abort;
   wire rfctrl2_sync_out;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if (!ddr4_ui_aresetn) begin
       rfctrl2_armed_meta <= 1'b0;
       rfctrl2_armed_ddr <= 1'b0;
+      rfctrl2_prepared_meta <= 1'b0;
+      rfctrl2_prepared_ddr <= 1'b0;
       rfctrl2_pending_meta <= 1'b0;
       rfctrl2_pending_ddr <= 1'b0;
       pc_started_meta <= 1'b0;
@@ -969,6 +978,8 @@ module Top #(
     end else begin
       rfctrl2_armed_meta <= rfctrl2_armed_dac;
       rfctrl2_armed_ddr <= rfctrl2_armed_meta;
+      rfctrl2_prepared_meta <= rfctrl2_prepared_dac;
+      rfctrl2_prepared_ddr <= rfctrl2_prepared_meta;
       rfctrl2_pending_meta <= rfctrl2_start_pending_dac;
       rfctrl2_pending_ddr <= rfctrl2_pending_meta;
       pc_started_meta <= pc_started;
@@ -982,6 +993,7 @@ module Top #(
     .ddr_clk                 (ddr4_ui_clk),
     .ddr_rst_n               (ddr4_ui_aresetn),
     .rfctrl2_arm_pulse       (rfctrl2_arm_pulse),
+    .rfctrl2_trigger_pulse   (rfctrl2_trigger_pulse),
     .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
     .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
     .rfctrl2_epoch           (rfctrl2_epoch),
@@ -990,6 +1002,7 @@ module Top #(
     .dac_clk                 (dac_axis_clk),
     .dac_rst_n               (dac_rst_n),
     .ext_sync_in             (ext_trigger_sync),
+    .play_prepare_pulse      (rfctrl2_play_prepare),
     .play_trigger_pulse      (rfctrl2_play_trigger),
     .play_abort_pulse        (rfctrl2_play_abort),
     .sync_out                (rfctrl2_sync_out),
@@ -1218,7 +1231,9 @@ module Top #(
   ) u_play_ctrl (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
-    .trigger(ps_trigger_dac_sync | rfctrl2_play_trigger),
+    .trigger(ps_trigger_dac_sync),
+    .rfctrl2_trigger(rfctrl2_play_trigger),
+    .prepare(rfctrl2_play_prepare),
     .abort(rfctrl2_play_abort),
 
     .cfg_seq_id(seq_id_dac),
@@ -1292,6 +1307,7 @@ module Top #(
     .ch6_active(),
     .ch7_active(),
     .ch8_active(),
+    .prepared(rfctrl2_prepared_dac),
 
     .dbg_trig_pulse (pc_trig_pulse),
     .dbg_new_cfg    (pc_new_cfg),
@@ -2268,7 +2284,12 @@ module Top #(
       ch2_fifo_level_beats,            // 42:27
       udp_wave_write_count[8:0],       // 26:18
       udp_wave_drop_count[8:0],        // 17:9
-      udp_wave_align_error_count[8:0]  // 8:0
+      {rfctrl2_trigger_pulse,          // 8
+       rfctrl2_arm_pulse,              // 7
+       rfctrl2_prepared_ddr,           // 6
+       rfctrl2_armed_ddr,              // 5
+       rfctrl2_abort_mute_pulse,       // 4
+       udp_wave_align_error_count[3:0]} // 3:0
     }),
     .probe1(udp64_rcv_dat),
     .probe2(M_AXI_WAVE_wdata),
@@ -2313,7 +2334,12 @@ module Top #(
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      12'd0,
+      7'd0,
+      rfctrl2_play_prepare,
+      rfctrl2_play_trigger,
+      rfctrl2_play_abort,
+      rfctrl2_prepared_dac,
+      rfctrl2_armed_dac,
       pc_done_pulse,
       pc_underflow_seen,
       trig_1_dac_valid_pulse,

@@ -154,6 +154,9 @@ class BoardGateway:
                 rfdc_capabilities=host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG,
                 rfdc_config_valid_mask=int(simulated.get("config_valid_mask", 0xFF)),
                 rfdc_last_revision=int(simulated.get("revision", 0)),
+                playback_armed=bool(simulated.get("playback_armed", False)),
+                playback_prepared=bool(simulated.get("playback_prepared", False)),
+                playback_running=bool(simulated.get("playback_running", False)),
             )
         try:
             with self._board_control_lock(board_id):
@@ -166,21 +169,36 @@ class BoardGateway:
                 raise RuntimeError(f"RFCTRL2 status returned 0x{int(response['status']):04X}")
             decoded = host.parse_rfctrl2_status_payload(response)
             current = self.status(board_id, refresh=False)
+            if decoded["running"]:
+                state = BoardState.RUNNING
+            elif decoded["prepared"] or decoded["armed"]:
+                state = BoardState.ARMED
+            elif current.state == BoardState.OFFLINE:
+                state = BoardState.IDLE
+            else:
+                state = current.state
             return self._set_status(
                 board_id,
-                state=current.state if current.state != BoardState.OFFLINE else BoardState.IDLE,
+                state=state,
                 online=True,
                 protocol_version=int(response.get("version", 2)),
                 rfdc_ready=bool(decoded["rfdc_ready"]),
                 rfdc_capabilities=int(decoded["capabilities"]),
                 rfdc_config_valid_mask=int(decoded["config_valid_mask"]) & 0xFF,
                 rfdc_config_busy=bool(decoded["rfdc_busy"]),
+                playback_armed=bool(decoded["armed"]),
+                playback_prepared=bool(decoded["prepared"]),
+                playback_running=bool(decoded["running"]),
                 rfdc_last_revision=int(decoded["last_revision"]),
                 rfdc_last_error=int(decoded["last_error"]),
                 rfdc_last_error_stage=int(decoded["last_error_stage"]),
                 rfdc_last_error_address=int(decoded["last_error_addr"]),
                 message=(
-                    "RFCTRL2 PL RFDC control ready"
+                    "RFCTRL2 PREPARED; waiting for TRIGGER"
+                    if decoded["prepared"]
+                    else "RFCTRL2 ARM accepted; prefetching waveform"
+                    if decoded["armed"]
+                    else "RFCTRL2 PL RFDC control ready"
                     if int(decoded["capabilities"]) & host.RF2_CAP_PL_RFDC_CONFIG
                     else "RFCTRL2 online; bitstream does not advertise PL RFDC configuration"
                 ),
@@ -196,15 +214,33 @@ class BoardGateway:
     def arm(self, board_id: str, run_token: int, channel_mask: int) -> None:
         board = self.profile(board_id)
         if self.simulation:
+            current = self.status(board_id, refresh=False)
+            if current.playback_armed or current.playback_running:
+                raise RuntimeError("board is already armed; ABORT_MUTE before re-arming")
             valid_mask = int(self._simulated_rfdc.get(board_id, {}).get("config_valid_mask", 0xFF))
             if channel_mask & ~valid_mask:
                 raise RuntimeError(
                     f"ARM mask 0x{channel_mask:02X} is not configured by PL (valid 0x{valid_mask:02X})"
                 )
-            self._set_status(board_id, state=BoardState.ARMED, online=True, message="simulated RFCTRL2 arm")
+            self._simulated_rfdc.setdefault(board_id, {}).update({
+                "playback_armed": True,
+                "playback_prepared": True,
+                "playback_running": False,
+            })
+            self._set_status(
+                board_id,
+                state=BoardState.ARMED,
+                online=True,
+                playback_armed=True,
+                playback_prepared=True,
+                playback_running=False,
+                message="simulated RFCTRL2 PREPARED; waiting for TRIGGER",
+            )
             return
         with self._board_control_lock(board_id):
             status = self.refresh(board_id)
+            if status.playback_armed or status.playback_running:
+                raise RuntimeError("board is already armed; ABORT_MUTE before re-arming")
             if not status.rfdc_capabilities & host.RF2_CAP_PL_RFDC_CONFIG:
                 raise RuntimeError("installed bitstream does not support PL RFDC runtime configuration")
             if channel_mask & ~status.rfdc_config_valid_mask:
@@ -215,10 +251,54 @@ class BoardGateway:
             controller = self._controller(board)
             try:
                 response = controller.rfctrl2_arm(run_token, channel_mask=channel_mask, seq=self._next_sequence(), wait_response=True)
+                self._require_ok(response, "ARM")
+                deadline = time.monotonic() + max(
+                    0.1, float(os.environ.get("RFSOC_WEB_ARM_PREPARE_TIMEOUT_S", "15"))
+                )
+                prepared_status = None
+                while time.monotonic() < deadline:
+                    status_response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
+                    self._require_ok(status_response, "STATUS after ARM")
+                    decoded = host.parse_rfctrl2_status_payload(status_response)
+                    prepared_status = decoded
+                    self._set_status(
+                        board_id,
+                        state=BoardState.RUNNING if decoded["running"] else BoardState.ARMED,
+                        online=True,
+                        protocol_version=2,
+                        playback_armed=bool(decoded["armed"]),
+                        playback_prepared=bool(decoded["prepared"]),
+                        playback_running=bool(decoded["running"]),
+                        message=(
+                            "RFCTRL2 PREPARED; waiting for TRIGGER"
+                            if decoded["prepared"]
+                            else "RFCTRL2 ARM accepted; prefetching waveform"
+                        ),
+                    )
+                    if decoded["prepared"]:
+                        break
+                    time.sleep(0.002)
+                if not prepared_status or not prepared_status["prepared"]:
+                    try:
+                        mute_response = controller.rfctrl2_abort_mute(
+                            seq=self._next_sequence(), wait_response=True
+                        )
+                        self._require_ok(mute_response, "ABORT_MUTE after PREPARE timeout")
+                    except Exception:
+                        pass
+                    raise TimeoutError("ARM accepted but PL did not reach PREPARED before timeout")
             finally:
                 controller.close()
-        self._require_ok(response, "ARM")
-        self._set_status(board_id, state=BoardState.ARMED, online=True, protocol_version=2, message="RFCTRL2 arm acknowledged")
+        self._set_status(
+            board_id,
+            state=BoardState.ARMED,
+            online=True,
+            protocol_version=2,
+            playback_armed=True,
+            playback_prepared=True,
+            playback_running=False,
+            message="RFCTRL2 PREPARED; waiting for TRIGGER",
+        )
 
     def sync_epoch(self, board_id: str, epoch: int) -> None:
         board = self.profile(board_id)
@@ -253,16 +333,41 @@ class BoardGateway:
     def manual_trigger(self, board_id: str) -> None:
         board = self.profile(board_id)
         if self.simulation:
-            self._set_status(board_id, state=BoardState.RUNNING, online=True, message="simulated manual trigger")
+            self._simulated_rfdc.setdefault(board_id, {}).update({
+                "playback_armed": True,
+                "playback_prepared": False,
+                "playback_running": True,
+            })
+            self._set_status(
+                board_id,
+                state=BoardState.RUNNING,
+                online=True,
+                playback_armed=True,
+                playback_prepared=False,
+                playback_running=True,
+                message="simulated manual trigger",
+            )
             return
         with self._board_control_lock(board_id):
+            status = self.refresh(board_id)
+            if not status.playback_prepared:
+                raise RuntimeError("RFCTRL2 TRIGGER requires the board to reach PREPARED first")
             controller = self._controller(board)
             try:
                 response = controller.rfctrl2_trigger(seq=self._next_sequence(), wait_response=True)
             finally:
                 controller.close()
         self._require_ok(response, "TRIGGER")
-        self._set_status(board_id, state=BoardState.RUNNING, online=True, protocol_version=2, message="manual trigger acknowledged")
+        self._set_status(
+            board_id,
+            state=BoardState.RUNNING,
+            online=True,
+            protocol_version=2,
+            playback_armed=True,
+            playback_prepared=False,
+            playback_running=True,
+            message="manual trigger acknowledged; playback gate opened",
+        )
 
     def mute(self, board_id: str) -> None:
         board = self.profile(board_id)
@@ -276,7 +381,15 @@ class BoardGateway:
             finally:
                 controller.close()
         self._require_ok(response, "ABORT_MUTE")
-        self._set_status(board_id, state=BoardState.MUTED, online=True, message="mute accepted")
+        self._set_status(
+            board_id,
+            state=BoardState.MUTED,
+            online=True,
+            playback_armed=False,
+            playback_prepared=False,
+            playback_running=False,
+            message="mute accepted",
+        )
 
     def rfdc_apply(self, board_id: str, channels, revision: int, channel_mask: int) -> dict:
         board = self.profile(board_id)

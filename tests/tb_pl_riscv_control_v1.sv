@@ -16,6 +16,7 @@ module tb_pl_riscv_control_v1;
   reg          m_instr_tready = 1'b1;
   wire         trigger_pulse;
   wire         rfctrl2_arm_pulse;
+  wire         rfctrl2_trigger_pulse;
   wire         rfctrl2_abort_mute_pulse;
   wire         rfctrl2_sync_epoch_pulse;
   wire [63:0]  rfctrl2_epoch;
@@ -78,7 +79,9 @@ module tb_pl_riscv_control_v1;
   reg [3:0] instr_count = 4'd0;
   reg trigger_seen = 1'b0;
   reg rfctrl2_arm_seen = 1'b0;
+  reg rfctrl2_trigger_seen = 1'b0;
   reg rfctrl2_sync_seen = 1'b0;
+  reg playback_prepared = 1'b0;
   reg rfdc_apply_start_seen = 1'b0;
   reg mmio_write_seen = 1'b0;
   reg mmio_read_seen = 1'b0;
@@ -107,6 +110,7 @@ module tb_pl_riscv_control_v1;
     .m_instr_tready(m_instr_tready),
     .trigger_pulse(trigger_pulse),
     .rfctrl2_arm_pulse(rfctrl2_arm_pulse),
+    .rfctrl2_trigger_pulse(rfctrl2_trigger_pulse),
     .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse),
     .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
     .rfctrl2_epoch(rfctrl2_epoch),
@@ -132,6 +136,7 @@ module tb_pl_riscv_control_v1;
     .rfdc_failure_axi_response(rfdc_failure_axi_response),
     .rfdc_ready(1'b1),
     .playback_armed(1'b0),
+    .playback_prepared(playback_prepared),
     .playback_running(1'b0),
     .rfdc_actual_nco_hz(rfdc_actual_nco_hz),
     .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
@@ -193,6 +198,9 @@ module tb_pl_riscv_control_v1;
       end
       if (rfctrl2_arm_pulse) begin
         rfctrl2_arm_seen <= 1'b1;
+      end
+      if (rfctrl2_trigger_pulse) begin
+        rfctrl2_trigger_seen <= 1'b1;
       end
       if (rfctrl2_sync_epoch_pulse) begin
         rfctrl2_sync_seen <= 1'b1;
@@ -338,6 +346,30 @@ module tb_pl_riscv_control_v1;
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 STATUS magic mismatch");
     check_condition(resp_words[1] == 64'h0000000200000002, "RFRESP2 STATUS header mismatch");
     check_condition(resp_words[2] == 64'h000000200000008A, "RFRESP2 STATUS sequence mismatch");
+
+    // RFCTRL2 Trigger is rejected until the DAC-domain prepare handshake is
+    // complete, then emitted on its dedicated output instead of legacy trigger_pulse.
+    resp_count = 6'd0;
+    send_rv_beat(64'h0000000900000002, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h0000000000000092, 1'b0, 1'b1, 32'hA0000004);
+    repeat (6) @(negedge clk);
+    check_condition(resp_count == 6'd3, "unprepared RFCTRL2 Trigger must receive a response");
+    check_condition(resp_words[1] == 64'h0000000900060002, "unprepared RFCTRL2 Trigger must report unsafe state");
+    check_condition(rfctrl2_trigger_seen == 1'b0, "unprepared RFCTRL2 Trigger must not emit a pulse");
+
+    playback_prepared = 1'b1;
+    resp_count = 6'd0;
+    send_rv_beat(64'h0000000900000002, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h0000000000000093, 1'b0, 1'b1, 32'hA0000004);
+    repeat (6) @(negedge clk);
+    check_condition(rfctrl2_trigger_seen == 1'b1, "prepared RFCTRL2 Trigger must emit the dedicated trigger pulse");
+    check_condition(resp_words[1] == 64'h0000000900000002, "prepared RFCTRL2 Trigger response mismatch");
+
+    resp_count = 6'd0;
+    send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h0000001000000094, 1'b0, 1'b1, 32'hA0000004);
+    repeat (8) @(negedge clk);
+    check_condition(resp_words[3] == 64'h0000001100030000, "RFRESP2 STATUS must advertise playback PREPARED in bit 4");
 
     // RFCTRL2 RFDC_APPLY: 4 header words plus a fixed 200-byte payload.
     request_nco[0] = -64'sd1900000000;
