@@ -355,6 +355,7 @@ class BoardOverride(BaseModel):
 class WaveformRequest(BaseModel):
     name: str = Field("Untitled waveform", min_length=1, max_length=120)
     mode: Literal["manual", "ezq"] = "manual"
+    loop: bool = False
     record_duration_ns: float = Field(10_000.0, gt=0.0, le=1e9)
     manual_channels: list[ManualChannel] = Field(default_factory=list)
     ezq_channels: list[EzqChannel] = Field(default_factory=list)
@@ -465,6 +466,11 @@ class PerformanceTestCreateRequest(BaseModel):
     settle_ms: float = Field(100.0, ge=0.0, le=60_000.0)
     auto_mute: bool = True
     dry_run: bool = False
+    scan_axis: str = Field("custom", max_length=48)
+    scan_start: float | None = None
+    scan_stop: float | None = None
+    scan_step: float | None = None
+    scan_unit: str = Field("", max_length=16)
 
     @field_validator("channels")
     @classmethod
@@ -490,6 +496,11 @@ class PerformanceTestRecord(BaseModel):
     settle_ms: float = 100.0
     auto_mute: bool = True
     dry_run: bool = False
+    scan_axis: str = "custom"
+    scan_start: float | None = None
+    scan_stop: float | None = None
+    scan_step: float | None = None
+    scan_unit: str = ""
     created_at: str
     updated_at: str
     error: str = ""

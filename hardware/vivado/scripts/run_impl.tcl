@@ -73,18 +73,26 @@ if {[llength ${bd_file}] > 0} {
 }
 
 puts "INFO: Starting implementation..."
-reset_run impl_1
-launch_runs impl_1 -jobs 8
-wait_on_run impl_1
+set impl_run [get_runs impl_1]
+
+# The 300 MHz DDR UI domain is close to the device routing limit. Run a
+# post-route physical optimization pass so small routing regressions are
+# repaired before timing is used to qualify the bitstream.
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true ${impl_run}
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore ${impl_run}
+
+reset_run ${impl_run}
+launch_runs ${impl_run} -jobs 8
+wait_on_run ${impl_run}
 
 # Check implementation status
-set impl_status [get_property STATUS [get_runs impl_1]]
-set impl_progress [get_property PROGRESS [get_runs impl_1]]
+set impl_status [get_property STATUS ${impl_run}]
+set impl_progress [get_property PROGRESS ${impl_run}]
 
 puts "INFO: Implementation status: ${impl_status}"
 puts "INFO: Implementation progress: ${impl_progress}"
 
-if {${impl_status} != "route_design Complete!"} {
+if {${impl_progress} != "100%" || ![string match "*Complete!" ${impl_status}]} {
     puts "ERROR: Implementation failed!"
     exit 1
 }
@@ -101,6 +109,13 @@ report_utilization -file ${report_dir}/post_impl_util.rpt
 report_timing_summary -file ${report_dir}/post_impl_timing.rpt
 report_power -file ${report_dir}/post_impl_power.rpt
 report_drc -file ${report_dir}/post_impl_drc.rpt
+
+set failing_setup_paths [get_timing_paths -quiet -delay_type max -slack_lesser_than 0 -max_paths 1]
+set failing_hold_paths [get_timing_paths -quiet -delay_type min -slack_lesser_than 0 -max_paths 1]
+if {[llength ${failing_setup_paths}] > 0 || [llength ${failing_hold_paths}] > 0} {
+    puts "ERROR: Implementation completed with timing violations"
+    exit 1
+}
 
 puts "INFO: Implementation complete"
 close_project

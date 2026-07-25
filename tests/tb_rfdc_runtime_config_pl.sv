@@ -40,7 +40,9 @@ module tb_rfdc_runtime_config_pl;
   reg [17:0] inject_write_error_addr=18'h3ffff;
   reg nco_low_seen=0, update_seen=0, vop_seen=0;
 
-  rfdc_runtime_config_pl #(.CLOCK_HZ(1000000), .AXI_TIMEOUT_CYCLES(100)) dut (
+  rfdc_runtime_config_pl #(
+    .CLOCK_HZ(1000000), .AXI_TIMEOUT_CYCLES(100), .READY_PROBE_INTERVAL_CYCLES(20)
+  ) dut (
     .clk(clk), .rst_n(rst_n), .start(start), .cmd_sequence(seq_num), .cmd_revision(revision),
     .cmd_channel_mask(mask), .cmd_nco_hz(nco_hz), .cmd_nyquist_zone(zones),
     .cmd_phase_mdeg(phases), .cmd_current_ua(currents), .playback_armed(armed),
@@ -81,7 +83,10 @@ module tb_rfdc_runtime_config_pl;
   end
 
   task pulse_start;
-    begin @(negedge clk); start=1; @(negedge clk); start=0; end
+    begin
+      while (busy) @(negedge clk);
+      @(negedge clk); start=1; @(negedge clk); start=0;
+    end
   endtask
   task wait_done;
     integer timeout;
@@ -105,6 +110,15 @@ module tb_rfdc_runtime_config_pl;
     memory[18'h1000c >> 2]=16'h000f;
     memory[18'h061d0 >> 2]=(425 << 6);
     repeat(5) @(negedge clk); rst_n=1;
+
+    while (!ready) @(negedge clk);
+    check(ready, "periodic probe did not detect four ready DAC tiles");
+    memory[18'h0c00c >> 2]=16'h000e;
+    repeat(50) @(negedge clk);
+    check(!ready, "periodic probe did not clear readiness for a failed tile");
+    memory[18'h0c00c >> 2]=16'h000f;
+    repeat(50) @(negedge clk);
+    check(ready, "periodic probe did not recover readiness after tile startup");
 
     seq_num=32'h55; revision=4; mask=8'h01;
     nco_hz[0 +: 64]=64'sd1600000000;
@@ -149,7 +163,7 @@ module tb_rfdc_runtime_config_pl;
     check(status == 16'h0008, "injected SLVERR was not reported");
     check(error_mask == 8'h02 && failure_address == 18'h0689c, "failure metadata mismatch");
 
-    $display("PASS: PL RFDC controller validates, writes, reads back, caches retries, and reports AXI failures");
+    $display("PASS: PL RFDC controller probes readiness, validates, writes, reads back, caches retries, and reports AXI failures");
     $finish;
   end
 endmodule

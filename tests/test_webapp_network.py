@@ -1,8 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from software.webapp.controller import BoardGateway
 from software.webapp.management import ManagementError
 from software.webapp.models import (
     BoardProfile,
@@ -100,6 +101,46 @@ class NetworkInterfaceTests(unittest.TestCase):
 
         self.assertEqual(result.apply_status, "applied")
         boards.rfdc_apply.assert_called_once()
+
+    def test_control_timeout_clears_stale_hardware_and_playback_state(self):
+        board = BoardProfile(
+            id="board-a",
+            name="A",
+            role=BoardRole.MASTER,
+            ip="192.168.1.128",
+            mac="",
+            udp_interface="enp225s0f1",
+            udp_source_ip="192.168.1.10",
+            clock_source="onboard",
+        )
+        gateway = BoardGateway(boards=(board,))
+        _ = gateway.boards
+        gateway._set_status(
+            board.id,
+            state=BoardState.RUNNING,
+            online=True,
+            protocol_version=2,
+            rfdc_ready=True,
+            rfdc_config_busy=True,
+            playback_armed=True,
+            playback_prepared=True,
+            playback_running=True,
+        )
+        controller = Mock()
+        controller.rfctrl2_status.side_effect = TimeoutError("RFCTRL2 response timeout")
+
+        with patch("software.webapp.controller.udp_path_error", return_value=None), patch.object(
+            BoardGateway, "_controller", return_value=controller
+        ):
+            status = gateway.refresh(board.id)
+
+        self.assertFalse(status.online)
+        self.assertEqual(status.protocol_version, 0)
+        self.assertIsNone(status.rfdc_ready)
+        self.assertFalse(status.rfdc_config_busy)
+        self.assertFalse(status.playback_armed)
+        self.assertFalse(status.playback_prepared)
+        self.assertFalse(status.playback_running)
 
 
 if __name__ == "__main__":

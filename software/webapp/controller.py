@@ -165,6 +165,12 @@ class BoardGateway:
                 board_id,
                 state=BoardState.OFFLINE,
                 online=False,
+                protocol_version=0,
+                rfdc_ready=None,
+                rfdc_config_busy=False,
+                playback_armed=False,
+                playback_prepared=False,
+                playback_running=False,
                 message=(
                     f"{path_error}；控制目标 {board.ip}:{board.port}。"
                     "请在板卡档案中选择实际连接的网卡并配置对应源 IP"
@@ -218,9 +224,31 @@ class BoardGateway:
                 ),
             )
         except OSError as exc:
-            return self._set_status(board_id, state=BoardState.OFFLINE, online=False, message=str(exc))
+            return self._set_status(
+                board_id,
+                state=BoardState.OFFLINE,
+                online=False,
+                protocol_version=0,
+                rfdc_ready=None,
+                rfdc_config_busy=False,
+                playback_armed=False,
+                playback_prepared=False,
+                playback_running=False,
+                message=str(exc),
+            )
         except (RuntimeError, ValueError, TimeoutError) as exc:
-            return self._set_status(board_id, state=BoardState.FAULT, online=False, message=str(exc))
+            return self._set_status(
+                board_id,
+                state=BoardState.FAULT,
+                online=False,
+                protocol_version=0,
+                rfdc_ready=None,
+                rfdc_config_busy=False,
+                playback_armed=False,
+                playback_prepared=False,
+                playback_running=False,
+                message=str(exc),
+            )
 
     def mark_state(self, board_id: str, state: BoardState, message: str = "") -> BoardStatus:
         return self._set_status(board_id, state=state, message=message)
@@ -347,10 +375,12 @@ class BoardGateway:
     def manual_trigger(self, board_id: str) -> None:
         board = self.profile(board_id)
         if self.simulation:
-            self._simulated_rfdc.setdefault(board_id, {}).update({
+            simulated = self._simulated_rfdc.setdefault(board_id, {})
+            simulated.update({
                 "playback_armed": True,
                 "playback_prepared": False,
                 "playback_running": True,
+                "trigger_count": int(simulated.get("trigger_count", 0)) + 1,
             })
             self._set_status(
                 board_id,
@@ -383,10 +413,74 @@ class BoardGateway:
             message="manual trigger acknowledged; playback gate opened",
         )
 
+    def wait_for_loop_prepared(
+        self,
+        board_id: str,
+        deadline: float,
+        expected_cycle_s: float,
+    ) -> bool:
+        """Wait until PL has refilled the next loop frame and closed its gate."""
+        if self.simulation:
+            simulated_cycle_s = max(
+                expected_cycle_s,
+                float(os.environ.get("RFSOC_WEB_SIM_LOOP_CYCLE_S", "0.001")),
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= simulated_cycle_s:
+                if remaining > 0:
+                    time.sleep(remaining)
+                return False
+            time.sleep(simulated_cycle_s)
+            current = self.status(board_id, refresh=False)
+            if not current.playback_armed:
+                raise RuntimeError("board left the RFCTRL2 ARM session while waiting for the next loop frame")
+            self._simulated_rfdc.setdefault(board_id, {}).update({
+                "playback_armed": True,
+                "playback_prepared": True,
+                "playback_running": False,
+            })
+            self._set_status(
+                board_id,
+                state=BoardState.ARMED,
+                online=True,
+                playback_armed=True,
+                playback_prepared=True,
+                playback_running=False,
+                message="simulated loop frame PREPARED; waiting for the next TRIGGER",
+            )
+            return True
+
+        poll_s = max(0.0001, float(os.environ.get("RFSOC_WEB_LOOP_STATUS_POLL_S", "0.001")))
+        while time.monotonic() < deadline:
+            status = self.refresh(board_id)
+            if status.playback_prepared:
+                return True
+            if not status.online:
+                raise RuntimeError(f"{board_id}: RFCTRL2 went offline while waiting for the next loop frame")
+            if not status.playback_armed and not status.playback_running:
+                raise RuntimeError(f"{board_id}: PL left the ARM session before the next loop frame was prepared")
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(poll_s, remaining))
+        return False
+
     def mute(self, board_id: str) -> None:
         board = self.profile(board_id)
         if self.simulation:
-            self._set_status(board_id, state=BoardState.MUTED, online=True, message="simulated mute")
+            self._simulated_rfdc.setdefault(board_id, {}).update({
+                "playback_armed": False,
+                "playback_prepared": False,
+                "playback_running": False,
+            })
+            self._set_status(
+                board_id,
+                state=BoardState.MUTED,
+                online=True,
+                playback_armed=False,
+                playback_prepared=False,
+                playback_running=False,
+                message="simulated mute",
+            )
             return
         with self._board_control_lock(board_id):
             controller = self._controller(board)
@@ -751,14 +845,28 @@ class RunCoordinator:
                     else:
                         self.boards.arm(board_id, int(run_id, 16), self._channel_mask(request))
                         self.boards.manual_trigger(board_id)
-                if request.one_shot_duration_ms > 0:
-                    time.sleep(request.one_shot_duration_ms / 1000.0)
+                trigger_count = 1
+                output_duration_s = request.one_shot_duration_ms / 1000.0
+                if output_duration_s > 0 and request.jobs[0].waveform.loop:
+                    board_id = record.board_ids[0]
+                    deadline = time.monotonic() + output_duration_s
+                    expected_cycle_s = request.jobs[0].waveform.record_duration_ns * 1e-9
+                    while self.boards.wait_for_loop_prepared(board_id, deadline, expected_cycle_s):
+                        if time.monotonic() >= deadline:
+                            break
+                        self.boards.manual_trigger(board_id)
+                        trigger_count += 1
+                elif output_duration_s > 0:
+                    time.sleep(output_duration_s)
                 for board_id in record.board_ids:
                     if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.MUTED, "dry-run one-shot muted")
                     else:
                         self.boards.mute(board_id)
-                self._event(run_id, "one-shot triggered and muted")
+                if request.jobs[0].waveform.loop:
+                    self._event(run_id, f"loop playback sent {trigger_count} RFCTRL2 Trigger commands and muted")
+                else:
+                    self._event(run_id, "one-shot triggered and muted")
                 record = self.store.finish_one_shot(run_id)
                 self._release_group(run_id)
                 self._publish_run(record)

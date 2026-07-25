@@ -16,6 +16,7 @@ module dac_play_ctrl #(
     input  wire        rfctrl2_trigger, // RFCTRL2 专用、DAC 域单周期 trigger
     input  wire        prepare,      // RFCTRL2 ARM 到达 DAC 域后的单周期 prepare
     input  wire        abort,        // DAC 域同步后的 emergency mute pulse
+    input  wire        armed,        // RFCTRL2 ARM 会话保持到 ABORT_MUTE
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
 
@@ -255,6 +256,28 @@ module dac_play_ctrl #(
           cfg_seen <= 1'b1;
           last_seq_id <= cfg_seq_id;
           prepare_wait_cfg <= 1'b0;
+          prepare_wait_warm <= 1'b1;
+        end else if(armed && cfg_seen && new_cfg && !started &&
+                    !prepare_wait_cfg && !prepare_wait_warm && !prepared &&
+                    (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
+          // A loop refill commits a new cfg_seq_id without issuing another
+          // ARM. Reload all per-frame counters and advertise PREPARED again;
+          // only the next RFCTRL2 Trigger may open the output gates.
+          dly1 <= ch1_delay_cycles; dly2 <= ch2_delay_cycles;
+          dly3 <= ch3_delay_cycles; dly4 <= ch4_delay_cycles;
+          dly5 <= ch5_delay_cycles; dly6 <= ch6_delay_cycles;
+          dly7 <= ch7_delay_cycles; dly8 <= ch8_delay_cycles;
+          beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
+          beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
+          beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
+          beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
+          dbg_underflow_seen <= 8'd0;
+          dbg_ch1_fire_count <= 32'd0; dbg_ch2_fire_count <= 32'd0;
+          dbg_ch3_fire_count <= 32'd0; dbg_ch4_fire_count <= 32'd0;
+          dbg_ch5_fire_count <= 32'd0; dbg_ch6_fire_count <= 32'd0;
+          dbg_ch7_fire_count <= 32'd0; dbg_ch8_fire_count <= 32'd0;
+          cfg_seen <= 1'b1;
+          last_seq_id <= cfg_seq_id;
           prepare_wait_warm <= 1'b1;
         end
 

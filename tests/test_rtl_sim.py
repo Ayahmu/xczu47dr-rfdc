@@ -62,6 +62,27 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path without breaking legacy UDP instructions",
         )
 
+    def test_rfctrl2_status_crosses_writer_and_control_response_path(self):
+        self.run_sim(
+            "tb_rfctrl2_control_path",
+            [
+                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+                ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
+                ROOT / "tests/tb_rfctrl2_control_path.sv",
+            ],
+            "PASS: full RFCTRL2 STATUS payload crosses the UDP writer and PL control response path",
+        )
+
+    def test_rfctrl2_udp_response_targets_requester_and_handles_backpressure(self):
+        self.run_sim(
+            "tb_rfctrl2_udp_response_tx",
+            [
+                ROOT / "hardware/vivado/src/udp/rfctrl2_udp_response_tx.v",
+                ROOT / "tests/tb_rfctrl2_udp_response_tx.sv",
+            ],
+            "PASS: RFCTRL2 UDP response TX locks the exact requester and honors AXIS backpressure",
+        )
+
     def test_pl_riscv_control_v1_emits_play_and_trigger(self):
         self.run_sim(
             "tb_pl_riscv_control_v1",
@@ -79,7 +100,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/dac_play_ctrl.v",
                 ROOT / "tests/tb_dac_play_ctrl.sv",
             ],
-            "PASS: dac_play_ctrl preserves legacy startup and opens RFCTRL2 PREPARED gates without restart latency",
+            "PASS: dac_play_ctrl preserves legacy startup and requires a fresh RFCTRL2 Trigger for every loop frame",
         )
 
     def test_rfctrl2_sync_controller_uses_external_epoch(self):
@@ -99,7 +120,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/rfdc_runtime_config_pl.v",
                 ROOT / "tests/tb_rfdc_runtime_config_pl.sv",
             ],
-            "PASS: PL RFDC controller validates, writes, reads back, caches retries, and reports AXI failures",
+            "PASS: PL RFDC controller probes readiness, validates, writes, reads back, caches retries, and reports AXI failures",
         )
 
     def test_axilite_arbiter_locks_complete_transactions(self):

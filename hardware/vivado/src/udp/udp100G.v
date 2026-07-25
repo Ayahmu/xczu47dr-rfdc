@@ -31,6 +31,7 @@ module udp_10G #(
     input  wire        resp64_tlast,
     input  wire[15:0]  resp64_word_count,
     output wire        resp64_tready,
+    output wire[7:0]   control_tx_debug,
     
     output wire        rcv_vld,
     output wire[63:0]  rcv_dat,
@@ -267,6 +268,7 @@ xxv_ethernet DUT
         .resp64_tlast(resp64_tlast),
         .resp64_word_count(resp64_word_count),
         .resp64_tready(resp64_tready),
+        .control_tx_debug(control_tx_debug),
         
         .rcv_vld   (rcv_vld),
         .rcv_dat   (rcv_dat), 

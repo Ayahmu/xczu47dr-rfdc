@@ -427,14 +427,18 @@ def preview(request: PreviewRequest, _user: UserRecord = Depends(require_user)) 
 @app.post("/api/runs", response_model=RunRecord, status_code=202)
 def create_run(request: RunCreateRequest, user: UserRecord = Depends(require_mutation_user)) -> RunRecord:
     try:
+        app_services = services()
         job = request.jobs[0]
         if not request.dry_run:
-            services().management.require_lease(user, job.board_id)
+            app_services.management.require_lease(user, job.board_id)
             if job.rfdc_config is not None:
                 if job.rfdc_config.board_id != job.board_id:
                     raise ValueError("RFDC configuration board_id does not match the waveform board")
-                if services().runs.active_run_for_board(job.board_id):
+                if app_services.runs.active_run_for_board(job.board_id):
                     raise RuntimeError(f"board {job.board_id} has an active waveform task")
+                status = app_services.boards.status(job.board_id, refresh=True)
+                if status.playback_armed or status.playback_prepared or status.playback_running:
+                    app_services.boards.mute(job.board_id)
                 waveform_channels = (
                     job.waveform.manual_channels
                     if job.waveform.mode == "manual"
@@ -445,13 +449,13 @@ def create_run(request: RunCreateRequest, user: UserRecord = Depends(require_mut
                     for channel in waveform_channels
                     if channel.enabled
                 )
-                services().rfdc.apply(job.board_id, RfdcConfigApplyRequest(
+                app_services.rfdc.apply(job.board_id, RfdcConfigApplyRequest(
                     channels=job.rfdc_config.channels,
                     channel_mask=channel_mask,
                 ))
-        record = services().runs.create(request)
-        services().management.set_run_owner(record.id, user)
-        services().management.add_audit("run.created", f"{user.username} created single-board run {record.name}", user.id, job.board_id)
+        record = app_services.runs.create(request)
+        app_services.management.set_run_owner(record.id, user)
+        app_services.management.add_audit("run.created", f"{user.username} created single-board run {record.name}", user.id, job.board_id)
         return record
     except Exception as exc:
         raise http_error(exc) from exc
@@ -848,4 +852,21 @@ if STATIC_DIR.exists():
 
     @app.get("/")
     def index() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/{frontend_path:path}", include_in_schema=False)
+    def frontend_route(frontend_path: str) -> FileResponse:
+        # Vue Router owns all non-API browser paths. Keep unknown API calls as
+        # real 404 responses instead of returning HTML to an API client.
+        if frontend_path == "api" or frontend_path.startswith("api/"):
+            raise HTTPException(404, "API endpoint not found")
+        candidate = (STATIC_DIR / frontend_path).resolve()
+        try:
+            candidate.relative_to(STATIC_DIR.resolve())
+        except ValueError as exc:
+            raise HTTPException(404, "static path not found") from exc
+        if candidate.is_file():
+            return FileResponse(candidate)
+        if Path(frontend_path).suffix:
+            raise HTTPException(404, "static file not found")
         return FileResponse(STATIC_DIR / "index.html")

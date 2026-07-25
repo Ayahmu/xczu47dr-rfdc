@@ -564,6 +564,10 @@ module Waveform_Interleaved_System_Top #(
               inter_bytes_left <= inter_total_bytes;
               inter_rd_addr <= inter_base_addr;
               prefill_beats_written <= 32'd0;
+              // Every loop iteration must be released by a fresh trigger.
+              // The prefill still runs immediately so PREPARED can be
+              // reported with the next frame already resident in the FIFO.
+              prefill_auto_start <= 1'b0;
               st <= ST_PREFILL;
             end else begin
               st <= ST_BUILD;

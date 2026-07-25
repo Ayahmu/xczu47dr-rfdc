@@ -19,12 +19,15 @@ module tb_udp_rvctrl_protocol;
   wire        rvctrl_tfirst;
   wire        rvctrl_tlast;
   wire [31:0] rvctrl_word_count;
+  wire [1:0] rvctrl_protocol;
 
   reg [31:0] rv_beats = 32'd0;
   reg [63:0] first_rv_data = 64'd0;
   reg [63:0] last_rv_data = 64'd0;
   reg [31:0] first_rv_count = 32'd0;
   reg [31:0] last_rv_count = 32'd0;
+  reg [1:0] first_rv_protocol = 2'd0;
+  reg [1:0] last_rv_protocol = 2'd0;
   reg        first_seen = 1'b0;
   reg        last_seen = 1'b0;
   reg        legacy_seen = 1'b0;
@@ -43,6 +46,7 @@ module tb_udp_rvctrl_protocol;
     .rvctrl_tfirst(rvctrl_tfirst),
     .rvctrl_tlast(rvctrl_tlast),
     .rvctrl_word_count(rvctrl_word_count),
+    .rvctrl_protocol(rvctrl_protocol),
     .m_axi_awaddr(),
     .m_axi_awburst(),
     .m_axi_awcache(),
@@ -90,11 +94,13 @@ module tb_udp_rvctrl_protocol;
         first_seen <= 1'b1;
         first_rv_data <= rvctrl_tdata;
         first_rv_count <= rvctrl_word_count;
+        first_rv_protocol <= rvctrl_protocol;
       end
       if (rvctrl_tlast) begin
         last_seen <= 1'b1;
         last_rv_data <= rvctrl_tdata;
         last_rv_count <= rvctrl_word_count;
+        last_rv_protocol <= rvctrl_protocol;
       end
     end else if (instr_tvalid) begin
       legacy_seen <= 1'b1;
@@ -189,8 +195,10 @@ module tb_udp_rvctrl_protocol;
     check_condition(last_seen == 1'b1, "RVCTRL1 last beat flag missing");
     check_condition(first_rv_data == 64'h0000000300000001, "RVCTRL1 header0 mismatch");
     check_condition(last_rv_data == 64'h1234567800000010, "RVCTRL1 payload mismatch");
-    check_condition(first_rv_count == 32'h80000006, "RVCTRL1 first word_count should mark v1 and report six 32-bit words");
-    check_condition(last_rv_count == 32'h80000006, "RVCTRL1 last word_count should mark v1 and report six 32-bit words");
+    check_condition(first_rv_count == 32'd6, "RVCTRL1 first word_count should report six 32-bit words");
+    check_condition(last_rv_count == 32'd6, "RVCTRL1 last word_count should report six 32-bit words");
+    check_condition(first_rv_protocol == 2'd1, "RVCTRL1 first beat protocol marker mismatch");
+    check_condition(last_rv_protocol == 2'd1, "RVCTRL1 last beat protocol marker mismatch");
 
     rv_beats = 32'd0;
     first_seen = 1'b0;
@@ -205,8 +213,10 @@ module tb_udp_rvctrl_protocol;
     check_condition(rv_beats == 32'd3, "RFCTRL2 packet should emit header0/header1/payload beats");
     check_condition(first_seen == 1'b1, "RFCTRL2 first beat flag missing");
     check_condition(last_seen == 1'b1, "RFCTRL2 last beat flag missing");
-    check_condition(first_rv_count == 32'hA0000006, "RFCTRL2 first word_count should mark v2 and report six 32-bit words");
-    check_condition(last_rv_count == 32'hA0000006, "RFCTRL2 last word_count should mark v2 and report six 32-bit words");
+    check_condition(first_rv_count == 32'd6, "RFCTRL2 first word_count should report six 32-bit words");
+    check_condition(last_rv_count == 32'd6, "RFCTRL2 last word_count should report six 32-bit words");
+    check_condition(first_rv_protocol == 2'd2, "RFCTRL2 first beat protocol marker mismatch");
+    check_condition(last_rv_protocol == 2'd2, "RFCTRL2 last beat protocol marker mismatch");
 
     $display("PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path without breaking legacy UDP instructions");
     $finish;

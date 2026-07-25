@@ -10,6 +10,7 @@ module tb_pl_riscv_control_v1;
   reg         rvctrl_tfirst = 1'b0;
   reg         rvctrl_tlast = 1'b0;
   reg [31:0]  rvctrl_word_count = 32'd0;
+  reg [1:0]   rvctrl_protocol = 2'd0;
 
   wire [127:0] m_instr_tdata;
   wire         m_instr_tvalid;
@@ -96,6 +97,7 @@ module tb_pl_riscv_control_v1;
   reg signed [31:0] request_phase [0:7];
   reg [31:0] request_current [0:7];
   integer channel;
+  integer packet_beat;
 
   pl_riscv_control_v1 dut (
     .clk(clk),
@@ -105,6 +107,7 @@ module tb_pl_riscv_control_v1;
     .rvctrl_tfirst(rvctrl_tfirst),
     .rvctrl_tlast(rvctrl_tlast),
     .rvctrl_word_count(rvctrl_word_count),
+    .rvctrl_protocol(rvctrl_protocol),
     .m_instr_tdata(m_instr_tdata),
     .m_instr_tvalid(m_instr_tvalid),
     .m_instr_tready(m_instr_tready),
@@ -239,13 +242,15 @@ module tb_pl_riscv_control_v1;
       rvctrl_tdata = word;
       rvctrl_tfirst = first;
       rvctrl_tlast = last;
-      rvctrl_word_count = count;
+      rvctrl_word_count = {3'd0, count[28:0]};
+      rvctrl_protocol = count[29] ? 2'd2 : (count[31] ? 2'd1 : 2'd0);
       rvctrl_tvalid = 1'b1;
       @(negedge clk);
       rvctrl_tvalid = 1'b0;
       rvctrl_tfirst = 1'b0;
       rvctrl_tlast = 1'b0;
       rvctrl_word_count = 32'd0;
+      rvctrl_protocol = 2'd0;
       rvctrl_tdata = 64'd0;
     end
   endtask
@@ -256,6 +261,18 @@ module tb_pl_riscv_control_v1;
         $display("FAIL: %s", message);
         $finish;
       end
+    end
+  endtask
+
+  task wait_for_response_count(input integer expected_count);
+    integer timeout_cycles;
+    begin
+      timeout_cycles = 0;
+      while ((resp_count < expected_count) && (timeout_cycles < 64)) begin
+        @(negedge clk);
+        timeout_cycles = timeout_cycles + 1;
+      end
+      repeat (2) @(negedge clk);
     end
   endtask
 
@@ -285,7 +302,7 @@ module tb_pl_riscv_control_v1;
     send_rv_beat(64'h0000000300000001, 1'b1, 1'b0, 32'h80000006);
     send_rv_beat(64'h0000000800000077, 1'b0, 1'b0, 32'h80000006);
     send_rv_beat(64'hCAFE123400000120, 1'b0, 1'b1, 32'h80000006);
-    repeat (8) @(negedge clk);
+    repeat (12) @(negedge clk);
     check_condition(mmio_write_seen == 1'b1, "RVCTRL1 MMIO_WRITE32 should create an AXI-Lite write");
     check_condition(mmio_write_addr == 18'h00120, "RVCTRL1 MMIO_WRITE32 address mismatch");
     check_condition(mmio_write_data == 32'hCAFE1234, "RVCTRL1 MMIO_WRITE32 data mismatch");
@@ -296,7 +313,7 @@ module tb_pl_riscv_control_v1;
     send_rv_beat(64'h0000000200000001, 1'b1, 1'b0, 32'h80000005);
     send_rv_beat(64'h0000000400000078, 1'b0, 1'b0, 32'h80000005);
     send_rv_beat(64'h0000000000000124, 1'b0, 1'b1, 32'h80000005);
-    repeat (8) @(negedge clk);
+    wait_for_response_count(4);
     check_condition(mmio_read_seen == 1'b1, "RVCTRL1 MMIO_READ32 should create an AXI-Lite read");
     check_condition(mmio_read_addr == 18'h00124, "RVCTRL1 MMIO_READ32 address mismatch");
     check_condition(dbg_status == 32'h10000002, "RVCTRL1 MMIO_READ32 status mismatch");
@@ -333,7 +350,7 @@ module tb_pl_riscv_control_v1;
     repeat (4) @(negedge clk);
     check_condition(rfctrl2_arm_seen == 1'b1, "RFCTRL2 ARM must emit an arm pulse");
     check_condition(dbg_status == 32'h20000006, "RFCTRL2 ARM status mismatch");
-    repeat (4) @(negedge clk);
+    wait_for_response_count(4);
     check_condition(resp_count == 6'd4, "RFCTRL2 ARM should emit a 4-word RFRESP2 packet");
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 ARM magic mismatch");
     check_condition(resp_words[1] == 64'h0000000600000002, "RFRESP2 ARM header mismatch");
@@ -341,7 +358,7 @@ module tb_pl_riscv_control_v1;
     resp_count = 6'd0;
     send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h000000100000008A, 1'b0, 1'b1, 32'hA0000004);
-    repeat (8) @(negedge clk);
+    wait_for_response_count(7);
     check_condition(resp_count == 6'd7, "RFCTRL2 STATUS should emit a 7-word RFRESP2 packet");
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 STATUS magic mismatch");
     check_condition(resp_words[1] == 64'h0000000200000002, "RFRESP2 STATUS header mismatch");
@@ -352,7 +369,7 @@ module tb_pl_riscv_control_v1;
     resp_count = 6'd0;
     send_rv_beat(64'h0000000900000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h0000000000000092, 1'b0, 1'b1, 32'hA0000004);
-    repeat (6) @(negedge clk);
+    wait_for_response_count(3);
     check_condition(resp_count == 6'd3, "unprepared RFCTRL2 Trigger must receive a response");
     check_condition(resp_words[1] == 64'h0000000900060002, "unprepared RFCTRL2 Trigger must report unsafe state");
     check_condition(rfctrl2_trigger_seen == 1'b0, "unprepared RFCTRL2 Trigger must not emit a pulse");
@@ -361,14 +378,14 @@ module tb_pl_riscv_control_v1;
     resp_count = 6'd0;
     send_rv_beat(64'h0000000900000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h0000000000000093, 1'b0, 1'b1, 32'hA0000004);
-    repeat (6) @(negedge clk);
+    wait_for_response_count(3);
     check_condition(rfctrl2_trigger_seen == 1'b1, "prepared RFCTRL2 Trigger must emit the dedicated trigger pulse");
     check_condition(resp_words[1] == 64'h0000000900000002, "prepared RFCTRL2 Trigger response mismatch");
 
     resp_count = 6'd0;
     send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h0000001000000094, 1'b0, 1'b1, 32'hA0000004);
-    repeat (8) @(negedge clk);
+    wait_for_response_count(7);
     check_condition(resp_words[3] == 64'h0000001100030000, "RFRESP2 STATUS must advertise playback PREPARED in bit 4");
 
     // RFCTRL2 RFDC_APPLY: 4 header words plus a fixed 200-byte payload.
@@ -421,7 +438,7 @@ module tb_pl_riscv_control_v1;
     rfdc_apply_done = 1'b1;
     @(negedge clk);
     rfdc_apply_done = 1'b0;
-    repeat (52) @(negedge clk);
+    wait_for_response_count(47);
     check_condition(resp_count == 6'd47, "RFDC_APPLY should emit a 47-word RFRESP2 packet");
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 RFDC_APPLY magic mismatch");
     check_condition(resp_words[1] == 64'h0000000300000002, "RFRESP2 RFDC_APPLY header mismatch");
@@ -431,12 +448,59 @@ module tb_pl_riscv_control_v1;
     check_condition(resp_words[7] == request_nco[0], "RFRESP2 RFDC_APPLY CH1 actual NCO mismatch");
     check_condition(resp_words[42] == request_nco[7], "RFRESP2 RFDC_APPLY CH8 actual NCO mismatch");
 
+    // A non-zero reserved word in the final channel record must be latched
+    // on the last beat and reject the request before the RFDC FSM starts.
+    resp_count = 6'd0;
+    rfdc_apply_start_seen = 1'b0;
+    send_rv_beat(64'h0000000300000002, 1'b1, 1'b0, 32'hA0000036);
+    send_rv_beat(64'h000000C800000095, 1'b0, 1'b0, 32'hA0000036);
+    send_rv_beat(64'h0000000100000005, 1'b0, 1'b0, 32'hA0000036);
+    for (channel = 0; channel < 8; channel = channel + 1) begin
+      send_rv_beat(64'd0, 1'b0, 1'b0, 32'hA0000036);
+      send_rv_beat(64'h0000000000000001, 1'b0, 1'b0, 32'hA0000036);
+      send_rv_beat(
+          {channel == 7 ? 32'd1 : 32'd0, 32'd20000},
+          1'b0,
+          channel == 7,
+          32'hA0000036
+      );
+    end
+    wait_for_response_count(3);
+    check_condition(!rfdc_apply_start_seen, "RFDC_APPLY must reject a non-zero final reserved word");
+    check_condition(resp_words[1] == 64'h0000000300030002, "invalid RFDC_APPLY status mismatch");
+
+    resp_count = 6'd0;
     send_rv_beat(64'h0000000700000002, 1'b1, 1'b0, 32'hA0000006);
     send_rv_beat(64'h0000000800000089, 1'b0, 1'b0, 32'hA0000006);
     send_rv_beat(64'h1122334455667788, 1'b0, 1'b1, 32'hA0000006);
-    repeat (4) @(negedge clk);
+    wait_for_response_count(4);
     check_condition(rfctrl2_sync_seen == 1'b1, "RFCTRL2 SYNC_EPOCH must emit a sync pulse");
     check_condition(rfctrl2_epoch == 64'h1122334455667788, "RFCTRL2 SYNC_EPOCH payload mismatch");
+
+    // The narrowed receive counters must still accept the full 64-word
+    // payload and reject an oversized packet without wrapping the write index.
+    for (packet_beat = 0; packet_beat < 32; packet_beat = packet_beat + 1) begin
+      send_rv_beat(
+          packet_beat == 0 ? 64'h0000123400000001 : {32'hA5000000 + packet_beat, 32'h5A000000 + packet_beat},
+          packet_beat == 0,
+          packet_beat == 31,
+          32'd64
+      );
+    end
+    repeat (4) @(negedge clk);
+    check_condition(dbg_play_count == 32'd1, "64-word boundary packet corrupted prior command state");
+    check_condition(dut.dbg_ping_count == 32'd1, "64-word boundary packet must be processed");
+
+    for (packet_beat = 0; packet_beat < 33; packet_beat = packet_beat + 1) begin
+      send_rv_beat(
+          packet_beat == 0 ? 64'h0000567800000001 : {32'hC3000000 + packet_beat, 32'h3C000000 + packet_beat},
+          packet_beat == 0,
+          packet_beat == 32,
+          32'd65
+      );
+    end
+    repeat (4) @(negedge clk);
+    check_condition(dut.dbg_ping_count == 32'd1, "65-word packet must be dropped without index wrap");
 
     $display("PASS: PL control shim emits legacy commands plus RFCTRL2 ARM, RFDC_APPLY, and SYNC_EPOCH");
     $finish;

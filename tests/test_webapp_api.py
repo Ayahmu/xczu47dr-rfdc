@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import time
@@ -6,13 +7,14 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from software.webapp.main import app
+from software.webapp.main import STATIC_DIR, app
 
 
-def manual_waveform_payload():
+def manual_waveform_payload(loop=False):
     return {
         "name": "Single-board manual smoke",
         "mode": "manual",
+        "loop": loop,
         "record_duration_ns": 1000,
         "manual_channels": [
             {
@@ -113,6 +115,16 @@ class WebAppApiTests(unittest.TestCase):
         with self.client.websocket_connect("/api/events") as socket:
             self.assertEqual(socket.receive_json()["type"], "service.ready")
 
+    def test_vue_router_paths_refresh_to_spa_without_hiding_unknown_api_routes(self):
+        if not STATIC_DIR.exists():
+            self.skipTest("production frontend has not been built")
+        response = self.client.get("/boards/board-a/output")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response.headers["content-type"])
+        self.assertIn('<div id="app"></div>', response.text)
+        self.assertEqual(self.client.get("/api/not-a-real-endpoint").status_code, 404)
+        self.assertEqual(self.client.get("/favicon.ico").status_code, 404)
+
     def test_server_udp_interface_inventory_exposes_both_selectable_ports(self):
         response = self.client.get("/api/network/interfaces")
         self.assertEqual(response.status_code, 200, response.text)
@@ -209,6 +221,20 @@ class WebAppApiTests(unittest.TestCase):
         second = self.client.post("/api/runs", json=run_payload(), headers=self.headers)
         self.assertEqual(second.status_code, 202, second.text)
 
+    def test_web_run_loop_flag_reaches_generated_metadata(self):
+        created = self.client.post(
+            "/api/runs",
+            json=run_payload(waveform=manual_waveform_payload(loop=True)),
+            headers=self.headers,
+        )
+        self.assertEqual(created.status_code, 202, created.text)
+        record = self.wait_done(created.json()["id"])
+        request = app.state.services.store.get_request(record["id"])
+        self.assertTrue(request.jobs[0].waveform.loop)
+        metadata_path = Path(record["artifact_dir"]) / "board-a" / "manual-channels_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.assertTrue(metadata["loop"])
+
     def test_multi_board_request_is_rejected_before_execution(self):
         payload = {
             "jobs": [
@@ -234,6 +260,58 @@ class WebAppApiTests(unittest.TestCase):
         self.assertFalse(record["loaded"])
         next_run = self.client.post("/api/runs", json=run_payload(), headers=self.headers)
         self.assertEqual(next_run.status_code, 202, next_run.text)
+
+    def test_live_one_shot_finishes_muted_without_loaded_manual_controls(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        payload = run_payload(dry_run=False)
+        payload["completion_mode"] = "one_shot"
+        payload["one_shot_duration_ms"] = 1
+        created = self.client.post("/api/runs", json=payload, headers=self.headers)
+        self.assertEqual(created.status_code, 202, created.text)
+        record = self.wait_done(created.json()["id"])
+        self.assertEqual(record["completion_mode"], "one_shot")
+        self.assertFalse(record["loaded"])
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+        self.assertIsNone(self.client.get("/api/boards/board-a/loaded-waveform").json())
+
+    def test_live_loop_sends_a_fresh_trigger_for_each_prepared_frame(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        payload = run_payload(waveform=manual_waveform_payload(loop=True), dry_run=False)
+        payload["completion_mode"] = "one_shot"
+        payload["one_shot_duration_ms"] = 8
+        created = self.client.post("/api/runs", json=payload, headers=self.headers)
+        self.assertEqual(created.status_code, 202, created.text)
+        record = self.wait_done(created.json()["id"])
+        events = self.client.get(f"/api/runs/{record['id']}/events").json()
+        summary = next(event["message"] for event in events if event["message"].startswith("loop playback sent "))
+        trigger_count = int(summary.split()[3])
+        self.assertGreaterEqual(trigger_count, 2)
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+
+    def test_live_run_auto_mutes_stale_armed_board_before_rfdc_apply(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        first = self.client.post("/api/runs", json=run_payload(dry_run=False), headers=self.headers)
+        self.assertEqual(first.status_code, 202, first.text)
+        self.wait_done(first.json()["id"])
+        armed = self.client.post("/api/boards/board-a/arm", headers=self.headers)
+        self.assertEqual(armed.status_code, 200, armed.text)
+        self.assertTrue(self.client.get("/api/boards/board-a/status?refresh=false").json()["playback_armed"])
+
+        config = self.client.get("/api/boards/board-a/rfdc-config").json()
+        payload = run_payload(dry_run=False)
+        payload["jobs"][0]["rfdc_config"] = config
+        payload["completion_mode"] = "one_shot"
+        payload["one_shot_duration_ms"] = 1
+        created = self.client.post("/api/runs", json=payload, headers=self.headers)
+        self.assertEqual(created.status_code, 202, created.text)
+        record = self.wait_done(created.json()["id"])
+        self.assertFalse(record["loaded"])
+        status = self.client.get("/api/boards/board-a/status?refresh=false").json()
+        self.assertFalse(status["playback_armed"])
+        self.assertFalse(status["playback_running"])
 
     def test_administrator_also_needs_lease_for_live_run(self):
         denied = self.client.post("/api/runs", json=run_payload(dry_run=False), headers=self.headers)
@@ -309,6 +387,58 @@ class WebAppApiTests(unittest.TestCase):
         self.assertTrue(latest_run["dry_run"])
         self.assertFalse(latest_run["loaded"])
         self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "IDLE")
+
+    def test_performance_scan_metadata_and_per_channel_snapshot(self):
+        created = self.client.post(
+            "/api/tests",
+            json={
+                "name": "per-channel amplitude sweep",
+                "board_id": "board-a",
+                "kind": "amplitude",
+                "mode": "manual",
+                "channels": [1, 3],
+                "scan_axis": "data_amplitude",
+                "scan_start": 0,
+                "scan_stop": 1,
+                "scan_step": 0.05,
+                "scan_unit": "",
+                "points": [{
+                    "scan_axis": "data_amplitude",
+                    "scan_value": 0.5,
+                    "channel_configs": {
+                        "1": {
+                            "data_amplitude": 0.5, "data_offset_hz": 20e6,
+                            "data_phase_deg": 10, "target_rf_hz": 4.5e9,
+                            "nco_hz": -2e9, "nco_phase_deg": 20,
+                            "dac_output_current_ma": 20, "duration_ns": 250,
+                        },
+                        "3": {
+                            "data_amplitude": 0.25, "data_offset_hz": -10e6,
+                            "data_phase_deg": 90, "target_rf_hz": 4.6e9,
+                            "nco_hz": -1.8e9, "nco_phase_deg": 45,
+                            "dac_output_current_ma": 22, "duration_ns": 500,
+                        },
+                    },
+                }],
+                "dry_run": True,
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        record = created.json()
+        self.assertEqual(record["scan_axis"], "data_amplitude")
+        self.assertEqual(record["scan_step"], 0.05)
+
+        executed = self.client.post(f"/api/tests/{record['id']}/points/0/execute", headers=self.headers)
+        self.assertEqual(executed.status_code, 200, executed.text)
+        runs = self.client.get("/api/runs").json()
+        request = app.state.services.store.get_request(runs[0]["id"])
+        channels = request.jobs[0].waveform.manual_channels
+        self.assertEqual(channels[0].data_amplitude, 0.5)
+        self.assertEqual(channels[0].duration_ns, 250)
+        self.assertEqual(channels[2].data_amplitude, 0.25)
+        self.assertEqual(channels[2].duration_ns, 500)
+        self.assertFalse(channels[1].enabled)
 
 
 if __name__ == "__main__":

@@ -403,6 +403,13 @@ bit  [9]    tiled DDR layout on PLAY
 bit  [10]   interleaved_512b DDR layout on PLAY
 ```
 
+For web-console loop runs, `bit[8]` reloads the same DDR frame after completion
+but does not auto-start it. The server waits for RFCTRL2 `PREPARED` and sends a
+new RFCTRL2 `TRIGGER` for every iteration until the configured total output time
+expires, then sends `ABORT_MUTE`. This mode intentionally includes the UDP
+status/trigger round-trip between iterations and is not phase-continuous or
+gapless looping.
+
 `send_waveform_udp.py` is the supported CLI entry point. Shared waveform
 generation and protocol helpers live in `waveform_tools.py`.
 

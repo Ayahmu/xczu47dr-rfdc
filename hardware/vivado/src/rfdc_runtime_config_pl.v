@@ -6,7 +6,8 @@
 // so RFDC_GET_CONFIG survives host service restarts.
 module rfdc_runtime_config_pl #(
     parameter integer CLOCK_HZ = 100000000,
-    parameter integer AXI_TIMEOUT_CYCLES = 100000
+    parameter integer AXI_TIMEOUT_CYCLES = 100000,
+    parameter integer READY_PROBE_INTERVAL_CYCLES = CLOCK_HZ
 ) (
     input  wire          clk,
     input  wire          rst_n,
@@ -181,6 +182,8 @@ module rfdc_runtime_config_pl #(
   localparam [7:0] S_VOP_QUANT_INIT   = 8'd76;
   localparam [7:0] S_VOP_QUANT_STEP   = 8'd77;
   localparam [7:0] S_VOP_QUANT_DONE   = 8'd78;
+  localparam [7:0] S_READY_PROBE_READ = 8'd79;
+  localparam [7:0] S_READY_PROBE_WAIT = 8'd80;
 
   reg [7:0] state;
   reg [2:0] channel_index;
@@ -224,6 +227,9 @@ module rfdc_runtime_config_pl #(
   reg calc_negative;
   reg ramp_up;
   reg vop_readback_only;
+  reg [31:0] ready_probe_count;
+  reg [1:0] ready_probe_tile;
+  reg [3:0] ready_probe_mask;
 
   reg [7:0] validation_error_mask;
   integer vi;
@@ -266,6 +272,13 @@ module rfdc_runtime_config_pl #(
     input [2:0] channel;
     begin
       channel_tile_base = 18'h04000 + ({15'd0, channel[2:1]} << 14);
+    end
+  endfunction
+
+  function [17:0] tile_base_from_index;
+    input [1:0] tile;
+    begin
+      tile_base_from_index = 18'h04000 + ({16'd0, tile} << 14);
     end
   endfunction
 
@@ -399,6 +412,8 @@ module rfdc_runtime_config_pl #(
       calc_dividend <= 66'd0; calc_quotient <= 66'd0; calc_remainder <= 20'd0;
       calc_divisor <= 20'd0; calc_iteration <= 7'd0; calc_negative <= 1'b0;
       ramp_up <= 1'b0; vop_readback_only <= 1'b0;
+      ready_probe_count <= READY_PROBE_INTERVAL_CYCLES - 1;
+      ready_probe_tile <= 2'd0; ready_probe_mask <= 4'd0;
       axi_start <= 1'b0; axi_write <= 1'b0; axi_address <= 18'd0;
       axi_write_data <= 32'd0; axi_write_strobe <= 4'b0011;
     end else begin
@@ -410,6 +425,7 @@ module rfdc_runtime_config_pl #(
         S_IDLE: begin
           busy <= 1'b0;
           if (start) begin
+            ready_probe_count <= READY_PROBE_INTERVAL_CYCLES - 1;
             if (cached_response_valid && (cmd_sequence == cached_sequence) && (cmd_revision == cached_revision)) begin
               done <= 1'b1;
             end else if (cmd_channel_mask == 8'd0) begin
@@ -429,9 +445,38 @@ module rfdc_runtime_config_pl #(
               request_nco_hz <= cmd_nco_hz; request_zone <= cmd_nyquist_zone;
               request_phase <= cmd_phase_mdeg; request_current <= cmd_current_ua;
               config_valid_mask <= config_valid_mask & ~cmd_channel_mask;
-              channel_status <= 256'd0; channel_index <= 3'd0; rfdc_ready <= 1'b1;
+              channel_status <= 256'd0; channel_index <= 3'd0;
               force_mute_pulse <= 1'b1; state <= S_SELECT;
             end
+          end else if (ready_probe_count == 0) begin
+            // RFDC startup is performed once by the PS. Probe all four DAC
+            // tiles from PL so STATUS reflects hardware without requiring a
+            // parameter write first.
+            busy <= 1'b1;
+            ready_probe_tile <= 2'd0;
+            ready_probe_mask <= 4'd0;
+            ready_probe_count <= READY_PROBE_INTERVAL_CYCLES - 1;
+            state <= S_READY_PROBE_READ;
+          end else begin
+            ready_probe_count <= ready_probe_count - 1'b1;
+          end
+        end
+
+        S_READY_PROBE_READ: begin
+          launch_read(tile_base_from_index(ready_probe_tile) + OFF_CURRENT_STATE);
+          state <= S_READY_PROBE_WAIT;
+        end
+        S_READY_PROBE_WAIT: if (axi_done) begin
+          ready_probe_mask[ready_probe_tile] <=
+              (axi_error == 0) && (axi_read_data[3:0] == 4'hF);
+          if (ready_probe_tile == 2'd3) begin
+            rfdc_ready <= (ready_probe_mask[2:0] == 3'b111) &&
+                          (axi_error == 0) && (axi_read_data[3:0] == 4'hF);
+            busy <= 1'b0;
+            state <= S_IDLE;
+          end else begin
+            ready_probe_tile <= ready_probe_tile + 1'b1;
+            state <= S_READY_PROBE_READ;
           end
         end
 
@@ -524,8 +569,15 @@ module rfdc_runtime_config_pl #(
           else if ((axi_read_data[3:0] != 4'hF)) begin
             status <= (applied_mask != 0) ? ST_PARTIAL : ST_RFDC_NOT_READY;
             error_mask <= request_mask & ~applied_mask; failure_stage <= STAGE_READY;
-            failure_address <= axi_address; rfdc_ready <= 1'b0; force_mute_pulse <= 1'b1; state <= S_FINISH;
-          end else state <= S_NYQ_READ;
+            failure_address <= axi_address;
+            ready_probe_mask[channel_index[2:1]] <= 1'b0;
+            rfdc_ready <= 1'b0; force_mute_pulse <= 1'b1; state <= S_FINISH;
+          end else begin
+            ready_probe_mask[channel_index[2:1]] <= 1'b1;
+            if ((ready_probe_mask | (4'b0001 << channel_index[2:1])) == 4'hF)
+              rfdc_ready <= 1'b1;
+            state <= S_NYQ_READ;
+          end
         end
         S_NYQ_READ: begin launch_read(block_base + OFF_CFG0); state <= S_NYQ_READ_WAIT; end
         S_NYQ_READ_WAIT: if (axi_done) begin

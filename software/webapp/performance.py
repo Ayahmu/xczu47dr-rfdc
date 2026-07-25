@@ -77,6 +77,11 @@ class PerformanceStore:
                     settle_ms REAL NOT NULL,
                     auto_mute INTEGER NOT NULL,
                     dry_run INTEGER NOT NULL,
+                    scan_axis TEXT NOT NULL DEFAULT 'custom',
+                    scan_start REAL,
+                    scan_stop REAL,
+                    scan_step REAL,
+                    scan_unit TEXT NOT NULL DEFAULT '',
                     error TEXT NOT NULL,
                     environment_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
@@ -100,6 +105,16 @@ class PerformanceStore:
                 connection.execute("ALTER TABLE performance_tests ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 1")
             if "environment_json" not in columns:
                 connection.execute("ALTER TABLE performance_tests ADD COLUMN environment_json TEXT NOT NULL DEFAULT '{}'")
+            if "scan_axis" not in columns:
+                connection.execute("ALTER TABLE performance_tests ADD COLUMN scan_axis TEXT NOT NULL DEFAULT 'custom'")
+            if "scan_start" not in columns:
+                connection.execute("ALTER TABLE performance_tests ADD COLUMN scan_start REAL")
+            if "scan_stop" not in columns:
+                connection.execute("ALTER TABLE performance_tests ADD COLUMN scan_stop REAL")
+            if "scan_step" not in columns:
+                connection.execute("ALTER TABLE performance_tests ADD COLUMN scan_step REAL")
+            if "scan_unit" not in columns:
+                connection.execute("ALTER TABLE performance_tests ADD COLUMN scan_unit TEXT NOT NULL DEFAULT ''")
 
     def create(self, request: PerformanceTestCreateRequest, environment: dict[str, object] | None = None) -> PerformanceTestRecord:
         test_id, timestamp = uuid.uuid4().hex[:12], utc_now()
@@ -108,11 +123,13 @@ class PerformanceStore:
                 """INSERT INTO performance_tests(
                     id, name, board_id, kind, channel, channels_json, mode, state,
                     current_point, total_points, settle_ms, auto_mute, dry_run,
+                    scan_axis, scan_start, scan_stop, scan_step, scan_unit,
                     error, environment_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'DRAFT', 0, ?, ?, ?, ?, '', ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'DRAFT', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
                 (test_id, request.name, request.board_id, request.kind.value, request.channel,
                  json.dumps(request.channels or [request.channel]), request.mode, len(request.points),
                  request.settle_ms, int(request.auto_mute), int(request.dry_run),
+                 request.scan_axis, request.scan_start, request.scan_stop, request.scan_step, request.scan_unit,
                  json.dumps(environment or {}, ensure_ascii=False), timestamp, timestamp),
             )
             for index, parameters in enumerate(request.points):
@@ -175,6 +192,11 @@ class PerformanceStore:
             current_point=row["current_point"], total_points=row["total_points"], settle_ms=row["settle_ms"],
             auto_mute=bool(row["auto_mute"]), created_at=row["created_at"], updated_at=row["updated_at"], error=row["error"],
             dry_run=bool(row["dry_run"]),
+            scan_axis=row["scan_axis"] if "scan_axis" in row.keys() else "custom",
+            scan_start=row["scan_start"] if "scan_start" in row.keys() else None,
+            scan_stop=row["scan_stop"] if "scan_stop" in row.keys() else None,
+            scan_step=row["scan_step"] if "scan_step" in row.keys() else None,
+            scan_unit=row["scan_unit"] if "scan_unit" in row.keys() else "",
             environment=json.loads(row["environment_json"]) if "environment_json" in row.keys() else {},
         )
 
@@ -349,31 +371,66 @@ class PerformanceService:
         values = {item.channel: item.model_copy(deep=True) for item in base.channels}
         params = point.parameters
         selected = test.channels or [test.channel]
+        duration_by_channel: dict[int, float] = {}
+
+        def apply_parameters(item, channel_params: dict[str, object]) -> None:
+            # A point may contain a complete per-channel snapshot. The legacy
+            # top-level fields below remain supported for old saved tests.
+            for field in (
+                "dac_output_current_ma", "data_offset_hz", "data_amplitude",
+                "data_phase_deg", "nco_phase_deg",
+            ):
+                if field in channel_params:
+                    setattr(item, field, float(channel_params[field]))
+            if "target_rf_hz" in channel_params:
+                item.target_rf_hz = float(channel_params["target_rf_hz"])
+                plan = host.rfdc_nco_plan_for_target(item.target_rf_hz)
+                item.nco_hz = float(plan["nco_hz"])
+                item.nyquist_zone = int(plan["nyquist_zone"])
+            if "nco_hz" in channel_params:
+                item.nco_hz = float(channel_params["nco_hz"])
+            if "nyquist_zone" in channel_params:
+                item.nyquist_zone = int(channel_params["nyquist_zone"])
+
+        channel_configs = params.get("channel_configs", {})
+        if isinstance(channel_configs, dict):
+            for raw_channel, channel_params in channel_configs.items():
+                try:
+                    channel = int(raw_channel)
+                except (TypeError, ValueError):
+                    continue
+                if channel in selected and isinstance(channel_params, dict):
+                    apply_parameters(values[channel], channel_params)
+                    if "duration_ns" in channel_params:
+                        duration_by_channel[channel] = float(channel_params["duration_ns"])
+        else:
+            channel_configs = {}
+
         for channel in selected:
-            item = values[channel]
-            if test.kind == TestKind.AMPLITUDE:
-                if "dac_output_current_ma" in params: item.dac_output_current_ma = float(params["dac_output_current_ma"])
-                if "data_amplitude" in params: item.data_amplitude = float(params["data_amplitude"])
-            elif test.kind == TestKind.FREQUENCY:
-                if "target_rf_hz" in params:
-                    item.target_rf_hz = float(params["target_rf_hz"])
-                    plan = host.rfdc_nco_plan_for_target(item.target_rf_hz)
-                    item.nco_hz = float(plan["nco_hz"])
-                    item.nyquist_zone = int(plan["nyquist_zone"])
-                if "data_offset_hz" in params: item.data_offset_hz = float(params["data_offset_hz"])
-            elif test.kind == TestKind.PHASE:
-                if "data_phase_deg" in params: item.data_phase_deg = float(params["data_phase_deg"])
-                if "nco_phase_deg" in params: item.nco_phase_deg = float(params["nco_phase_deg"])
+            apply_parameters(values[channel], params)
         if test.dry_run:
             config = base.model_copy(update={"channels": list(values.values())})
         else:
-            config = self.rfdc.apply(test.board_id, RfdcConfigApplyRequest(channels=list(values.values())))
+            channel_mask = sum(1 << (channel - 1) for channel in selected)
+            config = self.rfdc.apply(
+                test.board_id,
+                RfdcConfigApplyRequest(channels=list(values.values()), channel_mask=channel_mask),
+            )
         channels = []
         for channel in range(1, 9):
             item = values[channel]
             enabled = channel in selected
             amp = item.data_amplitude if enabled else 0.0
-            channels.append(ManualChannel(channel=channel, enabled=enabled, waveform="dc-iq-cw", frequency_mhz=item.data_offset_hz / 1e6, phase_deg=item.data_phase_deg, amplitude=round(abs(amp) * 32767), data_amplitude=amp, duration_ns=1000))
+            channels.append(ManualChannel(
+                channel=channel,
+                enabled=enabled,
+                waveform="dc-iq-cw",
+                frequency_mhz=item.data_offset_hz / 1e6,
+                phase_deg=item.data_phase_deg,
+                amplitude=round(abs(amp) * 32767),
+                data_amplitude=amp,
+                duration_ns=duration_by_channel.get(channel, 1000),
+            ))
         waveform = WaveformRequest(name=f"{test.name} point {point.index + 1}", mode="manual", record_duration_ns=10_000, manual_channels=channels)
         request = RunCreateRequest(
             # RFDC runtime settings were applied and read back by the PL above.

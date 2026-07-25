@@ -73,7 +73,10 @@ if {[llength $ltx_files] > 0} {
     puts "INFO: Debug probes copied to ${output_dir}/${output_basename}.ltx"
 }
 
-set timing_rpt "${impl_dir}/reports/post_impl_timing.rpt"
+set timing_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_postroute_physopted.rpt"
+if {![file exists ${timing_rpt}]} {
+    set timing_rpt "${impl_dir}/reports/post_impl_timing.rpt"
+}
 if {[file exists ${timing_rpt}]} {
     file copy -force ${timing_rpt} ${output_dir}/${output_basename}_timing.rpt
     puts "INFO: Timing report copied to ${output_dir}/${output_basename}_timing.rpt"

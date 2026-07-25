@@ -5,6 +5,7 @@ module tb_waveform_interleaved_rearm;
 
   reg clk = 1'b0;
   reg rst_n = 1'b0;
+  reg trigger = 1'b0;
   always #5 clk = ~clk;
 
   reg [127:0] instr_tdata = 128'd0;
@@ -35,7 +36,7 @@ module tb_waveform_interleaved_rearm;
   ) dut (
     .aclk(clk),
     .aresetn(rst_n),
-    .trigger(1'b0),
+    .trigger(trigger),
     .s_axis_instr_tdata(instr_tdata),
     .s_axis_instr_tvalid(instr_tvalid),
     .s_axis_instr_tready(instr_tready),
@@ -172,6 +173,13 @@ module tb_waveform_interleaved_rearm;
     end
   endtask
 
+  task pulse_trigger;
+    begin
+      @(negedge clk); trigger = 1'b1;
+      @(negedge clk); trigger = 1'b0;
+    end
+  endtask
+
   initial begin
     repeat(4) @(negedge clk);
     rst_n = 1'b1;
@@ -219,6 +227,31 @@ module tb_waveform_interleaved_rearm;
     repeat(2) @(negedge clk);
 
     check_condition(last_cmd_addr == DDR_BASE, "new interleaved frame should issue a fresh DDR read from the base address");
+
+    // A loop frame refills from DDR immediately, but each iteration must stay
+    // in WAITTRIG until a distinct Trigger pulse arrives.
+    @(negedge clk); rst_n = 1'b0;
+    repeat(4) @(negedge clk);
+    rst_n = 1'b1;
+    repeat(4) @(negedge clk);
+    send_instr({64'd0, 32'd32, 32'h00000412});
+    send_instr({64'd0, 32'd32, 32'h00000422});
+    send_instr(128'h00000000000000000000000000000103);
+    wait(cmd_count == 1);
+    for(integer first_beat = 0; first_beat < 4; first_beat = first_beat + 1)
+      send_dm_beat({480'd0, first_beat[31:0]});
+    wait(dbg_st == 3'd2);
+    pulse_trigger();
+    check_condition(dbg_st == 3'd3, "first loop iteration should enter PLAYING after Trigger");
+    wait(cmd_count == 2);
+    for(integer second_beat = 0; second_beat < 4; second_beat = second_beat + 1)
+      send_dm_beat({480'd0, second_beat[31:0]});
+    wait(dbg_st == 3'd2);
+    repeat(10) @(negedge clk);
+    check_condition(dbg_st == 3'd2, "refilled loop iteration must not auto-start without another Trigger");
+    pulse_trigger();
+    check_condition(dbg_st == 3'd3, "second loop iteration should enter PLAYING only after its own Trigger");
+
     $display("PASS: interleaved executor accepts a new frame after stale WAITTRIG");
     $finish;
   end

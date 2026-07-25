@@ -12,6 +12,7 @@ module pl_riscv_control_v1 #(
     input  wire         rvctrl_tfirst,
     input  wire         rvctrl_tlast,
     input  wire [31:0]  rvctrl_word_count,
+    input  wire [1:0]   rvctrl_protocol,
 
     output reg  [127:0] m_instr_tdata,
     output reg          m_instr_tvalid,
@@ -127,6 +128,9 @@ module pl_riscv_control_v1 #(
 
   localparam [31:0] RV1_VERSION = 32'd1;
   localparam [31:0] RF2_VERSION = 32'd2;
+  localparam [1:0] RVCTRL_PROTOCOL_LEGACY = 2'd0;
+  localparam [1:0] RVCTRL_PROTOCOL_V1     = 2'd1;
+  localparam [1:0] RVCTRL_PROTOCOL_RF2    = 2'd2;
   localparam [63:0] RVRESP1_MAGIC = 64'h0031505345525652;
   localparam [63:0] RFRESP2_MAGIC = 64'h0032505345524652;
 
@@ -145,15 +149,18 @@ module pl_riscv_control_v1 #(
   localparam [3:0] ST_MMIO_RMW_W = 4'd6;
   localparam [3:0] ST_BATCH_LOAD = 4'd7;
   localparam [3:0] ST_NCO_SCAN   = 4'd8;
+  localparam integer RX_COUNT_WIDTH = $clog2(MAX_PAYLOAD_WORDS + 1);
   localparam [31:0] MAX_PAYLOAD_WORDS_U32 = MAX_PAYLOAD_WORDS;
+  localparam [RX_COUNT_WIDTH-1:0] MAX_PAYLOAD_WORDS_COUNT = MAX_PAYLOAD_WORDS;
 
   reg [31:0] payload_words [0:MAX_PAYLOAD_WORDS-1];
-  reg [31:0] rx_index;
-  reg [31:0] rx_expected_words;
+  reg [RX_COUNT_WIDTH-1:0] rx_index;
+  reg [RX_COUNT_WIDTH-1:0] rx_expected_words;
   reg        rx_drop;
   reg        rx_is_v1;
   reg        rx_is_v2;
   reg        process_pending;
+  reg        decode_pending;
 
   reg [31:0] play_bytes_per_channel;
   reg [31:0] play_flags;
@@ -164,6 +171,7 @@ module pl_riscv_control_v1 #(
   reg [31:0] cmd_flags;
   reg [31:0] cmd_payload_bytes;
   reg [31:0] cmd_base;
+  reg        cmd_version_valid;
 
   reg [17:0] mmio_addr;
   reg [31:0] mmio_wdata;
@@ -183,17 +191,39 @@ module pl_riscv_control_v1 #(
   reg        rfdc_response_pending;
   reg [31:0] rfdc_response_sequence;
   reg [31:0] rfdc_response_opcode;
+  reg        rfdc_payload_fields_invalid_latched;
   reg        dbg_error_pending;
 
   wire instr_fire = m_instr_tvalid && m_instr_tready;
   wire out_can_load = !m_instr_tvalid || instr_fire;
-  wire [31:0] rx_word_count_clean = {3'd0, rvctrl_word_count[28:0]};
-  wire [31:0] active_rx_index = rvctrl_tfirst ? 32'd0 : rx_index;
-  wire [31:0] active_expected_words = rvctrl_tfirst ? rx_word_count_clean : rx_expected_words;
-  wire        active_count_ok = (active_expected_words <= MAX_PAYLOAD_WORDS_U32);
+  wire [31:0] rx_word_count_clean = rvctrl_word_count;
+  wire [RX_COUNT_WIDTH-1:0] rx_word_count_narrow =
+      rx_word_count_clean[RX_COUNT_WIDTH-1:0];
+  wire        first_count_ok =
+      !(|rx_word_count_clean[31:RX_COUNT_WIDTH]) &&
+      (rx_word_count_narrow <= MAX_PAYLOAD_WORDS_COUNT);
+  wire [RX_COUNT_WIDTH-1:0] active_rx_index =
+      rvctrl_tfirst ? {RX_COUNT_WIDTH{1'b0}} : rx_index;
+  wire [RX_COUNT_WIDTH-1:0] active_expected_words =
+      rvctrl_tfirst ? rx_word_count_narrow : rx_expected_words;
+  wire        active_count_ok = rvctrl_tfirst ? first_count_ok : !rx_drop;
   wire        active_drop = rvctrl_tfirst ? !active_count_ok : rx_drop;
-  wire [31:0] active_words_after_beat = active_rx_index +
-      (((active_rx_index + 32'd1) < active_expected_words) ? 32'd2 : 32'd1);
+  wire [RX_COUNT_WIDTH-1:0] active_second_index =
+      active_rx_index + {{(RX_COUNT_WIDTH-1){1'b0}}, 1'b1};
+  wire        active_second_word = active_second_index < active_expected_words;
+  wire        active_channel_mask_word = active_second_index == 7'd5;
+  wire        active_reserved_second =
+      (active_second_index == 7'd11) ||
+      (active_second_index == 7'd17) ||
+      (active_second_index == 7'd23) ||
+      (active_second_index == 7'd29) ||
+      (active_second_index == 7'd35) ||
+      (active_second_index == 7'd41) ||
+      (active_second_index == 7'd47) ||
+      (active_second_index == 7'd53);
+  wire [RX_COUNT_WIDTH-1:0] active_words_after_beat = active_rx_index +
+      (active_second_word ? {{(RX_COUNT_WIDTH-2){1'b0}}, 2'd2} :
+                            {{(RX_COUNT_WIDTH-1){1'b0}}, 1'b1});
   wire        write_done = aw_done && w_done && b_done;
   wire [63:0] response_magic = rx_is_v2 ? RFRESP2_MAGIC : RVRESP1_MAGIC;
   wire [15:0] response_version = rx_is_v2 ? RF2_VERSION[15:0] : RV1_VERSION[15:0];
@@ -201,16 +231,6 @@ module pl_riscv_control_v1 #(
   integer i;
   integer r;
   integer p;
-  reg rfdc_payload_fields_invalid;
-
-  always @* begin
-    rfdc_payload_fields_invalid = |payload_words[5][31:8];
-    for (p = 0; p < 8; p = p + 1) begin
-      if (payload_words[6 + p*6 + 5] != 32'd0)
-        rfdc_payload_fields_invalid = 1'b1;
-    end
-  end
-
   function [127:0] pack_instr;
     input [31:0] word0;
     input [31:0] word1;
@@ -460,12 +480,13 @@ module pl_riscv_control_v1 #(
       dbg_error_pending <= 1'b0;
       dbg_scratch <= 32'd0;
       dbg_state <= ST_IDLE;
-      rx_index <= 32'd0;
-      rx_expected_words <= 32'd0;
+      rx_index <= {RX_COUNT_WIDTH{1'b0}};
+      rx_expected_words <= {RX_COUNT_WIDTH{1'b0}};
       rx_drop <= 1'b0;
       rx_is_v1 <= 1'b0;
       rx_is_v2 <= 1'b0;
       process_pending <= 1'b0;
+      decode_pending <= 1'b0;
       play_bytes_per_channel <= 32'd0;
       play_flags <= 32'd0;
       play_out_index <= 4'd0;
@@ -474,6 +495,7 @@ module pl_riscv_control_v1 #(
       cmd_flags <= 32'd0;
       cmd_payload_bytes <= 32'd0;
       cmd_base <= 32'd0;
+      cmd_version_valid <= 1'b0;
       mmio_addr <= 18'd0;
       mmio_wdata <= 32'd0;
       mmio_mask <= 32'd0;
@@ -491,6 +513,7 @@ module pl_riscv_control_v1 #(
       rfdc_response_pending <= 1'b0;
       rfdc_response_sequence <= 32'd0;
       rfdc_response_opcode <= RF2_OP_RFDC_APPLY;
+      rfdc_payload_fields_invalid_latched <= 1'b0;
       for (i = 0; i < MAX_PAYLOAD_WORDS; i = i + 1) begin
         payload_words[i] <= 32'd0;
       end
@@ -552,25 +575,38 @@ module pl_riscv_control_v1 #(
       if (rvctrl_tvalid && !rfdc_response_pending) begin
         dbg_state <= ST_RECEIVE;
         if (rvctrl_tfirst) begin
-          rx_index <= 32'd0;
-          rx_expected_words <= rx_word_count_clean;
-          rx_is_v1 <= rvctrl_word_count[31];
-          rx_is_v2 <= rvctrl_word_count[29];
-          rx_drop <= (rx_word_count_clean > MAX_PAYLOAD_WORDS_U32);
-          if (rx_word_count_clean > MAX_PAYLOAD_WORDS_U32) begin
+          rx_index <= {RX_COUNT_WIDTH{1'b0}};
+          rx_expected_words <= rx_word_count_narrow;
+          rx_is_v1 <= (rvctrl_protocol == RVCTRL_PROTOCOL_V1);
+          rx_is_v2 <= (rvctrl_protocol == RVCTRL_PROTOCOL_RF2);
+          rx_drop <= !first_count_ok;
+          rfdc_payload_fields_invalid_latched <= 1'b0;
+          if (!first_count_ok) begin
             dbg_error_pending <= 1'b1;
           end
         end
 
-        if (active_count_ok && (active_rx_index < MAX_PAYLOAD_WORDS_U32)) begin
+        // RFCTRL2 RFDC_APPLY reserves the odd word at the end of every
+        // six-word channel record. Track those words while receiving so the
+        // command decoder does not build a wide payload-to-response path.
+        if (active_count_ok && !active_drop &&
+            ((active_channel_mask_word && (rvctrl_tdata[63:40] != 24'd0)) ||
+             (active_reserved_second && (rvctrl_tdata[63:32] != 32'd0)))) begin
+          rfdc_payload_fields_invalid_latched <= 1'b1;
+        end
+
+        if (active_count_ok && !active_drop &&
+            (active_rx_index < MAX_PAYLOAD_WORDS_COUNT)) begin
           payload_words[active_rx_index] <= rvctrl_tdata[31:0];
         end
-        if (active_count_ok &&
-            ((active_rx_index + 32'd1) < active_expected_words) &&
-            ((active_rx_index + 32'd1) < MAX_PAYLOAD_WORDS_U32)) begin
-          payload_words[active_rx_index + 32'd1] <= rvctrl_tdata[63:32];
+        if (active_count_ok && !active_drop && active_second_word &&
+            (active_second_index < MAX_PAYLOAD_WORDS_COUNT)) begin
+          payload_words[active_second_index] <= rvctrl_tdata[63:32];
         end
-        rx_index <= active_rx_index + 32'd2;
+        if (active_rx_index < MAX_PAYLOAD_WORDS_COUNT)
+          rx_index <= active_rx_index + {{(RX_COUNT_WIDTH-2){1'b0}}, 2'd2};
+        else
+          rx_index <= MAX_PAYLOAD_WORDS_COUNT;
         if (rvctrl_tlast) begin
           process_pending <= active_count_ok && !active_drop &&
                              (active_words_after_beat == active_expected_words);
@@ -579,26 +615,25 @@ module pl_riscv_control_v1 #(
         end
       end else if (process_pending) begin
         process_pending <= 1'b0;
+        decode_pending <= 1'b1;
         dbg_state <= ST_PROCESS;
 
-        if (rx_is_v1) begin
+        if (rx_is_v2) begin
           cmd_flags <= {16'd0, payload_words[0][31:16]};
           cmd_opcode <= payload_words[1];
           cmd_seq <= payload_words[2];
           cmd_payload_bytes <= payload_words[3];
           cmd_base <= 32'd4;
+          cmd_version_valid <= (payload_words[0][15:0] == RF2_VERSION[15:0]);
           dbg_last_cmd <= payload_words[1];
           dbg_last_seq <= payload_words[2];
-        end else if (rx_is_v2) begin
-          // RFCTRL2 keeps the version/opcode/sequence/payload-length header
-          // in the same four 32-bit words as RVCTRL1, but uses a distinct
-          // transport marker. Keep the decoded command fields consistent
-          // with the indexed payload handling below.
+        end else if (rx_is_v1) begin
           cmd_flags <= {16'd0, payload_words[0][31:16]};
           cmd_opcode <= payload_words[1];
           cmd_seq <= payload_words[2];
           cmd_payload_bytes <= payload_words[3];
           cmd_base <= 32'd4;
+          cmd_version_valid <= (payload_words[0][15:0] == RV1_VERSION[15:0]);
           dbg_last_cmd <= payload_words[1];
           dbg_last_seq <= payload_words[2];
         end else begin
@@ -607,32 +642,36 @@ module pl_riscv_control_v1 #(
           cmd_seq <= payload_words[1];
           cmd_payload_bytes <= (rx_expected_words > 32'd2) ? ((rx_expected_words - 32'd2) << 2) : 32'd0;
           cmd_base <= 32'd2;
+          cmd_version_valid <= 1'b1;
           dbg_last_cmd <= payload_words[0];
           dbg_last_seq <= payload_words[1];
         end
+      end else if (decode_pending) begin
+        decode_pending <= 1'b0;
+        dbg_state <= ST_PROCESS;
 
-        if ((rx_is_v1 || rx_is_v2) &&
-            (payload_words[0][15:0] != (rx_is_v2 ? RF2_VERSION[15:0] : RV1_VERSION[15:0]))) begin
+        if ((rx_is_v1 || rx_is_v2) && !cmd_version_valid) begin
           dbg_status <= 32'hBAD1_0001;
           dbg_error_pending <= 1'b1;
-          queue_resp0(payload_words[1], 16'h0001, payload_words[2]);
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_HELLO)) begin
+          queue_resp0(cmd_opcode, 16'h0001, cmd_seq);
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_HELLO)) begin
           dbg_status <= 32'h2000_0001;
-          queue_rf2_status(RF2_OP_HELLO, payload_words[2]);
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_STATUS)) begin
+          queue_rf2_status(RF2_OP_HELLO, cmd_seq);
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_STATUS)) begin
           dbg_status <= 32'h2000_0002;
-          queue_rf2_status(RF2_OP_STATUS, payload_words[2]);
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_RFDC_APPLY)) begin
-          if ((payload_words[3] != RF2_RFDC_REQUEST_BYTES) ||
-              (rx_expected_words != 32'd54) || rfdc_payload_fields_invalid) begin
+          queue_rf2_status(RF2_OP_STATUS, cmd_seq);
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_RFDC_APPLY)) begin
+          if ((cmd_payload_bytes != RF2_RFDC_REQUEST_BYTES) ||
+              (rx_expected_words != 32'd54) ||
+              rfdc_payload_fields_invalid_latched) begin
             dbg_status <= 32'hBAD2_0003;
             dbg_error_pending <= 1'b1;
-            queue_resp0(RF2_OP_RFDC_APPLY, 16'h0003, payload_words[2]);
+            queue_resp0(RF2_OP_RFDC_APPLY, 16'h0003, cmd_seq);
           end else if (rfdc_apply_busy) begin
             dbg_status <= 32'hBAD2_0004;
-            queue_resp0(RF2_OP_RFDC_APPLY, 16'h0004, payload_words[2]);
+            queue_resp0(RF2_OP_RFDC_APPLY, 16'h0004, cmd_seq);
           end else begin
-            rfdc_apply_sequence <= payload_words[2];
+            rfdc_apply_sequence <= cmd_seq;
             rfdc_apply_revision <= payload_words[4];
             rfdc_apply_channel_mask <= payload_words[5][7:0];
             for (r = 0; r < 8; r = r + 1) begin
@@ -645,61 +684,61 @@ module pl_riscv_control_v1 #(
             end
             rfdc_apply_start <= 1'b1;
             rfdc_response_pending <= 1'b1;
-            rfdc_response_sequence <= payload_words[2];
+            rfdc_response_sequence <= cmd_seq;
             rfdc_response_opcode <= RF2_OP_RFDC_APPLY;
             dbg_status <= 32'h2000_0003;
           end
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_RFDC_GET_CONFIG)) begin
-          queue_rfdc_response(RF2_OP_RFDC_GET_CONFIG, payload_words[2]);
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_ARM)) begin
-          if ((payload_words[3] != 32'd8) ||
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_RFDC_GET_CONFIG)) begin
+          queue_rfdc_response(RF2_OP_RFDC_GET_CONFIG, cmd_seq);
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_ARM)) begin
+          if ((cmd_payload_bytes != 32'd8) ||
               ((payload_words[5][7:0] & ~rfdc_config_valid_mask) != 8'd0)) begin
             dbg_status <= 32'hBAD2_0006;
-            queue_resp0(RF2_OP_ARM, 16'h0006, payload_words[2]);
+            queue_resp0(RF2_OP_ARM, 16'h0006, cmd_seq);
           end else if (playback_armed || playback_prepared || playback_running) begin
             dbg_status <= 32'hBAD2_1006;
-            queue_resp0(RF2_OP_ARM, 16'h0006, payload_words[2]);
+            queue_resp0(RF2_OP_ARM, 16'h0006, cmd_seq);
           end else begin
             rfctrl2_arm_pulse <= 1'b1;
             dbg_scratch <= payload_words[5];
             dbg_status <= 32'h2000_0006;
-            queue_resp1(RF2_OP_ARM, 16'h0000, payload_words[2], 32'd8, {payload_words[5], payload_words[4]});
+            queue_resp1(RF2_OP_ARM, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
           end
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_SYNC_EPOCH)) begin
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_SYNC_EPOCH)) begin
           rfctrl2_epoch <= {payload_words[5], payload_words[4]};
           rfctrl2_sync_epoch_pulse <= 1'b1;
           dbg_status <= 32'h2000_0007;
-          queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, payload_words[2], 32'd8, {payload_words[5], payload_words[4]});
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_START_AT)) begin
+          queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_START_AT)) begin
           rfctrl2_start_tick <= {payload_words[5], payload_words[4]};
           rfctrl2_start_valid <= 1'b1;
           dbg_status <= 32'h2000_0008;
-          queue_resp1(RF2_OP_START_AT, 16'h0000, payload_words[2], 32'd8, {payload_words[5], payload_words[4]});
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_TRIGGER)) begin
+          queue_resp1(RF2_OP_START_AT, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_TRIGGER)) begin
           if (!playback_prepared) begin
             dbg_status <= 32'hBAD2_0009;
-            queue_resp0(RF2_OP_TRIGGER, 16'h0006, payload_words[2]);
+            queue_resp0(RF2_OP_TRIGGER, 16'h0006, cmd_seq);
           end else begin
             rfctrl2_trigger_pulse <= 1'b1;
             dbg_trigger_count <= dbg_trigger_count + 32'd1;
             dbg_status <= 32'h2000_0009;
-            queue_resp0(RF2_OP_TRIGGER, 16'h0000, payload_words[2]);
+            queue_resp0(RF2_OP_TRIGGER, 16'h0000, cmd_seq);
           end
-        end else if (rx_is_v2 && (payload_words[1] == RF2_OP_ABORT_MUTE)) begin
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_ABORT_MUTE)) begin
           rfctrl2_abort_mute_pulse <= 1'b1;
           dbg_status <= 32'h2000_000A;
-          queue_resp0(RF2_OP_ABORT_MUTE, 16'h0000, payload_words[2]);
-        end else if ((!rx_is_v1 && (payload_words[0] == RV0_CMD_PING)) ||
-                     ( rx_is_v1 && (payload_words[1] == RV1_OP_PING))) begin
+          queue_resp0(RF2_OP_ABORT_MUTE, 16'h0000, cmd_seq);
+        end else if ((!rx_is_v1 && (cmd_opcode == RV0_CMD_PING)) ||
+                     ( rx_is_v1 && (cmd_opcode == RV1_OP_PING))) begin
           dbg_status <= rx_is_v1 ? 32'h1000_0001 : 32'h0000_0001;
           dbg_ping_count <= dbg_ping_count + 32'd1;
-          if (rx_is_v1) queue_resp0(RV1_OP_PING, 16'h0000, payload_words[2]);
-        end else if ((!rx_is_v1 && (payload_words[0] == RV0_CMD_PLAY_INTERLEAVED)) ||
-                     ( rx_is_v1 && (payload_words[1] == RV1_OP_PLAY_INTERLEAVED))) begin
+          if (rx_is_v1) queue_resp0(RV1_OP_PING, 16'h0000, cmd_seq);
+        end else if ((!rx_is_v1 && (cmd_opcode == RV0_CMD_PLAY_INTERLEAVED)) ||
+                     ( rx_is_v1 && (cmd_opcode == RV1_OP_PLAY_INTERLEAVED))) begin
           if (payload_words[rx_is_v1 ? 4 : 2][4:0] != 5'd0) begin
             dbg_status <= 32'hBAD0_0002;
             dbg_error_pending <= 1'b1;
-            if (rx_is_v1) queue_resp0(RV1_OP_PLAY_INTERLEAVED, 16'h0002, payload_words[2]);
+            if (rx_is_v1) queue_resp0(RV1_OP_PLAY_INTERLEAVED, 16'h0002, cmd_seq);
           end else begin
             play_bytes_per_channel <= payload_words[rx_is_v1 ? 4 : 2];
             play_flags <= payload_words[rx_is_v1 ? 5 : 3];
@@ -708,43 +747,43 @@ module pl_riscv_control_v1 #(
             dbg_status <= rx_is_v1 ? 32'h1000_0006 : 32'h0000_0002;
             dbg_state <= ST_OUT_PLAY;
           end
-        end else if ((!rx_is_v1 && (payload_words[0] == RV0_CMD_TRIGGER)) ||
-                     ( rx_is_v1 && (payload_words[1] == RV1_OP_TRIGGER))) begin
+        end else if ((!rx_is_v1 && (cmd_opcode == RV0_CMD_TRIGGER)) ||
+                     ( rx_is_v1 && (cmd_opcode == RV1_OP_TRIGGER))) begin
           trigger_pulse <= 1'b1;
           dbg_trigger_count <= dbg_trigger_count + 32'd1;
           dbg_status <= rx_is_v1 ? 32'h1000_0007 : 32'h0000_0003;
-          if (rx_is_v1) queue_resp0(RV1_OP_TRIGGER, 16'h0000, payload_words[2]);
+          if (rx_is_v1) queue_resp0(RV1_OP_TRIGGER, 16'h0000, cmd_seq);
         end else if (ENABLE_UNSAFE_RFDC_MMIO &&
-                     ((!rx_is_v1 && (payload_words[0] == RV0_CMD_WRITE_MMIO)) ||
-                     ( rx_is_v1 && (payload_words[1] == RV1_OP_MMIO_WRITE32)))) begin
+                     ((!rx_is_v1 && (cmd_opcode == RV0_CMD_WRITE_MMIO)) ||
+                     ( rx_is_v1 && (cmd_opcode == RV1_OP_MMIO_WRITE32)))) begin
           start_write(payload_words[rx_is_v1 ? 4 : 2], payload_words[rx_is_v1 ? 5 : 3]);
-        end else if (rx_is_v1 && (payload_words[1] == RV1_OP_MMIO_READ32)) begin
+        end else if (rx_is_v1 && (cmd_opcode == RV1_OP_MMIO_READ32)) begin
           start_read(payload_words[4]);
-        end else if (ENABLE_UNSAFE_RFDC_MMIO && rx_is_v1 && (payload_words[1] == RV1_OP_MMIO_RMW32)) begin
+        end else if (ENABLE_UNSAFE_RFDC_MMIO && rx_is_v1 && (cmd_opcode == RV1_OP_MMIO_RMW32)) begin
           mmio_mask <= payload_words[5];
           mmio_wdata <= payload_words[6];
           start_read(payload_words[4]);
-        end else if (ENABLE_UNSAFE_RFDC_MMIO && rx_is_v1 && (payload_words[1] == RV1_OP_MMIO_BATCH)) begin
+        end else if (ENABLE_UNSAFE_RFDC_MMIO && rx_is_v1 && (cmd_opcode == RV1_OP_MMIO_BATCH)) begin
           batch_count <= payload_words[4];
           batch_index <= 32'd0;
           dbg_state <= ST_BATCH_LOAD;
         end else if (ENABLE_UNSAFE_RFDC_MMIO && rx_is_v1 &&
-                     (payload_words[1] == RV1_OP_RFDC_CH_ENABLE)) begin
+                     (cmd_opcode == RV1_OP_RFDC_CH_ENABLE)) begin
           dbg_scratch <= payload_words[4];
           dbg_status <= 32'h1000_0008;
-          queue_resp1(RV1_OP_RFDC_CH_ENABLE, 16'h0000, payload_words[2], 32'd8, {payload_words[5], payload_words[4]});
+          queue_resp1(RV1_OP_RFDC_CH_ENABLE, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
         end else if (ENABLE_UNSAFE_RFDC_MMIO && rx_is_v1 &&
-                     (payload_words[1] == RV1_OP_RFDC_SET_NCO)) begin
+                     (cmd_opcode == RV1_OP_RFDC_SET_NCO)) begin
           nco_apply_mask <= payload_words[4];
           nco_index <= 32'd0;
           nco_zone_accum <= 32'd0;
           dbg_state <= ST_NCO_SCAN;
-        end else if (rx_is_v1 && (payload_words[1] == RV1_OP_STATUS_READ)) begin
+        end else if (rx_is_v1 && (cmd_opcode == RV1_OP_STATUS_READ)) begin
           dbg_status <= 32'h1000_000A;
           queue_resp2(
               RV1_OP_STATUS_READ,
               16'h0000,
-              payload_words[2],
+              cmd_seq,
               32'd16,
               {dbg_last_cmd, 32'h1000_000A},
               {dbg_error_count, dbg_scratch}
@@ -752,7 +791,7 @@ module pl_riscv_control_v1 #(
         end else begin
           dbg_status <= rx_is_v1 ? 32'hBAD1_0002 : 32'hBAD0_0001;
           dbg_error_pending <= 1'b1;
-          if (rx_is_v1 || rx_is_v2) queue_resp0(payload_words[1], 16'h0002, payload_words[2]);
+          if (rx_is_v1 || rx_is_v2) queue_resp0(cmd_opcode, 16'h0002, cmd_seq);
         end
       end else if (dbg_state == ST_OUT_PLAY) begin
         if (out_can_load) begin

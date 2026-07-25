@@ -170,11 +170,13 @@ module Top #(
   wire        rvctrl64_tfirst;
   wire        rvctrl64_tlast;
   wire [31:0] rvctrl64_word_count;
+  wire [1:0]  rvctrl64_protocol;
   wire        rvresp64_tvalid;
   wire [63:0] rvresp64_tdata;
   wire        rvresp64_tready;
   wire        rvresp64_tlast;
   wire [15:0] rvresp64_word_count;
+  wire [7:0]  udp_control_tx_debug;
 
   wire [63:0]  M_AXI_WAVE_awaddr;
   wire [1:0]   M_AXI_WAVE_awburst;
@@ -359,6 +361,7 @@ module Top #(
       .resp64_tlast (rvresp64_tlast),
       .resp64_word_count(rvresp64_word_count),
       .resp64_tready(rvresp64_tready),
+      .control_tx_debug(udp_control_tx_debug),
       .rcv_vld     (udp64_rcv_vld),
       .rcv_dat     (udp64_rcv_dat),
       .gap_num_vio (24'd0),
@@ -380,6 +383,7 @@ module Top #(
       .rvctrl_tfirst    (rvctrl64_tfirst),
       .rvctrl_tlast     (rvctrl64_tlast),
       .rvctrl_word_count(rvctrl64_word_count),
+      .rvctrl_protocol  (rvctrl64_protocol),
       .m_axi_awaddr     (M_AXI_WAVE_awaddr),
       .m_axi_awburst    (M_AXI_WAVE_awburst),
       .m_axi_awcache    (M_AXI_WAVE_awcache),
@@ -432,6 +436,7 @@ module Top #(
       .rvctrl_tfirst       (rvctrl64_tfirst),
       .rvctrl_tlast        (rvctrl64_tlast),
       .rvctrl_word_count   (rvctrl64_word_count),
+      .rvctrl_protocol     (rvctrl64_protocol),
       .m_instr_tdata       (rv_instr_tdata),
       .m_instr_tvalid      (rv_instr_tvalid),
       .m_instr_tready      (rv_instr_tready),
@@ -808,7 +813,9 @@ module Top #(
   ) executor_inst (
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
-    .trigger(ps_trigger_ddr_sync | rfctrl2_arm_pulse),
+    // ARM releases the first prefetched frame into the async FIFO. Every
+    // subsequent loop frame waits for its own RFCTRL2 Trigger as well.
+    .trigger(ps_trigger_ddr_sync | rfctrl2_arm_pulse | rfctrl2_trigger_pulse),
 
     .s_axis_instr_tdata(instr_tdata),
     .s_axis_instr_tvalid(instr_tvalid),
@@ -1235,6 +1242,7 @@ module Top #(
     .rfctrl2_trigger(rfctrl2_play_trigger),
     .prepare(rfctrl2_play_prepare),
     .abort(rfctrl2_play_abort),
+    .armed(rfctrl2_armed_dac),
 
     .cfg_seq_id(seq_id_dac),
     .auto_start(cfg_auto_start_dac),
@@ -2298,7 +2306,10 @@ module Top #(
       rv_dbg_status,                   // 123:92
       rv_dbg_last_seq,                 // 91:60
       rv_dbg_last_cmd,                 // 59:28
-      rv_dbg_scratch[27:0]             // 27:0
+      rvctrl64_protocol,                // 27:26
+      rvctrl64_word_count[6:0],         // 25:19
+      rv_dbg_scratch[10:0],             // 18:8
+      udp_control_tx_debug             // 7:0
     }),
     .probe4(instr_tdata),
     .probe5(dm_cmd_tdata),

@@ -7,6 +7,7 @@ module tb_dac_play_ctrl;
   reg rfctrl2_trigger = 1'b0;
   reg prepare = 1'b0;
   reg abort = 1'b0;
+  reg armed = 1'b0;
   reg [15:0] cfg_seq_id = 16'd1;
   reg auto_start = 1'b1;
   reg [31:0] ch1_len_beats = 32'd8;
@@ -34,6 +35,7 @@ module tb_dac_play_ctrl;
     .rfctrl2_trigger(rfctrl2_trigger),
     .prepare(prepare),
     .abort(abort),
+    .armed(armed),
     .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start),
     .ch1_delay_cycles(32'd0),
@@ -173,6 +175,7 @@ module tb_dac_play_ctrl;
     cfg_seq_id = 16'd3;
     ch1_len_beats = 32'd4;
     ch1_fifo_tvalid = 1'b0;
+    armed = 1'b1;
     prepare = 1'b1;
     @(negedge clk); prepare = 1'b0;
     repeat (3) @(posedge clk);
@@ -203,7 +206,26 @@ module tb_dac_play_ctrl;
       $finish;
     end
 
-    $display("PASS: dac_play_ctrl preserves legacy startup and opens RFCTRL2 PREPARED gates without restart latency");
+    // A loop refill has a new configuration sequence but remains in the same
+    // RFCTRL2 ARM session. It must become PREPARED and remain gated until a
+    // second, independent Trigger arrives.
+    wait (dbg_started == 1'b0);
+    @(negedge clk); cfg_seq_id = 16'd4;
+    wait (prepared == 1'b1);
+    repeat (2) @(posedge clk);
+    if (dbg_started || ch1_allow || dbg_ch1_fire_count != 32'd0) begin
+      $error("a refilled loop frame must wait in PREPARED for another RFCTRL2 Trigger");
+      $finish;
+    end
+    @(negedge clk); rfctrl2_trigger = 1'b1;
+    @(negedge clk); rfctrl2_trigger = 1'b0;
+    #1;
+    if (!dbg_started || !ch1_allow || prepared) begin
+      $error("the next loop frame must start only after its own RFCTRL2 Trigger");
+      $finish;
+    end
+
+    $display("PASS: dac_play_ctrl preserves legacy startup and requires a fresh RFCTRL2 Trigger for every loop frame");
     $finish;
   end
 endmodule

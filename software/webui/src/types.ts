@@ -131,6 +131,7 @@ export interface BoardOverride {
 export interface WaveformRequest {
   name: string
   mode: 'manual' | 'ezq'
+  loop: boolean
   record_duration_ns: number
   manual_channels: ManualChannel[]
   ezq_channels: EzqChannel[]
@@ -233,6 +234,11 @@ export interface PerformanceTestRecord {
   settle_ms: number
   auto_mute: boolean
   dry_run: boolean
+  scan_axis: string
+  scan_start: number | null
+  scan_stop: number | null
+  scan_step: number | null
+  scan_unit: string
   created_at: string
   updated_at: string
   error: string
