@@ -54,7 +54,8 @@ group membership.
 2. Create individual user accounts. Do not share the administrator account for
    normal waveform work.
 3. Run the Linux USB inventory scan, then register or edit each board with its
-   exact IP, server UDP interface (`enp225s0f0` or `enp225s0f1`), UDP source IP,
+   exact IP, server UDP interface (for example `eno1np0`, `eno2np1`,
+   `enp225s0f0` or `enp225s0f1`), UDP source IP,
    Digilent JTAG serial, target profile, and `/dev/ttyUSBx` UART path. This scan
    reads sysfs only and does not start Vivado, connect to `hw_server`, or open a
    hardware target.
@@ -79,12 +80,39 @@ ip -brief link show dev enp225s0f1
 ip -brief address show dev enp225s0f0
 ip -brief address show dev enp225s0f1
 sudo ip link set enp225s0f1 up
-sudo ip address replace 192.168.1.10/24 dev enp225s0f1
+sudo ip address replace 192.168.1.10/24 dev enp225s0f0
+sudo ip address replace 192.168.2.10/24 dev enp225s0f1
 ```
 
-Select the same interface and `192.168.1.10` source IP in every board profile
-reachable through that physical port. Persist the address with the server's
-normal network manager after validating the link.
+For two directly attached boards, keep each 10G port in a separate subnet to
+avoid ambiguous ARP and routing. The default mapping is:
+
+| Board | JTAG serial | Server port/source | PL address | Target |
+| --- | --- | --- | --- | --- |
+| A | `210512180081` | `enp225s0f0` / `192.168.1.10` | `192.168.1.128` | `custom_xczu47dr` |
+| B | `210512180082` | `enp225s0f1` / `192.168.2.10` | `192.168.2.129` | `custom_xczu47dr` |
+
+Both boards use the same `custom_xczu47dr` bitstream. The bootstrap identity
+starts at `192.168.254.254` on each isolated point-to-point link; the web
+console uses the selected server interface to address the correct board and
+then applies the database's unique formal IP/MAC. If the links are later
+joined through a switch, formal IP and MAC values must be unique.
+Persist the two server addresses with the server's normal network manager after
+validating both physical links.
+
+## Continuous Sine Output
+
+The output page offers `Single Shot` and `Continuous Sine` modes. Continuous
+sine is a hardware loop mode for basic RF tests: the server configures RFDC over
+RFCTRL2 UDP, generates one phase-continuous sine record, uploads it to DDR, then
+sends exactly one `ARM` and one `TRIGGER`. After that the PL refills the same
+DDR frame locally and keeps the DAC stream running until the requested duration
+expires or the operator clicks stop/mute.
+
+This mode does not repeatedly upload waveform data and does not send a UDP
+trigger for every loop. The terminal task state is `DONE` after the timed mute,
+so the board run lock is released and the next task can be created immediately.
+Only enabled `iq-sine` channels are accepted in this mode.
 
 ## Environment Variables
 

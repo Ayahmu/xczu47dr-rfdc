@@ -125,12 +125,12 @@ class WebAppApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/not-a-real-endpoint").status_code, 404)
         self.assertEqual(self.client.get("/favicon.ico").status_code, 404)
 
-    def test_server_udp_interface_inventory_exposes_both_selectable_ports(self):
+    def test_server_udp_interface_inventory_exposes_host_ethernet_port(self):
         response = self.client.get("/api/network/interfaces")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(
             [item["name"] for item in response.json()],
-            ["enp225s0f0", "enp225s0f1"],
+            ["enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1"],
         )
 
     def test_preflight_tracks_live_control_lease(self):
@@ -275,20 +275,65 @@ class WebAppApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
         self.assertIsNone(self.client.get("/api/boards/board-a/loaded-waveform").json())
 
-    def test_live_loop_sends_a_fresh_trigger_for_each_prepared_frame(self):
+    def test_live_continuous_sine_triggers_once_mutes_and_releases_board(self):
         leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
         self.assertEqual(leased.status_code, 200, leased.text)
         payload = run_payload(waveform=manual_waveform_payload(loop=True), dry_run=False)
         payload["completion_mode"] = "one_shot"
-        payload["one_shot_duration_ms"] = 8
+        payload["playback_mode"] = "continuous_sine"
+        payload["one_shot_duration_ms"] = 1
         created = self.client.post("/api/runs", json=payload, headers=self.headers)
         self.assertEqual(created.status_code, 202, created.text)
         record = self.wait_done(created.json()["id"])
+        self.assertEqual(record["playback_mode"], "continuous_sine")
+        self.assertFalse(record["loaded"])
         events = self.client.get(f"/api/runs/{record['id']}/events").json()
-        summary = next(event["message"] for event in events if event["message"].startswith("loop playback sent "))
-        trigger_count = int(summary.split()[3])
-        self.assertGreaterEqual(trigger_count, 2)
+        messages = [event["message"] for event in events]
+        self.assertTrue(any("continuous sine playback triggered once" in message for message in messages))
+        self.assertFalse(any("loop playback sent" in message for message in messages))
         self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+        next_run = self.client.post("/api/runs", json=run_payload(dry_run=False), headers=self.headers)
+        self.assertEqual(next_run.status_code, 202, next_run.text)
+
+    def test_live_continuous_sine_zero_duration_runs_until_board_abort(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        payload = run_payload(waveform=manual_waveform_payload(loop=True), dry_run=False)
+        payload["completion_mode"] = "one_shot"
+        payload["playback_mode"] = "continuous_sine"
+        payload["one_shot_duration_ms"] = 0
+        created = self.client.post("/api/runs", json=payload, headers=self.headers)
+        self.assertEqual(created.status_code, 202, created.text)
+        run_id = created.json()["id"]
+
+        running = {}
+        for _ in range(100):
+            running = self.client.get(f"/api/runs/{run_id}").json()
+            if running["state"] == "RUNNING":
+                break
+            time.sleep(0.02)
+        self.assertEqual(running["state"], "RUNNING", self.client.get(f"/api/runs/{run_id}/events").text)
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "RUNNING")
+
+        stopped = self.client.post("/api/boards/board-a/abort", headers=self.headers)
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual(stopped.json()["state"], "ABORTED")
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+
+    def test_continuous_sine_rejects_non_loop_or_non_sine_payload(self):
+        not_loop = run_payload(waveform=manual_waveform_payload(loop=False))
+        not_loop["playback_mode"] = "continuous_sine"
+        response = self.client.post("/api/runs", json=not_loop, headers=self.headers)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("waveform.loop=true", response.text)
+
+        non_sine_waveform = manual_waveform_payload(loop=True)
+        non_sine_waveform["manual_channels"][0]["waveform"] = "dc-iq-cw"
+        non_sine = run_payload(waveform=non_sine_waveform)
+        non_sine["playback_mode"] = "continuous_sine"
+        response = self.client.post("/api/runs", json=non_sine, headers=self.headers)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("requires iq-sine", response.text)
 
     def test_live_run_auto_mutes_stale_armed_board_before_rfdc_apply(self):
         leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)

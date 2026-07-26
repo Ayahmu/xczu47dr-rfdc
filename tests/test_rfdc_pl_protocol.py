@@ -129,6 +129,70 @@ class RfdcPlProtocolTests(unittest.TestCase):
         self.assertEqual(len(fake.sent), 2)
         self.assertEqual(fake.sent[0][0], fake.sent[1][0])
 
+    def test_network_apply_packet_and_response_round_trip(self):
+        packet = host.pack_rfctrl2_network_apply(
+            revision=12,
+            ip="192.168.10.130",
+            mac="02:00:00:00:00:42",
+            subnet_mask="255.255.255.0",
+            gateway="192.168.10.1",
+            port=1234,
+            seq=91,
+        )
+        magic, hdr0, hdr1 = struct.unpack_from("<QQQ", packet)
+        self.assertEqual(magic, host.UDP_RFCTRL2_MAGIC)
+        self.assertEqual(hdr0 >> 32, host.RF2_OP_NETWORK_APPLY)
+        self.assertEqual(hdr1 & 0xFFFFFFFF, 91)
+        self.assertEqual(hdr1 >> 32, host.NETWORK_APPLY_REQUEST_BYTES)
+        revision, ip, mac, subnet, gateway, port, reserved, tail = struct.unpack_from(
+            "<IIQIIHHI", packet, 24
+        )
+        self.assertEqual(revision, 12)
+        self.assertEqual(ip, 0xC0A80A82)
+        self.assertEqual(mac, 0x020000000042)
+        self.assertEqual(subnet, 0xFFFFFF00)
+        self.assertEqual(gateway, 0xC0A80A01)
+        self.assertEqual(port, 1234)
+        self.assertEqual((reserved, tail), (0, 0))
+
+        payload = struct.pack(
+            "<8Q",
+            0x0000000047D00042,
+            (0xC0A8FEFE << 32) | 0xC0A80A82,
+            0x020000000042,
+            (1 << 48) | (1234 << 32) | 12,
+            (host.RF2_CAP_NETWORK_CONFIG << 0) | (1 << 32),
+            0x020000000001,
+            0xFFFFFF00,
+            0xC0A80A01,
+        )
+        response_packet = (
+            struct.pack(
+                "<QQQ",
+                host.UDP_RFRESP2_MAGIC,
+                (host.RF2_OP_NETWORK_APPLY << 32) | host.RFCTRL2_VERSION,
+                (len(payload) << 32) | 91,
+            )
+            + payload
+        )
+        decoded = host.parse_rfctrl2_network_response(host.parse_rfresp2_packet(response_packet))
+        self.assertEqual(decoded["status"], host.RF2_STATUS_OK)
+        self.assertEqual(decoded["device_uid"], "0000000047d00042")
+        self.assertEqual(decoded["current_ip"], "192.168.10.130")
+        self.assertEqual(decoded["bootstrap_ip"], "192.168.254.254")
+        self.assertEqual(decoded["current_mac"], "02:00:00:00:00:42")
+        self.assertEqual(decoded["revision"], 12)
+        self.assertEqual(decoded["subnet_mask"], "255.255.255.0")
+        self.assertEqual(decoded["gateway"], "192.168.10.1")
+
+    def test_network_apply_rejects_invalid_identity(self):
+        with self.assertRaises(ValueError):
+            host.pack_rfctrl2_network_apply(1, "192.168.10.999", "02:00:00:00:00:42")
+        with self.assertRaises(ValueError):
+            host.pack_rfctrl2_network_apply(1, "192.168.10.2", "01:00:00:00:00:42")
+        with self.assertRaises(ValueError):
+            host.pack_rfctrl2_network_apply(1, "192.168.10.2", "02:00:00:00:00:42", port=0)
+
 
 if __name__ == "__main__":
     unittest.main()

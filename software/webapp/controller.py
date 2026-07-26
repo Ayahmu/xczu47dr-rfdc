@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 SOFTWARE_DIR = Path(__file__).resolve().parents[1]
 if str(SOFTWARE_DIR) not in sys.path:
@@ -22,13 +23,14 @@ from .models import (
     BoardRole,
     BoardState,
     BoardStatus,
+    NetworkConfigRequest,
     RunCreateRequest,
     RunEvent,
     RunRecord,
     RunState,
 )
 from .store import RunStore
-from .network import udp_path_error
+from .network import list_udp_interfaces, udp_path_error
 from .waveforms import to_waveform_config
 
 
@@ -79,14 +81,21 @@ class EventHub:
 
 
 class BoardGateway:
-    def __init__(self, boards: tuple[BoardProfile, ...] = DEFAULT_BOARDS, profile_provider=None) -> None:
+    def __init__(
+        self,
+        boards: tuple[BoardProfile, ...] = DEFAULT_BOARDS,
+        profile_provider=None,
+        network_state_updater: Callable[..., object] | None = None,
+    ) -> None:
         self._static_boards = boards
         self._profile_provider = profile_provider
+        self._network_state_updater = network_state_updater
         self.simulation = os.environ.get("RFSOC_WEB_SIMULATION", "0") == "1"
         self._statuses: dict[str, BoardStatus] = {}
         self._lock = threading.Lock()
         self._control_locks: dict[str, threading.RLock] = {}
         self._simulated_rfdc: dict[str, dict] = {}
+        self._network_recovery_at: dict[str, float] = {}
         self._sequence = (time.time_ns() ^ id(self)) & 0xFFFFFFFF or 1
 
     @property
@@ -144,6 +153,8 @@ class BoardGateway:
 
     def refresh(self, board_id: str) -> BoardStatus:
         board = self.profile(board_id)
+        interface_info = next((item for item in list_udp_interfaces() if item.name == board.udp_interface), None)
+        physical_link = interface_info.carrier if interface_info else False
         if self.simulation:
             simulated = self._simulated_rfdc.get(board_id, {})
             return self._set_status(
@@ -158,6 +169,16 @@ class BoardGateway:
                 playback_armed=bool(simulated.get("playback_armed", False)),
                 playback_prepared=bool(simulated.get("playback_prepared", False)),
                 playback_running=bool(simulated.get("playback_running", False)),
+                physical_link=True,
+                udp_interface=board.udp_interface,
+                udp_source_ip=board.udp_source_ip,
+                active_ip=board.active_ip or board.ip,
+                bootstrap_reachable=True,
+                network_configured=True,
+                device_uid=board.device_uid,
+                network_revision=board.network_revision,
+                network_apply_status=board.network_apply_status,
+                network_apply_error=board.network_apply_error,
             )
         path_error = udp_path_error(board)
         if path_error:
@@ -171,6 +192,10 @@ class BoardGateway:
                 playback_armed=False,
                 playback_prepared=False,
                 playback_running=False,
+                physical_link=physical_link,
+                udp_interface=board.udp_interface,
+                udp_source_ip=board.udp_source_ip,
+                active_ip=board.active_ip or board.ip,
                 message=(
                     f"{path_error}；控制目标 {board.ip}:{board.port}。"
                     "请在板卡档案中选择实际连接的网卡并配置对应源 IP"
@@ -178,14 +203,58 @@ class BoardGateway:
             )
         try:
             with self._board_control_lock(board_id):
-                controller = self._controller(board, timeout_s=0.5)
-                try:
-                    response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
-                finally:
-                    controller.close()
+                response = None
+                used_bootstrap = False
+                last_error: Exception | None = None
+                addresses = [board.active_ip or board.ip]
+                if board.bootstrap_ip and board.bootstrap_ip not in addresses:
+                    addresses.append(board.bootstrap_ip)
+                for address in addresses:
+                    controller = self._controller(board, timeout_s=0.5, address=address)
+                    try:
+                        response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
+                        used_bootstrap = address == board.bootstrap_ip
+                        break
+                    except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+                        last_error = exc
+                    finally:
+                        controller.close()
+                if response is None:
+                    raise last_error or TimeoutError("RFCTRL2 status timeout")
             if int(response.get("status", 1)) != 0:
                 raise RuntimeError(f"RFCTRL2 status returned 0x{int(response['status']):04X}")
             decoded = host.parse_rfctrl2_status_payload(response)
+            network_response = None
+            recovered_ip = board.active_ip or board.ip
+            recovered_mac = board.active_mac or board.mac
+            recovered_uid = board.device_uid
+            recovered_revision = board.network_revision
+            network_configured = not used_bootstrap
+            if used_bootstrap:
+                network_response = self._network_get_at(board, board.bootstrap_ip)
+                if int(network_response.get("status", 1)) != host.RF2_STATUS_OK:
+                    raise RuntimeError(
+                        f"NETWORK_GET returned 0x{int(network_response.get('status', 1)):04X}"
+                    )
+                recovered_uid = str(network_response.get("device_uid") or recovered_uid)
+                recovered_revision = int(network_response.get("revision") or recovered_revision)
+                recovered_ip = str(network_response.get("current_ip") or recovered_ip)
+                recovered_mac = str(network_response.get("current_mac") or recovered_mac)
+                self._persist_network_state(
+                    board_id,
+                    device_uid=recovered_uid,
+                    revision=recovered_revision,
+                )
+                if self._network_identity_needs_recovery(board, network_response):
+                    recovered = self._recover_network_identity(board, network_response)
+                    if recovered is not None:
+                        recovered_ip = str(recovered.get("current_ip") or board.desired_ip)
+                        recovered_mac = str(recovered.get("current_mac") or board.desired_mac)
+                        recovered_uid = str(recovered.get("device_uid") or recovered_uid)
+                        recovered_revision = int(recovered.get("revision") or recovered_revision)
+                        network_configured = True
+                else:
+                    network_configured = recovered_ip != board.bootstrap_ip
             current = self.status(board_id, refresh=False)
             if decoded["running"]:
                 state = BoardState.RUNNING
@@ -207,6 +276,16 @@ class BoardGateway:
                 playback_armed=bool(decoded["armed"]),
                 playback_prepared=bool(decoded["prepared"]),
                 playback_running=bool(decoded["running"]),
+                physical_link=physical_link,
+                udp_interface=board.udp_interface,
+                udp_source_ip=board.udp_source_ip,
+                active_ip=recovered_ip,
+                bootstrap_reachable=used_bootstrap and not network_configured,
+                network_configured=network_configured,
+                device_uid=recovered_uid,
+                network_revision=recovered_revision,
+                network_apply_status=board.network_apply_status,
+                network_apply_error=board.network_apply_error,
                 rfdc_last_revision=int(decoded["last_revision"]),
                 rfdc_last_error=int(decoded["last_error"]),
                 rfdc_last_error_stage=int(decoded["last_error_stage"]),
@@ -234,6 +313,10 @@ class BoardGateway:
                 playback_armed=False,
                 playback_prepared=False,
                 playback_running=False,
+                physical_link=physical_link,
+                udp_interface=board.udp_interface,
+                udp_source_ip=board.udp_source_ip,
+                active_ip=board.active_ip or board.ip,
                 message=str(exc),
             )
         except (RuntimeError, ValueError, TimeoutError) as exc:
@@ -247,6 +330,10 @@ class BoardGateway:
                 playback_armed=False,
                 playback_prepared=False,
                 playback_running=False,
+                physical_link=physical_link,
+                udp_interface=board.udp_interface,
+                udp_source_ip=board.udp_source_ip,
+                active_ip=board.active_ip or board.ip,
                 message=str(exc),
             )
 
@@ -611,14 +698,167 @@ class BoardGateway:
             finally:
                 controller.close()
 
+    @staticmethod
+    def _canonical_mac(value: str) -> str:
+        return value.replace(":", "").replace("-", "").lower()
+
+    def _persist_network_state(self, board_id: str, **changes) -> None:
+        if self._network_state_updater is not None:
+            self._network_state_updater(board_id, **changes)
+
+    def _network_identity_needs_recovery(self, board: BoardProfile, response: dict) -> bool:
+        desired_ip = board.desired_ip or board.ip
+        desired_mac = board.desired_mac or board.mac
+        current_ip = str(response.get("current_ip") or "")
+        current_mac = str(response.get("current_mac") or "")
+        return bool(
+            desired_ip
+            and desired_mac
+            and (
+                current_ip != desired_ip
+                or self._canonical_mac(current_mac) != self._canonical_mac(desired_mac)
+            )
+        )
+
+    def _recover_network_identity(self, board: BoardProfile, response: dict) -> dict | None:
+        now = time.monotonic()
+        if now - self._network_recovery_at.get(board.id, 0.0) < 5.0:
+            return None
+        self._network_recovery_at[board.id] = now
+        desired_ip = board.desired_ip or board.ip
+        desired_mac = board.desired_mac or board.mac
+        try:
+            request = NetworkConfigRequest(
+                revision=max(board.network_revision + 1, int(response.get("revision", 0)) + 1),
+                ip=desired_ip,
+                mac=desired_mac,
+                subnet_mask=str(response.get("subnet_mask") or "255.255.255.0"),
+                gateway=str(response.get("gateway") or "0.0.0.0"),
+                port=int(response.get("port") or board.port),
+            )
+            self._persist_network_state(
+                board.id,
+                desired_ip=request.ip,
+                desired_mac=request.mac,
+                revision=request.revision,
+                status="pending",
+                error="",
+            )
+            self.network_apply(board.id, request, address=board.bootstrap_ip)
+            self.network_restart(board.id, address=board.bootstrap_ip)
+            confirmed = self._wait_network_get(board, request.ip)
+            self._persist_network_state(
+                board.id,
+                active_ip=str(confirmed.get("current_ip") or request.ip),
+                active_mac=str(confirmed.get("current_mac") or request.mac),
+                device_uid=str(confirmed.get("device_uid") or response.get("device_uid") or ""),
+                revision=int(confirmed.get("revision") or request.revision),
+                status="applied",
+                error="",
+            )
+            return confirmed
+        except Exception as exc:
+            self._persist_network_state(board.id, status="failed", error=str(exc))
+            return None
+
+    def _network_get_at(self, board: BoardProfile, address: str) -> dict:
+        controller = self._controller(board, timeout_s=1.0, address=address)
+        try:
+            response = controller.rfctrl2_network_get(
+                seq=self._next_sequence(), wait_response=True, retries=1
+            )
+            response["bootstrap_reachable"] = address == board.bootstrap_ip
+            return response
+        finally:
+            controller.close()
+
+    def _wait_network_get(self, board: BoardProfile, address: str, timeout_s: float = 3.0) -> dict:
+        deadline = time.monotonic() + timeout_s
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                response = self._network_get_at(board, address)
+                if int(response.get("status", 1)) == host.RF2_STATUS_OK:
+                    return response
+            except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+                last_error = exc
+            time.sleep(0.05)
+        raise last_error or TimeoutError(f"network identity {address} did not respond")
+
+    def network_get(self, board_id: str, address: str | None = None) -> dict:
+        board = self.profile(board_id)
+        if self.simulation:
+            return {
+                "version": host.RFCTRL2_VERSION,
+                "status": host.RF2_STATUS_OK,
+                "device_uid": board.device_uid or board_id,
+                "current_ip": board.active_ip or board.ip,
+                "current_mac": board.active_mac or board.mac,
+                "bootstrap_ip": board.bootstrap_ip,
+                "revision": board.network_revision,
+                "port": board.port,
+                "capabilities": host.RF2_CAP_NETWORK_CONFIG,
+            }
+        with self._board_control_lock(board_id):
+            addresses = [address or board.active_ip or board.ip]
+            if address is None and board.bootstrap_ip and board.bootstrap_ip not in addresses:
+                addresses.append(board.bootstrap_ip)
+            last_error: Exception | None = None
+            for target in addresses:
+                try:
+                    return self._network_get_at(board, target)
+                except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+                    last_error = exc
+            raise last_error or TimeoutError("NETWORK_GET timeout")
+
+    def network_apply(self, board_id: str, request, address: str | None = None) -> dict:
+        board = self.profile(board_id)
+        if self.simulation:
+            return self.network_get(board_id) | {
+                "revision": request.revision,
+                "current_ip": request.ip,
+                "current_mac": request.mac,
+            }
+        with self._board_control_lock(board_id):
+            status = self.status(board_id, refresh=True)
+            if status.playback_armed or status.playback_prepared or status.playback_running:
+                raise RuntimeError("network configuration requires playback to be muted and disarmed")
+            controller = self._controller(board, timeout_s=2.0, address=address)
+            try:
+                return controller.rfctrl2_network_apply(
+                    request.revision, request.ip, request.mac,
+                    subnet_mask=request.subnet_mask, gateway=request.gateway,
+                    port=request.port, seq=self._next_sequence(), wait_response=True, retries=2,
+                )
+            finally:
+                controller.close()
+
+    def network_restart(self, board_id: str, address: str | None = None) -> dict:
+        board = self.profile(board_id)
+        if self.simulation:
+            return self.network_get(board_id)
+        with self._board_control_lock(board_id):
+            controller = self._controller(board, timeout_s=2.0, address=address)
+            try:
+                return controller.rfctrl2_network_restart(
+                    seq=self._next_sequence(), wait_response=True, retries=2
+                )
+            finally:
+                controller.close()
+
+    def network_confirm(self, board_id: str, address: str) -> dict:
+        board = self.profile(board_id)
+        with self._board_control_lock(board_id):
+            return self._wait_network_get(board, address)
+
     def _board_control_lock(self, board_id: str) -> threading.RLock:
         _ = self.boards
         return self._control_locks[board_id]
 
     @staticmethod
-    def _controller(board: BoardProfile, timeout_s: float = 1.0):
+    def _controller(board: BoardProfile, timeout_s: float = 1.0, address: str | None = None):
         return host.RFSocController(
-            board.ip,
+            address or board.active_ip or board.ip,
             port=board.port,
             timeout_s=timeout_s,
             transport="udp",
@@ -834,6 +1074,7 @@ class RunCoordinator:
 
             self._event(run_id, "single board waveform upload completed")
             if request.completion_mode == "one_shot":
+                continuous_sine = request.playback_mode == "continuous_sine"
                 # Keep the run in READY while the automatic pulse is active. The
                 # terminal DONE record is published only after mute and lock release.
                 record = self.store.complete_loaded(run_id, state=RunState.READY)
@@ -845,26 +1086,23 @@ class RunCoordinator:
                     else:
                         self.boards.arm(board_id, int(run_id, 16), self._channel_mask(request))
                         self.boards.manual_trigger(board_id)
-                trigger_count = 1
+                if continuous_sine and request.one_shot_duration_ms <= 0:
+                    record = self.store.update(run_id, RunState.RUNNING, 1.0)
+                    self._event(run_id, "continuous sine playback is running until Stop/Mute is requested")
+                    self._publish_run(record)
+                    return
                 output_duration_s = request.one_shot_duration_ms / 1000.0
-                if output_duration_s > 0 and request.jobs[0].waveform.loop:
-                    board_id = record.board_ids[0]
-                    deadline = time.monotonic() + output_duration_s
-                    expected_cycle_s = request.jobs[0].waveform.record_duration_ns * 1e-9
-                    while self.boards.wait_for_loop_prepared(board_id, deadline, expected_cycle_s):
-                        if time.monotonic() >= deadline:
-                            break
-                        self.boards.manual_trigger(board_id)
-                        trigger_count += 1
-                elif output_duration_s > 0:
+                if output_duration_s > 0:
                     time.sleep(output_duration_s)
                 for board_id in record.board_ids:
                     if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.MUTED, "dry-run one-shot muted")
                     else:
                         self.boards.mute(board_id)
-                if request.jobs[0].waveform.loop:
-                    self._event(run_id, f"loop playback sent {trigger_count} RFCTRL2 Trigger commands and muted")
+                if continuous_sine:
+                    self._event(run_id, f"continuous sine playback triggered once for {request.one_shot_duration_ms:g} ms and muted")
+                elif request.jobs[0].waveform.loop:
+                    self._event(run_id, f"loop playback triggered once for {request.one_shot_duration_ms:g} ms and muted")
                 else:
                     self._event(run_id, "one-shot triggered and muted")
                 record = self.store.finish_one_shot(run_id)

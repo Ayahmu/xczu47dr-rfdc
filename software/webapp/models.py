@@ -41,6 +41,15 @@ class BoardProfile(BaseModel):
     ip: str
     port: int = Field(1234, ge=1, le=65535)
     mac: str
+    bootstrap_ip: str = "192.168.254.254"
+    desired_ip: str = ""
+    active_ip: str = ""
+    desired_mac: str = ""
+    active_mac: str = ""
+    device_uid: str = ""
+    network_revision: int = Field(0, ge=0)
+    network_apply_status: Literal["unknown", "pending", "applied", "failed"] = "unknown"
+    network_apply_error: str = ""
     udp_interface: str = "enp225s0f0"
     udp_source_ip: str = "192.168.1.10"
     clock_source: Literal["onboard", "master-10mhz"]
@@ -59,7 +68,7 @@ class BoardProfile(BaseModel):
 
 
 class NetworkInterfaceInfo(BaseModel):
-    name: Literal["enp225s0f0", "enp225s0f1"]
+    name: Literal["enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1"]
     present: bool
     operstate: str
     carrier: bool
@@ -92,6 +101,16 @@ class BoardStatus(BaseModel):
     error_count: int = 0
     sync_epoch: int = 0
     hardware_tick: int = 0
+    physical_link: bool | None = None
+    udp_interface: str = ""
+    udp_source_ip: str = ""
+    active_ip: str = ""
+    bootstrap_reachable: bool = False
+    network_configured: bool = False
+    device_uid: str = ""
+    network_revision: int = 0
+    network_apply_status: str = "unknown"
+    network_apply_error: str = ""
     message: str = ""
 
 
@@ -291,7 +310,16 @@ class BoardUpdateRequest(BaseModel):
     ip: str = Field(min_length=1, max_length=64)
     port: int = Field(1234, ge=1, le=65535)
     mac: str = Field(default="", max_length=32)
-    udp_interface: Literal["enp225s0f0", "enp225s0f1"] = "enp225s0f0"
+    bootstrap_ip: str = Field(default="192.168.254.254", max_length=64)
+    desired_ip: str = Field(default="", max_length=64)
+    active_ip: str = Field(default="", max_length=64)
+    desired_mac: str = Field(default="", max_length=32)
+    active_mac: str = Field(default="", max_length=32)
+    device_uid: str = Field(default="", max_length=64)
+    network_revision: int = Field(default=0, ge=0)
+    network_apply_status: Literal["unknown", "pending", "applied", "failed"] = "unknown"
+    network_apply_error: str = Field(default="", max_length=512)
+    udp_interface: Literal["enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1"] = "enp225s0f0"
     udp_source_ip: str = Field(default="192.168.1.10", max_length=64)
     clock_source: Literal["onboard", "master-10mhz"] = "onboard"
     target_profile: str = Field(default="custom_xczu47dr", max_length=64)
@@ -302,6 +330,53 @@ class BoardUpdateRequest(BaseModel):
     location: str = Field(default="", max_length=120)
     notes: str = Field(default="", max_length=2000)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def normalize_network_aliases(self) -> "BoardUpdateRequest":
+        if not self.desired_ip:
+            self.desired_ip = self.ip
+        if not self.active_ip:
+            self.active_ip = self.ip
+        if not self.desired_mac:
+            self.desired_mac = self.mac
+        if not self.active_mac:
+            self.active_mac = self.mac
+        self.ip = self.active_ip
+        self.mac = self.active_mac
+        return self
+
+
+class NetworkConfigRequest(BaseModel):
+    revision: int = Field(ge=0)
+    ip: str = Field(min_length=7, max_length=64)
+    mac: str = Field(min_length=12, max_length=32)
+    subnet_mask: str = Field(default="255.255.255.0", min_length=7, max_length=64)
+    gateway: str = Field(default="0.0.0.0", min_length=7, max_length=64)
+    port: int = Field(1234, ge=1, le=65535)
+
+
+class NetworkConfigSnapshot(BaseModel):
+    board_id: str
+    device_uid: str = ""
+    bootstrap_ip: str = "192.168.254.254"
+    current_ip: str = ""
+    desired_ip: str = ""
+    current_mac: str = ""
+    desired_mac: str = ""
+    subnet_mask: str = "255.255.255.0"
+    gateway: str = "0.0.0.0"
+    port: int = Field(1234, ge=1, le=65535)
+    udp_interface: str
+    udp_source_ip: str
+    revision: int = 0
+    apply_status: Literal["unknown", "pending", "applied", "failed"] = "unknown"
+    apply_error: str = ""
+    physical_link: bool | None = None
+    bootstrap_reachable: bool = False
+    active_reachable: bool = False
+    protocol_version: int = 0
+    capabilities: int = 0
+    link_state: int = 0
 
 
 class ManualChannel(BaseModel):
@@ -407,6 +482,7 @@ class RunCreateRequest(BaseModel):
     dry_run: bool = False
     execution_mode: Literal["single", "synchronized"] = "single"
     completion_mode: Literal["upload", "one_shot"] = "upload"
+    playback_mode: Literal["single", "continuous_sine"] = "single"
     one_shot_duration_ms: float = Field(0.0, ge=0.0, le=3_600_000.0)
 
     @model_validator(mode="after")
@@ -416,6 +492,18 @@ class RunCreateRequest(BaseModel):
             raise ValueError("each board may appear only once in a run")
         if self.execution_mode != "single" or len(self.jobs) != 1:
             raise ValueError("multi-board synchronization is reserved until hardware qualification is complete")
+        if self.playback_mode == "continuous_sine":
+            waveform = self.jobs[0].waveform
+            if not waveform.loop:
+                raise ValueError("continuous_sine playback requires waveform.loop=true")
+            if waveform.mode != "manual":
+                raise ValueError("continuous_sine playback currently supports manual sine waveforms only")
+            enabled = [channel for channel in waveform.manual_channels if channel.enabled]
+            if not enabled:
+                raise ValueError("continuous_sine playback requires at least one enabled channel")
+            non_sine = [channel.channel for channel in enabled if channel.waveform != "iq-sine"]
+            if non_sine:
+                raise ValueError(f"continuous_sine playback requires iq-sine on enabled channels, got CH{non_sine}")
         return self
 
     @property
@@ -437,6 +525,7 @@ class RunRecord(BaseModel):
     progress: float = Field(0.0, ge=0.0, le=1.0)
     error: str = ""
     completion_mode: str = "upload"
+    playback_mode: str = "single"
     loaded: bool = False
 
 

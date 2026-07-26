@@ -59,6 +59,30 @@ module pl_riscv_control_v1 #(
     input  wire [255:0] rfdc_actual_phase_word,
     input  wire [255:0] rfdc_actual_vop_code,
 
+    output reg         network_apply_start,
+    output reg [31:0]  network_apply_revision,
+    output reg [31:0]  network_apply_ip,
+    output reg [63:0]  network_apply_mac,
+    output reg [31:0]  network_apply_subnet,
+    output reg [31:0]  network_apply_gateway,
+    output reg [15:0]  network_apply_port,
+    output reg         network_restart_start,
+    input  wire        network_busy,
+    input  wire        network_done,
+    input  wire [15:0] network_status,
+    input  wire [31:0] network_result_revision,
+    input  wire [31:0] network_current_ip,
+    input  wire [63:0] network_current_mac,
+    input  wire [31:0] network_current_subnet,
+    input  wire [31:0] network_current_gateway,
+    input  wire [15:0] network_current_port,
+    input  wire [63:0] network_device_uid,
+    input  wire [63:0] network_bootstrap_mac,
+    input  wire [31:0] network_bootstrap_ip,
+    input  wire [31:0] network_capabilities,
+    input  wire [31:0] network_status_flags,
+    input  wire [15:0] network_link_state,
+
     output reg  [63:0]  rvresp_tdata,
     output reg          rvresp_tvalid,
     input  wire         rvresp_tready,
@@ -123,8 +147,15 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_TRIGGER           = 32'h00000009;
   localparam [31:0] RF2_OP_ABORT_MUTE        = 32'h0000000A;
   localparam [31:0] RF2_OP_RFDC_GET_CONFIG   = 32'h0000000B;
-  localparam [31:0] RF2_CAPABILITIES         = 32'h00030000;
+  // Structured RFDC apply, RFDC readback, and runtime network identity
+  // configuration are all advertised through HELLO/STATUS.
+  localparam [31:0] RF2_CAPABILITIES         = 32'h00070000;
   localparam [31:0] RF2_RFDC_REQUEST_BYTES   = 32'd200;
+  localparam [31:0] RF2_NETWORK_APPLY_BYTES  = 32'd32;
+  localparam [31:0] RF2_NETWORK_RESPONSE_BYTES = 32'd64;
+  localparam [31:0] RF2_OP_NETWORK_GET       = 32'h0000000C;
+  localparam [31:0] RF2_OP_NETWORK_APPLY     = 32'h0000000D;
+  localparam [31:0] RF2_OP_NETWORK_RESTART   = 32'h0000000E;
 
   localparam [31:0] RV1_VERSION = 32'd1;
   localparam [31:0] RF2_VERSION = 32'd2;
@@ -192,6 +223,9 @@ module pl_riscv_control_v1 #(
   reg [31:0] rfdc_response_sequence;
   reg [31:0] rfdc_response_opcode;
   reg        rfdc_payload_fields_invalid_latched;
+  reg        network_response_pending;
+  reg [31:0] network_response_sequence;
+  reg [31:0] network_response_opcode;
   reg        dbg_error_pending;
 
   wire instr_fire = m_instr_tvalid && m_instr_tready;
@@ -354,6 +388,36 @@ module pl_riscv_control_v1 #(
     end
   endtask
 
+  task queue_network_response;
+    input [31:0] opcode;
+    input [31:0] resp_seq;
+    reg [31:0] state_flags;
+    begin
+      if (!rvresp_tvalid) begin
+        state_flags = network_status_flags;
+        resp_words[0] <= RFRESP2_MAGIC;
+        resp_words[1] <= {opcode, network_status, RF2_VERSION[15:0]};
+        resp_words[2] <= {RF2_NETWORK_RESPONSE_BYTES, resp_seq};
+        resp_words[3] <= network_device_uid;
+        resp_words[4] <= {network_bootstrap_ip, network_current_ip};
+        resp_words[5] <= network_current_mac;
+        resp_words[6] <= {{16{1'b0}}, network_link_state, network_current_port, network_result_revision};
+        resp_words[7] <= {state_flags, network_capabilities};
+        resp_words[8] <= network_bootstrap_mac;
+        resp_words[9] <= {32'd0, network_current_subnet};
+        resp_words[10] <= {32'd0, network_current_gateway};
+        resp_count <= 6'd11;
+        resp_index <= 6'd0;
+        rvresp_word_count <= 16'd11;
+        rvresp_tdata <= RFRESP2_MAGIC;
+        rvresp_tvalid <= 1'b1;
+        rvresp_tlast <= 1'b0;
+      end else begin
+        dbg_error_pending <= 1'b1;
+      end
+    end
+  endtask
+
   task queue_resp1;
     input [31:0] opcode;
     input [15:0] status_code;
@@ -456,6 +520,14 @@ module pl_riscv_control_v1 #(
       rfdc_apply_nyquist_zone <= 16'd0;
       rfdc_apply_phase_mdeg <= 256'd0;
       rfdc_apply_current_ua <= 256'd0;
+      network_apply_start <= 1'b0;
+      network_apply_revision <= 32'd0;
+      network_apply_ip <= 32'd0;
+      network_apply_mac <= 64'd0;
+      network_apply_subnet <= 32'd0;
+      network_apply_gateway <= 32'd0;
+      network_apply_port <= 16'd0;
+      network_restart_start <= 1'b0;
       rvresp_tdata <= 64'd0;
       rvresp_tvalid <= 1'b0;
       rvresp_tlast <= 1'b0;
@@ -514,6 +586,9 @@ module pl_riscv_control_v1 #(
       rfdc_response_sequence <= 32'd0;
       rfdc_response_opcode <= RF2_OP_RFDC_APPLY;
       rfdc_payload_fields_invalid_latched <= 1'b0;
+      network_response_pending <= 1'b0;
+      network_response_sequence <= 32'd0;
+      network_response_opcode <= RF2_OP_NETWORK_APPLY;
       for (i = 0; i < MAX_PAYLOAD_WORDS; i = i + 1) begin
         payload_words[i] <= 32'd0;
       end
@@ -527,6 +602,8 @@ module pl_riscv_control_v1 #(
       rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
+      network_apply_start <= 1'b0;
+      network_restart_start <= 1'b0;
 
       if (dbg_error_pending) begin
         dbg_error_count <= dbg_error_count + 32'd1;
@@ -536,6 +613,11 @@ module pl_riscv_control_v1 #(
       if (rfdc_response_pending && rfdc_apply_done) begin
         rfdc_response_pending <= 1'b0;
         queue_rfdc_response(rfdc_response_opcode, rfdc_response_sequence);
+      end
+
+      if (network_response_pending && network_done) begin
+        network_response_pending <= 1'b0;
+        queue_network_response(network_response_opcode, network_response_sequence);
       end
 
       if (rvresp_tvalid && rvresp_tready) begin
@@ -660,6 +742,44 @@ module pl_riscv_control_v1 #(
         end else if (rx_is_v2 && (cmd_opcode == RF2_OP_STATUS)) begin
           dbg_status <= 32'h2000_0002;
           queue_rf2_status(RF2_OP_STATUS, cmd_seq);
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_NETWORK_GET)) begin
+          dbg_status <= 32'h2000_000C;
+          queue_network_response(RF2_OP_NETWORK_GET, cmd_seq);
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_NETWORK_APPLY)) begin
+          if ((cmd_payload_bytes != RF2_NETWORK_APPLY_BYTES) ||
+              (rx_expected_words != 32'd12)) begin
+            dbg_status <= 32'hBAD2_000D;
+            queue_resp0(RF2_OP_NETWORK_APPLY, 16'h0003, cmd_seq);
+          end else if (network_busy) begin
+            dbg_status <= 32'hBAD2_100D;
+            queue_resp0(RF2_OP_NETWORK_APPLY, 16'h0004, cmd_seq);
+          end else begin
+            network_apply_revision <= payload_words[4];
+            network_apply_ip <= payload_words[5];
+            network_apply_mac <= {payload_words[7], payload_words[6]};
+            network_apply_subnet <= payload_words[8];
+            network_apply_gateway <= payload_words[9];
+            network_apply_port <= payload_words[10][15:0];
+            network_apply_start <= 1'b1;
+            network_response_pending <= 1'b1;
+            network_response_sequence <= cmd_seq;
+            network_response_opcode <= RF2_OP_NETWORK_APPLY;
+            dbg_status <= 32'h2000_000D;
+          end
+        end else if (rx_is_v2 && (cmd_opcode == RF2_OP_NETWORK_RESTART)) begin
+          if (cmd_payload_bytes != 32'd0 || rx_expected_words != 32'd4) begin
+            dbg_status <= 32'hBAD2_000E;
+            queue_resp0(RF2_OP_NETWORK_RESTART, 16'h0003, cmd_seq);
+          end else if (network_busy) begin
+            dbg_status <= 32'hBAD2_100E;
+            queue_resp0(RF2_OP_NETWORK_RESTART, 16'h0004, cmd_seq);
+          end else begin
+            network_restart_start <= 1'b1;
+            network_response_pending <= 1'b1;
+            network_response_sequence <= cmd_seq;
+            network_response_opcode <= RF2_OP_NETWORK_RESTART;
+            dbg_status <= 32'h2000_000E;
+          end
         end else if (rx_is_v2 && (cmd_opcode == RF2_OP_RFDC_APPLY)) begin
           if ((cmd_payload_bytes != RF2_RFDC_REQUEST_BYTES) ||
               (rx_expected_words != 32'd54) ||

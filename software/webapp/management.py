@@ -218,7 +218,42 @@ class ManagementStore:
                 );
                 """
             )
+            # Keep the database file backwards compatible with installations
+            # created before network identity was split into desired/active
+            # values. SQLite has no portable IF NOT EXISTS form for columns.
+            self._ensure_column(connection, "boards", "bootstrap_ip", "TEXT NOT NULL DEFAULT '192.168.254.254'")
+            self._ensure_column(connection, "boards", "desired_ip", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "boards", "active_ip", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "boards", "desired_mac", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "boards", "active_mac", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "boards", "device_uid", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "boards", "network_revision", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "boards", "network_apply_status", "TEXT NOT NULL DEFAULT 'unknown'")
+            self._ensure_column(connection, "boards", "network_apply_error", "TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                """UPDATE boards
+                   SET desired_ip = CASE WHEN desired_ip = '' THEN ip ELSE desired_ip END,
+                       active_ip = CASE WHEN active_ip = '' THEN ip ELSE active_ip END,
+                       desired_mac = CASE WHEN desired_mac = '' THEN mac ELSE desired_mac END,
+                       active_mac = CASE WHEN active_mac = '' THEN mac ELSE active_mac END
+                   WHERE desired_ip = '' OR active_ip = '' OR desired_mac = '' OR active_mac = ''"""
+            )
+            # Existing installations may still contain the retired board-B
+            # target. Board naming and sync metadata remain software-only;
+            # normal hardware and clock policy are now unified.
+            connection.execute(
+                """UPDATE boards
+                   SET target_profile = 'custom_xczu47dr',
+                       clock_source = 'onboard'
+                   WHERE target_profile IN ('custom_xczu47dr_b', 'custom_xczu47dr_b_standalone')"""
+            )
             self._seed(connection)
+
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def _seed(self, connection: sqlite3.Connection) -> None:
         if connection.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"] == 0:
@@ -231,18 +266,35 @@ class ManagementStore:
         if connection.execute("SELECT COUNT(*) AS count FROM boards").fetchone()["count"] == 0:
             timestamp = now()
             rows = [
-                ("board-a", "XCZU47DR A", "master", "192.168.1.128", "02:00:00:00:00:01", "onboard", "custom_xczu47dr"),
-                ("board-b", "XCZU47DR B", "follower", "192.168.1.129", "02:00:00:00:00:02", "master-10mhz", "custom_xczu47dr_b"),
+                ("board-a", "XCZU47DR A", "master", "192.168.1.128", "02:00:00:00:00:01", "onboard"),
+                ("board-b", "XCZU47DR B", "master", "192.168.2.129", "02:00:00:00:00:02", "onboard"),
             ]
-            for board_id, name, role, ip, mac, clock, target in rows:
+            for board_id, name, role, ip, mac, clock in rows:
                 connection.execute(
                     """
                     INSERT INTO boards(
-                        id, name, model, role, ip, port, mac, udp_interface, udp_source_ip,
-                        clock_source, target_profile, sync_group, created_at, updated_at
-                    ) VALUES (?, ?, 'XCZU47DR RFDC', ?, ?, 1234, ?, 'enp225s0f0', '192.168.1.10', ?, ?, 'pair-a-b', ?, ?)
+                        id, name, model, role, ip, port, mac, bootstrap_ip, desired_ip, active_ip,
+                        desired_mac, active_mac, udp_interface, udp_source_ip, clock_source,
+                        target_profile, sync_group, created_at, updated_at
+                    ) VALUES (?, ?, 'XCZU47DR RFDC', ?, ?, 1234, ?, '192.168.254.254', ?, ?, ?, ?, ?, ?, ?, ?, 'pair-a-b', ?, ?)
                     """,
-                    (board_id, name, role, ip, mac, clock, target, timestamp, timestamp),
+                    (
+                        board_id,
+                        name,
+                        role,
+                        ip,
+                        mac,
+                        ip,
+                        ip,
+                        mac,
+                        mac,
+                        "enp225s0f0" if board_id == "board-a" else "enp225s0f1",
+                        "192.168.1.10" if board_id == "board-a" else "192.168.2.10",
+                        clock,
+                        "custom_xczu47dr",
+                        timestamp,
+                        timestamp,
+                    ),
                 )
 
     @staticmethod
@@ -268,6 +320,11 @@ class ManagementStore:
         return BoardProfile(
             id=row["id"], name=row["name"], model=row["model"], role=row["role"], ip=row["ip"], port=int(row["port"]),
             mac=row["mac"], udp_interface=row["udp_interface"], udp_source_ip=row["udp_source_ip"],
+            bootstrap_ip=row["bootstrap_ip"], desired_ip=row["desired_ip"] or row["ip"],
+            active_ip=row["active_ip"] or row["ip"], desired_mac=row["desired_mac"] or row["mac"],
+            active_mac=row["active_mac"] or row["mac"], device_uid=row["device_uid"],
+            network_revision=int(row["network_revision"]), network_apply_status=row["network_apply_status"],
+            network_apply_error=row["network_apply_error"],
             clock_source=row["clock_source"], target_profile=row["target_profile"], sync_group=row["sync_group"],
             jtag_cable_serial=row["jtag_cable_serial"], serial_path=row["serial_path"], baud_rate=int(row["baud_rate"]),
             serial_status=row["serial_status"], serial_error=row["serial_error"], location=row["location"], notes=row["notes"],
@@ -306,6 +363,52 @@ class ManagementStore:
         self._write_board(board_id, request, create=False)
         return self.board(board_id)
 
+    def update_network_state(
+        self,
+        board_id: str,
+        *,
+        desired_ip: str | None = None,
+        desired_mac: str | None = None,
+        active_ip: str | None = None,
+        active_mac: str | None = None,
+        device_uid: str | None = None,
+        revision: int | None = None,
+        status: str | None = None,
+        error: str | None = None,
+    ) -> BoardProfile:
+        fields: list[str] = []
+        values: list[object] = []
+        updates = {
+            "desired_ip": desired_ip,
+            "desired_mac": desired_mac,
+            "active_ip": active_ip,
+            "active_mac": active_mac,
+            "device_uid": device_uid,
+            "network_revision": revision,
+            "network_apply_status": status,
+            "network_apply_error": error,
+        }
+        for field, value in updates.items():
+            if value is not None:
+                fields.append(f"{field}=?")
+                values.append(value)
+        if not fields:
+            return self.board(board_id)
+        if active_ip is not None:
+            fields.append("ip=?")
+            values.append(active_ip)
+        if active_mac is not None:
+            fields.append("mac=?")
+            values.append(active_mac)
+        fields.append("updated_at=?")
+        values.append(now())
+        values.append(board_id)
+        with self._transaction(immediate=True) as connection:
+            if connection.execute("SELECT 1 FROM boards WHERE id=?", (board_id,)).fetchone() is None:
+                raise KeyError(f"unknown board {board_id}")
+            connection.execute(f"UPDATE boards SET {', '.join(fields)} WHERE id=?", values)
+        return self.board(board_id)
+
     def _write_board(self, board_id: str, request: BoardUpdateRequest, create: bool) -> None:
         values = request.model_dump()
         timestamp = now()
@@ -319,11 +422,15 @@ class ManagementStore:
             if create:
                 connection.execute(
                     """
-                    INSERT INTO boards(id, name, model, role, ip, port, mac, udp_interface, udp_source_ip, clock_source,
-                        target_profile, sync_group, jtag_cable_serial, serial_path, baud_rate, location, notes, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO boards(id, name, model, role, ip, port, mac, bootstrap_ip, desired_ip, active_ip,
+                        desired_mac, active_mac, device_uid, network_revision, network_apply_status, network_apply_error,
+                        udp_interface, udp_source_ip, clock_source, target_profile, sync_group, jtag_cable_serial,
+                        serial_path, baud_rate, location, notes, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (board_id, values["name"], values["model"], values["role"], values["ip"], values["port"], values["mac"],
+                     values["bootstrap_ip"], values["desired_ip"], values["active_ip"], values["desired_mac"], values["active_mac"],
+                     values["device_uid"], values["network_revision"], values["network_apply_status"], values["network_apply_error"],
                      values["udp_interface"], values["udp_source_ip"], values["clock_source"], values["target_profile"], values["sync_group"],
                      values["jtag_cable_serial"], values["serial_path"], values["baud_rate"], values["location"], values["notes"],
                      int(values["enabled"]), timestamp, timestamp),
@@ -331,11 +438,15 @@ class ManagementStore:
             else:
                 connection.execute(
                     """
-                    UPDATE boards SET name=?, model=?, role=?, ip=?, port=?, mac=?, udp_interface=?, udp_source_ip=?, clock_source=?,
-                        target_profile=?, sync_group=?, jtag_cable_serial=?, serial_path=?, baud_rate=?, location=?, notes=?, enabled=?, updated_at=?
+                    UPDATE boards SET name=?, model=?, role=?, ip=?, port=?, mac=?, bootstrap_ip=?, desired_ip=?, active_ip=?,
+                        desired_mac=?, active_mac=?, device_uid=?, network_revision=?, network_apply_status=?, network_apply_error=?,
+                        udp_interface=?, udp_source_ip=?, clock_source=?, target_profile=?, sync_group=?, jtag_cable_serial=?,
+                        serial_path=?, baud_rate=?, location=?, notes=?, enabled=?, updated_at=?
                     WHERE id=?
                     """,
                     (values["name"], values["model"], values["role"], values["ip"], values["port"], values["mac"],
+                     values["bootstrap_ip"], values["desired_ip"], values["active_ip"], values["desired_mac"], values["active_mac"],
+                     values["device_uid"], values["network_revision"], values["network_apply_status"], values["network_apply_error"],
                      values["udp_interface"], values["udp_source_ip"], values["clock_source"], values["target_profile"], values["sync_group"],
                      values["jtag_cable_serial"], values["serial_path"], values["baud_rate"], values["location"], values["notes"],
                      int(values["enabled"]), timestamp, board_id),

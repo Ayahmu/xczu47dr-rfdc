@@ -125,6 +125,7 @@ module tb_waveform_executor;
     .ch7_arm(),
     .ch8_arm(),
     .cfg_auto_start(),
+    .cfg_loop(),
     .cfg_commit(cfg_commit),
     .dbg_st(dbg_st),
     .dbg_dm_st(dbg_dm_st),

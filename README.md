@@ -132,17 +132,18 @@ This section documents hardware development for the future synchronization
 mode. The current browser console does not expose multi-board start controls;
 single-board playback does not need these cables or synchronization roles.
 
-Build Board A (master) with the default target and Board B (follower) with its
-own target. The targets embed distinct Ethernet identities:
+Build both boards with the same normal target. Ethernet identity is assigned
+at runtime by the PL network configuration protocol; board names, cable
+serials, server interfaces, and formal IP/MAC values belong to the web
+console database, not to separate hardware targets:
 
 | Board | Build target | IPv4 | MAC | Clock role |
 | --- | --- | --- | --- | --- |
 | A | `custom_xczu47dr` | `192.168.1.128` | `02:00:00:00:00:01` | Existing 100 MHz path, forwards HMC 10 MHz |
-| B | `custom_xczu47dr_b` | `192.168.1.129` | `02:00:00:00:00:02` | HMC7044 CLKIN1 / XS17 external 10 MHz |
+| B | `custom_xczu47dr` | configured in web console | configured in web console | Same normal bitstream; sync role is software metadata |
 
 ```bash
 make hardware
-TARGET=custom_xczu47dr_b make hardware
 ```
 
 The intended two-coax topology is:

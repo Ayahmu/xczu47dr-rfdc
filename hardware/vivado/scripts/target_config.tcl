@@ -1,7 +1,7 @@
-# Vivado target matrix for supported RFDC builds
+# Vivado target matrix for supported builds.
 
 proc target_config_allowed_targets {} {
-    return [list custom_xczu47dr custom_xczu47dr_b custom_xczu47dr_bw]
+    return [list custom_xczu47dr custom_xczu47dr_bw]
 }
 
 proc target_config_exists {target} {
@@ -19,13 +19,38 @@ proc target_config_load {target} {
 
     switch -- $target {
         custom_xczu47dr {
-            return [dict create                 target custom_xczu47dr                 project_basename custom_xczu47dr_rfdc                 part xczu47dr-ffvg1517-2-i                 part_query *xczu47dr*ffvg1517*                 board_part {}                 xdc_files [list xdc/custom_xczu47dr_minimal.xdc]                 top_module TopCustomXczu47dr                 output_basename custom_xczu47dr_rfdc                 firmware_workspace firmware/workspace/custom_xczu47dr                 firmware_app rfdc_app                 firmware_elf firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf                 psu_init firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl                 clock_policy master_onboard_100mhz_forwarded_10mhz                 generics {BOARD_IS_MASTER=1 LOCAL_IP=32'hC0A80180 LOCAL_MAC=48'h020000000001}]
-        }
-        custom_xczu47dr_b {
-            return [dict create                 target custom_xczu47dr_b                 project_basename custom_xczu47dr_rfdc_b                 part xczu47dr-ffvg1517-2-i                 part_query *xczu47dr*ffvg1517*                 board_part {}                 xdc_files [list xdc/custom_xczu47dr_minimal.xdc]                 top_module TopCustomXczu47dr                 output_basename custom_xczu47dr_rfdc_b                 firmware_workspace firmware/workspace/custom_xczu47dr                 firmware_app rfdc_app                 firmware_elf firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf                 psu_init firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl                 clock_policy follower_external_10mhz_sync                 generics {BOARD_IS_MASTER=0 LOCAL_IP=32'hC0A80181 LOCAL_MAC=48'h020000000002}]
+            return [dict create \
+                target custom_xczu47dr \
+                project_basename custom_xczu47dr_rfdc \
+                part xczu47dr-ffvg1517-2-i \
+                part_query *xczu47dr*ffvg1517* \
+                board_part {} \
+                xdc_files [list xdc/custom_xczu47dr_minimal.xdc] \
+                top_module TopCustomXczu47dr \
+                output_basename custom_xczu47dr_rfdc \
+                firmware_workspace firmware/workspace/custom_xczu47dr \
+                firmware_app rfdc_app \
+                firmware_elf firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf \
+                psu_init firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl \
+                clock_policy unified_onboard_100mhz \
+                generics {}]
         }
         custom_xczu47dr_bw {
-            return [dict create                 target custom_xczu47dr_bw                 project_basename custom_xczu47dr_bandwidth                 part xczu47dr-ffvg1517-2-i                 part_query *xczu47dr*ffvg1517*                 board_part {}                 xdc_files [list xdc/custom_xczu47dr_bandwidth.xdc]                 top_module TopBandwidthXczu47dr                 output_basename custom_xczu47dr_bandwidth                 firmware_workspace firmware/workspace/custom_xczu47dr_bandwidth                 firmware_app bandwidth_app                 firmware_elf firmware/workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf                 psu_init firmware/workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl                 clock_policy ddr_bandwidth_interleaved_512b                 generics {}]
+            return [dict create \
+                target custom_xczu47dr_bw \
+                project_basename custom_xczu47dr_bandwidth \
+                part xczu47dr-ffvg1517-2-i \
+                part_query *xczu47dr*ffvg1517* \
+                board_part {} \
+                xdc_files [list xdc/custom_xczu47dr_bandwidth.xdc] \
+                top_module TopBandwidthXczu47dr \
+                output_basename custom_xczu47dr_bandwidth \
+                firmware_workspace firmware/workspace/custom_xczu47dr_bandwidth \
+                firmware_app bandwidth_app \
+                firmware_elf firmware/workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf \
+                psu_init firmware/workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl \
+                clock_policy ddr_bandwidth_interleaved_512b \
+                generics {}]
         }
     }
 }

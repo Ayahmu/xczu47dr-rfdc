@@ -100,7 +100,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/dac_play_ctrl.v",
                 ROOT / "tests/tb_dac_play_ctrl.sv",
             ],
-            "PASS: dac_play_ctrl preserves legacy startup and requires a fresh RFCTRL2 Trigger for every loop frame",
+            "PASS: dac_play_ctrl preserves legacy startup and auto-starts seamless loop refills",
         )
 
     def test_rfctrl2_sync_controller_uses_external_epoch(self):
@@ -141,7 +141,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/waveform_interleaved_system_top.v",
                 ROOT / "tests/tb_waveform_interleaved_rearm.sv",
             ],
-            "PASS: interleaved executor accepts a new frame after stale WAITTRIG",
+            "PASS: interleaved executor accepts rearm and clears loop state on abort",
         )
 
 

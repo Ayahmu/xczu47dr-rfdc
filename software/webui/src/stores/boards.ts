@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/client'
-import type { BoardPreflight, BoardProfile, BoardRfdcConfig, BoardStatus, DiscoveryResource, NetworkInterfaceInfo } from '../types'
+import type { BoardPreflight, BoardProfile, BoardRfdcConfig, BoardStatus, DiscoveryResource, NetworkConfigSnapshot, NetworkInterfaceInfo } from '../types'
 
 export const useBoardsStore = defineStore('boards', {
   state: () => ({
@@ -45,5 +45,11 @@ export const useBoardsStore = defineStore('boards', {
     },
     rfdc(boardId: string, refresh = false) { return api<BoardRfdcConfig>('/api/boards/' + boardId + '/rfdc-config?refresh=' + refresh) },
     preflight(boardId: string, refresh = true) { return api<BoardPreflight>('/api/boards/' + boardId + '/preflight?refresh=' + refresh) },
+    network(boardId: string, refresh = true) { return api<NetworkConfigSnapshot>('/api/boards/' + boardId + '/network-config?refresh=' + refresh) },
+    async applyNetwork(boardId: string, payload: { revision: number; ip: string; mac: string; subnet_mask: string; gateway: string; port: number }) {
+      const result = await api<NetworkConfigSnapshot>('/api/admin/boards/' + boardId + '/network-config/apply', { method: 'POST', body: payload })
+      await this.fetchAll(false)
+      return result
+    },
   },
 })

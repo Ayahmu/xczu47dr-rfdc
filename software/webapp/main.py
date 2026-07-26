@@ -33,6 +33,8 @@ from .models import (
     DiscoveryResource,
     LoginRequest,
     NetworkInterfaceInfo,
+    NetworkConfigRequest,
+    NetworkConfigSnapshot,
     PreviewRequest,
     PreviewResponse,
     PreflightCheck,
@@ -62,7 +64,7 @@ from .waveforms import preview_waveforms
 STATIC_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
 SESSION_COOKIE = "rfsoc_web_session"
 ARTIFACT_MAX_BYTES = int(os.environ.get("RFSOC_WEB_ARTIFACT_MAX_BYTES", str(1024 * 1024 * 1024)))
-TARGET_PROFILES = {"custom_xczu47dr", "custom_xczu47dr_b", "custom_xczu47dr_bw"}
+TARGET_PROFILES = {"custom_xczu47dr", "custom_xczu47dr_bw"}
 
 
 def runtime_root() -> Path:
@@ -77,7 +79,10 @@ class AppServices:
         self.events = EventHub()
         self.store = RunStore(root / "rfsoc_web.sqlite3")
         self.management = ManagementStore(root / "rfsoc_web.sqlite3")
-        self.boards = BoardGateway(profile_provider=self.management.list_boards)
+        self.boards = BoardGateway(
+            profile_provider=self.management.list_boards,
+            network_state_updater=self.management.update_network_state,
+        )
         self.runs = RunCoordinator(self.store, self.boards, root / "runs", self.events)
         self.serial = SerialService(self.management, self.events)
         self.rfdc = RfdcConfigService(self.management, self.boards, self.serial, self.events)
@@ -230,6 +235,164 @@ def boards(_user: UserRecord = Depends(require_user)) -> list[BoardProfile]:
 @app.get("/api/network/interfaces", response_model=list[NetworkInterfaceInfo])
 def network_interfaces(_user: UserRecord = Depends(require_user)) -> list[NetworkInterfaceInfo]:
     return list_udp_interfaces()
+
+
+def _network_snapshot(board_id: str, response: dict | None = None) -> NetworkConfigSnapshot:
+    board = services().management.board(board_id)
+    status = services().boards.status(board_id, refresh=False)
+    response = response or {}
+    return NetworkConfigSnapshot(
+        board_id=board_id,
+        device_uid=str(response.get("device_uid") or board.device_uid),
+        bootstrap_ip=str(response.get("bootstrap_ip") or board.bootstrap_ip),
+        current_ip=str(response.get("current_ip") or board.active_ip or board.ip),
+        desired_ip=board.desired_ip or board.ip,
+        current_mac=str(response.get("current_mac") or board.active_mac or board.mac),
+        desired_mac=board.desired_mac or board.mac,
+        subnet_mask=str(response.get("subnet_mask") or "255.255.255.0"),
+        gateway=str(response.get("gateway") or "0.0.0.0"),
+        port=int(response.get("port") or board.port),
+        udp_interface=board.udp_interface,
+        udp_source_ip=board.udp_source_ip,
+        revision=int(response.get("revision") or board.network_revision),
+        apply_status=board.network_apply_status,
+        apply_error=board.network_apply_error,
+        physical_link=status.physical_link,
+        bootstrap_reachable=bool(response.get("bootstrap_reachable", status.bootstrap_reachable)),
+        active_reachable=bool(status.online and not response.get("bootstrap_reachable", False)),
+        protocol_version=int(response.get("version") or status.protocol_version),
+        capabilities=int(response.get("capabilities") or status.rfdc_capabilities),
+        link_state=int(response.get("link_state") or 0),
+    )
+
+
+@app.get("/api/boards/{board_id}/network-config", response_model=NetworkConfigSnapshot)
+def get_network_config(
+    board_id: str,
+    refresh: bool = True,
+    _user: UserRecord = Depends(require_user),
+) -> NetworkConfigSnapshot:
+    try:
+        response = services().boards.network_get(board_id) if refresh else None
+        if response and int(response.get("status", 1)) == 0:
+            services().management.update_network_state(
+                board_id,
+                active_ip=str(response.get("current_ip") or ""),
+                active_mac=str(response.get("current_mac") or ""),
+                device_uid=str(response.get("device_uid") or ""),
+                revision=int(response.get("revision", 0)),
+                status="applied",
+                error="",
+            )
+        elif response:
+            raise RuntimeError(f"NETWORK_GET failed with status 0x{int(response.get('status', 1)):04X}")
+        return _network_snapshot(board_id, response)
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
+@app.post("/api/admin/boards/{board_id}/network-config", response_model=NetworkConfigSnapshot)
+def set_network_config(
+    board_id: str,
+    request: NetworkConfigRequest,
+    _user: UserRecord = Depends(require_admin),
+) -> NetworkConfigSnapshot:
+    try:
+        board = services().management.board(board_id)
+        updated = services().management.update_network_state(
+            board_id,
+            desired_ip=request.ip,
+            desired_mac=request.mac,
+            revision=request.revision,
+            status="pending",
+            error="",
+        )
+        services().management.add_audit(
+            "network.desired.updated",
+            f"network identity target changed to {request.ip}",
+            _user.id,
+            board_id,
+            {"ip": request.ip, "mac": request.mac, "revision": request.revision},
+        )
+        return _network_snapshot(board_id)
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
+@app.post("/api/admin/boards/{board_id}/network-config/apply", response_model=NetworkConfigSnapshot)
+def apply_network_config(
+    board_id: str,
+    request: NetworkConfigRequest,
+    _user: UserRecord = Depends(require_admin),
+) -> NetworkConfigSnapshot:
+    try:
+        board = services().management.board(board_id)
+        status = services().boards.status(board_id, refresh=True)
+        if status.playback_armed or status.playback_prepared or status.playback_running:
+            raise RuntimeError("network configuration requires playback to be muted and disarmed")
+        services().management.update_network_state(
+            board_id, desired_ip=request.ip, desired_mac=request.mac,
+            revision=request.revision, status="pending", error="",
+        )
+        response = services().boards.network_apply(board_id, request)
+        if int(response.get("status", 1)) != 0:
+            error = f"PL rejected NETWORK_APPLY with status 0x{int(response.get('status', 1)):04X}"
+            services().management.update_network_state(board_id, status="failed", error=error)
+            raise RuntimeError(error)
+        restart = services().boards.network_restart(board_id)
+        if int(restart.get("status", 1)) != 0:
+            error = f"PL rejected NETWORK_RESTART with status 0x{int(restart.get('status', 1)):04X}"
+            services().management.update_network_state(board_id, status="failed", error=error)
+            raise RuntimeError(error)
+        confirmed = services().boards.network_confirm(board_id, request.ip)
+        current_ip = str(confirmed.get("current_ip") or request.ip)
+        current_mac = str(confirmed.get("current_mac") or request.mac)
+        services().management.update_network_state(
+            board_id, active_ip=current_ip, active_mac=current_mac,
+            desired_ip=request.ip, desired_mac=request.mac,
+            device_uid=str(confirmed.get("device_uid") or ""),
+            revision=int(confirmed.get("revision") or request.revision),
+            status="applied", error="",
+        )
+        services().management.add_audit(
+            "network.applied",
+            f"{_user.username} applied network identity {current_ip}",
+            _user.id,
+            board_id,
+            {"ip": current_ip, "mac": current_mac, "revision": request.revision},
+        )
+        return _network_snapshot(board_id, confirmed)
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
+@app.post("/api/admin/boards/{board_id}/network-config/restart", response_model=NetworkConfigSnapshot)
+def restart_network_config(
+    board_id: str,
+    _user: UserRecord = Depends(require_admin),
+) -> NetworkConfigSnapshot:
+    try:
+        status = services().boards.status(board_id, refresh=True)
+        if status.playback_armed or status.playback_prepared or status.playback_running:
+            raise RuntimeError("network restart requires playback to be muted and disarmed")
+        response = services().boards.network_restart(board_id)
+        if int(response.get("status", 1)) != 0:
+            raise RuntimeError(f"PL rejected NETWORK_RESTART with status 0x{int(response.get('status', 1)):04X}")
+        board = services().management.board(board_id)
+        target = board.desired_ip or board.active_ip or board.ip
+        confirmed = services().boards.network_confirm(board_id, target)
+        services().management.update_network_state(
+            board_id,
+            active_ip=str(confirmed.get("current_ip") or target),
+            active_mac=str(confirmed.get("current_mac") or board.desired_mac or board.mac),
+            device_uid=str(confirmed.get("device_uid") or ""),
+            revision=int(confirmed.get("revision") or board.network_revision),
+            status="applied",
+            error="",
+        )
+        return _network_snapshot(board_id, confirmed)
+    except Exception as exc:
+        raise http_error(exc) from exc
 
 
 @app.get("/api/boards/status", response_model=list[BoardStatus])
@@ -518,6 +681,13 @@ def loaded_waveform(board_id: str, _user: UserRecord = Depends(require_user)) ->
 
 def board_loaded_action(board_id: str, action: str, user: UserRecord) -> RunRecord:
     try:
+        active_run = services().runs.active_run_for_board(board_id)
+        if action == "abort" and active_run:
+            record = services().store.get(active_run)
+            if record is None:
+                raise KeyError(active_run)
+            _check_run_control(record, user)
+            return services().runs.abort(active_run)
         record = _loaded_run_for_board(board_id)
         _check_run_control(record, user)
         if action == "arm":

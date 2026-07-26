@@ -10,6 +10,7 @@ module tb_dac_play_ctrl;
   reg armed = 1'b0;
   reg [15:0] cfg_seq_id = 16'd1;
   reg auto_start = 1'b1;
+  reg loop_enable = 1'b0;
   reg [31:0] ch1_len_beats = 32'd8;
   reg ch1_arm = 1'b1;
   reg ch1_fifo_tvalid = 1'b1;
@@ -38,6 +39,7 @@ module tb_dac_play_ctrl;
     .armed(armed),
     .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start),
+    .loop_enable(loop_enable),
     .ch1_delay_cycles(32'd0),
     .ch2_delay_cycles(32'd0),
     .ch3_delay_cycles(32'd0),
@@ -206,26 +208,19 @@ module tb_dac_play_ctrl;
       $finish;
     end
 
-    // A loop refill has a new configuration sequence but remains in the same
-    // RFCTRL2 ARM session. It must become PREPARED and remain gated until a
-    // second, independent Trigger arrives.
+    // A seamless loop refill has a new configuration sequence but remains in
+    // the same RFCTRL2 ARM session. It restarts when the refilled FIFO has
+    // data, without a second RFCTRL2 Trigger.
     wait (dbg_started == 1'b0);
-    @(negedge clk); cfg_seq_id = 16'd4;
-    wait (prepared == 1'b1);
-    repeat (2) @(posedge clk);
-    if (dbg_started || ch1_allow || dbg_ch1_fire_count != 32'd0) begin
-      $error("a refilled loop frame must wait in PREPARED for another RFCTRL2 Trigger");
-      $finish;
-    end
-    @(negedge clk); rfctrl2_trigger = 1'b1;
-    @(negedge clk); rfctrl2_trigger = 1'b0;
+    @(negedge clk); loop_enable = 1'b1; cfg_seq_id = 16'd4;
+    wait (dbg_started == 1'b1);
     #1;
-    if (!dbg_started || !ch1_allow || prepared) begin
-      $error("the next loop frame must start only after its own RFCTRL2 Trigger");
+    if (!ch1_allow || prepared || dbg_ch1_fire_count != 32'd0) begin
+      $error("a seamless loop refill must auto-start without another RFCTRL2 Trigger");
       $finish;
     end
 
-    $display("PASS: dac_play_ctrl preserves legacy startup and requires a fresh RFCTRL2 Trigger for every loop frame");
+    $display("PASS: dac_play_ctrl preserves legacy startup and auto-starts seamless loop refills");
     $finish;
   end
 endmodule

@@ -4,10 +4,7 @@
 `timescale 1ns / 1ps
 //`default_nettype none
  
-module udp_10G #(
-    parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01,
-    parameter [31:0] LOCAL_IP = 32'hC0A8_0180
-)
+module udp_10G
 (  
     input   wire      gt_rxp_in       ,
     input   wire      gt_rxn_in       ,
@@ -20,7 +17,14 @@ module udp_10G #(
 	input   wire       clk_100Mhz,
 	/////////////////////////////	
     input  wire        clk,
-    input  wire        rst, 
+    input  wire        rst,
+    input  wire [47:0] network_local_mac,
+    input  wire [31:0] network_local_ip,
+    input  wire [31:0] network_gateway_ip,
+    input  wire [31:0] network_subnet_mask,
+    input  wire [15:0] network_udp_port,
+    input  wire        network_clear_arp_cache,
+    input  wire        network_restart_pulse,
     
     input  wire        fifo64_wr,
     input  wire[63:0]  fifo64_din,
@@ -249,12 +253,16 @@ xxv_ethernet DUT
 
       
 
-    fpga_core #(
-        .LOCAL_MAC(LOCAL_MAC),
-        .LOCAL_IP (LOCAL_IP)
-    ) core_inst (
+    fpga_core core_inst (
         .clk(clk),
-        .rst(rst),         
+        .rst(rst),
+        .network_local_mac(network_local_mac),
+        .network_local_ip(network_local_ip),
+        .network_gateway_ip(network_gateway_ip),
+        .network_subnet_mask(network_subnet_mask),
+        .network_udp_port(network_udp_port),
+        .network_clear_arp_cache(network_clear_arp_cache),
+        .network_restart_pulse(network_restart_pulse),
          
         .loop_en   (loop_en   ),           
         .gap_num_vio(gap_num_vio), 

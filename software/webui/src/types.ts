@@ -20,6 +20,8 @@ export interface LeaseRecord {
   released_at?: string | null
 }
 
+export type UdpInterface = 'enp225s0f0' | 'enp225s0f1' | 'eno1np0' | 'eno2np1'
+
 export interface BoardProfile {
   id: string
   name: string
@@ -28,7 +30,16 @@ export interface BoardProfile {
   ip: string
   port: number
   mac: string
-  udp_interface: 'enp225s0f0' | 'enp225s0f1'
+  bootstrap_ip: string
+  desired_ip: string
+  active_ip: string
+  desired_mac: string
+  active_mac: string
+  device_uid: string
+  network_revision: number
+  network_apply_status: 'unknown' | 'pending' | 'applied' | 'failed'
+  network_apply_error: string
+  udp_interface: UdpInterface
   udp_source_ip: string
   clock_source: 'onboard' | 'master-10mhz'
   target_profile: string
@@ -44,8 +55,32 @@ export interface BoardProfile {
   lease?: LeaseRecord | null
 }
 
+export interface NetworkConfigSnapshot {
+  board_id: string
+  device_uid: string
+  bootstrap_ip: string
+  current_ip: string
+  desired_ip: string
+  current_mac: string
+  desired_mac: string
+  subnet_mask: string
+  gateway: string
+  port: number
+  udp_interface: UdpInterface
+  udp_source_ip: string
+  revision: number
+  apply_status: 'unknown' | 'pending' | 'applied' | 'failed'
+  apply_error: string
+  physical_link: boolean | null
+  bootstrap_reachable: boolean
+  active_reachable: boolean
+  protocol_version: number
+  capabilities: number
+  link_state: number
+}
+
 export interface NetworkInterfaceInfo {
-  name: 'enp225s0f0' | 'enp225s0f1'
+  name: UdpInterface
   present: boolean
   operstate: string
   carrier: boolean
@@ -215,6 +250,7 @@ export interface RunRecord {
   progress: number
   error: string
   completion_mode: 'upload' | 'one_shot'
+  playback_mode: 'single' | 'continuous_sine'
   loaded: boolean
 }
 

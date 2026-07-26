@@ -89,6 +89,7 @@ module tb_waveform_executor_outstanding;
     .ch7_arm(),
     .ch8_arm(),
     .cfg_auto_start(),
+    .cfg_loop(),
     .cfg_commit(cfg_commit),
     .dbg_st(),
     .dbg_dm_st(),

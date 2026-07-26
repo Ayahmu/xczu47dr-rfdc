@@ -1,7 +1,7 @@
 module Top #(
-    parameter integer BOARD_IS_MASTER = 1,
-    parameter [31:0] LOCAL_IP = 32'hC0A8_0180,
-    parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01
+    // Reserved for the future synchronized trigger topology. It does not
+    // select a board-specific network identity in the normal target.
+    parameter integer BOARD_IS_MASTER = 1
 ) (
 
     // HMC7044 clock chip control (SPI interface)
@@ -277,6 +277,39 @@ module Top #(
   wire [511:0] rfdc_actual_nco_word;
   wire [255:0] rfdc_actual_phase_word;
   wire [255:0] rfdc_actual_vop_code;
+  wire         network_apply_start;
+  wire [31:0]  network_apply_revision;
+  wire [31:0]  network_apply_ip;
+  wire [63:0]  network_apply_mac;
+  wire [31:0]  network_apply_subnet;
+  wire [31:0]  network_apply_gateway;
+  wire [15:0]  network_apply_port;
+  wire         network_restart_start;
+  wire         network_busy;
+  wire         network_done;
+  wire [15:0]  network_status;
+  wire [31:0]  network_result_revision;
+  wire [31:0]  network_current_ip;
+  wire [63:0]  network_current_mac;
+  wire [31:0]  network_current_subnet;
+  wire [31:0]  network_current_gateway;
+  wire [15:0]  network_current_port;
+  wire [63:0]  network_device_uid;
+  wire [63:0]  network_bootstrap_mac;
+  wire [31:0]  network_bootstrap_ip;
+  wire [31:0]  network_capabilities;
+  wire [31:0]  network_status_flags;
+  wire [15:0]  network_link_state;
+  wire         network_identity_ready;
+  wire         network_clear_arp_cache;
+  wire         network_restart_pulse;
+  // Network identity changes are infrequent. A clocked boundary keeps the
+  // high-fanout UDP/IP configuration bus off the critical timing path.
+  reg  [47:0] udp_network_mac;
+  reg  [31:0] udp_network_ip;
+  reg  [31:0] udp_network_gateway;
+  reg  [31:0] udp_network_subnet;
+  reg  [15:0] udp_network_port;
   wire [17:0]  RFDC_CFG_AXI_awaddr;
   wire         RFDC_CFG_AXI_awvalid;
   wire         RFDC_CFG_AXI_awready;
@@ -340,10 +373,65 @@ module Top #(
 
   assign SFP_TX_DIS = 1'b0;
 
-  udp_10G #(
-      .LOCAL_IP (LOCAL_IP),
-      .LOCAL_MAC(LOCAL_MAC)
-  ) udp_10g_i (
+  assign network_bootstrap_ip = 32'hC0A8FEFE;
+  assign network_capabilities = 32'h00040000;
+  assign network_status_flags = {
+      27'd0,
+      rfctrl2_prepared_ddr,
+      pc_started_ddr,
+      (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      network_busy,
+      network_identity_ready
+  };
+  assign network_link_state = 16'h0001;
+
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      udp_network_mac     <= 48'h0200_0000_0001;
+      udp_network_ip      <= 32'hC0A8_FEFE;
+      udp_network_gateway <= 32'h0000_0000;
+      udp_network_subnet  <= 32'hFFFF_FF00;
+      udp_network_port    <= 16'd1234;
+    end else begin
+      udp_network_mac     <= network_current_mac[47:0];
+      udp_network_ip      <= network_current_ip;
+      udp_network_gateway <= network_current_gateway;
+      udp_network_subnet  <= network_current_subnet;
+      udp_network_port    <= network_current_port;
+    end
+  end
+
+  network_config_pl network_config_pl_i (
+      .clk(ddr4_ui_clk),
+      .rst_n(ddr4_ui_aresetn),
+      .apply_start(network_apply_start),
+      .apply_revision(network_apply_revision),
+      .apply_ip(network_apply_ip),
+      .apply_mac(network_apply_mac),
+      .apply_subnet(network_apply_subnet),
+      .apply_gateway(network_apply_gateway),
+      .apply_port(network_apply_port),
+      .restart_start(network_restart_start),
+      .playback_armed(rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      .playback_prepared(rfctrl2_prepared_ddr),
+      .playback_running(pc_started_ddr),
+      .busy(network_busy),
+      .done(network_done),
+      .status(network_status),
+      .result_revision(network_result_revision),
+      .current_ip(network_current_ip),
+      .current_mac(network_current_mac),
+      .current_subnet(network_current_subnet),
+      .current_gateway(network_current_gateway),
+      .current_port(network_current_port),
+      .clear_arp_cache(network_clear_arp_cache),
+      .network_restart_pulse(network_restart_pulse),
+      .device_uid(network_device_uid),
+      .bootstrap_mac(network_bootstrap_mac),
+      .identity_ready(network_identity_ready)
+  );
+
+  udp_10G udp_10g_i (
       .gt_rxp_in   (sfp_rxp),
       .gt_rxn_in   (sfp_rxn),
       .gt_txp_out  (sfp_txp),
@@ -353,6 +441,13 @@ module Top #(
       .clk_100Mhz  (pl_clk),
       .clk         (ddr4_ui_clk),
       .rst         (~ddr4_ui_aresetn),
+      .network_local_mac(udp_network_mac),
+      .network_local_ip(udp_network_ip),
+      .network_gateway_ip(udp_network_gateway),
+      .network_subnet_mask(udp_network_subnet),
+      .network_udp_port(udp_network_port),
+      .network_clear_arp_cache(network_clear_arp_cache | network_restart_pulse),
+      .network_restart_pulse(network_restart_pulse),
       .fifo64_wr   (1'b0),
       .fifo64_din  (64'd0),
       .fifo64_af   (udp64_fifo_af),
@@ -478,6 +573,29 @@ module Top #(
       .rfdc_actual_nco_word(rfdc_actual_nco_word),
       .rfdc_actual_phase_word(rfdc_actual_phase_word),
       .rfdc_actual_vop_code(rfdc_actual_vop_code),
+      .network_apply_start(network_apply_start),
+      .network_apply_revision(network_apply_revision),
+      .network_apply_ip(network_apply_ip),
+      .network_apply_mac(network_apply_mac),
+      .network_apply_subnet(network_apply_subnet),
+      .network_apply_gateway(network_apply_gateway),
+      .network_apply_port(network_apply_port),
+      .network_restart_start(network_restart_start),
+      .network_busy(network_busy),
+      .network_done(network_done),
+      .network_status(network_status),
+      .network_result_revision(network_result_revision),
+      .network_current_ip(network_current_ip),
+      .network_current_mac(network_current_mac),
+      .network_current_subnet(network_current_subnet),
+      .network_current_gateway(network_current_gateway),
+      .network_current_port(network_current_port),
+      .network_device_uid(network_device_uid),
+      .network_bootstrap_mac(network_bootstrap_mac),
+      .network_bootstrap_ip(network_bootstrap_ip),
+      .network_capabilities(network_capabilities),
+      .network_status_flags(network_status_flags),
+      .network_link_state(network_link_state),
       .rvresp_tdata        (rvresp64_tdata),
       .rvresp_tvalid       (rvresp64_tvalid),
       .rvresp_tready       (rvresp64_tready),
@@ -779,6 +897,7 @@ module Top #(
   wire        ch1_arm,         ch2_arm,         ch3_arm,         ch4_arm;
   wire        ch5_arm,         ch6_arm,         ch7_arm,         ch8_arm;
   wire        cfg_auto_start;
+  wire        cfg_loop;
   wire        cfg_commit; // 每次 END 提交一帧配置
 
   localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
@@ -813,9 +932,10 @@ module Top #(
   ) executor_inst (
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
-    // ARM releases the first prefetched frame into the async FIFO. Every
-    // subsequent loop frame waits for its own RFCTRL2 Trigger as well.
+    // ARM releases the first prefetched frame into the async FIFO. Loop frames
+    // then auto-refill from DDR; only the first frame needs RFCTRL2 Trigger.
     .trigger(ps_trigger_ddr_sync | rfctrl2_arm_pulse | rfctrl2_trigger_pulse),
+    .abort_clear(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
 
     .s_axis_instr_tdata(instr_tdata),
     .s_axis_instr_tvalid(instr_tvalid),
@@ -889,6 +1009,7 @@ module Top #(
     .ch7_arm(ch7_arm),
     .ch8_arm(ch8_arm),
     .cfg_auto_start(cfg_auto_start),
+    .cfg_loop(cfg_loop),
     .cfg_commit(cfg_commit),
     .fifo_clear(ex_fifo_clear),
 
@@ -928,35 +1049,42 @@ module Top #(
   wire dac_rst_n = dac_rstff[2];
 
   // Board A forwards the HMC7044-derived 10MHz clock to Board B through
-  // TRIG_3 -> XS17.  Board B keeps its local TRIG_3 output low.
-  wire hmc_10m_ibuf;
-  wire hmc_10m_bufg;
-  wire trig_3_oddr_q;
-  IBUFDS #(
-    .DIFF_TERM("FALSE"),
-    .IBUF_LOW_PWR("FALSE")
-  ) hmc_10m_input_i (
-    .I (mclk_10m_p),
-    .IB(mclk_10m_n),
-    .O (hmc_10m_ibuf)
-  );
-  BUFG hmc_10m_bufg_i (.I(hmc_10m_ibuf), .O(hmc_10m_bufg));
-  ODDR #(
-    .DDR_CLK_EDGE("SAME_EDGE"),
-    .SRTYPE("ASYNC")
-  ) trig_3_oddr_i (
-    .C (hmc_10m_bufg),
-    .CE(1'b1),
-    .D1(1'b1),
-    .D2(1'b0),
-    .R (1'b0),
-    .S (1'b0),
-    .Q (trig_3_oddr_q)
-  );
-  OBUF trig_3_obuf_i (
-    .I((BOARD_IS_MASTER != 0) ? trig_3_oddr_q : 1'b0),
-    .O(TRIG_3)
-  );
+  // TRIG_3 -> XS17. A follower must not instantiate the master-only ODDR:
+  // its constant-low output otherwise leaves an unplaced OSERDES in Vivado.
+  generate
+    if (BOARD_IS_MASTER != 0) begin : gen_master_10m_forward
+      wire hmc_10m_ibuf;
+      wire hmc_10m_bufg;
+      wire trig_3_oddr_q;
+      IBUFDS #(
+        .DIFF_TERM("FALSE"),
+        .IBUF_LOW_PWR("FALSE")
+      ) hmc_10m_input_i (
+        .I (mclk_10m_p),
+        .IB(mclk_10m_n),
+        .O (hmc_10m_ibuf)
+      );
+      BUFG hmc_10m_bufg_i (.I(hmc_10m_ibuf), .O(hmc_10m_bufg));
+      ODDR #(
+        .DDR_CLK_EDGE("SAME_EDGE"),
+        .SRTYPE("ASYNC")
+      ) trig_3_oddr_i (
+        .C (hmc_10m_bufg),
+        .CE(1'b1),
+        .D1(1'b1),
+        .D2(1'b0),
+        .R (1'b0),
+        .S (1'b0),
+        .Q (trig_3_oddr_q)
+      );
+      OBUF trig_3_obuf_i (
+        .I(trig_3_oddr_q),
+        .O(TRIG_3)
+      );
+    end else begin : gen_follower_10m_forward
+      assign TRIG_3 = 1'b0;
+    end
+  endgenerate
 
   wire ext_trigger_sync;
   IBUFDS #(
@@ -1046,7 +1174,8 @@ module Top #(
       ch6_len_beats,
       ch7_len_beats,
       ch8_len_beats,
-      7'd0,
+      6'd0,
+      cfg_loop,
       cfg_auto_start,
       ch1_arm,
       ch2_arm,
@@ -1109,6 +1238,7 @@ module Top #(
   reg [31:0] ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac;
   reg [31:0] ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac;
   reg        cfg_auto_start_dac;
+  reg        cfg_loop_dac;
   reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
   reg        ch5_arm_dac, ch6_arm_dac, ch7_arm_dac, ch8_arm_dac;
   reg [15:0] seq_id_dac;
@@ -1121,6 +1251,7 @@ module Top #(
       ch1_len_dac   <= 0; ch2_len_dac   <= 0; ch3_len_dac <= 0; ch4_len_dac <= 0;
       ch5_len_dac   <= 0; ch6_len_dac   <= 0; ch7_len_dac <= 0; ch8_len_dac <= 0;
       cfg_auto_start_dac <= 0;
+      cfg_loop_dac <= 0;
       ch1_arm_dac   <= 0; ch2_arm_dac   <= 0; ch3_arm_dac <= 0; ch4_arm_dac <= 0;
       ch5_arm_dac   <= 0; ch6_arm_dac   <= 0; ch7_arm_dac <= 0; ch8_arm_dac <= 0;
       seq_id_dac    <= 0;
@@ -1144,6 +1275,7 @@ module Top #(
         ch6_len_dac   <= cfg_rd_data[127:96];
         ch7_len_dac   <= cfg_rd_data[95:64];
         ch8_len_dac   <= cfg_rd_data[63:32];
+        cfg_loop_dac <= cfg_rd_data[25];
         cfg_auto_start_dac <= cfg_rd_data[24];
         ch1_arm_dac   <= cfg_rd_data[23];
         ch2_arm_dac   <= cfg_rd_data[22];
@@ -1246,6 +1378,7 @@ module Top #(
 
     .cfg_seq_id(seq_id_dac),
     .auto_start(cfg_auto_start_dac),
+    .loop_enable(cfg_loop_dac),
 
     .ch1_delay_cycles(ch1_delay_dac),
     .ch2_delay_cycles(ch2_delay_dac),

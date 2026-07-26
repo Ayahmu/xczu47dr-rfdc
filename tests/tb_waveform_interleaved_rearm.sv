@@ -6,6 +6,7 @@ module tb_waveform_interleaved_rearm;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
   reg trigger = 1'b0;
+  reg abort_clear = 1'b0;
   always #5 clk = ~clk;
 
   reg [127:0] instr_tdata = 128'd0;
@@ -37,6 +38,7 @@ module tb_waveform_interleaved_rearm;
     .aclk(clk),
     .aresetn(rst_n),
     .trigger(trigger),
+    .abort_clear(abort_clear),
     .s_axis_instr_tdata(instr_tdata),
     .s_axis_instr_tvalid(instr_tvalid),
     .s_axis_instr_tready(instr_tready),
@@ -103,6 +105,7 @@ module tb_waveform_interleaved_rearm;
     .ch7_arm(),
     .ch8_arm(),
     .cfg_auto_start(),
+    .cfg_loop(),
     .cfg_commit(),
     .fifo_clear(fifo_clear),
     .dbg_st(dbg_st),
@@ -228,8 +231,8 @@ module tb_waveform_interleaved_rearm;
 
     check_condition(last_cmd_addr == DDR_BASE, "new interleaved frame should issue a fresh DDR read from the base address");
 
-    // A loop frame refills from DDR immediately, but each iteration must stay
-    // in WAITTRIG until a distinct Trigger pulse arrives.
+    // A loop frame refills from DDR immediately and auto-enters PLAYING after
+    // the refill completes. Only the first iteration needs a Trigger pulse.
     @(negedge clk); rst_n = 1'b0;
     repeat(4) @(negedge clk);
     rst_n = 1'b1;
@@ -246,13 +249,16 @@ module tb_waveform_interleaved_rearm;
     wait(cmd_count == 2);
     for(integer second_beat = 0; second_beat < 4; second_beat = second_beat + 1)
       send_dm_beat({480'd0, second_beat[31:0]});
-    wait(dbg_st == 3'd2);
-    repeat(10) @(negedge clk);
-    check_condition(dbg_st == 3'd2, "refilled loop iteration must not auto-start without another Trigger");
-    pulse_trigger();
-    check_condition(dbg_st == 3'd3, "second loop iteration should enter PLAYING only after its own Trigger");
+    wait(dbg_st == 3'd3);
+    check_condition(dbg_st == 3'd3, "refilled loop iteration should auto-enter PLAYING without another Trigger");
+    @(negedge clk); abort_clear = 1'b1;
+    @(negedge clk); abort_clear = 1'b0;
+    repeat(2) @(negedge clk);
+    check_condition(fifo_clear == 1'b1 || dbg_st == 3'd0,
+                    "abort_clear should clear loop executor state and wave FIFO");
+    check_condition(dbg_st == 3'd0, "abort_clear should return interleaved executor to BUILD");
 
-    $display("PASS: interleaved executor accepts a new frame after stale WAITTRIG");
+    $display("PASS: interleaved executor accepts rearm and clears loop state on abort");
     $finish;
   end
 endmodule

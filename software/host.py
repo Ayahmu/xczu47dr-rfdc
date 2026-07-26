@@ -163,9 +163,13 @@ RF2_OP_START_AT = 0x00000008
 RF2_OP_TRIGGER = 0x00000009
 RF2_OP_ABORT_MUTE = 0x0000000A
 RF2_OP_RFDC_GET_CONFIG = 0x0000000B
+RF2_OP_NETWORK_GET = 0x0000000C
+RF2_OP_NETWORK_APPLY = 0x0000000D
+RF2_OP_NETWORK_RESTART = 0x0000000E
 
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
+RF2_CAP_NETWORK_CONFIG = 0x00040000
 RF2_STATUS_RFDC_READY = 0x00000001
 RF2_STATUS_RFDC_BUSY = 0x00000002
 RF2_STATUS_ARMED = 0x00000004
@@ -192,6 +196,8 @@ RFDC_APPLY_RESPONSE_HEADER_BYTES = 32
 RFDC_APPLY_RESPONSE_ENTRY_BYTES = 40
 RFDC_NCO_MIN_HZ = -3_200_000_000
 RFDC_NCO_MAX_HZ = 3_200_000_000
+NETWORK_APPLY_REQUEST_BYTES = 32
+NETWORK_RESPONSE_BYTES = 64
 RV_PLAY_FLAG_AUTO_START = 0x1
 RV_PLAY_FLAG_LOOP = 0x2
 RFDC_CTRL_MAILBOX_OFFSET = DDR_MAX_INTERLEAVED_BYTES
@@ -586,6 +592,124 @@ def pack_rfctrl2_rfdc_apply(
 
 def pack_rfctrl2_rfdc_get_config(seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_RFDC_GET_CONFIG, seq=seq)
+
+
+def _ipv4_u32(value: str) -> int:
+    parts = value.split(".")
+    if len(parts) != 4:
+        raise ValueError(f"invalid IPv4 address: {value}")
+    octets = [int(part, 10) for part in parts]
+    if any(octet < 0 or octet > 255 for octet in octets):
+        raise ValueError(f"invalid IPv4 address: {value}")
+    return struct.unpack("!I", bytes(octets))[0]
+
+
+def _u32_ipv4(value: int) -> str:
+    return socket.inet_ntoa(struct.pack("!I", int(value) & 0xFFFFFFFF))
+
+
+def _mac_u64(value: str) -> int:
+    raw = value.replace(":", "").replace("-", "")
+    if len(raw) != 12:
+        raise ValueError(f"invalid MAC address: {value}")
+    try:
+        parsed = int(raw, 16) & 0xFFFFFFFFFFFF
+    except ValueError as exc:
+        raise ValueError(f"invalid MAC address: {value}") from exc
+    first_octet = (parsed >> 40) & 0xFF
+    if parsed == 0 or parsed == 0xFFFFFFFFFFFF or first_octet & 0x01:
+        raise ValueError(f"invalid unicast MAC address: {value}")
+    return parsed
+
+
+def _u64_mac(value: int) -> str:
+    raw = f"{int(value) & 0xFFFFFFFFFFFF:012x}"
+    return ":".join(raw[index:index + 2] for index in range(0, 12, 2))
+
+
+def pack_rfctrl2_network_apply(
+    revision: int,
+    ip: str,
+    mac: str,
+    subnet_mask: str = "255.255.255.0",
+    gateway: str = "0.0.0.0",
+    port: int = 1234,
+    seq: int = 1,
+) -> bytes:
+    if not 1 <= int(port) <= 65535:
+        raise ValueError(f"invalid UDP port: {port}")
+    payload = struct.pack(
+        "<IIQIIHHI",
+        int(revision) & 0xFFFFFFFF,
+        _ipv4_u32(ip),
+        _mac_u64(mac),
+        _ipv4_u32(subnet_mask),
+        _ipv4_u32(gateway),
+        int(port),
+        0,
+        0,
+    )
+    return pack_rfctrl2_packet(RF2_OP_NETWORK_APPLY, payload, seq=seq)
+
+
+def pack_rfctrl2_network_get(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_NETWORK_GET, seq=seq)
+
+
+def pack_rfctrl2_network_restart(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_NETWORK_RESTART, seq=seq)
+
+
+def parse_rfctrl2_network_response(response: dict) -> dict:
+    payload = bytes(response.get("payload", b""))
+    result = dict(response)
+    result.update({
+        "device_uid": "",
+        "current_ip": "",
+        "current_mac": "",
+        "bootstrap_ip": "192.168.254.254",
+        "revision": 0,
+        "port": 1234,
+        "status_flags": 0,
+        "capabilities": 0,
+        "bootstrap_mac": "",
+        "subnet_mask": "255.255.255.0",
+        "gateway": "0.0.0.0",
+        "link_state": 0,
+    })
+    if not payload and int(result.get("status", RF2_STATUS_BAD_REQUEST)) != RF2_STATUS_OK:
+        return result
+    if len(payload) != NETWORK_RESPONSE_BYTES:
+        raise ValueError(f"network response payload must be {NETWORK_RESPONSE_BYTES} bytes, got {len(payload)}")
+    words = struct.unpack("<" + "Q" * 8, payload)
+    device_uid = words[0]
+    current_ip = words[1] & 0xFFFFFFFF
+    bootstrap_ip = (words[1] >> 32) & 0xFFFFFFFF
+    current_mac = words[2]
+    revision = words[3] & 0xFFFFFFFF
+    port = (words[3] >> 32) & 0xFFFF
+    link_state = (words[3] >> 48) & 0xFFFF
+    capabilities = words[4] & 0xFFFFFFFF
+    status_flags = (words[4] >> 32) & 0xFFFFFFFF
+    bootstrap_mac = words[5]
+    subnet_mask = words[6] & 0xFFFFFFFF
+    gateway = words[7] & 0xFFFFFFFF
+    result.update({
+        "device_uid": f"{device_uid:016x}",
+        "current_ip": _u32_ipv4(current_ip),
+        "current_mac": _u64_mac(current_mac),
+        "bootstrap_ip": _u32_ipv4(bootstrap_ip),
+        "revision": revision,
+        "port": port & 0xFFFF,
+        "status_flags": status_flags,
+        "link_state": link_state,
+        "capabilities": capabilities,
+        "status_flags": status_flags,
+        "bootstrap_mac": _u64_mac(bootstrap_mac),
+        "subnet_mask": _u32_ipv4(subnet_mask),
+        "gateway": _u32_ipv4(gateway),
+    })
+    return result
 
 
 def pack_rfctrl2_arm(run_id: int, channel_mask: int = 0xFF, seq: int = 1) -> bytes:
@@ -1512,6 +1636,49 @@ class RFSocController:
             retries=retries,
         )
         return parse_rfctrl2_rfdc_config_response(response) if wait_response else response
+
+    def rfctrl2_network_get(self, seq: int = 1, wait_response: bool = True, retries: int = 2):
+        response = self._send_rfctrl2(
+            pack_rfctrl2_network_get(seq),
+            RF2_OP_NETWORK_GET,
+            seq,
+            wait_response,
+            retries=retries,
+        )
+        return parse_rfctrl2_network_response(response) if wait_response else response
+
+    def rfctrl2_network_apply(
+        self,
+        revision: int,
+        ip: str,
+        mac: str,
+        subnet_mask: str = "255.255.255.0",
+        gateway: str = "0.0.0.0",
+        port: int = 1234,
+        seq: int = 1,
+        wait_response: bool = True,
+        retries: int = 2,
+    ):
+        response = self._send_rfctrl2(
+            pack_rfctrl2_network_apply(
+                revision, ip, mac, subnet_mask=subnet_mask, gateway=gateway, port=port, seq=seq
+            ),
+            RF2_OP_NETWORK_APPLY,
+            seq,
+            wait_response,
+            retries=retries,
+        )
+        return parse_rfctrl2_network_response(response) if wait_response else response
+
+    def rfctrl2_network_restart(self, seq: int = 1, wait_response: bool = True, retries: int = 2):
+        response = self._send_rfctrl2(
+            pack_rfctrl2_network_restart(seq),
+            RF2_OP_NETWORK_RESTART,
+            seq,
+            wait_response,
+            retries=retries,
+        )
+        return parse_rfctrl2_network_response(response) if wait_response else response
 
     def rfctrl2_arm(self, run_id: int, channel_mask: int = 0xFF, seq: int = 1, wait_response: bool = True):
         return self._send_rfctrl2(pack_rfctrl2_arm(run_id, channel_mask, seq), RF2_OP_ARM, seq, wait_response)

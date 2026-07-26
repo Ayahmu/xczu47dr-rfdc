@@ -43,13 +43,28 @@ class ManagementStoreTests(unittest.TestCase):
         self.assertFalse(RunCreateRequest.model_fields["dry_run"].default)
         self.assertFalse(PerformanceTestCreateRequest.model_fields["dry_run"].default)
 
-    def test_board_profile_accepts_only_the_two_server_udp_ports(self):
+    def test_default_boards_use_independent_10g_paths(self):
+        board_a = self.store.board("board-a")
+        board_b = self.store.board("board-b")
+        self.assertEqual(
+            (board_a.ip, board_a.udp_interface, board_a.udp_source_ip),
+            ("192.168.1.128", "enp225s0f0", "192.168.1.10"),
+        )
+        self.assertEqual(
+            (board_b.ip, board_b.udp_interface, board_b.udp_source_ip),
+            ("192.168.2.129", "enp225s0f1", "192.168.2.10"),
+        )
+
+    def test_board_profile_accepts_the_host_ethernet_port(self):
         board = self.store.board("board-a")
         values = board.model_dump(exclude={"id", "lease", "serial_status", "serial_error"})
         values["udp_interface"] = "enp225s0f1"
         request = BoardUpdateRequest(**values)
         self.assertEqual(request.udp_interface, "enp225s0f1")
-        values["udp_interface"] = "eno1np0"
+        values["udp_interface"] = "eno2np1"
+        request = BoardUpdateRequest(**values)
+        self.assertEqual(request.udp_interface, "eno2np1")
+        values["udp_interface"] = "eno3"
         with self.assertRaises(ValidationError):
             BoardUpdateRequest(**values)
 

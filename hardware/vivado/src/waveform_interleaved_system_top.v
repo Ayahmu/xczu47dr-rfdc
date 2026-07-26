@@ -13,6 +13,7 @@ module Waveform_Interleaved_System_Top #(
     input  wire         aclk,
     input  wire         aresetn,
     input  wire         trigger,
+    input  wire         abort_clear,
 
     input  wire [127:0] s_axis_instr_tdata,
     input  wire         s_axis_instr_tvalid,
@@ -86,6 +87,7 @@ module Waveform_Interleaved_System_Top #(
     output reg          ch7_arm,
     output reg          ch8_arm,
     output reg          cfg_auto_start,
+    output reg          cfg_loop,
     output reg          cfg_commit,
     output reg          fifo_clear,
 
@@ -278,6 +280,7 @@ module Waveform_Interleaved_System_Top #(
   wire prefill_want_read = (st == ST_PREFILL) && (inter_bytes_left != 64'd0) && !prefill_target_reached;
   wire playing_want_read = (st == ST_PLAYING) && (inter_bytes_left != 64'd0);
   wire want_read = prefill_want_read || playing_want_read;
+  wire loop_refill_now = (st == ST_PLAYING) && loop_enable && read_complete && any_enabled_low && any_arm;
   wire [31:0] remaining_dm_beats_w = inter_bytes_left[37:6];
   wire [31:0] chunk_beats_w = (inter_bytes_left > {32'd0, CHUNK_BYTES_U32}) ? CHUNK_DM_BEATS_U32 : remaining_dm_beats_w;
   wire [31:0] chunk_bytes_w = {chunk_beats_w[25:0], 6'd0};
@@ -405,7 +408,8 @@ module Waveform_Interleaved_System_Top #(
 	      m_axis_dm_cmd_tvalid <= 1'b0;
 	      cfg_commit <= 1'b0;
 	      fifo_clear <= 1'b0;
-	      cfg_auto_start <= 1'b0;
+      cfg_auto_start <= 1'b0;
+      cfg_loop <= 1'b0;
       ch1_delay_cycles <= 32'd0; ch2_delay_cycles <= 32'd0; ch3_delay_cycles <= 32'd0; ch4_delay_cycles <= 32'd0;
       ch5_delay_cycles <= 32'd0; ch6_delay_cycles <= 32'd0; ch7_delay_cycles <= 32'd0; ch8_delay_cycles <= 32'd0;
       ch1_len_beats <= 32'd0; ch2_len_beats <= 32'd0; ch3_len_beats <= 32'd0; ch4_len_beats <= 32'd0;
@@ -419,7 +423,7 @@ module Waveform_Interleaved_System_Top #(
 	      dbg_ch1_bytes_left_r <= inter_bytes_left;
 	      dbg_ch2_bytes_left_r <= inter_total_bytes;
 
-	      if(rearm_frame) begin
+	      if(rearm_frame || abort_clear) begin
 	        st <= ST_BUILD;
 	        active_valid <= 1'b0;
 	        pending_valid <= 1'b0;
@@ -443,7 +447,8 @@ module Waveform_Interleaved_System_Top #(
 	        cmd_active_beats <= 32'd0;
 	        m_axis_dm_cmd_tdata <= 104'd0;
 	        m_axis_dm_cmd_tvalid <= 1'b0;
-	        cfg_auto_start <= 1'b0;
+        cfg_auto_start <= 1'b0;
+        cfg_loop <= 1'b0;
 	        fifo_clear <= 1'b1;
 	        ch1_delay_cycles <= 32'd0; ch2_delay_cycles <= 32'd0; ch3_delay_cycles <= 32'd0; ch4_delay_cycles <= 32'd0;
 	        ch5_delay_cycles <= 32'd0; ch6_delay_cycles <= 32'd0; ch7_delay_cycles <= 32'd0; ch8_delay_cycles <= 32'd0;
@@ -526,6 +531,7 @@ module Waveform_Interleaved_System_Top #(
             end else if(instr_cmd == CMD_END) begin
               prefill_auto_start <= (instr_ch == CH_AUTO_START);
               cfg_auto_start <= (instr_ch == CH_AUTO_START);
+              cfg_loop <= instr_loop;
               loop_enable <= instr_loop;
               pending_valid <= active_valid;
               inter_total_bytes <= {29'd0, max_ch_bytes, 3'd0};
@@ -559,15 +565,18 @@ module Waveform_Interleaved_System_Top #(
 
         ST_PLAYING: begin
           run_delay_cnt <= run_delay_cnt + 32'd1;
+          if(loop_refill_now) begin
+            inter_bytes_left <= inter_total_bytes;
+            inter_rd_addr <= inter_base_addr;
+          end
           if(wave_done) begin
             if(loop_enable) begin
               inter_bytes_left <= inter_total_bytes;
               inter_rd_addr <= inter_base_addr;
               prefill_beats_written <= 32'd0;
-              // Every loop iteration must be released by a fresh trigger.
-              // The prefill still runs immediately so PREPARED can be
-              // reported with the next frame already resident in the FIFO.
-              prefill_auto_start <= 1'b0;
+              // Seamless loop: after the first RFCTRL2 Trigger, every refill
+              // auto-commits into PLAYING. Host-side Trigger is not repeated.
+              prefill_auto_start <= 1'b1;
               st <= ST_PREFILL;
             end else begin
               st <= ST_BUILD;
@@ -575,6 +584,7 @@ module Waveform_Interleaved_System_Top #(
               pending_valid <= 1'b0;
               prefill_auto_start <= 1'b0;
               loop_enable <= 1'b0;
+              cfg_loop <= 1'b0;
               max_ch_bytes <= 32'd0;
               inter_total_bytes <= 64'd0;
               inter_bytes_left <= 64'd0;

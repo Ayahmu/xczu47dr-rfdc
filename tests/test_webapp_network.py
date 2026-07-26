@@ -17,7 +17,7 @@ from software.webapp.rfdc import RfdcConfigService, default_rfdc_config
 
 
 class NetworkInterfaceTests(unittest.TestCase):
-    def test_inventory_always_returns_the_two_supported_udp_interfaces(self):
+    def test_inventory_returns_dedicated_and_host_ethernet_interfaces(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             connected = root / "enp225s0f1"
@@ -25,11 +25,18 @@ class NetworkInterfaceTests(unittest.TestCase):
             (connected / "operstate").write_text("up\n", encoding="ascii")
             (connected / "carrier").write_text("1\n", encoding="ascii")
 
+            host_ethernet = root / "eno1np0"
+            host_ethernet.mkdir()
+            (host_ethernet / "operstate").write_text("up\n", encoding="ascii")
+            (host_ethernet / "carrier").write_text("1\n", encoding="ascii")
+
             interfaces = list_udp_interfaces(root)
 
-        self.assertEqual([item.name for item in interfaces], ["enp225s0f0", "enp225s0f1"])
+        self.assertEqual([item.name for item in interfaces], ["enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1"])
         self.assertFalse(interfaces[0].present)
         self.assertTrue(interfaces[1].carrier)
+        self.assertTrue(interfaces[2].carrier)
+        self.assertFalse(interfaces[3].present)
         self.assertIn("未配置 IPv4", interfaces[1].message)
 
     def test_rfdc_network_failure_is_not_reported_as_a_playback_state_error(self):

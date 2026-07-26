@@ -111,6 +111,7 @@ a { color: inherit; text-decoration: none; }
 .task-form-grid { display: grid; grid-template-columns: 1.4fr .8fr 1fr 1fr; gap: 12px; }
 .task-form-grid label, .form-grid label, .vertical-form label, .measurement-form label, .wizard-selection label { min-width: 0; display: grid; gap: 6px; }
 .task-form-grid label > span, .form-grid label > span, .vertical-form label > span, .measurement-form label > span, .wizard-selection label > span { color: #536176; font-size: 13px; font-weight: 650; }
+.field-hint { color: #64748b; font-size: 12px; line-height: 1.45; }
 label small { color: #8893a2; font-weight: 500; }
 .channel-configurator { min-width: 0; }
 .channel-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(108px, 1fr); gap: 7px; overflow-x: auto; padding: 2px 0 12px; }

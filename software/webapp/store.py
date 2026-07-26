@@ -53,6 +53,7 @@ class RunStore:
                     error TEXT NOT NULL,
                     request_json TEXT NOT NULL,
                     completion_mode TEXT NOT NULL DEFAULT 'upload',
+                    playback_mode TEXT NOT NULL DEFAULT 'single',
                     loaded INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS events (
@@ -65,6 +66,7 @@ class RunStore:
                 """
             )
             self._ensure_column(connection, "runs", "completion_mode", "TEXT NOT NULL DEFAULT 'upload'")
+            self._ensure_column(connection, "runs", "playback_mode", "TEXT NOT NULL DEFAULT 'single'")
             self._ensure_column(connection, "runs", "loaded", "INTEGER NOT NULL DEFAULT 0")
             # Dry runs only generate and validate host artifacts. Older versions
             # incorrectly marked them as if data had been uploaded to a board.
@@ -87,6 +89,7 @@ class RunStore:
             start_mode="trigger",
             execution_mode=request.execution_mode,
             completion_mode=request.completion_mode,
+            playback_mode=request.playback_mode,
             created_at=now,
             updated_at=now,
             artifact_dir=str(artifact_dir),
@@ -96,8 +99,8 @@ class RunStore:
                 """INSERT INTO runs(
                     id, name, state, dry_run, board_ids, start_mode, created_at,
                     updated_at, artifact_dir, progress, error, request_json,
-                    completion_mode, loaded
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    completion_mode, playback_mode, loaded
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
                     record.name,
@@ -112,6 +115,7 @@ class RunStore:
                     record.error,
                     request.model_dump_json(),
                     request.completion_mode,
+                    request.playback_mode,
                     0,
                 ),
             )
@@ -232,5 +236,6 @@ class RunStore:
             progress=float(row["progress"]),
             error=row["error"],
             completion_mode=row["completion_mode"] if "completion_mode" in row.keys() else "upload",
+            playback_mode=row["playback_mode"] if "playback_mode" in row.keys() else "single",
             loaded=bool(row["loaded"]) if "loaded" in row.keys() else False,
         )

@@ -2,13 +2,14 @@ import { defineStore } from 'pinia'
 import type { BoardOverride, BoardRfdcConfig, ManualChannel, RfdcChannelConfig, WaveformRequest } from '../types'
 
 export type NcoMode = 'auto' | 'manual'
+export type PlayMode = 'single' | 'continuous_sine'
 export interface OutputChannelDraft {
   channel: number; enabled: boolean; waveform: ManualChannel['waveform']; targetRfGhz: number; dataAmplitude: number;
   dataPhaseDeg: number; dataOffsetMhz: number; channelDurationNs: number; dacCurrentMa: number; ncoMode: NcoMode;
   ncoMhz: number; ncoPhaseDeg: number; nyquistZone: 1 | 2; calibrationPhaseDeg: number; calibrationNcoMhz: number;
 }
 export interface OutputDraft {
-  name: string; loop: boolean; recordDurationNs: number; outputDurationMs: number; channels: OutputChannelDraft[];
+  name: string; playMode: PlayMode; loop: boolean; recordDurationNs: number; outputDurationMs: number; channels: OutputChannelDraft[];
   selectedChannels: number[]; activeChannel: number; dirty: boolean;
 }
 export type SweepAxis = 'data_amplitude' | 'data_offset_hz' | 'data_phase_deg' | 'target_rf_hz' | 'nco_hz' | 'nco_phase_deg' | 'dac_output_current_ma'
@@ -29,10 +30,12 @@ function defaultChannel(channel: number): OutputChannelDraft {
     ncoPhaseDeg: 0, nyquistZone: plan.nyquistZone, calibrationPhaseDeg: 0, calibrationNcoMhz: 0 }
 }
 function defaultDraft(): OutputDraft {
-  return { name: '单板 8 通道输出', loop: false, recordDurationNs: 10000, outputDurationMs: 100,
+  return { name: '单板 8 通道输出', playMode: 'single', loop: false, recordDurationNs: 10000, outputDurationMs: 100,
     channels: Array.from({ length: 8 }, (_, index) => defaultChannel(index + 1)), selectedChannels: [1], activeChannel: 1, dirty: false }
 }
 function hydrate(draft: OutputDraft, rfdc?: BoardRfdcConfig | null) {
+  if (!draft.playMode) draft.playMode = draft.loop ? 'continuous_sine' : 'single'
+  draft.loop = draft.playMode === 'continuous_sine'
   if (!rfdc) return draft
   for (const channel of draft.channels) {
     const source = rfdc.channels.find((item) => item.channel === channel.channel)
@@ -83,8 +86,9 @@ export const useDraftsStore = defineStore('drafts', {
 })
 
 export function outputWaveform(draft: OutputDraft): WaveformRequest {
-  return { name: draft.name, mode: 'manual', loop: draft.loop, record_duration_ns: draft.recordDurationNs,
-    manual_channels: draft.channels.map((item) => ({ channel: item.channel, enabled: item.enabled, waveform: item.waveform,
+  const continuousSine = draft.playMode === 'continuous_sine'
+  return { name: draft.name, mode: 'manual', loop: continuousSine, record_duration_ns: draft.recordDurationNs,
+    manual_channels: draft.channels.map((item) => ({ channel: item.channel, enabled: item.enabled, waveform: continuousSine && item.enabled ? 'iq-sine' : item.waveform,
       frequency_mhz: item.dataOffsetMhz, phase_deg: item.dataPhaseDeg,
       amplitude: Math.round(Math.abs(item.dataAmplitude) * 32767), data_amplitude: item.dataAmplitude,
       duration_ns: Math.min(item.channelDurationNs, draft.recordDurationNs) })), ezq_channels: [] }

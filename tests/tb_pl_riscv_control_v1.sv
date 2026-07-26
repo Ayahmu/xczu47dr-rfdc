@@ -386,7 +386,7 @@ module tb_pl_riscv_control_v1;
     send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h0000001000000094, 1'b0, 1'b1, 32'hA0000004);
     wait_for_response_count(7);
-    check_condition(resp_words[3] == 64'h0000001100030000, "RFRESP2 STATUS must advertise playback PREPARED in bit 4");
+    check_condition(resp_words[3] == 64'h0000001100070000, "RFRESP2 STATUS must advertise playback PREPARED in bit 4");
 
     // RFCTRL2 RFDC_APPLY: 4 header words plus a fixed 200-byte payload.
     request_nco[0] = -64'sd1900000000;

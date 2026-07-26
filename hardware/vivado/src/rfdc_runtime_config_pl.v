@@ -208,6 +208,7 @@ module rfdc_runtime_config_pl #(
   reg [31:0] ramp_current_ua;
   reg [31:0] ramp_next_ua;
   reg [15:0] vop_code;
+  reg [31:0] vop_current_scaled;
   reg [5:0] vop_opt_index;
   reg [31:0] delay_count;
   reg [47:0] readback_nco_word;
@@ -405,6 +406,7 @@ module rfdc_runtime_config_pl #(
       expected_nco_word <= 48'd0; expected_phase_word <= 18'd0; rmw_value <= 16'd0;
       expected_cfg0 <= 16'd0; expected_cfg2 <= 16'd0; expected_cfg3 <= 16'd0;
       ramp_current_ua <= 32'd0; ramp_next_ua <= 32'd0; vop_code <= 16'd0; vop_opt_index <= 6'd0;
+      vop_current_scaled <= 32'd0;
       delay_count <= 32'd0; readback_nco_word <= 48'd0; readback_phase_word <= 18'd0;
       readback_cfg0 <= 16'd0; readback_cfg2 <= 16'd0; readback_cfg3 <= 16'd0;
       cached_sequence <= 32'd0; cached_revision <= 32'd0; cached_response_valid <= 1'b0;
@@ -760,7 +762,13 @@ module rfdc_runtime_config_pl #(
               status <= (applied_mask != 0) ? ST_PARTIAL : ST_READBACK;
               error_mask <= request_mask & ~applied_mask; failure_stage <= STAGE_READBACK;
               failure_address <= axi_address; force_mute_pulse <= 1'b1; state <= S_FINISH;
-            end else state <= S_CHANNEL_DONE;
+            end else begin
+              // Pipeline the VOP-to-current conversion. This value is only
+              // reported in RFRESP2, but the multiply/add path otherwise
+              // becomes a 300 MHz critical path.
+              vop_current_scaled <= vop_code * 32'd175;
+              state <= S_CHANNEL_DONE;
+            end
           end
         end
 
@@ -776,7 +784,7 @@ module rfdc_runtime_config_pl #(
           actual_phase_word[channel_index*32 +: 32] <= {14'd0, readback_phase_word};
           actual_phase_mdeg[channel_index*32 +: 32] <= selected_phase_mdeg;
           actual_vop_code[channel_index*32 +: 32] <= {16'd0, vop_code};
-          actual_current_ua[channel_index*32 +: 32] <= 32'd1400 + ((vop_code * 32'd175) >> 2);
+          actual_current_ua[channel_index*32 +: 32] <= 32'd1400 + (vop_current_scaled >> 2);
           channel_status[channel_index*32 +: 32] <= 32'd0;
           if (channel_index == 3'd7) state <= S_FINISH;
           else begin channel_index <= channel_index + 3'd1; state <= S_SELECT; end

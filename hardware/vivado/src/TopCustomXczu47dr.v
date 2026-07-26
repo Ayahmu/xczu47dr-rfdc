@@ -1,7 +1,7 @@
 module TopCustomXczu47dr #(
-    parameter integer BOARD_IS_MASTER = 1,
-    parameter [31:0] LOCAL_IP = 32'hC0A8_0180,
-    parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01
+    // Reserved for the future synchronized trigger topology. The normal
+    // single-board target uses one unified hardware configuration.
+    parameter integer BOARD_IS_MASTER = 1
 ) (
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
@@ -79,9 +79,7 @@ module TopCustomXczu47dr #(
   assign RST_88E1111 = 1'b1;
 
   Top #(
-      .BOARD_IS_MASTER(BOARD_IS_MASTER),
-      .LOCAL_IP(LOCAL_IP),
-      .LOCAL_MAC(LOCAL_MAC)
+      .BOARD_IS_MASTER(BOARD_IS_MASTER)
   ) top_i (
       .TRIG_1(TRIG_1),
       .TRIG_2(TRIG_2),
