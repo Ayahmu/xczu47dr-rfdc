@@ -167,6 +167,22 @@ module dac_play_ctrl #(
   wire ch7_fire = ch7_allow && ch7_fifo_tvalid && dac_ch7_ready_in;
   wire ch8_fire = ch8_allow && ch8_fifo_tvalid && dac_ch8_ready_in;
 
+  // underflow：门已开、DAC 已 ready，但 FIFO 当拍无数据。
+  // RF-DAC AXIS 不用 tvalid 选通，这一拍会被当成显式零样本送进 RFDC，
+  // 落在 fabric beat 节拍上，因此必须 fail closed 而不是继续播放。
+  wire ch1_underflow_now = ch1_allow && dac_ch1_ready_in && !ch1_fifo_tvalid;
+  wire ch2_underflow_now = ch2_allow && dac_ch2_ready_in && !ch2_fifo_tvalid;
+  wire ch3_underflow_now = ch3_allow && dac_ch3_ready_in && !ch3_fifo_tvalid;
+  wire ch4_underflow_now = ch4_allow && dac_ch4_ready_in && !ch4_fifo_tvalid;
+  wire ch5_underflow_now = ch5_allow && dac_ch5_ready_in && !ch5_fifo_tvalid;
+  wire ch6_underflow_now = ch6_allow && dac_ch6_ready_in && !ch6_fifo_tvalid;
+  wire ch7_underflow_now = ch7_allow && dac_ch7_ready_in && !ch7_fifo_tvalid;
+  wire ch8_underflow_now = ch8_allow && dac_ch8_ready_in && !ch8_fifo_tvalid;
+  wire any_underflow_now = ch1_underflow_now || ch2_underflow_now ||
+                           ch3_underflow_now || ch4_underflow_now ||
+                           ch5_underflow_now || ch6_underflow_now ||
+                           ch7_underflow_now || ch8_underflow_now;
+
   wire ch1_done_after = !ch1_arm || (beats1 == 32'd0) || (ch1_fire && (beats1 == 32'd1));
   wire ch2_done_after = !ch2_arm || (beats2 == 32'd0) || (ch2_fire && (beats2 == 32'd1));
   wire ch3_done_after = !ch3_arm || (beats3 == 32'd0) || (ch3_fire && (beats3 == 32'd1));
@@ -389,14 +405,14 @@ module dac_play_ctrl #(
         if(ch7_fire) dbg_ch7_fire_count <= dbg_ch7_fire_count + 32'd1;
         if(ch8_fire) dbg_ch8_fire_count <= dbg_ch8_fire_count + 32'd1;
 
-        if(ch1_allow && dac_ch1_ready_in && !ch1_fifo_tvalid) dbg_underflow_seen[0] <= 1'b1;
-        if(ch2_allow && dac_ch2_ready_in && !ch2_fifo_tvalid) dbg_underflow_seen[1] <= 1'b1;
-        if(ch3_allow && dac_ch3_ready_in && !ch3_fifo_tvalid) dbg_underflow_seen[2] <= 1'b1;
-        if(ch4_allow && dac_ch4_ready_in && !ch4_fifo_tvalid) dbg_underflow_seen[3] <= 1'b1;
-        if(ch5_allow && dac_ch5_ready_in && !ch5_fifo_tvalid) dbg_underflow_seen[4] <= 1'b1;
-        if(ch6_allow && dac_ch6_ready_in && !ch6_fifo_tvalid) dbg_underflow_seen[5] <= 1'b1;
-        if(ch7_allow && dac_ch7_ready_in && !ch7_fifo_tvalid) dbg_underflow_seen[6] <= 1'b1;
-        if(ch8_allow && dac_ch8_ready_in && !ch8_fifo_tvalid) dbg_underflow_seen[7] <= 1'b1;
+        if(ch1_underflow_now) dbg_underflow_seen[0] <= 1'b1;
+        if(ch2_underflow_now) dbg_underflow_seen[1] <= 1'b1;
+        if(ch3_underflow_now) dbg_underflow_seen[2] <= 1'b1;
+        if(ch4_underflow_now) dbg_underflow_seen[3] <= 1'b1;
+        if(ch5_underflow_now) dbg_underflow_seen[4] <= 1'b1;
+        if(ch6_underflow_now) dbg_underflow_seen[5] <= 1'b1;
+        if(ch7_underflow_now) dbg_underflow_seen[6] <= 1'b1;
+        if(ch8_underflow_now) dbg_underflow_seen[7] <= 1'b1;
 
         // 所有启用通道都发完才结束。Loop 模式下不关门，直接重装
         // beat 计数；executor 会提前续填 FIFO，避免每轮等待 Trigger。
@@ -416,6 +432,26 @@ module dac_play_ctrl #(
             start_pending <= 1'b0;
             dbg_done_pulse <= 1'b1;
           end
+        end
+
+        // Fail closed on an active-frame underflow. This block is intentionally
+        // last so it overrides the loop reload above: once an enabled channel
+        // has been starved mid-frame the gate must shut instead of continuing
+        // to present beats the FIFO cannot back. Leaving the gate open turns
+        // every starved cycle into an explicit zero beat at the RFDC fabric
+        // rate, which modulates the RF output instead of simply truncating it.
+        if(any_underflow_now) begin
+          started        <= 1'b0;
+          start_pending  <= 1'b0;
+          trigger_pending <= 1'b0;
+          prepared       <= 1'b0;
+          loop_refill_pending <= 1'b0;
+          prepare_wait_warm   <= 1'b0;
+          dbg_done_pulse <= 1'b0;
+          dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
+          dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+          beats1 <= 32'd0; beats2 <= 32'd0; beats3 <= 32'd0; beats4 <= 32'd0;
+          beats5 <= 32'd0; beats6 <= 32'd0; beats7 <= 32'd0; beats8 <= 32'd0;
         end
       end
 

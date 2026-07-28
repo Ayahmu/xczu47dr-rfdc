@@ -183,7 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     sine.add_argument("--amplitude", type=int, default=20000, help="DAC code amplitude, 0..32767")
     sine.add_argument("--encoding", choices=["signed"], default="signed")
     sine.add_argument("--duration-s", type=float, default=1e-6, help="Finite I/Q record length in seconds")
-    sine.add_argument("--zero-tail-s", type=float, default=50e-9, help="Zero I/Q tail appended after the finite sine record")
+    # Default is resolved in generate_waveforms: 0 s under --loop, 50 ns otherwise.
+    # A zero tail inside a loop is a periodic gate at the loop repetition rate,
+    # which sidebands the tone instead of ending the record cleanly.
+    sine.add_argument("--zero-tail-s", type=float, default=None, help="Zero I/Q tail appended after the finite sine record (default: 50ns, or 0 with --loop)")
 
     burst = subparsers.add_parser("burst", help="Gaussian-windowed RF bursts on CH1-CH8")
     add_common_args(burst)
@@ -216,7 +219,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=host.DDR_MAX_BYTES_PER_CHANNEL,
         help="Logical bytes per channel; accepts max, integer, KiB, MiB, or GiB",
     )
-    max_length.add_argument("--beats-per-datagram", type=int, default=128, help="512-bit DDR beats in each bulk UDP datagram")
+    max_length.add_argument(
+        "--beats-per-datagram",
+        type=int,
+        default=host.DEFAULT_UDP_BULK_BEATS,
+        help=(
+            f"512-bit DDR beats in each bulk UDP datagram "
+            f"(safe max {host.UDP_BULK_SAFE_MAX_BEATS}; MTU max {host.UDP_BULK_MAX_BEATS})"
+        ),
+    )
     max_length.add_argument("--batch-pause-us", type=float, default=0.0, help="Optional pacing delay after each bulk UDP datagram")
     max_length.add_argument("--marker-bytes-per-channel", type=int, default=4096, help="Per-channel size of start/middle/end marker regions")
     max_length.add_argument(
@@ -334,9 +345,52 @@ def _channel_key(channel: int, suffix: str) -> str:
     return f"ch{channel}_{suffix}"
 
 
+def resolve_sine_zero_tail_s(args: argparse.Namespace) -> float:
+    """Resolve --zero-tail-s, defaulting to 0 s when looping.
+
+    A finite record wants a zero tail so the output ends at complex zero. A
+    looped record does not: the tail replays every iteration, so it becomes a
+    periodic gate at the loop repetition rate and sidebands the tone. The web
+    path already makes this distinction; keep the CLI consistent with it.
+    """
+    if getattr(args, "zero_tail_s", None) is not None:
+        return float(args.zero_tail_s)
+    return 0.0 if getattr(args, "loop", False) else 50e-9
+
+
+def warn_if_tone_off_loop_grid(args: argparse.Namespace, complex_samples: int) -> None:
+    """Warn when a looped tone is not periodic over the replayed record.
+
+    Looping quantizes the emitted line to multiples of the repetition rate
+    R = sample_rate / complex_samples. A tone that is not an integer multiple
+    of R does not close phase across the loop seam, which both shifts the
+    emitted line to the nearest grid multiple and raises a comb at R.
+    """
+    if not getattr(args, "loop", False) or complex_samples <= 0:
+        return
+    rate_hz = float(args.sample_rate_hz)
+    rep_hz = rate_hz / float(complex_samples)
+    for channel in range(1, 9):
+        freq_hz = float(_channel_value(args, "freq_hz", channel))
+        if freq_hz == 0.0:
+            continue
+        cycles = freq_hz / rep_hz
+        nearest = round(cycles)
+        if abs(cycles - nearest) <= 1e-9:
+            continue
+        print(
+            f"[waveform] WARNING CH{channel}: looped tone {freq_hz/1e6:g} MHz is not periodic over "
+            f"the {complex_samples}-sample loop (repetition rate {rep_hz/1e6:.6f} MHz, "
+            f"{cycles:.4f} cycles). The emitted line will move to "
+            f"{nearest * rep_hz/1e6:.6f} MHz and a comb at {rep_hz/1e6:.6f} MHz spacing will appear. "
+            f"Pick a tone that is a multiple of the repetition rate, or adjust --duration-s."
+        )
+
+
 def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
     if args.mode == "sine":
         sample_count = waveform_tools.iq_duration_to_sample_count(args.duration_s, args.sample_rate_hz)
+        zero_tail_s = resolve_sine_zero_tail_s(args)
         waves = tuple(
             waveform_tools.append_iq_zero_tail(
                 waveform_tools.make_iq_sine_tile_waveform(
@@ -346,11 +400,12 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
                     args.sample_rate_hz,
                     sample_count=sample_count,
                 ),
-                args.zero_tail_s,
+                zero_tail_s,
                 args.sample_rate_hz,
             )
             for channel in range(1, 9)
         )
+        warn_if_tone_off_loop_grid(args, int(waves[0].size) // 2)
         metadata = waveform_tools.build_metadata(
             mode="iq-sine",
             sample_rate_hz=args.sample_rate_hz,
@@ -359,7 +414,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             layout=args.ddr_layout,
             amplitude=args.amplitude,
             duration_s=args.duration_s,
-            zero_tail_s=args.zero_tail_s,
+            zero_tail_s=zero_tail_s,
             **{_channel_key(channel, "freq_hz"): float(_channel_value(args, "freq_hz", channel)) for channel in range(1, 9)},
             **{_channel_key(channel, "phase_rad"): float(_channel_value(args, "phase_rad", channel)) for channel in range(1, 9)},
         )

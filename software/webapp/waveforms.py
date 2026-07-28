@@ -25,6 +25,7 @@ def _override_for(override: BoardOverride | None, field: str, channel: int, defa
 
 def _manual_config(request: WaveformRequest, override: BoardOverride | None) -> gui_model.WaveformConfig:
     channels: dict[str, gui_model.ChannelWaveformConfig] = {}
+    zero_tail_s = 0.0 if request.loop else 50e-9
     for item in request.manual_channels:
         enabled = bool(_override_for(override, "channel_enabled", item.channel, item.enabled))
         phase_deg = item.phase_deg + float(_override_for(override, "phase_offset_deg", item.channel, 0.0))
@@ -35,7 +36,7 @@ def _manual_config(request: WaveformRequest, override: BoardOverride | None) -> 
             phase_rad=math.radians(phase_deg),
             amplitude=amplitude,
             duration_s=item.duration_ns * 1e-9,
-            zero_tail_s=50e-9,
+            zero_tail_s=zero_tail_s,
         )
     return gui_model.WaveformConfig(
         mode="manual-channels",
@@ -45,7 +46,7 @@ def _manual_config(request: WaveformRequest, override: BoardOverride | None) -> 
         axis_freq_hz=host.DEFAULT_AXIS_HZ,
         loop=request.loop,
         record_duration_s=request.record_duration_ns * 1e-9,
-        wait_for_trigger=True,
+        wait_for_trigger=False,  # bypass ARM->PREPARED timeout (use auto-start)
         **channels,
     )
 
@@ -114,7 +115,7 @@ def _ezq_config(request: WaveformRequest, override: BoardOverride | None) -> gui
         axis_freq_hz=host.DEFAULT_AXIS_HZ,
         loop=request.loop,
         record_duration_s=request.record_duration_ns * 1e-9,
-        wait_for_trigger=True,
+        wait_for_trigger=False,  # bypass ARM->PREPARED timeout (use auto-start)
         ezq=ezq,
     )
 

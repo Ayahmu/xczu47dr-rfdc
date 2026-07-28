@@ -107,3 +107,7 @@ wave_preview_*.png
 *.backup.*
 *.orig
 *.rej
+
+# Vivado output artifacts (regeneratable)
+hardware/vivado/output/*.bit
+hardware/vivado/output/*.ltx
