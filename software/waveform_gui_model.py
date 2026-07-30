@@ -66,7 +66,7 @@ class ExtremePlaybackConfig:
     pattern: str = host.MAX_LENGTH_PATTERN_LOWFREQ_SINE
     sine_freq_hz: float = 10.0
     sine_amplitude: int = 4096
-    beats_per_datagram: int = 128
+    beats_per_datagram: int = host.DEFAULT_UDP_BULK_BEATS
     marker_bytes_per_channel: int = 4096
     use_waveform_cache: bool = True
     force_waveform_cache: bool = False
@@ -2157,6 +2157,23 @@ def channel_delay_cycles(config: WaveformConfig) -> dict[int, int]:
     return {}
 
 
+def enabled_channels_for_config(config: WaveformConfig) -> list[int]:
+    if config.mode.lower() == "ezq-quantum":
+        return [
+            channel
+            for channel in range(1, 9)
+            if _ezq_effective_channel_config(config.ezq, channel).enabled
+        ]
+    if _has_independent_channel_configs(config):
+        channels: list[int] = []
+        for channel in range(1, 9):
+            channel_config = getattr(config, f"ch{channel}") or ChannelWaveformConfig(waveform_type="off")
+            if channel_config.waveform_type.lower() != "off":
+                channels.append(channel)
+        return channels
+    return [1, 2]
+
+
 def ezq_channel_sequences(generated: GeneratedWaveforms) -> dict[int, np.ndarray]:
     sequences: dict[int, np.ndarray] = {}
     waves = {
@@ -2279,14 +2296,14 @@ def run_extreme_playback(
     bytes_per_channel = host.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
     if config.pattern not in {host.MAX_LENGTH_PATTERN_CW_MARKER, host.MAX_LENGTH_PATTERN_LOWFREQ_SINE}:
         raise ValueError(f"unsupported extreme playback pattern: {config.pattern}")
-    if int(config.beats_per_datagram) <= 0:
-        raise ValueError("beats_per_datagram must be positive")
+    beats_per_datagram = host.validate_udp_bulk_beats(int(config.beats_per_datagram))
     if int(config.marker_bytes_per_channel) <= 0:
         raise ValueError("marker_bytes_per_channel must be positive")
 
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    metadata = extreme_playback_metadata(config, bytes_per_channel)
+    effective_config = replace(config, beats_per_datagram=beats_per_datagram)
+    metadata = extreme_playback_metadata(effective_config, bytes_per_channel)
     if waveform_config is not None:
         generated = generate_waveforms(replace(waveform_config, dry_run=True))
         for key in ("per_channel_nco", "per_channel_zone", "per_channel_target_rf_hz"):
@@ -2335,7 +2352,7 @@ def run_extreme_playback(
         datagrams = ctrl.upload_max_length_udp(
             bytes_per_channel,
             base_addr=host.DDR_BASE,
-            beats_per_datagram=int(config.beats_per_datagram),
+            beats_per_datagram=beats_per_datagram,
             marker_bytes_per_channel=int(config.marker_bytes_per_channel),
             pattern=config.pattern,
             sine_freq_hz=float(config.sine_freq_hz),
@@ -2381,6 +2398,11 @@ class WaveformController:
 
     def run(self, config: WaveformConfig, connection: ConnectionConfig) -> ControllerResult:
         generated = generate_waveforms(config)
+        enabled_channels = enabled_channels_for_config(config)
+        if not enabled_channels:
+            raise ValueError("at least one waveform channel must be enabled")
+        generated.metadata["enabled_channels"] = enabled_channels
+        generated.metadata["enabled_channel_mask"] = sum(1 << (channel - 1) for channel in enabled_channels)
         output_dir = Path(config.output_dir)
         waveform_tools.save_waveform_bundle(
             output_dir,
@@ -2433,6 +2455,7 @@ class WaveformController:
         log_lines.append("progress: sending UDP packets")
         per_channel_nco = generated.metadata.get("per_channel_nco")
         per_channel_zone = generated.metadata.get("per_channel_zone")
+        log_lines.append(f"enabled_channels={','.join(str(channel) for channel in enabled_channels)}")
         self.uploader(
             generated.x,
             generated.y,
@@ -2452,6 +2475,7 @@ class WaveformController:
             layout=config.ddr_layout,
             rfdc_nco_hz=per_channel_nco if isinstance(per_channel_nco, dict) else None,
             rfdc_nyquist_zones=per_channel_zone if isinstance(per_channel_zone, dict) else None,
+            enabled_channels=enabled_channels,
         )
         log_lines.append("progress: send complete")
         log_lines.append(f"sent UDP waveform to {connection.ip}:{connection.port}")

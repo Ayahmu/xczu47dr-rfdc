@@ -1137,7 +1137,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             extreme = waveform_gui_model.ExtremePlaybackConfig(
                 output_dir=Path(temp_dir),
                 bytes_per_channel="4096",
-                beats_per_datagram=16,
+                beats_per_datagram=host.DEFAULT_UDP_BULK_BEATS,
                 marker_bytes_per_channel=4096,
                 wait_for_trigger=True,
                 dry_run=False,
@@ -1168,7 +1168,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             [(
                 4096,
                 host.DDR_BASE,
-                16,
+                host.DEFAULT_UDP_BULK_BEATS,
                 4096,
                 host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
                 10.0,
@@ -1227,6 +1227,28 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(kwargs["extra_channels"][8].dtype, np.int16)
             self.assertEqual(kwargs["rfdc_nco_hz"]["ch5"], 0.0)
             self.assertEqual(kwargs["rfdc_nyquist_zones"]["ch5"], 1)
+            self.assertEqual(kwargs["enabled_channels"], list(range(1, 9)))
+
+    def test_send_uses_enabled_channel_subset_for_manual_waveforms(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = waveform_gui_model.WaveformConfig(
+                mode="manual-channels",
+                output_dir=Path(temp_dir),
+                dry_run=False,
+                ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=10e6),
+                ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=20e6),
+                ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="off"),
+                ch4=waveform_gui_model.ChannelWaveformConfig(waveform_type="off"),
+            )
+            uploader = mock.Mock()
+            controller = waveform_gui_model.WaveformController(uploader=uploader)
+
+            result = controller.run(config, waveform_gui_model.ConnectionConfig())
+
+            self.assertFalse(result.dry_run)
+            _, kwargs = uploader.call_args
+            self.assertEqual(kwargs["enabled_channels"], [1, 2])
+            self.assertEqual(result.generated.metadata["enabled_channel_mask"], 0x03)
 
     def test_build_send_summary_includes_target_and_channel_plan(self):
         config = waveform_gui_model.WaveformConfig(

@@ -61,6 +61,126 @@ class SendWaveformUdpTests(unittest.TestCase):
             metadata_path = Path(temp_dir) / "max_length_metadata.json"
             self.assertTrue(metadata_path.exists())
 
+    def test_rvctrl_cli_commands_use_control_packet_path(self):
+        cases = [
+            (
+                ["send_waveform_udp.py", "rvctrl-ping", "--seq", "11"],
+                "rvctrl_ping",
+                (11,),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl-play", "--bytes-per-channel", "4KiB", "--seq", "12", "--auto-start", "--loop"],
+                "rvctrl_play_interleaved",
+                (4096,),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl-trigger", "--seq", "13"],
+                "rvctrl_trigger",
+                (13,),
+            ),
+        ]
+
+        for argv, method_name, first_args in cases:
+            with self.subTest(method_name=method_name):
+                controller = mock.Mock()
+                with mock.patch.object(sys, "argv", argv), \
+                     mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                    self.assertEqual(send_waveform_udp.main(), 0)
+
+                method = getattr(controller, method_name)
+                method.assert_called_once()
+                for index, expected in enumerate(first_args):
+                    self.assertEqual(method.call_args.args[index], expected)
+
+    def test_rvctrl_play_cli_passes_auto_start_and_loop_flags(self):
+        controller = mock.Mock()
+        argv = [
+            "send_waveform_udp.py",
+            "rvctrl-play",
+            "--bytes-per-channel", "4096",
+            "--seq", "14",
+            "--auto-start",
+            "--loop",
+        ]
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+            self.assertEqual(send_waveform_udp.main(), 0)
+
+        controller.rvctrl_play_interleaved.assert_called_once_with(
+            4096,
+            seq=14,
+            auto_start=True,
+            loop=True,
+        )
+
+    def test_rvctrl1_cli_commands_use_control_packet_path(self):
+        cases = [
+            (
+                ["send_waveform_udp.py", "rvctrl1-ping", "--seq", "21"],
+                "rvctrl1_ping",
+                (21,),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-mmio-write", "--addr", "0x120", "--value", "0xCAFE1234", "--seq", "22"],
+                "rvctrl1_mmio_write32",
+                (0x120, 0xCAFE1234),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-mmio-rmw", "--addr", "0x124", "--mask", "0xff", "--value", "0x55", "--seq", "23"],
+                "rvctrl1_mmio_rmw32",
+                (0x124, 0xff, 0x55),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-mmio-batch", "--write", "0x10=0x11", "--write", "0x20=0x22", "--seq", "24"],
+                "rvctrl1_mmio_batch",
+                ([(0x10, 0x11), (0x20, 0x22)],),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-rfdc-ch-enable", "--channel-mask", "0x03", "--enable-mask", "0x01", "--seq", "25"],
+                "rvctrl1_rfdc_ch_enable",
+                (0x03, 0x01),
+            ),
+            (
+                ["send_waveform_udp.py", "rvctrl1-rfdc-set-nco", "--nco", "1=100e6", "--zone", "1=2", "--apply-mask", "0x01", "--seq", "26"],
+                "rvctrl1_rfdc_set_nco",
+                ({1: 100e6}, {1: 2}),
+            ),
+        ]
+
+        for argv, method_name, expected_args in cases:
+            with self.subTest(method_name=method_name):
+                controller = mock.Mock()
+                with mock.patch.object(sys, "argv", argv), \
+                     mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                    self.assertEqual(send_waveform_udp.main(), 0)
+
+                method = getattr(controller, method_name)
+                method.assert_called_once()
+                for index, expected in enumerate(expected_args):
+                    self.assertEqual(method.call_args.args[index], expected)
+
+    def test_rvctrl1_play_cli_passes_auto_start_and_loop_flags(self):
+        controller = mock.Mock()
+        argv = [
+            "send_waveform_udp.py",
+            "rvctrl1-play",
+            "--bytes-per-channel", "4096",
+            "--seq", "25",
+            "--auto-start",
+            "--loop",
+        ]
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+            self.assertEqual(send_waveform_udp.main(), 0)
+
+        controller.rvctrl1_play_interleaved.assert_called_once_with(
+            4096,
+            seq=25,
+            auto_start=True,
+            loop=True,
+            wait_response=False,
+        )
+
     def test_max_length_cli_dry_run_does_not_generate_cache_unless_requested(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             argv = [
@@ -102,7 +222,7 @@ class SendWaveformUdpTests(unittest.TestCase):
         *waves, metadata = send_waveform_udp.generate_waveforms(args)
         expected_len = (
             waveform_tools.iq_duration_to_sample_count(args.duration_s, args.sample_rate_hz)
-            + waveform_tools.iq_duration_to_sample_count(args.zero_tail_s, args.sample_rate_hz)
+            + waveform_tools.iq_duration_to_sample_count(send_waveform_udp.resolve_sine_zero_tail_s(args), args.sample_rate_hz)
         )
 
         self.assertEqual(len(waves), 8)
@@ -138,6 +258,25 @@ class SendWaveformUdpTests(unittest.TestCase):
         metadata = save_bundle.call_args.args[3]
         self.assertTrue(metadata["loop"])
         self.assertTrue(upload.call_args.kwargs["loop"])
+
+    def test_sine_cli_rejects_nonperiodic_loop_tone(self):
+        output_dir = Path("/tmp/send-waveform-nonperiodic-loop-test")
+        argv = [
+            "send_waveform_udp.py",
+            "sine",
+            "--loop",
+            "--duration-s", "1e-6",
+            "--ch1-freq-hz", "20500000",
+            "--output-dir", str(output_dir),
+        ]
+
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(send_waveform_udp.waveform_tools, "save_waveform_bundle") as save_bundle, \
+             mock.patch.object(send_waveform_udp.waveform_tools, "upload_and_play") as upload:
+            self.assertEqual(send_waveform_udp.main(), 1)
+
+        save_bundle.assert_not_called()
+        upload.assert_not_called()
 
     def test_pypulse_cli_generates_eight_interleaved_iq_buffers_and_metadata(self):
         args = send_waveform_udp.build_parser().parse_args([

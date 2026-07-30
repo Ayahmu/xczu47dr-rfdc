@@ -1,0 +1,16 @@
+[Unit]
+Description=Xilinx hardware server for RFSoC boards
+After=network.target
+
+[Service]
+Type=simple
+User=rfsoc-web
+Group=rfsoc-web
+ExecStart=/tools/Xilinx/Vivado/2024.2/bin/hw_server -s tcp::3121
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

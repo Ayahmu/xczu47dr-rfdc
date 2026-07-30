@@ -4,8 +4,13 @@ module tb_dac_play_ctrl;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
   reg trigger = 1'b0;
+  reg rfctrl2_trigger = 1'b0;
+  reg prepare = 1'b0;
+  reg abort = 1'b0;
+  reg armed = 1'b0;
   reg [15:0] cfg_seq_id = 16'd1;
   reg auto_start = 1'b1;
+  reg loop_enable = 1'b0;
   reg [31:0] ch1_len_beats = 32'd8;
   reg ch1_arm = 1'b1;
   reg ch1_fifo_tvalid = 1'b1;
@@ -14,6 +19,7 @@ module tb_dac_play_ctrl;
 
   wire ch1_allow;
   wire dbg_started;
+  wire prepared;
   wire dbg_trig_start;
   wire dbg_done_pulse;
   wire [7:0] dbg_underflow_seen;
@@ -27,8 +33,13 @@ module tb_dac_play_ctrl;
     .clk(clk),
     .rst_n(rst_n),
     .trigger(trigger),
+    .rfctrl2_trigger(rfctrl2_trigger),
+    .prepare(prepare),
+    .abort(abort),
+    .armed(armed),
     .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start),
+    .loop_enable(loop_enable),
     .ch1_delay_cycles(32'd0),
     .ch2_delay_cycles(32'd0),
     .ch3_delay_cycles(32'd0),
@@ -93,6 +104,7 @@ module tb_dac_play_ctrl;
     .ch6_active(),
     .ch7_active(),
     .ch8_active(),
+    .prepared(prepared),
     .dbg_trig_pulse(),
     .dbg_new_cfg(),
     .dbg_trig_start(dbg_trig_start),
@@ -156,7 +168,85 @@ module tb_dac_play_ctrl;
       $finish;
     end
 
-    $display("PASS: dac_play_ctrl starts short frames and reports completion/fire/underflow debug state");
+    // RFCTRL2 ARM prepares the next configuration before Trigger. The FIFO is
+    // intentionally empty first so PREPARED cannot be reported prematurely.
+    @(negedge clk); abort = 1'b1;
+    @(negedge clk); abort = 1'b0;
+    @(negedge clk);
+    auto_start = 1'b0;
+    cfg_seq_id = 16'd3;
+    ch1_len_beats = 32'd4;
+    ch1_fifo_tvalid = 1'b0;
+    armed = 1'b1;
+    prepare = 1'b1;
+    @(negedge clk); prepare = 1'b0;
+    repeat (3) @(posedge clk);
+    if (prepared || dbg_started || ch1_allow) begin
+      $error("RFCTRL2 PREPARED must wait for the first FIFO beat with all output gates closed");
+      $finish;
+    end
+
+    @(negedge clk); ch1_fifo_tvalid = 1'b1;
+    wait (prepared == 1'b1);
+    #1;
+    if (dbg_started || ch1_allow || dbg_ch1_fire_count != 32'd0) begin
+      $error("RFCTRL2 PREPARED must latch launch state without consuming samples");
+      $finish;
+    end
+
+    @(negedge clk); loop_enable = 1'b1; ch1_fifo_prog_empty = 1'b0; rfctrl2_trigger = 1'b1;
+    @(negedge clk); rfctrl2_trigger = 1'b0;
+    #1;
+    if (!dbg_started || !ch1_allow || prepared) begin
+      $error("RFCTRL2 Trigger must open the already prepared output gate immediately");
+      $finish;
+    end
+    @(posedge clk);
+    #1;
+    if (dbg_ch1_fire_count != 32'd1) begin
+      $error("the first RFCTRL2 sample must handshake on the first DAC cycle after the gate opens");
+      $finish;
+    end
+
+    // Loop frames repeat seamlessly when FIFO is safely above prog_empty.
+    repeat (12) @(posedge clk);
+    if (!dbg_started || !ch1_allow || dbg_ch1_fire_count < 32'd8 || dbg_underflow_seen != 8'd0) begin
+      $error("loop frames must keep repeating from the same cfg while FIFO water level is safe");
+      $finish;
+    end
+
+    // Longer loop frames should not blindly reload when the FIFO is below the
+    // programmable empty threshold. They close the gate, wait for refill, then
+    // restart from the same cfg_seq_id without requiring another RFCTRL2 Trigger.
+    @(negedge clk); abort = 1'b1;
+    @(negedge clk); abort = 1'b0;
+    @(negedge clk);
+    cfg_seq_id = 16'd4;
+    ch1_len_beats = 32'd130;
+    ch1_fifo_tvalid = 1'b1;
+    ch1_fifo_prog_empty = 1'b1;
+    loop_enable = 1'b1;
+    prepare = 1'b1;
+    @(negedge clk); prepare = 1'b0;
+    wait (prepared == 1'b1);
+    @(negedge clk); rfctrl2_trigger = 1'b1;
+    @(negedge clk); rfctrl2_trigger = 1'b0;
+    wait (dbg_started == 1'b1);
+    wait (dbg_started == 1'b0);
+    #1;
+    if (ch1_allow || prepared || dbg_underflow_seen != 8'd0) begin
+      $error("long loop frame_done must close the gate while waiting for FIFO refill without underflow");
+      $finish;
+    end
+    @(negedge clk); ch1_fifo_prog_empty = 1'b0;
+    wait (dbg_started == 1'b1);
+    #1;
+    if (!ch1_allow || prepared || dbg_underflow_seen != 8'd0) begin
+      $error("a loop refill must restart from the same cfg without another RFCTRL2 Trigger");
+      $finish;
+    end
+
+    $display("PASS: dac_play_ctrl preserves legacy startup and loops from refill-safe FIFO state");
     $finish;
   end
 endmodule

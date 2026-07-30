@@ -27,13 +27,16 @@ set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
 set_property PACKAGE_PIN A6 [get_ports TRIG_1]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
 
-# XS18/TRIG_2 debug clock output.  This carries dac_axis_clk / 16 so the DAC
-# clock chain can be checked from an external scope without probing RFDC refclk.
-set_property PACKAGE_PIN D10 [get_ports HMC7044_CLK]
-set_property IOSTANDARD LVCMOS25 [get_ports HMC7044_CLK]
+# XS18/TRIG_2 is the master board's RFCTRL2 sync epoch pulse.
+set_property PACKAGE_PIN D10 [get_ports TRIG_2]
+set_property IOSTANDARD LVCMOS25 [get_ports TRIG_2]
 
-# These scope-only outputs are not sampled by an external synchronous interface.
-set_false_path -to [get_ports {HMC7044_CLK TRIG_1}]
+# XS18/TRIG_3 forwards the HMC7044 10MHz reference output to XS17.
+set_property PACKAGE_PIN C10 [get_ports TRIG_3]
+set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
+
+# TRIG_1 and TRIG_2 are asynchronous external observability/control outputs.
+set_false_path -to [get_ports {TRIG_1 TRIG_2}]
 
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
@@ -47,11 +50,19 @@ set_property PACKAGE_PIN C7 [get_ports PL_SYSREF_N_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_N_0]
 set_property IOB false [get_ports PL_SYSREF_P_0]
 
-# 10MHz external reference clock for HMC7044
+# HMC7044 CLKOUT2 10MHz return to the FPGA. Board A forwards it to Board B.
 set_property PACKAGE_PIN B8 [get_ports mclk_10m_p]
 set_property IOSTANDARD LVDS_25 [get_ports mclk_10m_p]
 set_property PACKAGE_PIN B7 [get_ports mclk_10m_n]
 set_property IOSTANDARD LVDS_25 [get_ports mclk_10m_n]
+create_clock -name HMC_10M -period 100 [get_ports mclk_10m_p]
+
+# X3 -> NB6N11 differential outputs.  This net also feeds HMC7044 EXT_SYNC.
+# The electrical standard must be reconfirmed during board qualification.
+set_property PACKAGE_PIN A10 [get_ports EXT_TRIGGER_P]
+set_property PACKAGE_PIN A9 [get_ports EXT_TRIGGER_N]
+set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_P]
+set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_N]
 
 # 10G SFP+ link copied from the known-good reference implementation report.
 set_property PACKAGE_PIN N38 [get_ports sfp_rxp]
@@ -76,6 +87,7 @@ set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get
 set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_ddr_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_dac_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/udp_trigger_dac_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/u_rfctrl2_sync/ext_sync_meta_reg/D]
 
 # Single-DDR bring-up constraints adapted from the user-provided XCZU47DR
 # reference project MIG implementation. The custom card uses a 64-bit C0 DDR4

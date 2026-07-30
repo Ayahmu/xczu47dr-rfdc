@@ -8,7 +8,8 @@ module TopCustomXczu47dr (
 
     output RST_88E1111,
     output TRIG_1,
-    output HMC7044_CLK,
+    output TRIG_2,
+    output TRIG_3,
 
     // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
     input  PL_CLK_P_0,
@@ -19,6 +20,8 @@ module TopCustomXczu47dr (
     // 10MHz external reference clock for HMC7044 (differential)
     input  mclk_10m_p,
     input  mclk_10m_n,
+    input  EXT_TRIGGER_P,
+    input  EXT_TRIGGER_N,
 
     // 10G SFP+ UDP link, matching the reference project.
     input  sfp_refclkp,
@@ -73,7 +76,8 @@ module TopCustomXczu47dr (
 
   Top top_i (
       .TRIG_1(TRIG_1),
-      .HMC7044_CLK(HMC7044_CLK),
+      .TRIG_2(TRIG_2),
+      .TRIG_3(TRIG_3),
 
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),
@@ -91,6 +95,8 @@ module TopCustomXczu47dr (
       // 10MHz reference clock
       .mclk_10m_p(mclk_10m_p),
       .mclk_10m_n(mclk_10m_n),
+      .EXT_TRIGGER_P(EXT_TRIGGER_P),
+      .EXT_TRIGGER_N(EXT_TRIGGER_N),
 
       // 10G SFP+ UDP link
       .sfp_refclkp(sfp_refclkp),

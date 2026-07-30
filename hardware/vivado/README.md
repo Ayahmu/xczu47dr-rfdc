@@ -11,6 +11,14 @@ The Vivado project integrates:
 - Constraint files for timing and pinout
 - Build automation scripts
 
+The production control path includes a dedicated `rfdc_runtime_config_pl` FSM.
+It receives fixed CH1-CH8 `RFDC_APPLY` fields from the RFCTRL2 parser, checks
+tile and playback state, writes the RFDC through 16-bit AXI-Lite transactions,
+verifies Nyquist/NCO/phase/VOP register readback, and returns actual values over
+UDP. A transaction-locking two-master arbiter shares the RFDC AXI-Lite slave
+with the PS startup path. Production disables legacy RFDC MMIO write, RMW,
+batch, and placeholder NCO commands.
+
 ## Directory Structure
 
 ```

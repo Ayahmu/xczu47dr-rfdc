@@ -12,9 +12,14 @@ module dac_play_ctrl #(
     input  wire        clk,
     input  wire        rst_n,
 
-    input  wire        trigger,      // DAC 域同步后的 trigger 电平
+    input  wire        trigger,      // 旧 GPIO/RVCTRL 路径的 DAC 域同步 trigger 电平
+    input  wire        rfctrl2_trigger, // RFCTRL2 专用、DAC 域单周期 trigger
+    input  wire        prepare,      // RFCTRL2 ARM 到达 DAC 域后的单周期 prepare
+    input  wire        abort,        // DAC 域同步后的 emergency mute pulse
+    input  wire        armed,        // RFCTRL2 ARM 会话保持到 ABORT_MUTE
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
+    input  wire        loop_enable,  // loop refill 后自动继续输出，不等待下一次 Trigger
 
     input  wire [31:0] ch1_delay_cycles,
     input  wire [31:0] ch2_delay_cycles,
@@ -84,6 +89,7 @@ module dac_play_ctrl #(
     output reg         ch6_active,
     output reg         ch7_active,
     output reg         ch8_active,
+    output reg         prepared,
 
     // ===== debug (可选接 ILA) =====
     output wire        dbg_trig_pulse,
@@ -106,6 +112,9 @@ module dac_play_ctrl #(
   reg started;
   reg start_pending;
   reg trigger_pending;
+  reg prepare_wait_cfg;
+  reg prepare_wait_warm;
+  reg loop_refill_pending;
   reg [31:0] dly1, dly2, dly3, dly4, dly5, dly6, dly7, dly8;
   reg [31:0] beats1, beats2, beats3, beats4, beats5, beats6, beats7, beats8;
 
@@ -125,9 +134,11 @@ module dac_play_ctrl #(
 
   // 普通帧等 GPIO/UDP trigger；trigger 可能比 cfg CDC 晚到/早到几个周期，
   // 因此先锁存为 pending，等下一帧 cfg_seq_id 到 DAC 域后再启动。
+  wire prepare_active = prepare_wait_cfg || prepare_wait_warm || prepared;
   wire trigger_seen = trig_pulse || trigger_pending;
   wire start_req = trigger_seen || auto_start;
-  wire trig_start = start_req && new_cfg && !started && !start_pending && (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm);
+  wire trig_start = start_req && new_cfg && !started && !start_pending && !prepare_active &&
+                    (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm);
 
   // DDR 域已经在整帧预取完成后才提交 cfg；DAC 域只需等首个 FIFO beat 可读。
   // 短帧可能小于 prog_empty 阈值，不能用 prog_empty 作为启动条件。
@@ -135,6 +146,32 @@ module dac_play_ctrl #(
                     (!ch3_arm || ch3_fifo_tvalid) && (!ch4_arm || ch4_fifo_tvalid) &&
                     (!ch5_arm || ch5_fifo_tvalid) && (!ch6_arm || ch6_fifo_tvalid) &&
                     (!ch7_arm || ch7_fifo_tvalid) && (!ch8_arm || ch8_fifo_tvalid);
+
+  localparam [31:0] LOOP_SAFE_BEATS = 32'd128;
+  wire ch1_loop_short = (ch1_len_beats <= LOOP_SAFE_BEATS);
+  wire ch2_loop_short = (ch2_len_beats <= LOOP_SAFE_BEATS);
+  wire ch3_loop_short = (ch3_len_beats <= LOOP_SAFE_BEATS);
+  wire ch4_loop_short = (ch4_len_beats <= LOOP_SAFE_BEATS);
+  wire ch5_loop_short = (ch5_len_beats <= LOOP_SAFE_BEATS);
+  wire ch6_loop_short = (ch6_len_beats <= LOOP_SAFE_BEATS);
+  wire ch7_loop_short = (ch7_len_beats <= LOOP_SAFE_BEATS);
+  wire ch8_loop_short = (ch8_len_beats <= LOOP_SAFE_BEATS);
+  wire loop_boundary_warm = (!ch1_arm || (ch1_fifo_tvalid && !ch1_fifo_prog_empty)) &&
+                            (!ch2_arm || (ch2_fifo_tvalid && !ch2_fifo_prog_empty)) &&
+                            (!ch3_arm || (ch3_fifo_tvalid && !ch3_fifo_prog_empty)) &&
+                            (!ch4_arm || (ch4_fifo_tvalid && !ch4_fifo_prog_empty)) &&
+                            (!ch5_arm || (ch5_fifo_tvalid && !ch5_fifo_prog_empty)) &&
+                            (!ch6_arm || (ch6_fifo_tvalid && !ch6_fifo_prog_empty)) &&
+                            (!ch7_arm || (ch7_fifo_tvalid && !ch7_fifo_prog_empty)) &&
+                            (!ch8_arm || (ch8_fifo_tvalid && !ch8_fifo_prog_empty));
+  wire loop_refill_warm = (!ch1_arm || (ch1_fifo_tvalid && (ch1_loop_short || !ch1_fifo_prog_empty))) &&
+                          (!ch2_arm || (ch2_fifo_tvalid && (ch2_loop_short || !ch2_fifo_prog_empty))) &&
+                          (!ch3_arm || (ch3_fifo_tvalid && (ch3_loop_short || !ch3_fifo_prog_empty))) &&
+                          (!ch4_arm || (ch4_fifo_tvalid && (ch4_loop_short || !ch4_fifo_prog_empty))) &&
+                          (!ch5_arm || (ch5_fifo_tvalid && (ch5_loop_short || !ch5_fifo_prog_empty))) &&
+                          (!ch6_arm || (ch6_fifo_tvalid && (ch6_loop_short || !ch6_fifo_prog_empty))) &&
+                          (!ch7_arm || (ch7_fifo_tvalid && (ch7_loop_short || !ch7_fifo_prog_empty))) &&
+                          (!ch8_arm || (ch8_fifo_tvalid && (ch8_loop_short || !ch8_fifo_prog_empty)));
 
   // allow：started 且 delay==0 且 beats!=0 且 arm
   assign ch1_allow = started && ch1_arm && (dly1 == 0) && (beats1 != 0);
@@ -156,11 +193,42 @@ module dac_play_ctrl #(
   wire ch7_fire = ch7_allow && ch7_fifo_tvalid && dac_ch7_ready_in;
   wire ch8_fire = ch8_allow && ch8_fifo_tvalid && dac_ch8_ready_in;
 
+  // underflow：门已开、DAC 已 ready，但 FIFO 当拍无数据。
+  // RF-DAC AXIS 不用 tvalid 选通，这一拍会被当成显式零样本送进 RFDC，
+  // 落在 fabric beat 节拍上，因此必须 fail closed 而不是继续播放。
+  wire ch1_underflow_now = ch1_allow && dac_ch1_ready_in && !ch1_fifo_tvalid;
+  wire ch2_underflow_now = ch2_allow && dac_ch2_ready_in && !ch2_fifo_tvalid;
+  wire ch3_underflow_now = ch3_allow && dac_ch3_ready_in && !ch3_fifo_tvalid;
+  wire ch4_underflow_now = ch4_allow && dac_ch4_ready_in && !ch4_fifo_tvalid;
+  wire ch5_underflow_now = ch5_allow && dac_ch5_ready_in && !ch5_fifo_tvalid;
+  wire ch6_underflow_now = ch6_allow && dac_ch6_ready_in && !ch6_fifo_tvalid;
+  wire ch7_underflow_now = ch7_allow && dac_ch7_ready_in && !ch7_fifo_tvalid;
+  wire ch8_underflow_now = ch8_allow && dac_ch8_ready_in && !ch8_fifo_tvalid;
+  wire any_underflow_now = ch1_underflow_now || ch2_underflow_now ||
+                           ch3_underflow_now || ch4_underflow_now ||
+                           ch5_underflow_now || ch6_underflow_now ||
+                           ch7_underflow_now || ch8_underflow_now;
+
+  wire ch1_done_after = !ch1_arm || (beats1 == 32'd0) || (ch1_fire && (beats1 == 32'd1));
+  wire ch2_done_after = !ch2_arm || (beats2 == 32'd0) || (ch2_fire && (beats2 == 32'd1));
+  wire ch3_done_after = !ch3_arm || (beats3 == 32'd0) || (ch3_fire && (beats3 == 32'd1));
+  wire ch4_done_after = !ch4_arm || (beats4 == 32'd0) || (ch4_fire && (beats4 == 32'd1));
+  wire ch5_done_after = !ch5_arm || (beats5 == 32'd0) || (ch5_fire && (beats5 == 32'd1));
+  wire ch6_done_after = !ch6_arm || (beats6 == 32'd0) || (ch6_fire && (beats6 == 32'd1));
+  wire ch7_done_after = !ch7_arm || (beats7 == 32'd0) || (ch7_fire && (beats7 == 32'd1));
+  wire ch8_done_after = !ch8_arm || (beats8 == 32'd0) || (ch8_fire && (beats8 == 32'd1));
+  wire frame_done_after = ch1_done_after && ch2_done_after && ch3_done_after && ch4_done_after &&
+                          ch5_done_after && ch6_done_after && ch7_done_after && ch8_done_after;
+
   always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
       started     <= 1'b0;
       start_pending <= 1'b0;
       trigger_pending <= 1'b0;
+      prepare_wait_cfg <= 1'b0;
+      prepare_wait_warm <= 1'b0;
+      loop_refill_pending <= 1'b0;
+      prepared <= 1'b0;
       dly1        <= 32'd0;
       dly2        <= 32'd0;
       dly3        <= 32'd0;
@@ -198,49 +266,156 @@ module dac_play_ctrl #(
 
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
+    end else if(abort) begin
+      started       <= 1'b0;
+      start_pending <= 1'b0;
+      trigger_pending <= 1'b0;
+      prepare_wait_cfg <= 1'b0;
+      prepare_wait_warm <= 1'b0;
+      loop_refill_pending <= 1'b0;
+      prepared <= 1'b0;
+      dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
+      dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+      beats1 <= 32'd0; beats2 <= 32'd0; beats3 <= 32'd0; beats4 <= 32'd0;
+      beats5 <= 32'd0; beats6 <= 32'd0; beats7 <= 32'd0; beats8 <= 32'd0;
+      ch1_active <= 1'b0; ch2_active <= 1'b0; ch3_active <= 1'b0; ch4_active <= 1'b0;
+      ch5_active <= 1'b0; ch6_active <= 1'b0; ch7_active <= 1'b0; ch8_active <= 1'b0;
+      dbg_done_pulse <= 1'b0;
     end else begin
       dbg_done_pulse <= 1'b0;
-      if(trig_pulse && !started && !start_pending) begin
-        trigger_pending <= 1'b1;
-      end
-
-      // 启动请求先挂起，直到 FIFO 预填达到阈值后才真正开始消耗。
-      if(trig_start) begin
-        start_pending <= 1'b1;
-        trigger_pending <= 1'b0;
-      end
-
-      if(start_pending && start_warm) begin
-        started       <= 1'b1;
+      // RFCTRL2 ARM begins a new prepare transaction. The waveform executor
+      // is already prefetching in the DDR domain; do not open any DAC gate
+      // until this controller has locked the new configuration and observed
+      // one readable beat for every enabled channel.
+      if(prepare) begin
+        started <= 1'b0;
         start_pending <= 1'b0;
-        dly1          <= ch1_delay_cycles;
-        dly2          <= ch2_delay_cycles;
-        dly3          <= ch3_delay_cycles;
-        dly4          <= ch4_delay_cycles;
-        dly5          <= ch5_delay_cycles;
-        dly6          <= ch6_delay_cycles;
-        dly7          <= ch7_delay_cycles;
-        dly8          <= ch8_delay_cycles;
-        beats1        <= ch1_len_beats;
-        beats2        <= ch2_len_beats;
-        beats3        <= ch3_len_beats;
-        beats4        <= ch4_len_beats;
-        beats5        <= ch5_len_beats;
-        beats6        <= ch6_len_beats;
-        beats7        <= ch7_len_beats;
-        beats8        <= ch8_len_beats;
-        dbg_underflow_seen <= 8'd0;
-        dbg_ch1_fire_count <= 32'd0;
-        dbg_ch2_fire_count <= 32'd0;
-        dbg_ch3_fire_count <= 32'd0;
-        dbg_ch4_fire_count <= 32'd0;
-        dbg_ch5_fire_count <= 32'd0;
-        dbg_ch6_fire_count <= 32'd0;
-        dbg_ch7_fire_count <= 32'd0;
-        dbg_ch8_fire_count <= 32'd0;
+        trigger_pending <= 1'b0;
+        prepare_wait_cfg <= 1'b1;
+        prepare_wait_warm <= 1'b0;
+        loop_refill_pending <= 1'b0;
+        prepared <= 1'b0;
+      end else begin
+        if(prepare_wait_cfg && new_cfg &&
+           (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
+          dly1 <= ch1_delay_cycles; dly2 <= ch2_delay_cycles;
+          dly3 <= ch3_delay_cycles; dly4 <= ch4_delay_cycles;
+          dly5 <= ch5_delay_cycles; dly6 <= ch6_delay_cycles;
+          dly7 <= ch7_delay_cycles; dly8 <= ch8_delay_cycles;
+          beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
+          beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
+          beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
+          beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
+          dbg_underflow_seen <= 8'd0;
+          dbg_ch1_fire_count <= 32'd0; dbg_ch2_fire_count <= 32'd0;
+          dbg_ch3_fire_count <= 32'd0; dbg_ch4_fire_count <= 32'd0;
+          dbg_ch5_fire_count <= 32'd0; dbg_ch6_fire_count <= 32'd0;
+          dbg_ch7_fire_count <= 32'd0; dbg_ch8_fire_count <= 32'd0;
+          cfg_seen <= 1'b1;
+          last_seq_id <= cfg_seq_id;
+          prepare_wait_cfg <= 1'b0;
+          prepare_wait_warm <= 1'b1;
+        end else if(armed && cfg_seen && new_cfg && !started &&
+                    !prepare_wait_cfg && !prepare_wait_warm && !prepared &&
+                    (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
+          // A loop refill commits a new cfg_seq_id without issuing another
+          // ARM. In seamless loop mode the warmup immediately reopens the
+          // gate; otherwise it reports PREPARED for expert/manual trigger.
+          dly1 <= ch1_delay_cycles; dly2 <= ch2_delay_cycles;
+          dly3 <= ch3_delay_cycles; dly4 <= ch4_delay_cycles;
+          dly5 <= ch5_delay_cycles; dly6 <= ch6_delay_cycles;
+          dly7 <= ch7_delay_cycles; dly8 <= ch8_delay_cycles;
+          beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
+          beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
+          beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
+          beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
+          dbg_underflow_seen <= 8'd0;
+          dbg_ch1_fire_count <= 32'd0; dbg_ch2_fire_count <= 32'd0;
+          dbg_ch3_fire_count <= 32'd0; dbg_ch4_fire_count <= 32'd0;
+          dbg_ch5_fire_count <= 32'd0; dbg_ch6_fire_count <= 32'd0;
+          dbg_ch7_fire_count <= 32'd0; dbg_ch8_fire_count <= 32'd0;
+          cfg_seen <= 1'b1;
+          last_seq_id <= cfg_seq_id;
+          prepare_wait_warm <= 1'b1;
+          loop_refill_pending <= loop_enable;
+        end
 
-        cfg_seen      <= 1'b1;
-        last_seq_id   <= cfg_seq_id;
+        if(prepare_wait_warm && start_warm) begin
+          prepare_wait_warm <= 1'b0;
+          if(loop_refill_pending) begin
+            started <= 1'b1;
+            prepared <= 1'b0;
+            loop_refill_pending <= 1'b0;
+          end else begin
+            prepared <= 1'b1;
+          end
+        end
+
+        // In the RFCTRL2 path all launch state was loaded while PREPARED.
+        // Trigger therefore only opens the output gates; it never waits for
+        // FIFO data or reloads delay/beat counters.
+        if(rfctrl2_trigger && prepared && !started) begin
+          started <= 1'b1;
+          prepared <= 1'b0;
+        end
+
+        if(trig_pulse && !started && !start_pending && !prepare_active) begin
+        trigger_pending <= 1'b1;
+        end
+
+        // 旧 GPIO/RVCTRL 路径保持原行为：Trigger 可以早于配置，且要等
+        // FIFO 首拍就绪后再启动。RFCTRL2 预取路径不会进入这里。
+        if(trig_start) begin
+          start_pending <= 1'b1;
+          trigger_pending <= 1'b0;
+        end
+
+        if(start_pending && start_warm) begin
+          started       <= 1'b1;
+          start_pending <= 1'b0;
+          dly1          <= ch1_delay_cycles;
+          dly2          <= ch2_delay_cycles;
+          dly3          <= ch3_delay_cycles;
+          dly4          <= ch4_delay_cycles;
+          dly5          <= ch5_delay_cycles;
+          dly6          <= ch6_delay_cycles;
+          dly7          <= ch7_delay_cycles;
+          dly8          <= ch8_delay_cycles;
+          beats1        <= ch1_len_beats;
+          beats2        <= ch2_len_beats;
+          beats3        <= ch3_len_beats;
+          beats4        <= ch4_len_beats;
+          beats5        <= ch5_len_beats;
+          beats6        <= ch6_len_beats;
+          beats7        <= ch7_len_beats;
+          beats8        <= ch8_len_beats;
+          dbg_underflow_seen <= 8'd0;
+          dbg_ch1_fire_count <= 32'd0;
+          dbg_ch2_fire_count <= 32'd0;
+          dbg_ch3_fire_count <= 32'd0;
+          dbg_ch4_fire_count <= 32'd0;
+          dbg_ch5_fire_count <= 32'd0;
+          dbg_ch6_fire_count <= 32'd0;
+          dbg_ch7_fire_count <= 32'd0;
+          dbg_ch8_fire_count <= 32'd0;
+
+          cfg_seen      <= 1'b1;
+          last_seq_id   <= cfg_seq_id;
+        end
+
+        if(loop_refill_pending && !started && loop_refill_warm) begin
+          started <= 1'b1;
+          start_pending <= 1'b0;
+          trigger_pending <= 1'b0;
+          loop_refill_pending <= 1'b0;
+          prepared <= 1'b0;
+          dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
+          dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+          beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
+          beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
+          beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
+          beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
+        end
       end
 
       if(started) begin
@@ -270,21 +445,63 @@ module dac_play_ctrl #(
         if(ch7_fire) dbg_ch7_fire_count <= dbg_ch7_fire_count + 32'd1;
         if(ch8_fire) dbg_ch8_fire_count <= dbg_ch8_fire_count + 32'd1;
 
-        if(ch1_allow && dac_ch1_ready_in && !ch1_fifo_tvalid) dbg_underflow_seen[0] <= 1'b1;
-        if(ch2_allow && dac_ch2_ready_in && !ch2_fifo_tvalid) dbg_underflow_seen[1] <= 1'b1;
-        if(ch3_allow && dac_ch3_ready_in && !ch3_fifo_tvalid) dbg_underflow_seen[2] <= 1'b1;
-        if(ch4_allow && dac_ch4_ready_in && !ch4_fifo_tvalid) dbg_underflow_seen[3] <= 1'b1;
-        if(ch5_allow && dac_ch5_ready_in && !ch5_fifo_tvalid) dbg_underflow_seen[4] <= 1'b1;
-        if(ch6_allow && dac_ch6_ready_in && !ch6_fifo_tvalid) dbg_underflow_seen[5] <= 1'b1;
-        if(ch7_allow && dac_ch7_ready_in && !ch7_fifo_tvalid) dbg_underflow_seen[6] <= 1'b1;
-        if(ch8_allow && dac_ch8_ready_in && !ch8_fifo_tvalid) dbg_underflow_seen[7] <= 1'b1;
+        if(ch1_underflow_now) dbg_underflow_seen[0] <= 1'b1;
+        if(ch2_underflow_now) dbg_underflow_seen[1] <= 1'b1;
+        if(ch3_underflow_now) dbg_underflow_seen[2] <= 1'b1;
+        if(ch4_underflow_now) dbg_underflow_seen[3] <= 1'b1;
+        if(ch5_underflow_now) dbg_underflow_seen[4] <= 1'b1;
+        if(ch6_underflow_now) dbg_underflow_seen[5] <= 1'b1;
+        if(ch7_underflow_now) dbg_underflow_seen[6] <= 1'b1;
+        if(ch8_underflow_now) dbg_underflow_seen[7] <= 1'b1;
 
-        // 所有启用通道都发完才结束
-        if((beats1 == 0) && (beats2 == 0) && (beats3 == 0) && (beats4 == 0) &&
-           (beats5 == 0) && (beats6 == 0) && (beats7 == 0) && (beats8 == 0)) begin
-          started <= 1'b0;
-          start_pending <= 1'b0;
-          dbg_done_pulse <= 1'b1;
+        // 所有启用通道都发完才结束。Loop 模式仍使用同一配置续播；
+        // executor 的低水位续读不会提交新的 cfg_seq_id。边界处只有在
+        // FIFO 超过 prog_empty 阈值时才无缝重装；否则先关门等待 refill。
+        // 这样不会把当前最后一拍 tvalid 误判为下一轮已有数据。
+        if(frame_done_after) begin
+          if(loop_enable) begin
+            if(loop_boundary_warm) begin
+              started <= 1'b1;
+              start_pending <= 1'b0;
+              loop_refill_pending <= 1'b0;
+              beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
+              beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
+              beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
+              beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
+              dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
+              dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+            end else begin
+              started <= 1'b0;
+              start_pending <= 1'b0;
+              loop_refill_pending <= 1'b1;
+            end
+            dbg_done_pulse <= 1'b1;
+          end else begin
+            started <= 1'b0;
+            start_pending <= 1'b0;
+            loop_refill_pending <= 1'b0;
+            dbg_done_pulse <= 1'b1;
+          end
+        end
+
+        // Fail closed on an active-frame underflow. This block is intentionally
+        // last so it overrides the loop reload above: once an enabled channel
+        // has been starved mid-frame the gate must shut instead of continuing
+        // to present beats the FIFO cannot back. Leaving the gate open turns
+        // every starved cycle into an explicit zero beat at the RFDC fabric
+        // rate, which modulates the RF output instead of simply truncating it.
+        if(any_underflow_now) begin
+          started        <= 1'b0;
+          start_pending  <= 1'b0;
+          trigger_pending <= 1'b0;
+          prepared       <= 1'b0;
+          loop_refill_pending <= 1'b0;
+          prepare_wait_warm   <= 1'b0;
+          dbg_done_pulse <= 1'b0;
+          dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
+          dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+          beats1 <= 32'd0; beats2 <= 32'd0; beats3 <= 32'd0; beats4 <= 32'd0;
+          beats5 <= 32'd0; beats6 <= 32'd0; beats7 <= 32'd0; beats8 <= 32'd0;
         end
       end
 

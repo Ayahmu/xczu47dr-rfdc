@@ -11,6 +11,7 @@ module tb_udp_waveform_ddr_writer_trigger;
 
   reg         udp_tvalid = 1'b0;
   reg [63:0] udp_tdata = 64'd0;
+  reg         udp_tlast = 1'b0;
 
   wire instr_tvalid;
   wire [63:0] instr_tdata;
@@ -22,6 +23,7 @@ module tb_udp_waveform_ddr_writer_trigger;
     .rst_n(rst_n),
     .udp_tvalid(udp_tvalid),
     .udp_tdata(udp_tdata),
+    .udp_tlast(udp_tlast),
     .instr_tvalid(instr_tvalid),
     .instr_tdata(instr_tdata),
     .trigger_pulse(trigger_pulse),
@@ -62,8 +64,10 @@ module tb_udp_waveform_ddr_writer_trigger;
       @(negedge clk);
       udp_tdata = word;
       udp_tvalid = 1'b1;
+      udp_tlast = 1'b1;
       @(negedge clk);
       udp_tvalid = 1'b0;
+      udp_tlast = 1'b0;
       udp_tdata = 64'd0;
     end
   endtask

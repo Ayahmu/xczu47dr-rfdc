@@ -121,7 +121,7 @@ class UdpWaveformPacketTests(unittest.TestCase):
         bytes_per_channel = 16 * 1024
         datagrams = list(host.iter_max_length_udp_batches(
             bytes_per_channel,
-            beats_per_datagram=8,
+            beats_per_datagram=host.UDP_BULK_SAFE_MAX_BEATS,
             marker_bytes_per_channel=4096,
             pattern=host.MAX_LENGTH_PATTERN_CW_MARKER,
         ))
@@ -184,6 +184,10 @@ class UdpWaveformPacketTests(unittest.TestCase):
     def test_max_length_bulk_stream_rejects_over_capacity(self):
         with self.assertRaisesRegex(ValueError, "bytes_per_channel"):
             next(host.iter_max_length_udp_batches(host.DDR_MAX_BYTES_PER_CHANNEL + 32))
+
+    def test_max_length_bulk_stream_rejects_packets_larger_than_pl_limit(self):
+        with self.assertRaisesRegex(ValueError, "PL UDP bulk parser limit"):
+            next(host.iter_max_length_udp_batches(4096, beats_per_datagram=host.UDP_BULK_SAFE_MAX_BEATS + 1))
 
     def test_rfdc_nco_plan_maps_zone1_and_zone2_targets(self):
         self.assertEqual(host.rfdc_nco_plan_for_target(3.5e9)["nco_hz"], -2.9e9)
@@ -281,6 +285,26 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertIn(("setsockopt", host.socket.SOL_SOCKET, host.SO_BINDTODEVICE, b"enp225s0f0\0"), fake_socket.calls)
         self.assertIn(("bind", ("192.168.1.10", 0)), fake_socket.calls)
 
+    def test_udp_controller_reports_missing_cap_net_raw_for_interface_binding(self):
+        class FakeSocket:
+            def settimeout(self, timeout_s):
+                pass
+
+            def setsockopt(self, level, optname, value):
+                if optname == host.SO_BINDTODEVICE:
+                    raise OSError(1, "Operation not permitted")
+
+            def close(self):
+                pass
+
+        with mock.patch.object(host.socket, "socket", return_value=FakeSocket()):
+            with self.assertRaisesRegex(PermissionError, "CAP_NET_RAW"):
+                host.RFSocController(
+                    "192.168.1.128",
+                    transport="udp",
+                    udp_interface="enp225s0f0",
+                )
+
     def test_send_instructions_encodes_reserved_loop_bit(self):
         class FakeSocket:
             def __init__(self):
@@ -305,7 +329,10 @@ class UdpWaveformPacketTests(unittest.TestCase):
         sendto_calls = [call for call in fake_socket.calls if call[0] == "sendto"]
         self.assertEqual(len(sendto_calls), 1)
         packet = sendto_calls[0][1]
-        word0, word1, word2, word3 = struct.unpack("<IIII", packet)
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        word0, word1, word2, word3 = struct.unpack("<IIII", packet[16:32])
+        self.assertEqual(magic, host.UDP_WAVE_INSTR_MAGIC)
+        self.assertEqual(word_count, 2)
         self.assertEqual(word0, 0x000001f3)
         self.assertEqual(word1, 0)
         self.assertEqual(word2, 0)
@@ -333,7 +360,10 @@ class UdpWaveformPacketTests(unittest.TestCase):
             ctrl.close()
 
         packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
-        word0, word1, word2, word3 = struct.unpack("<IIII", packet)
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        word0, word1, word2, word3 = struct.unpack("<IIII", packet[16:32])
+        self.assertEqual(magic, host.UDP_WAVE_INSTR_MAGIC)
+        self.assertEqual(word_count, 2)
         self.assertEqual(word0, 0x00000212)
         self.assertEqual(word1, host.FIXED_DATA_BYTES)
         self.assertEqual(word2, host.tiled_channel_base_addr(1))
@@ -361,7 +391,10 @@ class UdpWaveformPacketTests(unittest.TestCase):
             ctrl.close()
 
         packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
-        word0, word1, word2, word3 = struct.unpack("<IIII", packet)
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        word0, word1, word2, word3 = struct.unpack("<IIII", packet[16:32])
+        self.assertEqual(magic, host.UDP_WAVE_INSTR_MAGIC)
+        self.assertEqual(word_count, 2)
         self.assertEqual(word0, 0x00000412)
         self.assertFalse(word0 & 0x00000200)
         self.assertEqual(word1, host.FIXED_DATA_BYTES)
@@ -391,6 +424,110 @@ class UdpWaveformPacketTests(unittest.TestCase):
 
         packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
         self.assertEqual(packet, struct.pack("<Q", host.UDP_TRIGGER_WORD))
+
+    def test_rvctrl_packet_packs_magic_count_and_padding(self):
+        packet = host.pack_rvctrl_packet([host.RV_CMD_PING, 0x12345678, 0xA5A5A5A5])
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        payload = struct.unpack("<IIII", packet[16:32])
+
+        self.assertEqual(magic, host.UDP_RVCTRL_MAGIC)
+        self.assertEqual(word_count, 3)
+        self.assertEqual(payload, (host.RV_CMD_PING, 0x12345678, 0xA5A5A5A5, 0))
+
+    def test_rvctrl_play_interleaved_packs_control_flags(self):
+        packet = host.pack_rvctrl_play_interleaved(
+            4096,
+            seq=9,
+            auto_start=False,
+            loop=True,
+        )
+        magic, word_count = struct.unpack("<QQ", packet[:16])
+        cmd, seq, bytes_per_channel, flags = struct.unpack("<IIII", packet[16:32])
+
+        self.assertEqual(magic, host.UDP_RVCTRL_MAGIC)
+        self.assertEqual(word_count, 4)
+        self.assertEqual(cmd, host.RV_CMD_PLAY_INTERLEAVED)
+        self.assertEqual(seq, 9)
+        self.assertEqual(bytes_per_channel, 4096)
+        self.assertEqual(flags, host.RV_PLAY_FLAG_LOOP)
+
+    def test_rvctrl1_mmio_write_packs_header_and_payload(self):
+        packet = host.pack_rvctrl1_mmio_write32(0x120, 0xCAFE1234, seq=0x77)
+        magic, hdr0, hdr1 = struct.unpack("<QQQ", packet[:24])
+        addr, value = struct.unpack("<II", packet[24:32])
+
+        self.assertEqual(magic, host.UDP_RVCTRL1_MAGIC)
+        self.assertEqual(hdr0 & 0xFFFF, host.RVCTRL1_VERSION)
+        self.assertEqual((hdr0 >> 16) & 0xFFFF, 0)
+        self.assertEqual((hdr0 >> 32) & 0xFFFFFFFF, host.RV1_OP_MMIO_WRITE32)
+        self.assertEqual(hdr1 & 0xFFFFFFFF, 0x77)
+        self.assertEqual((hdr1 >> 32) & 0xFFFFFFFF, 8)
+        self.assertEqual(addr, 0x120)
+        self.assertEqual(value, 0xCAFE1234)
+
+    def test_rvctrl1_batch_packs_counted_writes(self):
+        packet = host.pack_rvctrl1_mmio_batch([(0x10, 0x11), (0x20, 0x22)], seq=3)
+        magic, hdr0, hdr1 = struct.unpack("<QQQ", packet[:24])
+        count, addr0, value0, addr1, value1 = struct.unpack("<IIIII", packet[24:44])
+
+        self.assertEqual(magic, host.UDP_RVCTRL1_MAGIC)
+        self.assertEqual((hdr0 >> 32) & 0xFFFFFFFF, host.RV1_OP_MMIO_BATCH)
+        self.assertEqual(hdr1 & 0xFFFFFFFF, 3)
+        self.assertEqual((hdr1 >> 32) & 0xFFFFFFFF, 20)
+        self.assertEqual((count, addr0, value0, addr1, value1), (2, 0x10, 0x11, 0x20, 0x22))
+
+    def test_rvctrl1_rfdc_set_nco_packs_channel_entries(self):
+        packet = host.pack_rvctrl1_rfdc_set_nco({1: -1.9e9}, {1: 2}, seq=5, apply_mask=0x01)
+        magic, hdr0, hdr1 = struct.unpack("<QQQ", packet[:24])
+        apply_mask, ch1_nco, ch1_zone, _ = struct.unpack("<IqII", packet[24:44])
+
+        self.assertEqual(magic, host.UDP_RVCTRL1_MAGIC)
+        self.assertEqual((hdr0 >> 32) & 0xFFFFFFFF, host.RV1_OP_RFDC_SET_NCO)
+        self.assertEqual(hdr1 & 0xFFFFFFFF, 5)
+        self.assertEqual(apply_mask, 0x01)
+        self.assertEqual(ch1_nco, -1900000000)
+        self.assertEqual(ch1_zone, 2)
+
+    def test_rvresp1_parser(self):
+        payload = struct.pack("<I", 0xCAFE1234)
+        hdr0 = (host.RV1_OP_MMIO_READ32 << 32) | (0 << 16) | host.RVCTRL1_VERSION
+        hdr1 = (len(payload) << 32) | 0x44
+        parsed = host.parse_rvresp1_packet(struct.pack("<QQQ", host.UDP_RVRESP1_MAGIC, hdr0, hdr1) + payload)
+
+        self.assertEqual(parsed["version"], host.RVCTRL1_VERSION)
+        self.assertEqual(parsed["status"], 0)
+        self.assertEqual(parsed["opcode"], host.RV1_OP_MMIO_READ32)
+        self.assertEqual(parsed["seq"], 0x44)
+        self.assertEqual(parsed["payload"], payload)
+
+    def test_rvresp1_receiver_filters_source_address(self):
+        payload = b""
+        hdr0 = (host.RV1_OP_PING << 32) | host.RVCTRL1_VERSION
+        hdr1 = (len(payload) << 32) | 0x55
+        packet = struct.pack("<QQQ", host.UDP_RVRESP1_MAGIC, hdr0, hdr1)
+
+        class FakeSocket:
+            def __init__(self):
+                self.replies = [
+                    (packet, ("192.168.1.200", 1234)),
+                    (packet, ("192.168.1.128", 1234)),
+                ]
+
+            def settimeout(self, _timeout_s):
+                pass
+
+            def recvfrom(self, _size):
+                return self.replies.pop(0)
+
+            def close(self):
+                pass
+
+        with mock.patch.object(host.socket, "socket", return_value=FakeSocket()):
+            ctrl = host.RFSocController("192.168.1.128", transport="udp")
+            response = ctrl.recv_rvresp1(expected_seq=0x55, expected_opcode=host.RV1_OP_PING)
+            ctrl.close()
+
+        self.assertEqual(response["addr"], ("192.168.1.128", 1234))
 
     def test_rfdc_nco_mailbox_packs_entries_and_commits_header_last(self):
         nco = {channel: 4.5e9 for channel in range(1, 5)}
@@ -422,6 +559,26 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(last_addr, host.RFDC_CTRL_MAILBOX_OFFSET)
         self.assertEqual(last_payload, image[:host.RFDC_CTRL_MAILBOX_HEADER_BYTES])
 
+    def test_rfdc_runtime_mailbox_preserves_negative_phase_and_fractional_current(self):
+        image = host.pack_rfdc_runtime_mailbox(
+            {1: -1.9e9},
+            {1: 2},
+            {1: -90.5},
+            {1: 40.5},
+            seq=9,
+            apply_mask=0x01,
+        )
+        entry = image[
+            host.RFDC_RUNTIME_MAILBOX_HEADER_BYTES:
+            host.RFDC_RUNTIME_MAILBOX_HEADER_BYTES + host.RFDC_RUNTIME_MAILBOX_ENTRY_BYTES
+        ]
+        nco_hz, zone, phase_mdeg, current_ua, *_ = struct.unpack("<qIiIIII", entry)
+
+        self.assertEqual(nco_hz, -1_900_000_000)
+        self.assertEqual(zone, 2)
+        self.assertEqual(phase_mdeg, -90_500)
+        self.assertEqual(current_ua, 40_500)
+
     def test_send_instructions_rejects_unaligned_play(self):
         class FakeSocket:
             def settimeout(self, timeout_s):
@@ -437,6 +594,55 @@ class UdpWaveformPacketTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "PLAY addr must be 32B aligned"):
                 ctrl.send_instructions([[2, 1, host.FIXED_DATA_BYTES, 8, host.PLAY_FLAG_TILED]])
             ctrl.close()
+
+    def test_rfctrl2_packets_are_versioned_and_round_trip(self):
+        packet = host.pack_rfctrl2_arm(run_id=0xCAFE, channel_mask=0x3F, seq=0x77)
+        magic, hdr0, hdr1, run_id, channel_mask = struct.unpack("<QQQII", packet)
+        self.assertEqual(magic, host.UDP_RFCTRL2_MAGIC)
+        self.assertEqual(hdr0 & 0xFFFF, host.RFCTRL2_VERSION)
+        self.assertEqual(hdr0 >> 32, host.RF2_OP_ARM)
+        self.assertEqual(hdr1 & 0xFFFFFFFF, 0x77)
+        self.assertEqual(hdr1 >> 32, 8)
+        self.assertEqual(run_id, 0xCAFE)
+        self.assertEqual(channel_mask, 0x3F)
+
+        payload = struct.pack("<QQ", 0x1234, 0x5678)
+        response_hdr0 = (host.RF2_OP_STATUS << 32) | host.RFCTRL2_VERSION
+        response_hdr1 = (len(payload) << 32) | 0x77
+        parsed = host.parse_rfresp2_packet(struct.pack("<QQQ", host.UDP_RFRESP2_MAGIC, response_hdr0, response_hdr1) + payload)
+        self.assertEqual(parsed["version"], host.RFCTRL2_VERSION)
+        self.assertEqual(parsed["opcode"], host.RF2_OP_STATUS)
+        self.assertEqual(parsed["seq"], 0x77)
+        self.assertEqual(parsed["payload"], payload)
+
+    def test_rfctrl2_controller_sends_scheduled_start(self):
+        class FakeSocket:
+            def __init__(self):
+                self.calls = []
+
+            def settimeout(self, timeout_s):
+                self.calls.append(("settimeout", timeout_s))
+
+            def sendto(self, packet, addr):
+                self.calls.append(("sendto", packet, addr))
+                return len(packet)
+
+            def close(self):
+                self.calls.append(("close",))
+
+        fake_socket = FakeSocket()
+        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
+            ctrl = host.RFSocController("192.168.1.129", transport="udp")
+            sent = ctrl.rfctrl2_start_at(5_000_000, seq=9, wait_response=False)
+            ctrl.close()
+
+        self.assertGreater(sent, 0)
+        packet = next(call[1] for call in fake_socket.calls if call[0] == "sendto")
+        magic, hdr0, hdr1, start_tick = struct.unpack("<QQQQ", packet)
+        self.assertEqual(magic, host.UDP_RFCTRL2_MAGIC)
+        self.assertEqual(hdr0 >> 32, host.RF2_OP_START_AT)
+        self.assertEqual(hdr1 & 0xFFFFFFFF, 9)
+        self.assertEqual(start_tick, 5_000_000)
 
 
 

@@ -2,6 +2,7 @@
 
 module tb_udp_protocol;
   localparam [63:0] MAGIC = 64'h5741564544445230;
+  localparam [63:0] INSTR_MAGIC = 64'h57415645494E5330;
   localparam [63:0] DDR_X_ADDR = 64'h0000004800000000;
 
   reg clk = 1'b0;
@@ -10,6 +11,7 @@ module tb_udp_protocol;
 
   reg         udp_tvalid = 1'b0;
   reg [63:0] udp_tdata = 64'd0;
+  reg         udp_tlast = 1'b0;
 
   wire        instr64_tvalid;
   wire [63:0] instr64_tdata;
@@ -42,6 +44,7 @@ module tb_udp_protocol;
     .rst_n(rst_n),
     .udp_tvalid(udp_tvalid),
     .udp_tdata(udp_tdata),
+    .udp_tlast(udp_tlast),
     .instr_tvalid(instr64_tvalid),
     .instr_tdata(instr64_tdata),
     .m_axi_awaddr(awaddr),
@@ -92,6 +95,7 @@ module tb_udp_protocol;
       udp_tvalid = 1'b1;
       @(negedge clk);
       udp_tvalid = 1'b0;
+      udp_tlast = 1'b0;
       udp_tdata = 64'd0;
     end
   endtask
@@ -121,6 +125,8 @@ module tb_udp_protocol;
     check_condition(dbg_write_count == 32'd1, "writer did not accept one waveform write");
     check_condition(dbg_last_wdata == 256'h000f000e000d000c000b000a0009000800070006000500040003000200010000, "writer 256-bit lane order mismatch");
 
+    send_word(INSTR_MAGIC);
+    send_word(64'd2);
     send_word(64'h0000100000000012);
     send_word(DDR_X_ADDR);
     repeat (2) @(negedge clk);

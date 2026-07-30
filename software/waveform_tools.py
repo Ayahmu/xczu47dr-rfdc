@@ -392,6 +392,7 @@ def build_play_commands(
     channel_addrs: dict[int, int] | None = None,
     channel_lengths: dict[int, int] | None = None,
     channel_delays: dict[int, int] | None = None,
+    enabled_channels: set[int] | list[int] | tuple[int, ...] | None = None,
     layout: str = host.DEFAULT_DDR_LAYOUT,
 ) -> list[list[int]]:
     if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
@@ -408,6 +409,13 @@ def build_play_commands(
         default_addrs = DEFAULT_CHANNEL_ADDRS
         play_flag = 0
     addrs = dict(default_addrs if channel_addrs is None else channel_addrs)
+    if enabled_channels is not None:
+        enabled = {int(channel) for channel in enabled_channels}
+        if not enabled:
+            raise ValueError("enabled_channels must not be empty")
+        addrs = {channel: addr for channel, addr in addrs.items() if int(channel) in enabled}
+        if not addrs:
+            raise ValueError("enabled_channels did not match any channel addresses")
     lengths = {} if channel_lengths is None else {int(channel): int(length) for channel, length in channel_lengths.items()}
     delays = {} if channel_delays is None else {int(channel): int(delay) for channel, delay in channel_delays.items()}
     if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
@@ -750,6 +758,9 @@ def upload_and_play(
     layout: str = host.DEFAULT_DDR_LAYOUT,
     rfdc_nco_hz: dict[int, float] | dict[str, float] | None = None,
     rfdc_nyquist_zones: dict[int, int] | dict[str, int] | None = None,
+    preflight_ack: bool = True,
+    instruction_repeats: int = 3,
+    enabled_channels: set[int] | list[int] | tuple[int, ...] | None = None,
 ) -> None:
     if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
         raise ValueError(f"unsupported DDR layout: {layout}")
@@ -767,19 +778,35 @@ def upload_and_play(
         default_addrs = DEFAULT_TILED_CHANNEL_ADDRS
     else:
         default_addrs = DEFAULT_CHANNEL_ADDRS
-    uploads: list[tuple[int, np.ndarray, int, str]] = [
-        (1, x, default_addrs[1], "ch1_upload_hex.txt"),
-        (2, y, default_addrs[2], "ch2_upload_hex.txt"),
-    ]
+    enabled = None if enabled_channels is None else {int(channel) for channel in enabled_channels}
+    if enabled is not None and not enabled:
+        raise ValueError("enabled_channels must not be empty")
+    available: dict[int, np.ndarray] = {1: x, 2: y}
     if ch3 is not None:
-        uploads.append((3, ch3, default_addrs[3], "ch3_upload_hex.txt"))
+        available[3] = ch3
     if ch4 is not None:
-        uploads.append((4, ch4, default_addrs[4], "ch4_upload_hex.txt"))
+        available[4] = ch4
     if extra_channels is not None:
         for channel, samples in sorted(extra_channels.items()):
-            uploads.append((int(channel), samples, default_addrs[int(channel)], f"ch{int(channel)}_upload_hex.txt"))
+            available[int(channel)] = samples
+    missing = sorted(enabled - set(available)) if enabled is not None else []
+    if missing:
+        raise ValueError(f"enabled channel data is missing for CH{', CH'.join(str(channel) for channel in missing)}")
+    uploads: list[tuple[int, np.ndarray, int, str]] = []
+    for channel, samples in sorted(available.items()):
+        if enabled is not None and channel not in enabled:
+            continue
+        uploads.append((channel, samples, default_addrs[channel], f"ch{channel}_upload_hex.txt"))
+    if not uploads:
+        raise ValueError("no channels selected for upload/playback")
 
     try:
+        if preflight_ack and getattr(ctrl, "transport", "udp") == "udp":
+            warm_control = getattr(ctrl, "warm_udp_control_path", None)
+            if warm_control is None:
+                ctrl.rvctrl1_ping(wait_response=True)
+            else:
+                warm_control()
         if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
             channel_waves = {channel: samples for channel, samples, _, _ in uploads}
             upload_interleaved = getattr(ctrl, "upload_waveform_udp_interleaved", None)
@@ -811,13 +838,19 @@ def upload_and_play(
             time.sleep(post_upload_sleep_s)
         channel_addrs = {channel: 0 for channel, _, _, _ in uploads} if layout == host.DDR_LAYOUT_INTERLEAVED_512B else {channel: ddr_addr for channel, _, ddr_addr, _ in uploads}
         channel_lengths = {channel: waveform_length_bytes(samples) for channel, samples, _, _ in uploads}
-        ctrl.send_instructions(build_play_commands(
+        commands = build_play_commands(
             loop=loop,
             auto_start=auto_start,
             channel_addrs=None if layout == host.DDR_LAYOUT_INTERLEAVED_512B else channel_addrs,
             channel_lengths=channel_lengths,
             channel_delays=channel_delays,
+            enabled_channels=[channel for channel, _, _, _ in uploads],
             layout=layout,
-        ))
+        )
+        repeats = max(1, int(instruction_repeats))
+        for repeat_index in range(repeats):
+            ctrl.send_instructions(commands)
+            if repeat_index + 1 < repeats:
+                time.sleep(0.002)
     finally:
         ctrl.close()

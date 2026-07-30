@@ -1438,7 +1438,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_1",
+                                        "name": "top_i/rfctrl2_armed_dac",
                                         "isBus": false
                                     }
                                 ]
@@ -1454,7 +1454,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_2",
+                                        "name": "top_i/rfctrl2_prepared_dac",
                                         "isBus": false
                                     }
                                 ]
@@ -1470,7 +1470,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_3",
+                                        "name": "top_i/rfctrl2_play_abort",
                                         "isBus": false
                                     }
                                 ]
@@ -1486,7 +1486,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_4",
+                                        "name": "top_i/rfctrl2_play_trigger",
                                         "isBus": false
                                     }
                                 ]
@@ -1502,7 +1502,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_5",
+                                        "name": "top_i/rfctrl2_play_prepare",
                                         "isBus": false
                                     }
                                 ]
@@ -1518,7 +1518,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_6",
+                                        "name": "top_i/<const0>_1",
                                         "isBus": false
                                     }
                                 ]
@@ -1534,7 +1534,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_7",
+                                        "name": "top_i/<const0>_2",
                                         "isBus": false
                                     }
                                 ]
@@ -1550,7 +1550,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_8",
+                                        "name": "top_i/<const0>_3",
                                         "isBus": false
                                     }
                                 ]
@@ -1566,7 +1566,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_9",
+                                        "name": "top_i/<const0>_4",
                                         "isBus": false
                                     }
                                 ]
@@ -1582,7 +1582,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_10",
+                                        "name": "top_i/<const0>_5",
                                         "isBus": false
                                     }
                                 ]
@@ -1598,7 +1598,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_11",
+                                        "name": "top_i/<const0>_6",
                                         "isBus": false
                                     }
                                 ]
@@ -1614,7 +1614,7 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_12",
+                                        "name": "top_i/<const0>",
                                         "isBus": false
                                     }
                                 ]
@@ -13784,28 +13784,13 @@
                                 "direction": "IN",
                                 "isVector": true,
                                 "leftIndex": 0,
-                                "rightIndex": 8,
+                                "rightIndex": 3,
                                 "portIndex": 0,
                                 "nets": [
                                     {
                                         "name": "top_i/udp_wave_align_error_count",
                                         "isBus": true,
                                         "subnets": [
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[8]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[7]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[6]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[5]"
-                                            },
-                                            {
-                                                "name": "top_i/udp_wave_align_error_count[4]"
-                                            },
                                             {
                                                 "name": "top_i/udp_wave_align_error_count[3]"
                                             },
@@ -13825,6 +13810,86 @@
                             {
                                 "name": "probe0",
                                 "id": 144,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 4,
+                                "rightIndex": 4,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_abort_mute_pulse",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 145,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 5,
+                                "rightIndex": 5,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_armed_ddr",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 146,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 6,
+                                "rightIndex": 6,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_prepared_ddr",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 147,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 7,
+                                "rightIndex": 7,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_arm_pulse",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 148,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 8,
+                                "rightIndex": 8,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rfctrl2_trigger_pulse",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 149,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -13869,7 +13934,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 145,
+                                "id": 150,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -13914,7 +13979,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 146,
+                                "id": 151,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -13980,7 +14045,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 147,
+                                "id": 152,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14046,7 +14111,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 148,
+                                "id": 153,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14088,30 +14153,18 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 149,
+                                "id": 154,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
                                 "leftIndex": 67,
-                                "rightIndex": 74,
+                                "rightIndex": 70,
                                 "portIndex": 0,
                                 "nets": [
                                     {
                                         "name": "top_i/dm_mm2s_sts_tdata",
                                         "isBus": true,
                                         "subnets": [
-                                            {
-                                                "name": "top_i/dm_mm2s_sts_tdata[7]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_mm2s_sts_tdata[6]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_mm2s_sts_tdata[5]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_mm2s_sts_tdata[4]"
-                                            },
                                             {
                                                 "name": "top_i/dm_mm2s_sts_tdata[3]"
                                             },
@@ -14130,7 +14183,37 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 150,
+                                "id": 155,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 71,
+                                "rightIndex": 74,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rv_dbg_state_1",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rv_dbg_state_1[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_state_1[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_state_1[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_state_1[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 156,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14154,7 +14237,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 151,
+                                "id": 157,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14178,7 +14261,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 152,
+                                "id": 158,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14202,7 +14285,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 153,
+                                "id": 159,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14229,7 +14312,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 154,
+                                "id": 160,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14246,11 +14329,11 @@
                                             },
                                             {
                                                 "name": "top_i/ex_dbg_st[1]",
-                                                "parentNetId": 3946
+                                                "parentNetId": 3951
                                             },
                                             {
                                                 "name": "top_i/ex_dbg_st[0]",
-                                                "parentNetId": 3947
+                                                "parentNetId": 3952
                                             }
                                         ]
                                     }
@@ -14258,7 +14341,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 155,
+                                "id": 161,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14282,7 +14365,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 156,
+                                "id": 162,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14298,7 +14381,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 157,
+                                "id": 163,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14314,7 +14397,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 158,
+                                "id": 164,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14330,7 +14413,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 159,
+                                "id": 165,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14346,7 +14429,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 160,
+                                "id": 166,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14362,7 +14445,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 161,
+                                "id": 167,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14378,7 +14461,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 162,
+                                "id": 168,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14394,7 +14477,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 163,
+                                "id": 169,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14410,7 +14493,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 164,
+                                "id": 170,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14426,7 +14509,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 165,
+                                "id": 171,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14442,7 +14525,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 166,
+                                "id": 172,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14458,7 +14541,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 167,
+                                "id": 173,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14474,7 +14557,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 168,
+                                "id": 174,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14490,7 +14573,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 169,
+                                "id": 175,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14499,14 +14582,14 @@
                                 "portIndex": 0,
                                 "nets": [
                                     {
-                                        "name": "top_i/udp_trigger_pulse",
+                                        "name": "top_i/control_trigger_pulse",
                                         "isBus": false
                                     }
                                 ]
                             },
                             {
                                 "name": "probe0",
-                                "id": 170,
+                                "id": 176,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14522,7 +14605,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 171,
+                                "id": 177,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14538,7 +14621,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 172,
+                                "id": 178,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14554,7 +14637,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 173,
+                                "id": 179,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14570,7 +14653,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 174,
+                                "id": 180,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14586,7 +14669,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 175,
+                                "id": 181,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14602,7 +14685,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 176,
+                                "id": 182,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14618,7 +14701,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 177,
+                                "id": 183,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14634,7 +14717,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 178,
+                                "id": 184,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14650,7 +14733,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 179,
+                                "id": 185,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14666,92 +14749,12 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 180,
+                                "id": 186,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
                                 "leftIndex": 113,
                                 "rightIndex": 113,
-                                "portIndex": 0,
-                                "nets": [
-                                    {
-                                        "name": "top_i/dm_data_tlast",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe0",
-                                "id": 181,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 114,
-                                "rightIndex": 114,
-                                "portIndex": 0,
-                                "nets": [
-                                    {
-                                        "name": "top_i/dm_data_tready",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe0",
-                                "id": 182,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 115,
-                                "rightIndex": 115,
-                                "portIndex": 0,
-                                "nets": [
-                                    {
-                                        "name": "top_i/dm_data_tvalid",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe0",
-                                "id": 183,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 116,
-                                "rightIndex": 116,
-                                "portIndex": 0,
-                                "nets": [
-                                    {
-                                        "name": "top_i/dm_cmd_tready",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe0",
-                                "id": 184,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 117,
-                                "rightIndex": 117,
-                                "portIndex": 0,
-                                "nets": [
-                                    {
-                                        "name": "top_i/dm_cmd_tvalid",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe0",
-                                "id": 185,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 118,
-                                "rightIndex": 118,
                                 "portIndex": 0,
                                 "nets": [
                                     {
@@ -14762,12 +14765,12 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 186,
+                                "id": 187,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 119,
-                                "rightIndex": 119,
+                                "leftIndex": 114,
+                                "rightIndex": 114,
                                 "portIndex": 0,
                                 "nets": [
                                     {
@@ -14778,12 +14781,12 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 187,
+                                "id": 188,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 120,
-                                "rightIndex": 120,
+                                "leftIndex": 115,
+                                "rightIndex": 115,
                                 "portIndex": 0,
                                 "nets": [
                                     {
@@ -14794,7 +14797,87 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 188,
+                                "id": 189,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 116,
+                                "rightIndex": 116,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rv_instr_tready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 190,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 117,
+                                "rightIndex": 117,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rv_instr_tvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 191,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 118,
+                                "rightIndex": 118,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvctrl64_tlast",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 192,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 119,
+                                "rightIndex": 119,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvctrl64_tfirst",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 193,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 120,
+                                "rightIndex": 120,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvctrl64_tvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe0",
+                                "id": 194,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14810,7 +14893,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 189,
+                                "id": 195,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14826,7 +14909,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 190,
+                                "id": 196,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14842,7 +14925,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 191,
+                                "id": 197,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14858,7 +14941,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 192,
+                                "id": 198,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14874,7 +14957,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 193,
+                                "id": 199,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14890,7 +14973,7 @@
                             },
                             {
                                 "name": "probe0",
-                                "id": 194,
+                                "id": 200,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -14900,13 +14983,14 @@
                                 "nets": [
                                     {
                                         "name": "top_i/ddr4_ui_aresetn",
-                                        "isBus": false
+                                        "isBus": false,
+                                        "parentNetId": 3991
                                     }
                                 ]
                             },
                             {
                                 "name": "probe1",
-                                "id": 195,
+                                "id": 201,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -15116,7 +15200,7 @@
                             },
                             {
                                 "name": "probe2",
-                                "id": 196,
+                                "id": 202,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -15902,427 +15986,45 @@
                             },
                             {
                                 "name": "probe3",
-                                "id": 197,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 0,
-                                "rightIndex": 103,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/dm_cmd_tdata_1",
-                                        "isBus": true,
-                                        "subnets": [
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[103]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[102]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[101]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[100]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[99]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[98]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[97]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[96]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[95]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[94]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[93]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[92]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[91]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[90]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[89]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[88]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[87]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[86]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[85]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[84]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[83]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[82]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[81]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[80]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[79]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[78]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[77]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[76]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[75]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[74]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[73]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[72]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[71]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[70]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[69]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[68]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[67]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[66]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[65]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[64]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[63]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[62]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[61]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[60]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[59]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[58]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[57]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[56]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[55]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[54]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[53]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[52]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[51]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[50]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[49]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[48]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[47]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[46]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[45]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[44]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[43]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[42]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[41]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[40]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[39]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[38]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[37]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[36]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[35]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[34]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[33]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[32]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[31]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[30]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[29]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[28]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[27]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[26]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[25]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[24]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[23]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[22]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[21]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[20]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[19]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[18]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[17]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[16]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[15]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[14]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[13]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[12]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[11]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[10]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[9]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[8]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[7]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[6]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[5]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[4]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[3]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[2]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[1]"
-                                            },
-                                            {
-                                                "name": "top_i/dm_cmd_tdata_1[0]"
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 198,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 104,
-                                "rightIndex": 104,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_13",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 199,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 105,
-                                "rightIndex": 105,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_14",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 200,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 106,
-                                "rightIndex": 106,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_15",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 201,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 107,
-                                "rightIndex": 107,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_16",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 202,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 108,
-                                "rightIndex": 108,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_17",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
                                 "id": 203,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 109,
-                                "rightIndex": 109,
+                                "leftIndex": 0,
+                                "rightIndex": 7,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_18",
-                                        "isBus": false
+                                        "name": "top_i/udp_control_tx_debug",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[7]"
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[6]"
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[5]"
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[4]"
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[3]"
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[2]"
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[1]",
+                                                "parentNetId": 4318
+                                            },
+                                            {
+                                                "name": "top_i/udp_control_tx_debug[0]",
+                                                "parentNetId": 4319
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16332,13 +16034,48 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 110,
-                                "rightIndex": 110,
+                                "leftIndex": 8,
+                                "rightIndex": 18,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_19",
-                                        "isBus": false
+                                        "name": "top_i/rv_dbg_scratch",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[10]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[9]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[8]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[7]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[6]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[5]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[4]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_scratch[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16348,13 +16085,36 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 111,
-                                "rightIndex": 111,
+                                "leftIndex": 19,
+                                "rightIndex": 25,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_20",
-                                        "isBus": false
+                                        "name": "top_i/rvctrl64_word_count",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[6]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[5]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[4]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_word_count[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16364,13 +16124,21 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 112,
-                                "rightIndex": 112,
+                                "leftIndex": 26,
+                                "rightIndex": 27,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_21",
-                                        "isBus": false
+                                        "name": "top_i/rvctrl64_protocol",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rvctrl64_protocol[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rvctrl64_protocol[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16380,13 +16148,111 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 113,
-                                "rightIndex": 113,
+                                "leftIndex": 28,
+                                "rightIndex": 59,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_22",
-                                        "isBus": false
+                                        "name": "top_i/rv_dbg_last_cmd",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[31]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[30]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[29]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[28]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[27]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[26]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[25]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[24]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[23]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[22]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[21]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[20]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[19]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[18]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[17]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[16]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[15]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[14]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[13]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[12]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[11]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[10]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[9]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[8]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[7]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[6]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[5]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[4]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_cmd[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16396,13 +16262,111 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 114,
-                                "rightIndex": 114,
+                                "leftIndex": 60,
+                                "rightIndex": 91,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_23",
-                                        "isBus": false
+                                        "name": "top_i/rv_dbg_last_seq",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[31]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[30]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[29]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[28]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[27]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[26]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[25]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[24]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[23]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[22]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[21]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[20]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[19]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[18]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[17]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[16]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[15]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[14]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[13]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[12]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[11]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[10]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[9]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[8]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[7]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[6]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[5]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[4]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_last_seq[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16412,13 +16376,111 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 115,
-                                "rightIndex": 115,
+                                "leftIndex": 92,
+                                "rightIndex": 123,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>_24",
-                                        "isBus": false
+                                        "name": "top_i/rv_dbg_status",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rv_dbg_status[31]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[30]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[29]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[28]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[27]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[26]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[25]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[24]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[23]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[22]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[21]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[20]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[19]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[18]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[17]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[16]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[15]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[14]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[13]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[12]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[11]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[10]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[9]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[8]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[7]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[6]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[5]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[4]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_status[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -16428,195 +16490,33 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 116,
-                                "rightIndex": 116,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_25",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 211,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 117,
-                                "rightIndex": 117,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_26",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 212,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 118,
-                                "rightIndex": 118,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_27",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 213,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 119,
-                                "rightIndex": 119,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_28",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 214,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 120,
-                                "rightIndex": 120,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_29",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 215,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 121,
-                                "rightIndex": 121,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_30",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 216,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 122,
-                                "rightIndex": 122,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_31",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 217,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 123,
-                                "rightIndex": 123,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_32",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 218,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
                                 "leftIndex": 124,
-                                "rightIndex": 124,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_33",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 219,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 125,
-                                "rightIndex": 125,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_34",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 220,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 126,
-                                "rightIndex": 126,
-                                "portIndex": 3,
-                                "nets": [
-                                    {
-                                        "name": "top_i/<const0>_35",
-                                        "isBus": false
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe3",
-                                "id": 221,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 127,
                                 "rightIndex": 127,
                                 "portIndex": 3,
                                 "nets": [
                                     {
-                                        "name": "top_i/<const0>",
-                                        "isBus": false
+                                        "name": "top_i/rv_dbg_state",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rv_dbg_state[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_state[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_state[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rv_dbg_state[0]"
+                                            }
+                                        ]
                                     }
                                 ]
                             },
                             {
                                 "name": "probe4",
-                                "id": 222,
+                                "id": 211,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -17018,7 +16918,7 @@
                             },
                             {
                                 "name": "probe5",
-                                "id": 223,
+                                "id": 212,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -17348,7 +17248,7 @@
                             },
                             {
                                 "name": "probe6",
-                                "id": 224,
+                                "id": 213,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -18902,211 +18802,517 @@
                             },
                             {
                                 "name": "probe7",
-                                "id": 225,
+                                "id": 214,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
                                 "leftIndex": 0,
-                                "rightIndex": 63,
+                                "rightIndex": 31,
                                 "portIndex": 7,
                                 "nets": [
                                     {
-                                        "name": "top_i/ex_dbg_ch2_base_addr",
+                                        "name": "top_i/RV_AXI_RFDC_rdata",
                                         "isBus": true,
                                         "subnets": [
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[63]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[31]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[62]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[30]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[61]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[29]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[60]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[28]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[59]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[27]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[58]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[26]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[57]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[25]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[56]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[24]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[55]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[23]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[54]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[22]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[53]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[21]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[52]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[20]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[51]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[19]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[50]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[18]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[49]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[17]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[48]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[16]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[47]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[15]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[46]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[14]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[45]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[13]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[44]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[12]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[43]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[11]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[42]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[10]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[41]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[9]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[40]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[8]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[39]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[7]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[38]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[6]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[37]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[5]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[36]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[4]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[35]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[3]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[34]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[2]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[33]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[1]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[32]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[31]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[30]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[29]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[28]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[27]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[26]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[25]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[24]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[23]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[22]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[21]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[20]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[19]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[18]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[17]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[16]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[15]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[14]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[13]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[12]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[11]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[10]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[9]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[8]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[7]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[6]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[5]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[4]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[3]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[2]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[1]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_base_addr[0]"
+                                                "name": "top_i/RV_AXI_RFDC_rdata[0]"
                                             }
                                         ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 215,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 32,
+                                "rightIndex": 49,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_araddr",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[17]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[16]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[15]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[14]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[13]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[12]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[11]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[10]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[9]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[8]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[7]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[6]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[5]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[4]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[3]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[2]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[1]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_araddr[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 216,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 50,
+                                "rightIndex": 81,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_wdata",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[31]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[30]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[29]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[28]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[27]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[26]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[25]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[24]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[23]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[22]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[21]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[20]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[19]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[18]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[17]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[16]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[15]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[14]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[13]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[12]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[11]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[10]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[9]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[8]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[7]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[6]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[5]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[4]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[3]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[2]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[1]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_wdata[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 217,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 82,
+                                "rightIndex": 99,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_awaddr",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[17]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[16]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[15]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[14]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[13]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[12]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[11]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[10]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[9]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[8]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[7]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[6]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[5]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[4]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[3]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[2]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[1]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_awaddr[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 218,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 100,
+                                "rightIndex": 101,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_rresp",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_rresp[1]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_rresp[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 219,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 102,
+                                "rightIndex": 103,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_bresp",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_bresp[1]"
+                                            },
+                                            {
+                                                "name": "top_i/RV_AXI_RFDC_bresp[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 220,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 104,
+                                "rightIndex": 104,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_rready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 221,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 105,
+                                "rightIndex": 105,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_rvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 222,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 106,
+                                "rightIndex": 106,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_arready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 223,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 107,
+                                "rightIndex": 107,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_arvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 224,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 108,
+                                "rightIndex": 108,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_bready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 225,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 109,
+                                "rightIndex": 109,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_bvalid",
+                                        "isBus": false
                                     }
                                 ]
                             },
@@ -19116,205 +19322,158 @@
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
-                                "leftIndex": 64,
+                                "leftIndex": 110,
+                                "rightIndex": 110,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_wready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 227,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 111,
+                                "rightIndex": 111,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_wvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 228,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 112,
+                                "rightIndex": 112,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_awready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 229,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 113,
+                                "rightIndex": 113,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/RV_AXI_RFDC_awvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 230,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 114,
+                                "rightIndex": 114,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvresp64_tvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 231,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 115,
+                                "rightIndex": 115,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvresp64_tready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 232,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 116,
+                                "rightIndex": 116,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvresp64_tlast",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 233,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 117,
                                 "rightIndex": 127,
                                 "portIndex": 7,
                                 "nets": [
                                     {
-                                        "name": "top_i/ex_dbg_ch1_base_addr",
+                                        "name": "top_i/rvresp64_word_count",
                                         "isBus": true,
                                         "subnets": [
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[63]"
+                                                "name": "top_i/rvresp64_word_count[10]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[62]"
+                                                "name": "top_i/rvresp64_word_count[9]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[61]"
+                                                "name": "top_i/rvresp64_word_count[8]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[60]"
+                                                "name": "top_i/rvresp64_word_count[7]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[59]"
+                                                "name": "top_i/rvresp64_word_count[6]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[58]"
+                                                "name": "top_i/rvresp64_word_count[5]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[57]"
+                                                "name": "top_i/rvresp64_word_count[4]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[56]"
+                                                "name": "top_i/rvresp64_word_count[3]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[55]"
+                                                "name": "top_i/rvresp64_word_count[2]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[54]"
+                                                "name": "top_i/rvresp64_word_count[1]"
                                             },
                                             {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[53]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[52]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[51]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[50]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[49]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[48]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[47]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[46]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[45]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[44]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[43]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[42]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[41]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[40]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[39]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[38]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[37]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[36]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[35]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[34]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[33]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[32]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[31]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[30]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[29]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[28]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[27]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[26]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[25]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[24]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[23]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[22]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[21]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[20]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[19]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[18]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[17]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[16]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[15]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[14]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[13]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[12]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[11]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[10]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[9]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[8]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[7]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[6]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[5]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[4]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[3]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[2]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[1]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch1_base_addr[0]"
+                                                "name": "top_i/rvresp64_word_count[0]"
                                             }
                                         ]
                                     }
@@ -19322,222 +19481,12 @@
                             },
                             {
                                 "name": "probe8",
-                                "id": 227,
+                                "id": 234,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
                                 "leftIndex": 0,
                                 "rightIndex": 63,
-                                "portIndex": 8,
-                                "nets": [
-                                    {
-                                        "name": "top_i/ex_dbg_ch2_bytes_left",
-                                        "isBus": true,
-                                        "subnets": [
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[63]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[62]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[61]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[60]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[59]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[58]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[57]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[56]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[55]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[54]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[53]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[52]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[51]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[50]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[49]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[48]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[47]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[46]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[45]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[44]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[43]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[42]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[41]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[40]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[39]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[38]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[37]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[36]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[35]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[34]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[33]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[32]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[31]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[30]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[29]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[28]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[27]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[26]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[25]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[24]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[23]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[22]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[21]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[20]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[19]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[18]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[17]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[16]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[15]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[14]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[13]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[12]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[11]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[10]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[9]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[8]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[7]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[6]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[5]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[4]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[3]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[2]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[1]"
-                                            },
-                                            {
-                                                "name": "top_i/ex_dbg_ch2_bytes_left[0]"
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "name": "probe8",
-                                "id": 228,
-                                "type": "DATA_TRIGGER",
-                                "direction": "IN",
-                                "isVector": true,
-                                "leftIndex": 64,
-                                "rightIndex": 127,
                                 "portIndex": 8,
                                 "nets": [
                                     {
@@ -19741,8 +19690,218 @@
                                 ]
                             },
                             {
+                                "name": "probe8",
+                                "id": 235,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 64,
+                                "rightIndex": 127,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/rvresp64_tdata",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/rvresp64_tdata[63]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[62]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[61]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[60]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[59]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[58]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[57]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[56]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[55]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[54]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[53]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[52]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[51]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[50]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[49]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[48]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[47]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[46]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[45]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[44]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[43]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[42]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[41]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[40]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[39]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[38]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[37]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[36]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[35]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[34]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[33]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[32]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[31]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[30]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[29]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[28]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[27]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[26]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[25]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[24]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[23]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[22]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[21]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[20]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[19]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[18]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[17]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[16]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[15]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[14]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[13]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[12]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[11]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[10]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[9]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[8]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[7]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[6]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[5]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[4]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[3]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[2]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[1]"
+                                            },
+                                            {
+                                                "name": "top_i/rvresp64_tdata[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
                                 "name": "probe9",
-                                "id": 229,
+                                "id": 236,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -20528,7 +20687,7 @@
                             },
                             {
                                 "name": "probe10",
-                                "id": 230,
+                                "id": 237,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -21314,7 +21473,7 @@
                             },
                             {
                                 "name": "probe11",
-                                "id": 231,
+                                "id": 238,
                                 "type": "DATA_TRIGGER",
                                 "direction": "IN",
                                 "isVector": true,
@@ -22103,7 +22262,7 @@
                 ],
                 "parent_nets": [
                     {
-                        "id": 3946,
+                        "id": 3951,
                         "name": "top_i/executor_inst/dbg_st[1]",
                         "state_reg": [
                             {
@@ -22130,7 +22289,7 @@
                         ]
                     },
                     {
-                        "id": 3947,
+                        "id": 3952,
                         "name": "top_i/executor_inst/dbg_st[0]",
                         "state_reg": [
                             {
@@ -22151,6 +22310,79 @@
                                     {
                                         "name": "ST_PREFILL",
                                         "val": "01"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 3991,
+                        "name": "top_i/u_ddr4_ui_reset/io_peripheral_aresetn",
+                        "state_reg": [
+                            {
+                                "name": "top_i/executor_inst/FSM_onehot_pack_phase_reg[1]",
+                                "states": [
+                                    {
+                                        "name": "iSTATE",
+                                        "val": "1000"
+                                    },
+                                    {
+                                        "name": "iSTATE0",
+                                        "val": "0001"
+                                    },
+                                    {
+                                        "name": "iSTATE1",
+                                        "val": "0010"
+                                    },
+                                    {
+                                        "name": "iSTATE2",
+                                        "val": "0100"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 4318,
+                        "name": "top_i/udp_10g_i/core_inst/response_tx_inst/Q[2]",
+                        "state_reg": [
+                            {
+                                "name": "top_i/udp_10g_i/core_inst/response_tx_inst/FSM_onehot_state_reg[0]",
+                                "states": [
+                                    {
+                                        "name": "ST_IDLE",
+                                        "val": "001"
+                                    },
+                                    {
+                                        "name": "ST_HEADER",
+                                        "val": "010"
+                                    },
+                                    {
+                                        "name": "ST_PAYLOAD",
+                                        "val": "100"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 4319,
+                        "name": "top_i/udp_10g_i/core_inst/response_tx_inst/Q[1]",
+                        "state_reg": [
+                            {
+                                "name": "top_i/udp_10g_i/core_inst/response_tx_inst/FSM_onehot_state_reg[2]",
+                                "states": [
+                                    {
+                                        "name": "ST_IDLE",
+                                        "val": "001"
+                                    },
+                                    {
+                                        "name": "ST_HEADER",
+                                        "val": "010"
+                                    },
+                                    {
+                                        "name": "ST_PAYLOAD",
+                                        "val": "100"
                                     }
                                 ]
                             }

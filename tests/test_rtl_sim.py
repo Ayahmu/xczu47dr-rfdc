@@ -1,34 +1,40 @@
 import shutil
 import subprocess
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VIVADO_BIN = Path(os.environ.get("VIVADO_BIN", "/tools/Xilinx/Vivado/2024.2/bin"))
 
 
-@unittest.skipUnless(all(shutil.which(tool) for tool in ("xvlog", "xelab", "xsim")), "Vivado simulator is unavailable")
+def vivado_tool(name: str) -> str | None:
+    return shutil.which(name) or (str(VIVADO_BIN / name) if (VIVADO_BIN / name).is_file() else None)
+
+
+@unittest.skipUnless(all(vivado_tool(tool) for tool in ("xvlog", "xelab", "xsim")), "Vivado simulator is unavailable")
 class RtlSimulationTests(unittest.TestCase):
     def run_sim(self, top: str, sources: list[Path], expected: str) -> None:
         with tempfile.TemporaryDirectory(prefix=f"{top}-") as temp_dir:
             workdir = Path(temp_dir)
             subprocess.run(
-                ["xvlog", "-sv", *(str(source) for source in sources)],
+                [vivado_tool("xvlog"), "-sv", *(str(source) for source in sources)],
                 cwd=workdir,
                 check=True,
                 text=True,
                 capture_output=True,
             )
             subprocess.run(
-                ["xelab", top, "-s", "sim"],
+                [vivado_tool("xelab"), top, "-s", "sim"],
                 cwd=workdir,
                 check=True,
                 text=True,
                 capture_output=True,
             )
             result = subprocess.run(
-                ["xsim", "sim", "-runall"],
+                [vivado_tool("xsim"), "sim", "-runall"],
                 cwd=workdir,
                 check=True,
                 text=True,
@@ -46,6 +52,67 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: UDP DDR writer preserves legacy writes and bulk sequential writes",
         )
 
+    def test_udp_writer_routes_rvctrl_packets(self):
+        self.run_sim(
+            "tb_udp_rvctrl_protocol",
+            [
+                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+                ROOT / "tests/tb_udp_rvctrl_protocol.sv",
+            ],
+            "PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path and framed UDP instructions",
+        )
+
+    def test_udp_writer_resets_at_packet_boundary(self):
+        self.run_sim(
+            "tb_udp_waveform_packet_boundary",
+            [
+                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+                ROOT / "tests/tb_udp_waveform_packet_boundary.sv",
+            ],
+            "PASS: UDP packet boundary terminates incomplete bulk parsing",
+        )
+
+    def test_udp_writer_drops_oversized_bulk_packet(self):
+        self.run_sim(
+            "tb_udp_waveform_bulk_limit",
+            [
+                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+                ROOT / "tests/tb_udp_waveform_bulk_limit.sv",
+            ],
+            "PASS: UDP writer drops oversized bulk packets at the UDP boundary",
+        )
+
+    def test_rfctrl2_status_crosses_writer_and_control_response_path(self):
+        self.run_sim(
+            "tb_rfctrl2_control_path",
+            [
+                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+                ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
+                ROOT / "tests/tb_rfctrl2_control_path.sv",
+            ],
+            "PASS: full RFCTRL2 STATUS payload crosses the UDP writer and PL control response path",
+        )
+
+    def test_rfctrl2_udp_response_targets_requester_and_handles_backpressure(self):
+        self.run_sim(
+            "tb_rfctrl2_udp_response_tx",
+            [
+                ROOT / "hardware/vivado/src/udp/rfctrl2_udp_response_tx.v",
+                ROOT / "tests/tb_rfctrl2_udp_response_tx.sv",
+            ],
+            "PASS: RFCTRL2 UDP response TX locks the exact requester and honors AXIS backpressure",
+        )
+
+    def test_pl_riscv_control_v1_emits_play_and_trigger(self):
+        self.run_sim(
+            "tb_pl_riscv_control_v1",
+            [
+                ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
+                ROOT / "tests/tb_pl_riscv_control_v1.sv",
+            ],
+            "PASS: PL control shim emits legacy commands plus RFCTRL2 ARM, RFDC_APPLY, and SYNC_EPOCH",
+        )
+
     def test_dac_play_completion_and_underflow_counters(self):
         self.run_sim(
             "tb_dac_play_ctrl",
@@ -53,7 +120,37 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/dac_play_ctrl.v",
                 ROOT / "tests/tb_dac_play_ctrl.sv",
             ],
-            "PASS: dac_play_ctrl starts short frames and reports completion/fire/underflow debug state",
+            "PASS: dac_play_ctrl preserves legacy startup and loops from refill-safe FIFO state",
+        )
+
+    def test_rfctrl2_playback_controller_is_single_board(self):
+        self.run_sim(
+            "tb_rfctrl2_playback_controller",
+            [
+                ROOT / "hardware/vivado/src/rfctrl2_playback_controller.v",
+                ROOT / "tests/tb_rfctrl2_playback_controller.sv",
+            ],
+            "PASS: RFCTRL2 single-board playback CDC arms, triggers, and aborts without board sync",
+        )
+
+    def test_pl_rfdc_runtime_controller_closes_the_axi_readback_loop(self):
+        self.run_sim(
+            "tb_rfdc_runtime_config_pl",
+            [
+                ROOT / "hardware/vivado/src/rfdc_runtime_config_pl.v",
+                ROOT / "tests/tb_rfdc_runtime_config_pl.sv",
+            ],
+            "PASS: PL RFDC controller probes readiness, validates, writes, reads back, caches retries, and reports AXI failures",
+        )
+
+    def test_axilite_arbiter_locks_complete_transactions(self):
+        self.run_sim(
+            "tb_axilite_arbiter_2to1",
+            [
+                ROOT / "hardware/vivado/src/axilite_arbiter_2to1.v",
+                ROOT / "tests/tb_axilite_arbiter_2to1.sv",
+            ],
+            "PASS: AXI-Lite arbiter locks each write and read transaction to one master",
         )
 
     def test_interleaved_executor_retains_33bit_total_length(self):
@@ -64,7 +161,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/waveform_interleaved_system_top.v",
                 ROOT / "tests/tb_waveform_interleaved_rearm.sv",
             ],
-            "PASS: interleaved executor accepts a new frame after stale WAITTRIG",
+            "PASS: interleaved executor accepts rearm and clears loop state on abort",
         )
 
 

@@ -1,0 +1,29 @@
+[Unit]
+Description=XCZU47DR RFDC web control console
+Requires=hw-server.service
+After=network-online.target hw-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rfsoc-web
+Group=rfsoc-web
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/xczu47dr-rfdc
+EnvironmentFile=/etc/rfsoc-web/rfsoc-web.env
+ExecStart=/opt/xczu47dr-rfdc/.venv/bin/python -m uvicorn software.webapp.main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=3
+UMask=0027
+PrivateTmp=true
+NoNewPrivileges=true
+# CAP_NET_ADMIN configures the FPGA NICs; CAP_NET_RAW is required by Linux
+# for SO_BINDTODEVICE on the UDP sockets used to select a physical port.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rfsoc-web
+
+[Install]
+WantedBy=multi-user.target

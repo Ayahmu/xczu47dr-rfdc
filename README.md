@@ -57,9 +57,101 @@ DRY_RUN=1 ./build.sh program
 # Offline host validation without board access
 make host-dry-run
 
-# Launch the local waveform GUI
-python3 software/waveform_gui.py
+# Build the browser control console, then launch its safe simulator mode
+cd software/webui && npm ci && npm run build
+cd ../..
+RFSOC_WEB_SIMULATION=1 python3 -m uvicorn software.webapp.main:app --host 127.0.0.1 --port 8000
 ```
+
+Open `http://127.0.0.1:8000` after the service starts. The browser console is
+the normal control interface; the old Tkinter utility remains only as a
+compatibility/debug tool.
+
+## Browser Control Console
+
+The web console is a Vue 3 / TypeScript / Element Plus application served by a
+headless FastAPI control service. It retains the useful operating functions of
+the old GUI while separating waveform preparation from actual board control:
+
+- Eight-channel manual I/Q waveform editor with preview and spectrum.
+- ez-Q XY / Z / readout editor with the existing fixed channel-role map.
+- Dynamic registered-board inventory with login, exclusive leases, Linux USB
+  discovery for Digilent JTAG serials, RFCTRL2 status, and read-only UART logs.
+- Single-board waveform jobs: select one leased board, independently enable and
+  configure CH1-CH8, preview, upload, ARM, issue the board-local trigger, and
+  abort/mute.
+- Persistent run history, immutable `.bit + .elf` releases, controlled JTAG
+  deployment, programming logs, user administration, and audit records.
+
+The current web release intentionally exposes only single-board playback. It
+does not select every registered board, require a synchronization group, or
+send `SYNC_EPOCH` / `START_AT`. Requests containing more than one board job are
+rejected before hardware I/O. Synchronization metadata remains in the board
+records for a later hardware-qualified multi-board release.
+
+For normal use, build the frontend once and run the backend from the repository
+root:
+
+```bash
+python3 -m pip install -r software/requirements.txt
+cd software/webui
+npm ci
+npm run build
+cd ../..
+
+# Safe local workflow. No UDP packets are sent to a board.
+RFSOC_WEB_SIMULATION=1 \
+RFSOC_WEB_ADMIN_PASSWORD='replace-this-password' \
+python3 -m uvicorn software.webapp.main:app --host 127.0.0.1 --port 8000
+
+# Development UI with Vite hot reload, in a second terminal.
+cd software/webui
+npm run dev -- --host 127.0.0.1
+```
+
+The production frontend is served at `http://127.0.0.1:8000`; the Vite
+development server normally uses `http://127.0.0.1:5173`. Log in with the
+configured bootstrap administrator, register the exact JTAG/UART/network
+mapping, acquire one board, and use Dry Run before enabling real control. Set
+`RFSOC_WEB_SIMULATION=0` only after that board has RFCTRL2-capable firmware and
+its network path has been verified. Runtime state, runs, logs, and releases are stored under
+`$RFSOC_WEB_RUNTIME_DIR`, or `~/.local/state/xczu47dr-rfdc` by default.
+
+Deployment configuration, service-account permissions, environment variables,
+and systemd examples are documented in
+[`software/WEB_CONSOLE_DEPLOYMENT.md`](software/WEB_CONSOLE_DEPLOYMENT.md).
+
+The frontend uses a purpose-built operational console, not a static HTML admin
+template. Vue component state, REST endpoints, and a WebSocket event stream are
+used so that state changes from an ARM/start/abort request are visible to every
+open browser.
+
+## Future Two-Board Sync Build And Cabling
+
+This section documents hardware development for the future synchronization
+mode. The current browser console does not expose multi-board start controls;
+single-board playback does not need these cables or synchronization roles.
+
+Build both boards with the same normal target. Ethernet identity is assigned
+at runtime by the PL network configuration protocol; board names, cable
+serials, server interfaces, and formal IP/MAC values belong to the web
+console database, not to separate hardware targets:
+
+| Build target | Purpose |
+| --- | --- |
+| `custom_xczu47dr` | Normal single-board RFDC playback |
+| `custom_xczu47dr_bw` | Standalone DDR bandwidth stress target |
+
+```bash
+make hardware
+```
+
+Board inventory is not hard-coded. The web console prepares candidate server
+10G ports, sends RFCTRL2 discovery probes, and adds a board only after the PL
+returns a unique `device_uid`. Current playback qualification is single-board:
+`upload -> RFDC_APPLY -> ARM/PREPARED -> TRIGGER -> MUTE`. `ARM` only prepares
+and prefills the PL path; `TRIGGER` is the only command that opens the output
+gate.
 
 Default normal RFDC playback handoff artifacts:
 
@@ -79,7 +171,9 @@ The current custom scope is eight-output DAC playback on the custom XCZU47DR boa
 
 Host upload now defaults to the `interleaved_512b` DDR layout. Each 512-bit DDR beat contains eight 64-bit lanes: lane0 is CH1 sample group `N`, lane1 is CH2, through lane7 as CH8. Four consecutive DDR beats are packed in hardware into one 256-bit RFDC beat per channel. The DataMover reads one continuous DDR region instead of switching among per-channel address ranges. The old `tiled` and `contiguous` layouts remain in software for debug/fallback, but the normal RFDC Top uses the interleaved executor.
 
-Each DAC is targeted at `Fs = 6.4 GS/s` with `16x` interpolation, so the RFDC input complex I/Q rate is `400 MS/s` and the PL/AXIS fabric clock is `50 MHz` (`8` complex samples per 256-bit RFDC beat). DAC2 (tile 230) owns the PLL from the HMC7044 128 MHz refclk and distributes to all tiles. Every active DAC slice is configured for fine-NCO C2R up-conversion (`I/Q->Real`, fine mixer). XY/readout use the RFDC NCO for the RF carrier; software `detune_hz` is only a small baseband offset. In this baseline, CH1-CH4 default XY at 4.5 GHz maps to Zone2 with NCO `-1.9 GHz`; CH5-CH6 default Z channels use `NCO = 0` with DC coupling on tile 230; CH7-CH8 default readout targets are 5.8/6.2 GHz and map to Zone2 with NCO `-0.6/-0.2 GHz`. The GUI writes these per-channel NCO and Nyquist settings through the DDR mailbox before issuing PLAY instructions.
+Each DAC is targeted at `Fs = 6.4 GS/s` with `16x` interpolation, so the RFDC input complex I/Q rate is `400 MS/s` and the PL/AXIS fabric clock is `50 MHz` (`8` complex samples per 256-bit RFDC beat). DAC2 (tile 230) owns the PLL from the HMC7044 128 MHz refclk and distributes to all tiles. Every active DAC slice is configured for fine-NCO C2R up-conversion (`I/Q->Real`, fine mixer). XY/readout use the RFDC NCO for the RF carrier; software `detune_hz` is only a small baseband offset. In this baseline, CH1-CH4 default XY at 4.5 GHz maps to Zone2 with NCO `-1.9 GHz`; CH5-CH6 default Z channels use `NCO = 0` with DC coupling on tile 230; CH7-CH8 default readout targets are 5.8/6.2 GHz and map to Zone2 with NCO `-0.6/-0.2 GHz`.
+
+Runtime NCO, NCO phase, Nyquist zone, and DAC VOP configuration uses a pure-PL closed loop: FastAPI sends structured `RFCTRL2 RFDC_APPLY` UDP packets, the PL validates all selected channels, performs 16-bit RFDC AXI-Lite writes, reads the critical registers back, and returns a structured `RFRESP2` UDP response. DDR mailbox polling, PS runtime register writes, and UART `RFDC_APPLY` confirmation are not part of this path. The PS only starts RFDC tiles, PLLs, and calibration during boot; UART remains an optional diagnostic console.
 
 The custom PL includes an HMC7044 sequencer and the firmware waits for its done bit before RFDC startup. The RTL currently drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The host DC-CW path now writes explicit interleaved `I=C,Q=0` samples; tone frequency is set by the firmware NCO, not by the host sample rate. The custom firmware no longer initializes PS Ethernet or lwIP.
 

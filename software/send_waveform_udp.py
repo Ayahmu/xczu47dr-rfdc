@@ -45,6 +45,70 @@ def parse_byte_count(value: str) -> int:
     return int(text, 0)
 
 
+def parse_u32(value: str) -> int:
+    return int(value, 0) & 0xFFFFFFFF
+
+
+def parse_mmio_write(value: str) -> tuple[int, int]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("MMIO batch write must be ADDR=VALUE")
+    addr_s, value_s = value.split("=", 1)
+    return parse_u32(addr_s), parse_u32(value_s)
+
+
+def parse_channel_assignment(value: str, parser) -> tuple[int, object]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("channel assignment must be CH=VALUE")
+    channel_s, value_s = value.split("=", 1)
+    channel_text = channel_s.strip().lower()
+    if channel_text.startswith("ch"):
+        channel_text = channel_text[2:]
+    try:
+        channel = int(channel_text, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid channel {channel_s!r}") from exc
+    if channel < 1 or channel > host.RFDC_CTRL_MAILBOX_CHANNELS:
+        raise argparse.ArgumentTypeError(f"channel must be 1..{host.RFDC_CTRL_MAILBOX_CHANNELS}, got {channel}")
+    return channel, parser(value_s)
+
+
+def parse_nco_assignment(value: str) -> tuple[int, float]:
+    return parse_channel_assignment(value, float)
+
+
+def parse_zone_assignment(value: str) -> tuple[int, int]:
+    channel, zone = parse_channel_assignment(value, lambda text: int(text, 0))
+    if zone not in (1, 2):
+        raise argparse.ArgumentTypeError(f"nyquist zone must be 1 or 2, got {zone}")
+    return channel, zone
+
+
+def add_rvctrl1_response_args(parser: argparse.ArgumentParser, default: bool = False) -> None:
+    if default:
+        parser.add_argument("--no-wait-response", dest="wait_response", action="store_false", help="Do not wait for RVRESP1")
+        parser.set_defaults(wait_response=True)
+    else:
+        parser.add_argument("--wait-response", action="store_true", help="Wait for RVRESP1 and print the parsed reply")
+
+
+def print_rvresp1(resp: dict[str, object]) -> None:
+    payload = bytes(resp.get("payload", b""))
+    print(
+        f"[rvresp1] opcode=0x{int(resp['opcode']):08X} seq={int(resp['seq'])} "
+        f"status=0x{int(resp['status']):04X} payload_bytes={int(resp['payload_bytes'])}"
+    )
+    if payload:
+        print(f"[rvresp1] payload={payload.hex()}")
+    if int(resp["opcode"]) == host.RV1_OP_MMIO_READ32 and len(payload) >= 8:
+        addr = int.from_bytes(payload[0:4], "little")
+        value = int.from_bytes(payload[4:8], "little")
+        print(f"[rvresp1] mmio[0x{addr:08X}] = 0x{value:08X}")
+    elif int(resp["opcode"]) in (host.RV1_OP_RFDC_CH_ENABLE, host.RV1_OP_RFDC_SET_NCO) and len(payload) >= 8:
+        field0 = int.from_bytes(payload[0:4], "little")
+        field1 = int.from_bytes(payload[4:8], "little")
+        print(f"[rvresp1] ack_payload[0]=0x{field0:08X} ack_payload[1]=0x{field1:08X}")
+
+
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ip", default=host.DEFAULT_BOARD_IP, help="RFSoC board IPv4 address")
     parser.add_argument("--port", type=int, default=host.DEFAULT_BOARD_PORT, help="RFSoC UDP port")
@@ -119,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     sine.add_argument("--amplitude", type=int, default=20000, help="DAC code amplitude, 0..32767")
     sine.add_argument("--encoding", choices=["signed"], default="signed")
     sine.add_argument("--duration-s", type=float, default=1e-6, help="Finite I/Q record length in seconds")
-    sine.add_argument("--zero-tail-s", type=float, default=50e-9, help="Zero I/Q tail appended after the finite sine record")
+    sine.add_argument("--zero-tail-s", type=float, default=None, help="Zero I/Q tail appended after the finite sine record")
 
     burst = subparsers.add_parser("burst", help="Gaussian-windowed RF bursts on CH1-CH8")
     add_common_args(burst)
@@ -152,7 +216,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=host.DDR_MAX_BYTES_PER_CHANNEL,
         help="Logical bytes per channel; accepts max, integer, KiB, MiB, or GiB",
     )
-    max_length.add_argument("--beats-per-datagram", type=int, default=128, help="512-bit DDR beats in each bulk UDP datagram")
+    max_length.add_argument(
+        "--beats-per-datagram",
+        type=int,
+        default=host.DEFAULT_UDP_BULK_BEATS,
+        help=(
+            f"512-bit DDR beats in each bulk UDP datagram "
+            f"(safe max {host.UDP_BULK_SAFE_MAX_BEATS}; MTU max {host.UDP_BULK_MAX_BEATS})"
+        ),
+    )
     max_length.add_argument("--batch-pause-us", type=float, default=0.0, help="Optional pacing delay after each bulk UDP datagram")
     max_length.add_argument("--marker-bytes-per-channel", type=int, default=4096, help="Per-channel size of start/middle/end marker regions")
     max_length.add_argument(
@@ -168,6 +240,84 @@ def build_parser() -> argparse.ArgumentParser:
     max_length.add_argument("--force-waveform-cache", action="store_true", help="Regenerate the waveform cache before sending")
     max_length.add_argument("--generate-cache-only", action="store_true", help="Generate/reuse the waveform cache and exit without uploading")
     max_length.add_argument("--no-full-dump", action="store_true", help="Compatibility option; max-length mode never writes a full hex dump")
+
+    rv_ping = subparsers.add_parser("rvctrl-ping", help="send one RVCTRL0 PING command to the PL control CPU path")
+    add_common_args(rv_ping)
+    rv_ping.add_argument("--seq", type=int, default=1)
+
+    rv_play = subparsers.add_parser("rvctrl-play", help="send RVCTRL0 PLAY_INTERLEAVED; waveform data must already be in DDR")
+    add_common_args(rv_play)
+    rv_play.add_argument("--seq", type=int, default=1)
+    rv_play.add_argument("--bytes-per-channel", type=parse_byte_count, default=host.FIXED_DATA_BYTES)
+    rv_play.add_argument("--auto-start", action="store_true", help="Commit END as auto-start instead of waiting for trigger")
+
+    rv_trigger = subparsers.add_parser("rvctrl-trigger", help="send one RVCTRL0 TRIGGER command")
+    add_common_args(rv_trigger)
+    rv_trigger.add_argument("--seq", type=int, default=1)
+
+    rv1_ping = subparsers.add_parser("rvctrl1-ping", help="send one RVCTRL1 PING command")
+    add_common_args(rv1_ping)
+    rv1_ping.add_argument("--seq", type=int, default=1)
+    add_rvctrl1_response_args(rv1_ping)
+
+    rv1_play = subparsers.add_parser("rvctrl1-play", help="send RVCTRL1 PLAY_INTERLEAVED; waveform data must already be in DDR")
+    add_common_args(rv1_play)
+    rv1_play.add_argument("--seq", type=int, default=1)
+    rv1_play.add_argument("--bytes-per-channel", type=parse_byte_count, default=host.FIXED_DATA_BYTES)
+    rv1_play.add_argument("--auto-start", action="store_true", help="Commit END as auto-start instead of waiting for trigger")
+    add_rvctrl1_response_args(rv1_play)
+
+    rv1_trigger = subparsers.add_parser("rvctrl1-trigger", help="send one RVCTRL1 TRIGGER command")
+    add_common_args(rv1_trigger)
+    rv1_trigger.add_argument("--seq", type=int, default=1)
+    add_rvctrl1_response_args(rv1_trigger)
+
+    rv1_read = subparsers.add_parser("rvctrl1-mmio-read", help="send RVCTRL1 MMIO_READ32 command")
+    add_common_args(rv1_read)
+    rv1_read.add_argument("--seq", type=int, default=1)
+    rv1_read.add_argument("--addr", type=parse_u32, required=True)
+    add_rvctrl1_response_args(rv1_read, default=True)
+
+    rv1_write = subparsers.add_parser("rvctrl1-mmio-write", help="send RVCTRL1 MMIO_WRITE32 command")
+    add_common_args(rv1_write)
+    rv1_write.add_argument("--seq", type=int, default=1)
+    rv1_write.add_argument("--addr", type=parse_u32, required=True)
+    rv1_write.add_argument("--value", type=parse_u32, required=True)
+    add_rvctrl1_response_args(rv1_write)
+
+    rv1_rmw = subparsers.add_parser("rvctrl1-mmio-rmw", help="send RVCTRL1 MMIO_RMW32 command")
+    add_common_args(rv1_rmw)
+    rv1_rmw.add_argument("--seq", type=int, default=1)
+    rv1_rmw.add_argument("--addr", type=parse_u32, required=True)
+    rv1_rmw.add_argument("--mask", type=parse_u32, required=True)
+    rv1_rmw.add_argument("--value", type=parse_u32, required=True)
+    add_rvctrl1_response_args(rv1_rmw)
+
+    rv1_batch = subparsers.add_parser("rvctrl1-mmio-batch", help="send RVCTRL1 MMIO_BATCH write sequence")
+    add_common_args(rv1_batch)
+    rv1_batch.add_argument("--seq", type=int, default=1)
+    rv1_batch.add_argument("--write", type=parse_mmio_write, action="append", required=True, help="ADDR=VALUE, may be repeated")
+    add_rvctrl1_response_args(rv1_batch)
+
+    rv1_status = subparsers.add_parser("rvctrl1-status", help="send RVCTRL1 STATUS_READ command and wait for RVRESP1")
+    add_common_args(rv1_status)
+    rv1_status.add_argument("--seq", type=int, default=1)
+    add_rvctrl1_response_args(rv1_status, default=True)
+
+    rv1_ch_enable = subparsers.add_parser("rvctrl1-rfdc-ch-enable", help="send RVCTRL1 RFDC_CH_ENABLE command")
+    add_common_args(rv1_ch_enable)
+    rv1_ch_enable.add_argument("--seq", type=int, default=1)
+    rv1_ch_enable.add_argument("--channel-mask", type=parse_u32, required=True, help="8-bit mask of RFDC channels to update")
+    rv1_ch_enable.add_argument("--enable-mask", type=parse_u32, required=True, help="8-bit enabled-channel value")
+    add_rvctrl1_response_args(rv1_ch_enable)
+
+    rv1_set_nco = subparsers.add_parser("rvctrl1-rfdc-set-nco", help="send RVCTRL1 RFDC_SET_NCO command")
+    add_common_args(rv1_set_nco)
+    rv1_set_nco.add_argument("--seq", type=int, default=1)
+    rv1_set_nco.add_argument("--apply-mask", type=parse_u32, default=0xFF, help="8-bit mask of channels whose NCO settings should apply")
+    rv1_set_nco.add_argument("--nco", type=parse_nco_assignment, action="append", default=[], help="CH=HZ, e.g. 1=100e6 or ch7=-1.9e9; may be repeated")
+    rv1_set_nco.add_argument("--zone", type=parse_zone_assignment, action="append", default=[], help="CH=ZONE, zone is 1 or 2; may be repeated")
+    add_rvctrl1_response_args(rv1_set_nco)
 
     return parser
 
@@ -192,9 +342,52 @@ def _channel_key(channel: int, suffix: str) -> str:
     return f"ch{channel}_{suffix}"
 
 
+def resolve_sine_zero_tail_s(args: argparse.Namespace) -> float:
+    """Resolve --zero-tail-s, defaulting to 0 s when looping.
+
+    A finite record wants a zero tail so the output ends at complex zero. A
+    looped record does not: the tail replays every iteration, so it becomes a
+    periodic gate at the loop repetition rate and sidebands the tone. The web
+    path already makes this distinction; keep the CLI consistent with it.
+    """
+    if getattr(args, "zero_tail_s", None) is not None:
+        return float(args.zero_tail_s)
+    return 0.0 if getattr(args, "loop", False) else 50e-9
+
+
+def validate_tone_on_loop_grid(args: argparse.Namespace, complex_samples: int) -> None:
+    """Reject a looped tone that is not periodic over the replayed record.
+
+    Looping quantizes the emitted line to multiples of the repetition rate
+    R = sample_rate / complex_samples. A tone that is not an integer multiple
+    of R does not close phase across the loop boundary, which both shifts the
+    emitted line to the nearest grid multiple and raises a comb at R.
+    """
+    if not getattr(args, "loop", False) or complex_samples <= 0:
+        return
+    rate_hz = float(args.sample_rate_hz)
+    rep_hz = rate_hz / float(complex_samples)
+    for channel in range(1, 9):
+        freq_hz = float(_channel_value(args, "freq_hz", channel))
+        if freq_hz == 0.0:
+            continue
+        cycles = freq_hz / rep_hz
+        nearest = round(cycles)
+        if abs(cycles - nearest) <= 1e-9:
+            continue
+        raise ValueError(
+            f"CH{channel}: looped tone {freq_hz/1e6:g} MHz is not periodic over "
+            f"the {complex_samples}-sample loop (repetition rate {rep_hz/1e6:.6f} MHz, "
+            f"{cycles:.4f} cycles). It would move to {nearest * rep_hz/1e6:.6f} MHz "
+            f"and create a comb at {rep_hz/1e6:.6f} MHz spacing. "
+            f"Pick a tone that is a multiple of the repetition rate, or adjust --duration-s."
+        )
+
+
 def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
     if args.mode == "sine":
         sample_count = waveform_tools.iq_duration_to_sample_count(args.duration_s, args.sample_rate_hz)
+        zero_tail_s = resolve_sine_zero_tail_s(args)
         waves = tuple(
             waveform_tools.append_iq_zero_tail(
                 waveform_tools.make_iq_sine_tile_waveform(
@@ -204,11 +397,12 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
                     args.sample_rate_hz,
                     sample_count=sample_count,
                 ),
-                args.zero_tail_s,
+                zero_tail_s,
                 args.sample_rate_hz,
             )
             for channel in range(1, 9)
         )
+        validate_tone_on_loop_grid(args, int(waves[0].size) // 2)
         metadata = waveform_tools.build_metadata(
             mode="iq-sine",
             sample_rate_hz=args.sample_rate_hz,
@@ -217,7 +411,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             layout=args.ddr_layout,
             amplitude=args.amplitude,
             duration_s=args.duration_s,
-            zero_tail_s=args.zero_tail_s,
+            zero_tail_s=zero_tail_s,
             **{_channel_key(channel, "freq_hz"): float(_channel_value(args, "freq_hz", channel)) for channel in range(1, 9)},
             **{_channel_key(channel, "phase_rad"): float(_channel_value(args, "phase_rad", channel)) for channel in range(1, 9)},
         )
@@ -446,6 +640,142 @@ def run_max_length(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = build_parser().parse_args()
+    rvctrl1_modes = {
+        "rvctrl1-ping",
+        "rvctrl1-play",
+        "rvctrl1-trigger",
+        "rvctrl1-mmio-read",
+        "rvctrl1-mmio-write",
+        "rvctrl1-mmio-rmw",
+        "rvctrl1-mmio-batch",
+        "rvctrl1-status",
+        "rvctrl1-rfdc-ch-enable",
+        "rvctrl1-rfdc-set-nco",
+    }
+    if args.mode in ("rvctrl-ping", "rvctrl-play", "rvctrl-trigger") or args.mode in rvctrl1_modes:
+        if args.dry_run:
+            if args.mode == "rvctrl-ping":
+                packet = host.pack_rvctrl_ping(args.seq)
+            elif args.mode == "rvctrl-play":
+                packet = host.pack_rvctrl_play_interleaved(
+                    args.bytes_per_channel,
+                    seq=args.seq,
+                    auto_start=bool(args.auto_start),
+                    loop=bool(args.loop),
+                )
+            elif args.mode == "rvctrl-trigger":
+                packet = host.pack_rvctrl_trigger(args.seq)
+            elif args.mode == "rvctrl1-ping":
+                packet = host.pack_rvctrl1_ping(args.seq)
+            elif args.mode == "rvctrl1-play":
+                packet = host.pack_rvctrl1_play_interleaved(
+                    args.bytes_per_channel,
+                    seq=args.seq,
+                    auto_start=bool(args.auto_start),
+                    loop=bool(args.loop),
+                )
+            elif args.mode == "rvctrl1-trigger":
+                packet = host.pack_rvctrl1_trigger(args.seq)
+            elif args.mode == "rvctrl1-mmio-read":
+                packet = host.pack_rvctrl1_mmio_read32(args.addr, seq=args.seq)
+            elif args.mode == "rvctrl1-mmio-write":
+                packet = host.pack_rvctrl1_mmio_write32(args.addr, args.value, seq=args.seq)
+            elif args.mode == "rvctrl1-mmio-rmw":
+                packet = host.pack_rvctrl1_mmio_rmw32(args.addr, args.mask, args.value, seq=args.seq)
+            elif args.mode == "rvctrl1-mmio-batch":
+                packet = host.pack_rvctrl1_mmio_batch(args.write, seq=args.seq)
+            elif args.mode == "rvctrl1-status":
+                packet = host.pack_rvctrl1_status_read(seq=args.seq)
+            elif args.mode == "rvctrl1-rfdc-ch-enable":
+                packet = host.pack_rvctrl1_rfdc_ch_enable(args.channel_mask, args.enable_mask, seq=args.seq)
+            else:
+                nco = dict(args.nco)
+                zones = dict(args.zone)
+                packet = host.pack_rvctrl1_rfdc_set_nco(nco, zones, seq=args.seq, apply_mask=args.apply_mask)
+            print(f"[rvctrl] dry-run mode={args.mode} bytes={len(packet)} hex={packet.hex()}")
+            return 0
+
+        ctrl = host.RFSocController(
+            args.ip,
+            port=args.port,
+            timeout_s=args.timeout_s,
+            transport="udp",
+            udp_interface=args.udp_interface,
+            udp_source_ip=args.udp_source_ip,
+        )
+        try:
+            if args.mode == "rvctrl-ping":
+                ctrl.rvctrl_ping(args.seq)
+            elif args.mode == "rvctrl-play":
+                ctrl.rvctrl_play_interleaved(
+                    args.bytes_per_channel,
+                    seq=args.seq,
+                    auto_start=bool(args.auto_start),
+                    loop=bool(args.loop),
+                )
+            elif args.mode == "rvctrl-trigger":
+                ctrl.rvctrl_trigger(args.seq)
+            elif args.mode == "rvctrl1-ping":
+                resp = ctrl.rvctrl1_ping(args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-play":
+                resp = ctrl.rvctrl1_play_interleaved(
+                    args.bytes_per_channel,
+                    seq=args.seq,
+                    auto_start=bool(args.auto_start),
+                    loop=bool(args.loop),
+                    wait_response=bool(args.wait_response),
+                )
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-trigger":
+                resp = ctrl.rvctrl1_trigger(args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-mmio-read":
+                resp = ctrl.rvctrl1_mmio_read32(args.addr, seq=args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-mmio-write":
+                resp = ctrl.rvctrl1_mmio_write32(args.addr, args.value, seq=args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-mmio-rmw":
+                resp = ctrl.rvctrl1_mmio_rmw32(args.addr, args.mask, args.value, seq=args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-mmio-batch":
+                resp = ctrl.rvctrl1_mmio_batch(args.write, seq=args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-status":
+                resp = ctrl.rvctrl1_status_read(seq=args.seq, wait_response=bool(args.wait_response))
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            elif args.mode == "rvctrl1-rfdc-ch-enable":
+                resp = ctrl.rvctrl1_rfdc_ch_enable(
+                    args.channel_mask,
+                    args.enable_mask,
+                    seq=args.seq,
+                    wait_response=bool(args.wait_response),
+                )
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            else:
+                resp = ctrl.rvctrl1_rfdc_set_nco(
+                    dict(args.nco),
+                    dict(args.zone),
+                    seq=args.seq,
+                    apply_mask=args.apply_mask,
+                    wait_response=bool(args.wait_response),
+                )
+                if bool(args.wait_response):
+                    print_rvresp1(resp)
+            return 0
+        finally:
+            ctrl.close()
+
     if args.mode == "max-length":
         return run_max_length(args)
     if args.mode == "ezq":
@@ -520,7 +850,11 @@ def main() -> int:
         finally:
             ctrl.close()
 
-    generated = generate_waveforms(args)
+    try:
+        generated = generate_waveforms(args)
+    except ValueError as exc:
+        print(f"[waveform] ERROR: {exc}", file=sys.stderr)
+        return 1
     *waves, metadata = generated
     extra_waves = {channel: wave for channel, wave in enumerate(waves[2:], start=3)}
     waveform_tools.save_waveform_bundle(

@@ -480,7 +480,7 @@ class WaveformSenderApp(ttk.Frame):
         self.extreme_pattern = tk.StringVar(value=host.MAX_LENGTH_PATTERN_LOWFREQ_SINE)
         self.extreme_sine_freq_hz = tk.StringVar(value="10")
         self.extreme_sine_amplitude = tk.StringVar(value="4096")
-        self.extreme_beats_per_datagram = tk.StringVar(value="128")
+        self.extreme_beats_per_datagram = tk.StringVar(value=str(host.DEFAULT_UDP_BULK_BEATS))
         self.extreme_marker_bytes_per_channel = tk.StringVar(value="4096")
         self.extreme_use_waveform_cache = tk.BooleanVar(value=True)
         self.extreme_force_waveform_cache = tk.BooleanVar(value=False)

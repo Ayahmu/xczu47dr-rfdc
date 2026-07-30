@@ -30,8 +30,6 @@ if {$argc == 3} {
 proc board_target_filter {target role} {
     if {[info exists ::env(JTAG_CABLE_SERIAL)]} {
         set serial $::env(JTAG_CABLE_SERIAL)
-    } elseif {$target eq "custom_xczu47dr"} {
-        set serial "210512180081"
     } else {
         set serial ""
     }
@@ -41,6 +39,7 @@ proc board_target_filter {target role} {
         fpga { set role_filter {name =~ "PS TAP"} }
         pl { set role_filter {name =~ "PL"} }
         a53 { set role_filter {name =~ "Cortex-A53 #0"} }
+        dap { set role_filter {name =~ "DAP*"} }
         default { error "Unknown target role: $role" }
     }
 
@@ -56,21 +55,67 @@ proc board_role_filter {role} {
         fpga { return {name =~ "PS TAP"} }
         pl { return {name =~ "PL"} }
         a53 { return {name =~ "Cortex-A53 #0"} }
+        dap { return {name =~ "DAP*"} }
         default { error "Unknown target role: $role" }
     }
 }
 
+proc board_target_available {target role} {
+    set filter [board_target_filter $target $role]
+    if {[catch {set matches [targets -filter $filter]}]} {
+        return 0
+    }
+    return [expr {[string trim $matches] ne ""}]
+}
+
 proc select_board_target {target role} {
     set filter [board_target_filter $target $role]
-    if {[catch {targets -set -filter $filter} err]} {
+    if {[catch {set matches [targets -filter $filter]} err] || [string trim $matches] eq ""} {
+        set serial "default"
         if {[info exists ::env(JTAG_CABLE_SERIAL)]} {
-            puts "ERROR: Could not select JTAG_CABLE_SERIAL=$::env(JTAG_CABLE_SERIAL) for role=${role}."
-            puts "ERROR: Refusing to fall back to a role-only target because multiple boards may be attached."
-            puts "Available targets:"
-            targets
-            exit 1
-        } else {
+            set serial $::env(JTAG_CABLE_SERIAL)
+        }
+        puts "ERROR: Could not select JTAG cable ${serial} for role=${role}."
+        puts "ERROR: The cable may be disconnected, the board may have no JTAG device, or another Vivado/XSCT process may own it."
+        puts "Available debug targets:"
+        targets
+        if {$err ne ""} {
             error $err
+        }
+        error "No debug target matched ${filter}"
+    }
+    if {[catch {targets -set -filter $filter -timeout 15} err]} {
+        puts "ERROR: JTAG target matched but could not be selected for role=${role}: ${err}"
+        puts "ERROR: Close any Vivado/ILA or XSCT session currently controlling this board."
+        error $err
+    }
+}
+
+proc recover_psu_target {target} {
+    if {[board_target_available $target psu]} {
+        return
+    }
+    puts "PSU target is not visible yet; attempting JTAG recovery reset."
+    foreach role {dap fpga} {
+        if {![board_target_available $target $role]} {
+            continue
+        }
+        if {[catch {select_board_target $target $role} err]} {
+            puts "WARNING: could not select ${role} for recovery: ${err}"
+            continue
+        }
+        if {$role eq "dap"} {
+            catch {rst -system} reset_error
+        } else {
+            catch {rst -srst} reset_error
+        }
+        if {[info exists reset_error] && $reset_error ne ""} {
+            puts "WARNING: ${role} recovery reset reported: ${reset_error}"
+        }
+        after 3000
+        if {[board_target_available $target psu]} {
+            puts "PSU target recovered."
+            return
         }
     }
 }
@@ -107,12 +152,36 @@ if {[info exists ::env(DRY_RUN)] && $::env(DRY_RUN) eq "1"} {
 puts "Connecting to target..."
 connect
 
-puts "Available targets:"
+puts "Opening JTAG cables..."
+if {[catch {jtag targets -open} jtag_error]} {
+    puts "ERROR: Unable to open JTAG cables: ${jtag_error}"
+    puts "ERROR: Close competing Vivado/hw_server target sessions and verify the cable serial."
+    exit 1
+}
+
+set jtag_inventory [jtag targets -verbose -target-properties]
+set requested_serial ""
+if {[info exists ::env(JTAG_CABLE_SERIAL)]} {
+    set requested_serial $::env(JTAG_CABLE_SERIAL)
+}
+if {$requested_serial ne "" && [string first "jtag_cable_serial ${requested_serial}" $jtag_inventory] < 0} {
+    puts "ERROR: JTAG cable serial ${requested_serial} is not present in the opened JTAG inventory."
+    puts "Detected JTAG inventory:"
+    puts $jtag_inventory
+    exit 1
+}
+
+puts "Available targets for selected cable ${requested_serial}:"
 targets
+
+recover_psu_target $target
 
 puts "Resetting system..."
 select_board_target $target psu
-rst -system
+if {[catch {rst -system} reset_error]} {
+    puts "WARNING: rst -system failed on selected PS target: ${reset_error}"
+    puts "WARNING: Continuing with psu_init/fpga/dow; some XSCT target names such as PS TAP do not support system reset."
+}
 after 3000
 
 puts "Initializing PS..."

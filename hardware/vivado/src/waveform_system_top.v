@@ -778,7 +778,9 @@ module Waveform_System_Top #(
         if(loop_enable) begin
           st <= ST_PREFILL;
           pending_valid <= 1'b0;
-          prefill_auto_start <= 1'b1;
+          // Refill immediately, but require a new trigger before each
+          // iteration instead of silently auto-starting the next frame.
+          prefill_auto_start <= 1'b0;
           active_valid  <= 1'b1;
           run_delay_cnt <= 32'd0;
 

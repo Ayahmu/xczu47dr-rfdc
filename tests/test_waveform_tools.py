@@ -186,6 +186,17 @@ class WaveformToolTests(unittest.TestCase):
             [3, 15, 0, 0, 1],
         ])
 
+    def test_build_play_commands_uses_enabled_channel_subset(self):
+        cmds = waveform_tools.build_play_commands(loop=False, auto_start=False, enabled_channels=[1, 2])
+
+        self.assertEqual(cmds, [
+            [1, 1, 0, 0],
+            [2, 1, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
+            [1, 2, 0, 0],
+            [2, 2, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED],
+            [3, 0, 0, 0, 0],
+        ])
+
     def test_build_play_commands_can_emit_legacy_contiguous_layout(self):
         cmds = waveform_tools.build_play_commands(loop=True, auto_start=True, layout=host.DDR_LAYOUT_CONTIGUOUS)
 
@@ -212,7 +223,11 @@ class WaveformToolTests(unittest.TestCase):
 
         class FakeController:
             def __init__(self, *args, **kwargs):
+                self.transport = "udp"
                 calls.append(("init", args, kwargs))
+
+            def warm_udp_control_path(self):
+                calls.append(("warm_udp_control_path",))
 
             def upload_waveform_udp_interleaved(self, channel_waves, base_addr, dump_path):
                 calls.append(("upload_interleaved", sorted(channel_waves), base_addr, Path(dump_path).name))
@@ -248,11 +263,60 @@ class WaveformToolTests(unittest.TestCase):
         self.assertEqual(upload_calls, [
             ("upload_interleaved", [1, 2, 3, 4], host.DDR_BASE, "interleaved_wave_hex.txt"),
         ])
+        self.assertIn(("warm_udp_control_path",), calls)
         instruction_calls = [call for call in calls if call[0] == "instructions"]
+        self.assertEqual(len(instruction_calls), 3)
         self.assertEqual(instruction_calls[0][1][1], [2, 1, 32, 0, host.PLAY_FLAG_INTERLEAVED])
         self.assertEqual(instruction_calls[0][1][3], [2, 2, 32, 0, host.PLAY_FLAG_INTERLEAVED])
         self.assertEqual(instruction_calls[0][1][5], [2, 3, 32, 0, host.PLAY_FLAG_INTERLEAVED])
         self.assertEqual(instruction_calls[0][1][7], [2, 4, 32, 0, host.PLAY_FLAG_INTERLEAVED])
+
+    def test_upload_and_play_skips_disabled_channels_for_interleaved_playback(self):
+        arrays = [np.full(8, value, dtype=np.int16) for value in range(1, 9)]
+        calls = []
+
+        class FakeController:
+            def __init__(self, *args, **kwargs):
+                self.transport = "udp"
+
+            def warm_udp_control_path(self):
+                pass
+
+            def upload_waveform_udp_interleaved(self, channel_waves, base_addr, dump_path):
+                calls.append(("upload_interleaved", sorted(channel_waves)))
+
+            def send_instructions(self, commands):
+                calls.append(("instructions", commands))
+
+            def close(self):
+                pass
+
+        original = waveform_tools.host.RFSocController
+        waveform_tools.host.RFSocController = FakeController
+        try:
+            waveform_tools.upload_and_play(
+                arrays[0],
+                arrays[1],
+                ch3=arrays[2],
+                ch4=arrays[3],
+                extra_channels={5: arrays[4], 6: arrays[5], 7: arrays[6], 8: arrays[7]},
+                ip="192.0.2.10",
+                port=1234,
+                udp_interface="eth0",
+                udp_source_ip="192.0.2.1",
+                timeout_s=1.0,
+                post_upload_sleep_s=0.0,
+                output_dir=Path("/tmp/two-channel-test"),
+                loop=False,
+                auto_start=False,
+                enabled_channels=[1, 2],
+            )
+        finally:
+            waveform_tools.host.RFSocController = original
+
+        self.assertEqual(calls[0], ("upload_interleaved", [1, 2]))
+        play_channels = [cmd[1] for cmd in calls[1][1] if cmd[0] == 2]
+        self.assertEqual(play_channels, [1, 2])
 
     def test_waveform_metadata_uses_explicit_units(self):
         metadata = waveform_tools.build_metadata(

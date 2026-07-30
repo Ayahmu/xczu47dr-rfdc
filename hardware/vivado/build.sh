@@ -41,6 +41,13 @@ fi
 # Create output directory
 mkdir -p "${OUTPUT_DIR}"
 
+PROJECT_NAME="$(cd "${SCRIPT_DIR}/scripts" && tclsh target_config.tcl "${TARGET}" | awk -F': ' '/^project_basename:/ {print $2}')"
+OUTPUT_BASENAME="$(cd "${SCRIPT_DIR}/scripts" && tclsh target_config.tcl "${TARGET}" | awk -F': ' '/^output_basename:/ {print $2}')"
+if [ -z "${PROJECT_NAME}" ] || [ -z "${OUTPUT_BASENAME}" ]; then
+    print_error "Unable to resolve target configuration for TARGET=${TARGET}"
+    exit 1
+fi
+
 # Parse command line arguments
 SKIP_CHISEL=false
 SKIP_SYNTH=false
@@ -99,16 +106,20 @@ done
 # Clean if requested
 if [ "$CLEAN_FIRST" = true ]; then
     print_warn "Cleaning previous build..."
-    rm -rf "${WORK_DIR}"
-    rm -rf "${OUTPUT_DIR}"/*.bit "${OUTPUT_DIR}"/*.ltx "${OUTPUT_DIR}"/*.xsa "${OUTPUT_DIR}"/*.rpt
+    rm -rf "${WORK_DIR}/${PROJECT_NAME}.xpr" \
+           "${WORK_DIR}/${PROJECT_NAME}.srcs" \
+           "${WORK_DIR}/${PROJECT_NAME}.gen" \
+           "${WORK_DIR}/${PROJECT_NAME}.runs" \
+           "${WORK_DIR}/${PROJECT_NAME}.cache" \
+           "${WORK_DIR}/${PROJECT_NAME}.hw" \
+           "${WORK_DIR}/${PROJECT_NAME}.ip_user_files" \
+           "${WORK_DIR}/${PROJECT_NAME}.sim"
+    rm -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" \
+          "${OUTPUT_DIR}/${OUTPUT_BASENAME}.ltx" \
+          "${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa" \
+          "${OUTPUT_DIR}/${OUTPUT_BASENAME}_timing.rpt"
     mkdir -p "${OUTPUT_DIR}"
     print_info "Clean complete"
-fi
-
-PROJECT_NAME="$(cd "${SCRIPT_DIR}/scripts" && tclsh target_config.tcl "${TARGET}" | awk -F': ' '/^project_basename:/ {print $2}')"
-if [ -z "${PROJECT_NAME}" ]; then
-    print_error "Unable to resolve project name for TARGET=${TARGET}"
-    exit 1
 fi
 
 # Step 1: Generate Chisel Verilog
@@ -125,12 +136,22 @@ cd "${SCRIPT_DIR}"
 
 # Step 2: Create Vivado Project (or use existing)
 PROJECT_FILE="${WORK_DIR}/${PROJECT_NAME}.xpr"
-if [ -f "${PROJECT_FILE}" ]; then
+if [ "$CLEAN_FIRST" = false ] && [ -f "${PROJECT_FILE}" ]; then
     print_step "Step 2/5: Using existing Vivado project..."
     print_info "Found existing project: ${PROJECT_FILE}"
     print_info "To recreate project from scratch, use --clean option"
 else
     print_step "Step 2/5: Creating Vivado project..."
+    if [ "$CLEAN_FIRST" = true ]; then
+        rm -rf "${PROJECT_FILE}" \
+               "${WORK_DIR}/${PROJECT_NAME}.srcs" \
+               "${WORK_DIR}/${PROJECT_NAME}.gen" \
+               "${WORK_DIR}/${PROJECT_NAME}.runs" \
+               "${WORK_DIR}/${PROJECT_NAME}.cache" \
+               "${WORK_DIR}/${PROJECT_NAME}.hw" \
+               "${WORK_DIR}/${PROJECT_NAME}.ip_user_files" \
+               "${WORK_DIR}/${PROJECT_NAME}.sim"
+    fi
     vivado -mode batch -source scripts/create_project.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Project creation failed"

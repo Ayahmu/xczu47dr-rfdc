@@ -39,6 +39,7 @@ if [ -z "${WORKSPACE_RELATIVE}" ] || [ -z "${TARGET_OUTPUT_BASENAME}" ] || [ -z 
     exit 1
 fi
 WORKSPACE_DIR="${PROJECT_ROOT}/${WORKSPACE_RELATIVE}"
+APP_SRC_DIR="${WORKSPACE_DIR}/${APP_NAME}/src"
 XSA_FILE="${PROJECT_ROOT}/hardware/vivado/output/${TARGET_OUTPUT_BASENAME}.xsa"
 BIT_FILE="${PROJECT_ROOT}/hardware/vivado/output/${TARGET_OUTPUT_BASENAME}.bit"
 ELF_FILE="${PROJECT_ROOT}/${ELF_RELATIVE}"
@@ -70,6 +71,35 @@ print_target_paths() {
     print_info "BIT=${BIT_FILE}"
     print_info "ELF=${ELF_FILE}"
     print_info "PSU_INIT=${PSU_INIT_FILE}"
+}
+
+sync_app_sources() {
+    if [ "${DRY_RUN}" = "1" ]; then
+        print_info "Source sync: ${SRC_DIR}/ -> ${APP_SRC_DIR}/"
+        return 0
+    fi
+    if [ ! -d "${APP_SRC_DIR}" ]; then
+        print_error "Application source directory not found. Run '$0 create' first."
+        exit 1
+    fi
+    if command -v rsync &> /dev/null; then
+        rsync -a "${SRC_DIR}/" "${APP_SRC_DIR}/"
+    else
+        cp -a "${SRC_DIR}/." "${APP_SRC_DIR}/"
+    fi
+}
+
+build_app() {
+    print_info "Building application..."
+    if [ ! -d "${WORKSPACE_DIR}/${APP_NAME}" ]; then
+        print_error "Application not found. Run '$0 create' first."
+        exit 1
+    fi
+    sync_app_sources
+    cd "${WORKSPACE_DIR}/${APP_NAME}/Debug"
+    make clean
+    make all
+    print_info "Build complete: ${WORKSPACE_DIR}/${APP_NAME}/Debug/${APP_NAME}.elf"
 }
 
 run_xsct() {
@@ -125,15 +155,7 @@ case "$1" in
         ;;
 
     build)
-        print_info "Building application..."
-        if [ ! -d "${WORKSPACE_DIR}/${APP_NAME}" ]; then
-            print_error "Application not found. Run '$0 create' first."
-            exit 1
-        fi
-        cd "${WORKSPACE_DIR}/${APP_NAME}/Debug"
-        make clean
-        make all
-        print_info "Build complete: ${WORKSPACE_DIR}/${APP_NAME}/Debug/${APP_NAME}.elf"
+        build_app
         ;;
 
     rebuild)
@@ -150,6 +172,7 @@ case "$1" in
         else
             check_bit
             check_psu_init
+            build_app
             if [ ! -f "${ELF_FILE}" ]; then
                 print_error "ELF file not found: ${ELF_FILE}"
                 print_info "Please build firmware first: $0 build"

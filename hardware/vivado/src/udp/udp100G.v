@@ -4,7 +4,7 @@
 `timescale 1ns / 1ps
 //`default_nettype none
  
-module udp_10G  
+module udp_10G
 (  
     input   wire      gt_rxp_in       ,
     input   wire      gt_rxn_in       ,
@@ -17,14 +17,29 @@ module udp_10G
 	input   wire       clk_100Mhz,
 	/////////////////////////////	
     input  wire        clk,
-    input  wire        rst, 
+    input  wire        rst,
+    input  wire [47:0] network_local_mac,
+    input  wire [31:0] network_local_ip,
+    input  wire [31:0] network_gateway_ip,
+    input  wire [31:0] network_subnet_mask,
+    input  wire [15:0] network_udp_port,
+    input  wire        network_clear_arp_cache,
+    input  wire        network_restart_pulse,
     
     input  wire        fifo64_wr,
     input  wire[63:0]  fifo64_din,
     output wire        fifo64_af,
+
+    input  wire        resp64_tvalid,
+    input  wire[63:0]  resp64_tdata,
+    input  wire        resp64_tlast,
+    input  wire[15:0]  resp64_word_count,
+    output wire        resp64_tready,
+    output wire[7:0]   control_tx_debug,
     
     output wire        rcv_vld,
     output wire[63:0]  rcv_dat,
+    output wire        rcv_last,
      
     input   wire    [23:0]       gap_num_vio       ,
     input  wire        loop_en
@@ -239,9 +254,16 @@ xxv_ethernet DUT
 
       
 
-    fpga_core    core_inst ( 
+    fpga_core core_inst (
         .clk(clk),
-        .rst(rst),         
+        .rst(rst),
+        .network_local_mac(network_local_mac),
+        .network_local_ip(network_local_ip),
+        .network_gateway_ip(network_gateway_ip),
+        .network_subnet_mask(network_subnet_mask),
+        .network_udp_port(network_udp_port),
+        .network_clear_arp_cache(network_clear_arp_cache),
+        .network_restart_pulse(network_restart_pulse),
          
         .loop_en   (loop_en   ),           
         .gap_num_vio(gap_num_vio), 
@@ -249,9 +271,17 @@ xxv_ethernet DUT
         .fifo64_wr (fifo64_wr ),
         .fifo64_din(fifo64_din),
         .fifo64_af (fifo64_af ),
+
+        .resp64_tvalid(resp64_tvalid),
+        .resp64_tdata(resp64_tdata),
+        .resp64_tlast(resp64_tlast),
+        .resp64_word_count(resp64_word_count),
+        .resp64_tready(resp64_tready),
+        .control_tx_debug(control_tx_debug),
         
         .rcv_vld   (rcv_vld),
-        .rcv_dat   (rcv_dat), 
+        .rcv_dat   (rcv_dat),
+        .rcv_last  (rcv_last),
         
         .sfp0_tx_clk        (tx_clk_out),
         .sfp0_tx_rst        (user_tx_reset_0),

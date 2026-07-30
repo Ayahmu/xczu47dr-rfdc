@@ -13,9 +13,13 @@ module Top (
     input  PL_SYSREF_P_0,
     input  PL_SYSREF_N_0,
 
-    // 10MHz external reference clock for HMC7044 (differential)
+    // HMC7044 10MHz output returned to the FPGA (differential).
     input  mclk_10m_p,
     input  mclk_10m_n,
+
+    // X3 differential external-sync output after the on-board NB6N11 buffer.
+    input  EXT_TRIGGER_P,
+    input  EXT_TRIGGER_N,
 
     // 10G SFP+ UDP link, matching the reference project.
     input  sfp_refclkp,
@@ -47,7 +51,8 @@ module Top (
     output vout32_v_n,
     output vout32_v_p,
     output TRIG_1,
-    output HMC7044_CLK,
+    output TRIG_2,
+    output TRIG_3,
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -112,6 +117,7 @@ module Top (
 
 
   wire        hmc7044_set_finish;
+  wire        hmc_use_external_10mhz = 1'b0;
 
   hmc7044 hmc7044_i (
       .clk(pl_clk),
@@ -119,7 +125,8 @@ module Top (
       .H7044_SLEN(H7044_SLEN_0),
       .H7044_SCLK(H7044_SCLK_0),
       .H7044_SDATA(H7044_SDATA_0),
-      .SET_FINISH(hmc7044_set_finish)
+      .SET_FINISH(hmc7044_set_finish),
+      .USE_EXTERNAL_10MHZ(hmc_use_external_10mhz)
   );
 
   assign RESET_H7044_H_0 = 1'b0;
@@ -132,23 +139,40 @@ module Top (
   wire [127:0] udp_instr_tdata;
   wire         udp_instr_tvalid;
   wire         udp_instr_tready;
+  wire [127:0] rv_instr_tdata;
+  wire         rv_instr_tvalid;
+  wire         rv_instr_tready;
   wire [127:0] instr_tdata;
   wire         instr_tvalid;
   wire         instr_tready;
 
-  assign instr_tdata      = udp_instr_tvalid ? udp_instr_tdata : ps_instr_tdata;
-  assign instr_tvalid     = udp_instr_tvalid | ps_instr_tvalid;
+  assign instr_tdata      = udp_instr_tvalid ? udp_instr_tdata : (rv_instr_tvalid ? rv_instr_tdata : ps_instr_tdata);
+  assign instr_tvalid     = udp_instr_tvalid | rv_instr_tvalid | ps_instr_tvalid;
   assign udp_instr_tready = udp_instr_tvalid && instr_tready;
-  assign ps_instr_tready  = !udp_instr_tvalid && instr_tready;
+  assign rv_instr_tready  = !udp_instr_tvalid && rv_instr_tvalid && instr_tready;
+  assign ps_instr_tready  = !udp_instr_tvalid && !rv_instr_tvalid && instr_tready;
 
   localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
   // ========== Reference 10G UDP receiver ==========
   wire        udp64_rcv_vld;
   wire [63:0] udp64_rcv_dat;
+  wire        udp64_rcv_last;
   wire        udp64_fifo_af;
   wire        udp_instr64_tvalid;
   wire [63:0] udp_instr64_tdata;
+  wire        rvctrl64_tvalid;
+  wire [63:0] rvctrl64_tdata;
+  wire        rvctrl64_tfirst;
+  wire        rvctrl64_tlast;
+  wire [31:0] rvctrl64_word_count;
+  wire [1:0]  rvctrl64_protocol;
+  wire        rvresp64_tvalid;
+  wire [63:0] rvresp64_tdata;
+  wire        rvresp64_tready;
+  wire        rvresp64_tlast;
+  wire [15:0] rvresp64_word_count;
+  wire [7:0]  udp_control_tx_debug;
 
   wire [63:0]  M_AXI_WAVE_awaddr;
   wire [1:0]   M_AXI_WAVE_awburst;
@@ -172,7 +196,167 @@ module Top (
   wire         udp_wave_pkt;
   wire         udp_instr_word;
   wire         udp_trigger_pulse;
-  wire [2:0]   udp_wave_state;
+  wire         rv_trigger_pulse;
+  wire         rfctrl2_arm_pulse;
+  wire         rfctrl2_trigger_pulse;
+  wire         rfctrl2_abort_mute_pulse;
+  wire         rfctrl2_sync_epoch_pulse;
+  wire [63:0]  rfctrl2_epoch;
+  wire         rfctrl2_start_valid;
+  wire [63:0]  rfctrl2_start_tick;
+  wire         rfctrl2_armed_dac;
+  wire         rfctrl2_prepared_dac;
+  wire         rfctrl2_start_pending_dac;
+  wire         pc_started;
+  reg          rfctrl2_armed_meta;
+  reg          rfctrl2_armed_ddr;
+  reg          rfctrl2_prepared_meta;
+  reg          rfctrl2_prepared_ddr;
+  reg          rfctrl2_pending_meta;
+  reg          rfctrl2_pending_ddr;
+  reg          pc_started_meta;
+  reg          pc_started_ddr;
+  wire         control_trigger_pulse;
+  wire [31:0]  rv_dbg_status;
+  wire [31:0]  rv_dbg_last_seq;
+  wire [31:0]  rv_dbg_last_cmd;
+  wire [31:0]  rv_dbg_ping_count;
+  wire [31:0]  rv_dbg_play_count;
+  wire [31:0]  rv_dbg_trigger_count;
+  wire [31:0]  rv_dbg_mmio_write_count;
+  wire [31:0]  rv_dbg_error_count;
+  wire [31:0]  rv_dbg_scratch;
+  wire [3:0]   rv_dbg_state;
+  wire [3:0]   udp_wave_state;
+  wire [17:0]  RV_CTRL_AXI_awaddr;
+  wire         RV_CTRL_AXI_awvalid;
+  wire         RV_CTRL_AXI_awready;
+  wire [31:0]  RV_CTRL_AXI_wdata;
+  wire [3:0]   RV_CTRL_AXI_wstrb;
+  wire         RV_CTRL_AXI_wvalid;
+  wire         RV_CTRL_AXI_wready;
+  wire [1:0]   RV_CTRL_AXI_bresp;
+  wire         RV_CTRL_AXI_bvalid;
+  wire         RV_CTRL_AXI_bready;
+  wire [17:0]  RV_CTRL_AXI_araddr;
+  wire         RV_CTRL_AXI_arvalid;
+  wire         RV_CTRL_AXI_arready;
+  wire [31:0]  RV_CTRL_AXI_rdata;
+  wire [1:0]   RV_CTRL_AXI_rresp;
+  wire         RV_CTRL_AXI_rvalid;
+  wire         RV_CTRL_AXI_rready;
+  wire         rfdc_apply_start;
+  wire [31:0]  rfdc_apply_sequence;
+  wire [31:0]  rfdc_apply_revision;
+  wire [7:0]   rfdc_apply_channel_mask;
+  wire [511:0] rfdc_apply_nco_hz;
+  wire [15:0]  rfdc_apply_nyquist_zone;
+  wire [255:0] rfdc_apply_phase_mdeg;
+  wire [255:0] rfdc_apply_current_ua;
+  wire         rfdc_apply_busy;
+  wire         rfdc_apply_done;
+  wire         rfdc_force_mute_pulse;
+  wire [15:0]  rfdc_apply_status;
+  wire [31:0]  rfdc_result_revision;
+  wire [7:0]   rfdc_result_applied_mask;
+  wire [7:0]   rfdc_result_error_mask;
+  wire [7:0]   rfdc_config_valid_mask;
+  wire [31:0]  rfdc_failure_stage;
+  wire [17:0]  rfdc_failure_address;
+  wire [1:0]   rfdc_failure_axi_response;
+  wire         rfdc_runtime_ready;
+  wire [511:0] rfdc_actual_nco_hz;
+  wire [15:0]  rfdc_actual_nyquist_zone;
+  wire [255:0] rfdc_actual_phase_mdeg;
+  wire [255:0] rfdc_actual_current_ua;
+  wire [255:0] rfdc_channel_status;
+  wire [511:0] rfdc_actual_nco_word;
+  wire [255:0] rfdc_actual_phase_word;
+  wire [255:0] rfdc_actual_vop_code;
+  wire         network_apply_start;
+  wire [31:0]  network_apply_revision;
+  wire [31:0]  network_apply_ip;
+  wire [63:0]  network_apply_mac;
+  wire [31:0]  network_apply_subnet;
+  wire [31:0]  network_apply_gateway;
+  wire [15:0]  network_apply_port;
+  wire         network_restart_start;
+  wire         network_busy;
+  wire         network_done;
+  wire [15:0]  network_status;
+  wire [31:0]  network_result_revision;
+  wire [31:0]  network_current_ip;
+  wire [63:0]  network_current_mac;
+  wire [31:0]  network_current_subnet;
+  wire [31:0]  network_current_gateway;
+  wire [15:0]  network_current_port;
+  wire [63:0]  network_device_uid;
+  wire [63:0]  network_bootstrap_mac;
+  wire [31:0]  network_bootstrap_ip;
+  wire [31:0]  network_capabilities;
+  wire [31:0]  network_status_flags;
+  wire [15:0]  network_link_state;
+  wire         network_identity_ready;
+  wire         network_clear_arp_cache;
+  wire         network_restart_pulse;
+  // Network identity changes are infrequent. A clocked boundary keeps the
+  // high-fanout UDP/IP configuration bus off the critical timing path.
+  reg  [47:0] udp_network_mac;
+  reg  [31:0] udp_network_ip;
+  reg  [31:0] udp_network_gateway;
+  reg  [31:0] udp_network_subnet;
+  reg  [15:0] udp_network_port;
+  wire [17:0]  RFDC_CFG_AXI_awaddr;
+  wire         RFDC_CFG_AXI_awvalid;
+  wire         RFDC_CFG_AXI_awready;
+  wire [31:0]  RFDC_CFG_AXI_wdata;
+  wire [3:0]   RFDC_CFG_AXI_wstrb;
+  wire         RFDC_CFG_AXI_wvalid;
+  wire         RFDC_CFG_AXI_wready;
+  wire [1:0]   RFDC_CFG_AXI_bresp;
+  wire         RFDC_CFG_AXI_bvalid;
+  wire         RFDC_CFG_AXI_bready;
+  wire [17:0]  RFDC_CFG_AXI_araddr;
+  wire         RFDC_CFG_AXI_arvalid;
+  wire         RFDC_CFG_AXI_arready;
+  wire [31:0]  RFDC_CFG_AXI_rdata;
+  wire [1:0]   RFDC_CFG_AXI_rresp;
+  wire         RFDC_CFG_AXI_rvalid;
+  wire         RFDC_CFG_AXI_rready;
+  wire [17:0]  PL_CTRL_AXI_awaddr;
+  wire         PL_CTRL_AXI_awvalid;
+  wire         PL_CTRL_AXI_awready;
+  wire [31:0]  PL_CTRL_AXI_wdata;
+  wire [3:0]   PL_CTRL_AXI_wstrb;
+  wire         PL_CTRL_AXI_wvalid;
+  wire         PL_CTRL_AXI_wready;
+  wire [1:0]   PL_CTRL_AXI_bresp;
+  wire         PL_CTRL_AXI_bvalid;
+  wire         PL_CTRL_AXI_bready;
+  wire [17:0]  PL_CTRL_AXI_araddr;
+  wire         PL_CTRL_AXI_arvalid;
+  wire         PL_CTRL_AXI_arready;
+  wire [31:0]  PL_CTRL_AXI_rdata;
+  wire [1:0]   PL_CTRL_AXI_rresp;
+  wire         PL_CTRL_AXI_rvalid;
+  wire         PL_CTRL_AXI_rready;
+  wire [17:0]  RV_AXI_RFDC_awaddr;
+  wire         RV_AXI_RFDC_awvalid;
+  wire         RV_AXI_RFDC_awready;
+  wire [31:0]  RV_AXI_RFDC_wdata;
+  wire [3:0]   RV_AXI_RFDC_wstrb;
+  wire         RV_AXI_RFDC_wvalid;
+  wire         RV_AXI_RFDC_wready;
+  wire [1:0]   RV_AXI_RFDC_bresp;
+  wire         RV_AXI_RFDC_bvalid;
+  wire         RV_AXI_RFDC_bready;
+  wire [17:0]  RV_AXI_RFDC_araddr;
+  wire         RV_AXI_RFDC_arvalid;
+  wire         RV_AXI_RFDC_arready;
+  wire [31:0]  RV_AXI_RFDC_rdata;
+  wire [1:0]   RV_AXI_RFDC_rresp;
+  wire         RV_AXI_RFDC_rvalid;
+  wire         RV_AXI_RFDC_rready;
   wire [31:0]  udp_wave_write_count;
   wire [31:0]  udp_wave_bresp_count;
   wire [31:0]  udp_wave_drop_count;
@@ -185,6 +369,71 @@ module Top (
 
   assign SFP_TX_DIS = 1'b0;
 
+  assign network_bootstrap_ip = 32'hC0A8FEFE;
+  assign network_capabilities = 32'h00040000;
+  localparam [31:0] RF2_BUILD_PROFILE_ID = 32'd1;
+  assign network_status_flags = {
+      27'd0,
+      rfctrl2_prepared_ddr,
+      pc_started_ddr,
+      (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      network_busy,
+      network_identity_ready
+  };
+  assign network_link_state = 16'h0001;
+
+  localparam [47:0] NETWORK_RESET_MAC = 48'h02_00_00_00_00_FE;
+  localparam [31:0] NETWORK_RESET_IP = 32'hA9FE_FEFE;
+
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      udp_network_mac     <= NETWORK_RESET_MAC;
+      udp_network_ip      <= NETWORK_RESET_IP;
+      udp_network_gateway <= 32'h0000_0000;
+      udp_network_subnet  <= 32'hFFFF_0000;
+      udp_network_port    <= 16'd1234;
+    end else begin
+      udp_network_mac     <= network_current_mac[47:0];
+      udp_network_ip      <= network_current_ip;
+      udp_network_gateway <= network_current_gateway;
+      udp_network_subnet  <= network_current_subnet;
+      udp_network_port    <= network_current_port;
+    end
+  end
+
+  network_config_pl #(
+      .BOOTSTRAP_IP(32'hC0A8FEFE),
+      .INITIALIZE_FROM_DNA(1'b1)
+  ) network_config_pl_i (
+      .clk(ddr4_ui_clk),
+      .rst_n(ddr4_ui_aresetn),
+      .apply_start(network_apply_start),
+      .apply_revision(network_apply_revision),
+      .apply_ip(network_apply_ip),
+      .apply_mac(network_apply_mac),
+      .apply_subnet(network_apply_subnet),
+      .apply_gateway(network_apply_gateway),
+      .apply_port(network_apply_port),
+      .restart_start(network_restart_start),
+      .playback_armed(rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      .playback_prepared(rfctrl2_prepared_ddr),
+      .playback_running(pc_started_ddr),
+      .busy(network_busy),
+      .done(network_done),
+      .status(network_status),
+      .result_revision(network_result_revision),
+      .current_ip(network_current_ip),
+      .current_mac(network_current_mac),
+      .current_subnet(network_current_subnet),
+      .current_gateway(network_current_gateway),
+      .current_port(network_current_port),
+      .clear_arp_cache(network_clear_arp_cache),
+      .network_restart_pulse(network_restart_pulse),
+      .device_uid(network_device_uid),
+      .bootstrap_mac(network_bootstrap_mac),
+      .identity_ready(network_identity_ready)
+  );
+
   udp_10G udp_10g_i (
       .gt_rxp_in   (sfp_rxp),
       .gt_rxn_in   (sfp_rxn),
@@ -195,11 +444,25 @@ module Top (
       .clk_100Mhz  (pl_clk),
       .clk         (ddr4_ui_clk),
       .rst         (~ddr4_ui_aresetn),
+      .network_local_mac(udp_network_mac),
+      .network_local_ip(udp_network_ip),
+      .network_gateway_ip(udp_network_gateway),
+      .network_subnet_mask(udp_network_subnet),
+      .network_udp_port(udp_network_port),
+      .network_clear_arp_cache(network_clear_arp_cache | network_restart_pulse),
+      .network_restart_pulse(network_restart_pulse),
       .fifo64_wr   (1'b0),
       .fifo64_din  (64'd0),
       .fifo64_af   (udp64_fifo_af),
+      .resp64_tvalid(rvresp64_tvalid),
+      .resp64_tdata (rvresp64_tdata),
+      .resp64_tlast (rvresp64_tlast),
+      .resp64_word_count(rvresp64_word_count),
+      .resp64_tready(rvresp64_tready),
+      .control_tx_debug(udp_control_tx_debug),
       .rcv_vld     (udp64_rcv_vld),
       .rcv_dat     (udp64_rcv_dat),
+      .rcv_last    (udp64_rcv_last),
       .gap_num_vio (24'd0),
       .loop_en     (1'b0)
   );
@@ -211,9 +474,16 @@ module Top (
       .rst_n            (ddr4_ui_aresetn),
       .udp_tvalid       (udp64_rcv_vld),
       .udp_tdata        (udp64_rcv_dat),
+      .udp_tlast        (udp64_rcv_last),
       .instr_tvalid     (udp_instr64_tvalid),
       .instr_tdata      (udp_instr64_tdata),
       .trigger_pulse    (udp_trigger_pulse),
+      .rvctrl_tvalid    (rvctrl64_tvalid),
+      .rvctrl_tdata     (rvctrl64_tdata),
+      .rvctrl_tfirst    (rvctrl64_tfirst),
+      .rvctrl_tlast     (rvctrl64_tlast),
+      .rvctrl_word_count(rvctrl64_word_count),
+      .rvctrl_protocol  (rvctrl64_protocol),
       .m_axi_awaddr     (M_AXI_WAVE_awaddr),
       .m_axi_awburst    (M_AXI_WAVE_awburst),
       .m_axi_awcache    (M_AXI_WAVE_awcache),
@@ -256,6 +526,249 @@ module Top (
       .m_axis_tready (udp_instr_tready)
   );
 
+  // Signals reported through RFCTRL2 STATUS must be declared before the
+  // control module instance; otherwise Verilog implicit nets can hide widths.
+  wire        ch1_arm, ch2_arm, ch3_arm, ch4_arm;
+  wire        ch5_arm, ch6_arm, ch7_arm, ch8_arm;
+  wire        dac_in_ch1_tvalid, dac_in_ch2_tvalid, dac_in_ch3_tvalid, dac_in_ch4_tvalid;
+  wire        dac_in_ch5_tvalid, dac_in_ch6_tvalid, dac_in_ch7_tvalid, dac_in_ch8_tvalid;
+  wire        ch1_wave_tready_internal, ch2_wave_tready_internal, ch3_wave_tready_internal, ch4_wave_tready_internal;
+  wire        ch5_wave_tready_internal, ch6_wave_tready_internal, ch7_wave_tready_internal, ch8_wave_tready_internal;
+  wire [2:0]  ex_dbg_st;
+  wire [1:0]  ex_dbg_dm_st;
+  wire        ex_dbg_dm_sel_ch1;
+  wire [31:0] ex_dbg_dm_chunk_beats;
+  wire [31:0] ex_dbg_dm_beats_sent;
+  wire [63:0] ex_dbg_ch1_bytes_left;
+  wire [63:0] ex_dbg_ch2_bytes_left;
+  wire [63:0] ex_dbg_ch1_base_addr;
+  wire [63:0] ex_dbg_ch2_base_addr;
+  wire        ex_dbg_ch1_need_hard, ex_dbg_ch2_need_hard;
+  wire        ex_dbg_ch1_need_soft, ex_dbg_ch2_need_soft;
+  wire [127:0] ex_dbg_instr_in_tdata;
+  wire        ex_dbg_instr_in_tvalid, ex_dbg_instr_in_tready;
+  wire [127:0] ex_dbg_main_tdata;
+  wire        ex_dbg_main_tvalid, ex_dbg_main_tready;
+  wire        ex_dbg_prefill_ready, ex_dbg_pending_valid, ex_dbg_active_valid;
+  wire [31:0] ex_dbg_run_delay_cnt;
+  wire [31:0] ex_dbg_bad_instr_count;
+
+  pl_riscv_control_v1 #(
+      .ENABLE_UNSAFE_RFDC_MMIO(0),
+      .BUILD_PROFILE_ID(RF2_BUILD_PROFILE_ID)
+  ) pl_riscv_control_v1_i (
+      .clk                 (ddr4_ui_clk),
+      .rst_n               (ddr4_ui_aresetn),
+      .rvctrl_tvalid       (rvctrl64_tvalid),
+      .rvctrl_tdata        (rvctrl64_tdata),
+      .rvctrl_tfirst       (rvctrl64_tfirst),
+      .rvctrl_tlast        (rvctrl64_tlast),
+      .rvctrl_word_count   (rvctrl64_word_count),
+      .rvctrl_protocol     (rvctrl64_protocol),
+      .m_instr_tdata       (rv_instr_tdata),
+      .m_instr_tvalid      (rv_instr_tvalid),
+      .m_instr_tready      (rv_instr_tready),
+      .trigger_pulse       (rv_trigger_pulse),
+      .rfctrl2_arm_pulse   (rfctrl2_arm_pulse),
+      .rfctrl2_trigger_pulse(rfctrl2_trigger_pulse),
+      .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse),
+      .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
+      .rfctrl2_epoch       (rfctrl2_epoch),
+      .rfctrl2_start_valid (rfctrl2_start_valid),
+      .rfctrl2_start_tick  (rfctrl2_start_tick),
+      .rfdc_apply_start    (rfdc_apply_start),
+      .rfdc_apply_sequence (rfdc_apply_sequence),
+      .rfdc_apply_revision (rfdc_apply_revision),
+      .rfdc_apply_channel_mask(rfdc_apply_channel_mask),
+      .rfdc_apply_nco_hz   (rfdc_apply_nco_hz),
+      .rfdc_apply_nyquist_zone(rfdc_apply_nyquist_zone),
+      .rfdc_apply_phase_mdeg(rfdc_apply_phase_mdeg),
+      .rfdc_apply_current_ua(rfdc_apply_current_ua),
+      .rfdc_apply_busy     (rfdc_apply_busy),
+      .rfdc_apply_done     (rfdc_apply_done),
+      .rfdc_apply_status   (rfdc_apply_status),
+      .rfdc_result_revision(rfdc_result_revision),
+      .rfdc_result_applied_mask(rfdc_result_applied_mask),
+      .rfdc_result_error_mask(rfdc_result_error_mask),
+      .rfdc_config_valid_mask(rfdc_config_valid_mask),
+      .rfdc_failure_stage  (rfdc_failure_stage),
+      .rfdc_failure_address(rfdc_failure_address),
+      .rfdc_failure_axi_response(rfdc_failure_axi_response),
+      .rfdc_ready          (rfdc_runtime_ready),
+      .playback_armed      (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      .playback_prepared   (rfctrl2_prepared_ddr),
+      .playback_running    (pc_started_ddr),
+      .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
+      .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
+      .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
+      .rfdc_actual_current_ua(rfdc_actual_current_ua),
+      .rfdc_channel_status (rfdc_channel_status),
+      .rfdc_actual_nco_word(rfdc_actual_nco_word),
+      .rfdc_actual_phase_word(rfdc_actual_phase_word),
+      .rfdc_actual_vop_code(rfdc_actual_vop_code),
+      .network_apply_start(network_apply_start),
+      .network_apply_revision(network_apply_revision),
+      .network_apply_ip(network_apply_ip),
+      .network_apply_mac(network_apply_mac),
+      .network_apply_subnet(network_apply_subnet),
+      .network_apply_gateway(network_apply_gateway),
+      .network_apply_port(network_apply_port),
+      .network_restart_start(network_restart_start),
+      .network_busy(network_busy),
+      .network_done(network_done),
+      .network_status(network_status),
+      .network_result_revision(network_result_revision),
+      .network_current_ip(network_current_ip),
+      .network_current_mac(network_current_mac),
+      .network_current_subnet(network_current_subnet),
+      .network_current_gateway(network_current_gateway),
+      .network_current_port(network_current_port),
+      .network_device_uid(network_device_uid),
+      .network_bootstrap_mac(network_bootstrap_mac),
+      .network_bootstrap_ip(network_bootstrap_ip),
+      .network_capabilities(network_capabilities),
+      .network_status_flags(network_status_flags),
+      .network_link_state(network_link_state),
+      .play_config_channel_mask({ch8_arm, ch7_arm, ch6_arm, ch5_arm, ch4_arm, ch3_arm, ch2_arm, ch1_arm}),
+      .play_fifo_valid_mask({dac_in_ch8_tvalid, dac_in_ch7_tvalid, dac_in_ch6_tvalid, dac_in_ch5_tvalid,
+                             dac_in_ch4_tvalid, dac_in_ch3_tvalid, dac_in_ch2_tvalid, dac_in_ch1_tvalid}),
+      .play_fifo_ready_mask({ch8_wave_tready_internal, ch7_wave_tready_internal, ch6_wave_tready_internal, ch5_wave_tready_internal,
+                             ch4_wave_tready_internal, ch3_wave_tready_internal, ch2_wave_tready_internal, ch1_wave_tready_internal}),
+      .play_executor_state({5'd0, ex_dbg_st}),
+      .play_ddr_read_counter(ex_dbg_dm_beats_sent),
+      .play_bad_instr_count(ex_dbg_bad_instr_count),
+      .play_prefill_ready(ex_dbg_prefill_ready),
+      .play_active_valid(ex_dbg_active_valid),
+      .play_pending_valid(ex_dbg_pending_valid),
+      .rvresp_tdata        (rvresp64_tdata),
+      .rvresp_tvalid       (rvresp64_tvalid),
+      .rvresp_tready       (rvresp64_tready),
+      .rvresp_tlast        (rvresp64_tlast),
+      .rvresp_word_count   (rvresp64_word_count),
+      .m_axil_awaddr       (RV_CTRL_AXI_awaddr),
+      .m_axil_awvalid      (RV_CTRL_AXI_awvalid),
+      .m_axil_awready      (RV_CTRL_AXI_awready),
+      .m_axil_wdata        (RV_CTRL_AXI_wdata),
+      .m_axil_wstrb        (RV_CTRL_AXI_wstrb),
+      .m_axil_wvalid       (RV_CTRL_AXI_wvalid),
+      .m_axil_wready       (RV_CTRL_AXI_wready),
+      .m_axil_bresp        (RV_CTRL_AXI_bresp),
+      .m_axil_bvalid       (RV_CTRL_AXI_bvalid),
+      .m_axil_bready       (RV_CTRL_AXI_bready),
+      .m_axil_araddr       (RV_CTRL_AXI_araddr),
+      .m_axil_arvalid      (RV_CTRL_AXI_arvalid),
+      .m_axil_arready      (RV_CTRL_AXI_arready),
+      .m_axil_rdata        (RV_CTRL_AXI_rdata),
+      .m_axil_rresp        (RV_CTRL_AXI_rresp),
+      .m_axil_rvalid       (RV_CTRL_AXI_rvalid),
+      .m_axil_rready       (RV_CTRL_AXI_rready),
+      .dbg_status          (rv_dbg_status),
+      .dbg_last_seq        (rv_dbg_last_seq),
+      .dbg_last_cmd        (rv_dbg_last_cmd),
+      .dbg_ping_count      (rv_dbg_ping_count),
+      .dbg_play_count      (rv_dbg_play_count),
+      .dbg_trigger_count   (rv_dbg_trigger_count),
+      .dbg_mmio_write_count(rv_dbg_mmio_write_count),
+      .dbg_error_count     (rv_dbg_error_count),
+      .dbg_scratch         (rv_dbg_scratch),
+      .dbg_state           (rv_dbg_state)
+  );
+
+  rfdc_runtime_config_pl #(
+      // DDR4 UI clock: 1200.48 MHz memory clock / 4 (833 ps, 4:1).
+      .CLOCK_HZ(300120048),
+      .AXI_TIMEOUT_CYCLES(100000)
+  ) rfdc_runtime_config_pl_i (
+      .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn),
+      .start(rfdc_apply_start), .cmd_sequence(rfdc_apply_sequence),
+      .cmd_revision(rfdc_apply_revision), .cmd_channel_mask(rfdc_apply_channel_mask),
+      .cmd_nco_hz(rfdc_apply_nco_hz), .cmd_nyquist_zone(rfdc_apply_nyquist_zone),
+      .cmd_phase_mdeg(rfdc_apply_phase_mdeg), .cmd_current_ua(rfdc_apply_current_ua),
+      .playback_armed(rfctrl2_armed_ddr | rfctrl2_pending_ddr),
+      .playback_running(pc_started_ddr),
+      .busy(rfdc_apply_busy), .done(rfdc_apply_done), .force_mute_pulse(rfdc_force_mute_pulse),
+      .status(rfdc_apply_status), .revision(rfdc_result_revision),
+      .applied_mask(rfdc_result_applied_mask), .error_mask(rfdc_result_error_mask),
+      .config_valid_mask(rfdc_config_valid_mask), .failure_stage(rfdc_failure_stage),
+      .failure_address(rfdc_failure_address), .failure_axi_response(rfdc_failure_axi_response),
+      .rfdc_ready(rfdc_runtime_ready), .actual_nco_hz(rfdc_actual_nco_hz),
+      .actual_nyquist_zone(rfdc_actual_nyquist_zone), .actual_phase_mdeg(rfdc_actual_phase_mdeg),
+      .actual_current_ua(rfdc_actual_current_ua), .channel_status(rfdc_channel_status),
+      .actual_nco_word(rfdc_actual_nco_word), .actual_phase_word(rfdc_actual_phase_word),
+      .actual_vop_code(rfdc_actual_vop_code),
+      .m_axil_awaddr(RFDC_CFG_AXI_awaddr), .m_axil_awvalid(RFDC_CFG_AXI_awvalid),
+      .m_axil_awready(RFDC_CFG_AXI_awready), .m_axil_wdata(RFDC_CFG_AXI_wdata),
+      .m_axil_wstrb(RFDC_CFG_AXI_wstrb), .m_axil_wvalid(RFDC_CFG_AXI_wvalid),
+      .m_axil_wready(RFDC_CFG_AXI_wready), .m_axil_bresp(RFDC_CFG_AXI_bresp),
+      .m_axil_bvalid(RFDC_CFG_AXI_bvalid), .m_axil_bready(RFDC_CFG_AXI_bready),
+      .m_axil_araddr(RFDC_CFG_AXI_araddr), .m_axil_arvalid(RFDC_CFG_AXI_arvalid),
+      .m_axil_arready(RFDC_CFG_AXI_arready), .m_axil_rdata(RFDC_CFG_AXI_rdata),
+      .m_axil_rresp(RFDC_CFG_AXI_rresp), .m_axil_rvalid(RFDC_CFG_AXI_rvalid),
+      .m_axil_rready(RFDC_CFG_AXI_rready)
+  );
+
+  axilite_arbiter_2to1 #(.ADDR_WIDTH(18)) pl_rfdc_axil_arbiter_i (
+      .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn),
+      .s0_awaddr(RV_CTRL_AXI_awaddr), .s0_awvalid(RV_CTRL_AXI_awvalid), .s0_awready(RV_CTRL_AXI_awready),
+      .s0_wdata(RV_CTRL_AXI_wdata), .s0_wstrb(RV_CTRL_AXI_wstrb), .s0_wvalid(RV_CTRL_AXI_wvalid), .s0_wready(RV_CTRL_AXI_wready),
+      .s0_bresp(RV_CTRL_AXI_bresp), .s0_bvalid(RV_CTRL_AXI_bvalid), .s0_bready(RV_CTRL_AXI_bready),
+      .s0_araddr(RV_CTRL_AXI_araddr), .s0_arvalid(RV_CTRL_AXI_arvalid), .s0_arready(RV_CTRL_AXI_arready),
+      .s0_rdata(RV_CTRL_AXI_rdata), .s0_rresp(RV_CTRL_AXI_rresp), .s0_rvalid(RV_CTRL_AXI_rvalid), .s0_rready(RV_CTRL_AXI_rready),
+      .s1_awaddr(RFDC_CFG_AXI_awaddr), .s1_awvalid(RFDC_CFG_AXI_awvalid), .s1_awready(RFDC_CFG_AXI_awready),
+      .s1_wdata(RFDC_CFG_AXI_wdata), .s1_wstrb(RFDC_CFG_AXI_wstrb), .s1_wvalid(RFDC_CFG_AXI_wvalid), .s1_wready(RFDC_CFG_AXI_wready),
+      .s1_bresp(RFDC_CFG_AXI_bresp), .s1_bvalid(RFDC_CFG_AXI_bvalid), .s1_bready(RFDC_CFG_AXI_bready),
+      .s1_araddr(RFDC_CFG_AXI_araddr), .s1_arvalid(RFDC_CFG_AXI_arvalid), .s1_arready(RFDC_CFG_AXI_arready),
+      .s1_rdata(RFDC_CFG_AXI_rdata), .s1_rresp(RFDC_CFG_AXI_rresp), .s1_rvalid(RFDC_CFG_AXI_rvalid), .s1_rready(RFDC_CFG_AXI_rready),
+      .m_awaddr(PL_CTRL_AXI_awaddr), .m_awvalid(PL_CTRL_AXI_awvalid), .m_awready(PL_CTRL_AXI_awready),
+      .m_wdata(PL_CTRL_AXI_wdata), .m_wstrb(PL_CTRL_AXI_wstrb), .m_wvalid(PL_CTRL_AXI_wvalid), .m_wready(PL_CTRL_AXI_wready),
+      .m_bresp(PL_CTRL_AXI_bresp), .m_bvalid(PL_CTRL_AXI_bvalid), .m_bready(PL_CTRL_AXI_bready),
+      .m_araddr(PL_CTRL_AXI_araddr), .m_arvalid(PL_CTRL_AXI_arvalid), .m_arready(PL_CTRL_AXI_arready),
+      .m_rdata(PL_CTRL_AXI_rdata), .m_rresp(PL_CTRL_AXI_rresp), .m_rvalid(PL_CTRL_AXI_rvalid), .m_rready(PL_CTRL_AXI_rready)
+  );
+
+  axilite_cdc_simple rv_rfdc_axil_cdc_i (
+      .s_clk      (ddr4_ui_clk),
+      .s_rst_n    (ddr4_ui_aresetn),
+      .s_awaddr   (PL_CTRL_AXI_awaddr),
+      .s_awvalid  (PL_CTRL_AXI_awvalid),
+      .s_awready  (PL_CTRL_AXI_awready),
+      .s_wdata    (PL_CTRL_AXI_wdata),
+      .s_wstrb    (PL_CTRL_AXI_wstrb),
+      .s_wvalid   (PL_CTRL_AXI_wvalid),
+      .s_wready   (PL_CTRL_AXI_wready),
+      .s_bresp    (PL_CTRL_AXI_bresp),
+      .s_bvalid   (PL_CTRL_AXI_bvalid),
+      .s_bready   (PL_CTRL_AXI_bready),
+      .s_araddr   (PL_CTRL_AXI_araddr),
+      .s_arvalid  (PL_CTRL_AXI_arvalid),
+      .s_arready  (PL_CTRL_AXI_arready),
+      .s_rdata    (PL_CTRL_AXI_rdata),
+      .s_rresp    (PL_CTRL_AXI_rresp),
+      .s_rvalid   (PL_CTRL_AXI_rvalid),
+      .s_rready   (PL_CTRL_AXI_rready),
+      .m_clk      (pl_clk),
+      .m_rst_n    (pl_aresetn),
+      .m_awaddr   (RV_AXI_RFDC_awaddr),
+      .m_awvalid  (RV_AXI_RFDC_awvalid),
+      .m_awready  (RV_AXI_RFDC_awready),
+      .m_wdata    (RV_AXI_RFDC_wdata),
+      .m_wstrb    (RV_AXI_RFDC_wstrb),
+      .m_wvalid   (RV_AXI_RFDC_wvalid),
+      .m_wready   (RV_AXI_RFDC_wready),
+      .m_bresp    (RV_AXI_RFDC_bresp),
+      .m_bvalid   (RV_AXI_RFDC_bvalid),
+      .m_bready   (RV_AXI_RFDC_bready),
+      .m_araddr   (RV_AXI_RFDC_araddr),
+      .m_arvalid  (RV_AXI_RFDC_arvalid),
+      .m_arready  (RV_AXI_RFDC_arready),
+      .m_rdata    (RV_AXI_RFDC_rdata),
+      .m_rresp    (RV_AXI_RFDC_rresp),
+      .m_rvalid   (RV_AXI_RFDC_rvalid),
+      .m_rready   (RV_AXI_RFDC_rready)
+  );
+
+  assign control_trigger_pulse = udp_trigger_pulse | rv_trigger_pulse;
+
   // ========== DataMover ==========
   wire [103:0] dm_cmd_tdata;
   wire         dm_cmd_tvalid, dm_cmd_tready;
@@ -271,8 +784,6 @@ module Top (
   wire [255:0] ch5_wave_tdata, ch6_wave_tdata, ch7_wave_tdata, ch8_wave_tdata;
   wire         ch1_wave_tvalid, ch2_wave_tvalid, ch3_wave_tvalid, ch4_wave_tvalid;
   wire         ch5_wave_tvalid, ch6_wave_tvalid, ch7_wave_tvalid, ch8_wave_tvalid;
-  wire         ch1_wave_tready_internal, ch2_wave_tready_internal, ch3_wave_tready_internal, ch4_wave_tready_internal;
-  wire         ch5_wave_tready_internal, ch6_wave_tready_internal, ch7_wave_tready_internal, ch8_wave_tready_internal;
   wire [15:0]  ch1_fifo_level_beats;
   wire [15:0]  ch2_fifo_level_beats;
   wire [15:0]  ch3_fifo_level_beats;
@@ -309,7 +820,7 @@ module Top (
     if(!ddr4_ui_aresetn) begin
       udp_trigger_stretch_cnt <= 8'd0;
       udp_trigger_stretched <= 1'b0;
-    end else if(udp_trigger_pulse) begin
+    end else if(control_trigger_pulse) begin
       udp_trigger_stretch_cnt <= 8'd64;
       udp_trigger_stretched <= 1'b1;
     end else if(udp_trigger_stretch_cnt != 8'd0) begin
@@ -425,32 +936,12 @@ module Top (
   wire [31:0] ch5_delay_cycles, ch6_delay_cycles, ch7_delay_cycles, ch8_delay_cycles;
   wire [31:0] ch1_len_beats,   ch2_len_beats,   ch3_len_beats,   ch4_len_beats;
   wire [31:0] ch5_len_beats,   ch6_len_beats,   ch7_len_beats,   ch8_len_beats;
-  wire        ch1_arm,         ch2_arm,         ch3_arm,         ch4_arm;
-  wire        ch5_arm,         ch6_arm,         ch7_arm,         ch8_arm;
   wire        cfg_auto_start;
+  wire        cfg_loop;
   wire        cfg_commit; // 每次 END 提交一帧配置
 
   localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
 
-  wire [2:0]  ex_dbg_st;
-  wire [1:0]  ex_dbg_dm_st;
-  wire        ex_dbg_dm_sel_ch1;
-  wire [31:0] ex_dbg_dm_chunk_beats;
-  wire [31:0] ex_dbg_dm_beats_sent;
-  wire [63:0] ex_dbg_ch1_bytes_left;
-  wire [63:0] ex_dbg_ch2_bytes_left;
-  wire [63:0] ex_dbg_ch1_base_addr;
-  wire [63:0] ex_dbg_ch2_base_addr;
-  wire        ex_dbg_ch1_need_hard, ex_dbg_ch2_need_hard;
-  wire        ex_dbg_ch1_need_soft, ex_dbg_ch2_need_soft;
-  
-  wire [127:0] ex_dbg_instr_in_tdata;
-  wire         ex_dbg_instr_in_tvalid, ex_dbg_instr_in_tready;
-  wire [127:0] ex_dbg_main_tdata;
-  wire         ex_dbg_main_tvalid, ex_dbg_main_tready;
-  wire         ex_dbg_pending_valid, ex_dbg_active_valid;
-  wire [31:0]  ex_dbg_run_delay_cnt;
-  wire [31:0]  ex_dbg_bad_instr_count;
   wire         ex_fifo_clear;
 
   // ========== executor ==========
@@ -462,7 +953,9 @@ module Top (
   ) executor_inst (
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
-    .trigger(ps_trigger_ddr_sync),
+    // ARM only prepares/prefills playback. A real trigger releases output.
+    .trigger(ps_trigger_ddr_sync | rfctrl2_trigger_pulse),
+    .abort_clear(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
 
     .s_axis_instr_tdata(instr_tdata),
     .s_axis_instr_tvalid(instr_tvalid),
@@ -536,6 +1029,7 @@ module Top (
     .ch7_arm(ch7_arm),
     .ch8_arm(ch8_arm),
     .cfg_auto_start(cfg_auto_start),
+    .cfg_loop(cfg_loop),
     .cfg_commit(cfg_commit),
     .fifo_clear(ex_fifo_clear),
 
@@ -558,6 +1052,7 @@ module Top (
     .dbg_main_tdata     (ex_dbg_main_tdata),
     .dbg_main_tvalid    (ex_dbg_main_tvalid),
     .dbg_main_tready    (ex_dbg_main_tready),
+    .dbg_prefill_ready  (ex_dbg_prefill_ready),
     .dbg_pending_valid  (ex_dbg_pending_valid),
     .dbg_active_valid   (ex_dbg_active_valid),
     .dbg_run_delay_cnt  (ex_dbg_run_delay_cnt),
@@ -574,14 +1069,51 @@ module Top (
   end
   wire dac_rst_n = dac_rstff[2];
 
-  // Debug clock output for checking the RFDC-derived DAC AXIS clock without
-  // probing the board-internal HMC7044 differential refclk nets.
-  reg [4:0] hmc7044_clk_dbg_div;
-  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
-    if (!dac_rst_n) hmc7044_clk_dbg_div <= 5'd0;
-    else            hmc7044_clk_dbg_div <= hmc7044_clk_dbg_div + 5'd1;
+  assign TRIG_2 = 1'b0;
+  assign TRIG_3 = 1'b0;
+
+  wire rfctrl2_play_trigger;
+  wire rfctrl2_play_prepare;
+  wire rfctrl2_play_abort;
+  wire unused_single_board_inputs = mclk_10m_p | mclk_10m_n | EXT_TRIGGER_P | EXT_TRIGGER_N |
+      rfctrl2_sync_epoch_pulse | rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      rfctrl2_armed_meta <= 1'b0;
+      rfctrl2_armed_ddr <= 1'b0;
+      rfctrl2_prepared_meta <= 1'b0;
+      rfctrl2_prepared_ddr <= 1'b0;
+      rfctrl2_pending_meta <= 1'b0;
+      rfctrl2_pending_ddr <= 1'b0;
+      pc_started_meta <= 1'b0;
+      pc_started_ddr <= 1'b0;
+    end else begin
+      rfctrl2_armed_meta <= rfctrl2_armed_dac;
+      rfctrl2_armed_ddr <= rfctrl2_armed_meta;
+      rfctrl2_prepared_meta <= rfctrl2_prepared_dac;
+      rfctrl2_prepared_ddr <= rfctrl2_prepared_meta;
+      rfctrl2_pending_meta <= rfctrl2_start_pending_dac;
+      rfctrl2_pending_ddr <= rfctrl2_pending_meta;
+      pc_started_meta <= pc_started;
+      pc_started_ddr <= pc_started_meta;
+    end
   end
-  assign HMC7044_CLK = hmc7044_clk_dbg_div[3]; // dac_axis_clk / 16
+
+  rfctrl2_playback_controller u_rfctrl2_playback (
+    .ddr_clk                 (ddr4_ui_clk),
+    .ddr_rst_n               (ddr4_ui_aresetn),
+    .rfctrl2_arm_pulse       (rfctrl2_arm_pulse),
+    .rfctrl2_trigger_pulse   (rfctrl2_trigger_pulse),
+    .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
+    .dac_clk                 (dac_axis_clk),
+    .dac_rst_n               (dac_rst_n),
+    .play_prepare_pulse      (rfctrl2_play_prepare),
+    .play_trigger_pulse      (rfctrl2_play_trigger),
+    .play_abort_pulse        (rfctrl2_play_abort),
+    .armed                   (rfctrl2_armed_dac),
+    .hardware_tick           (),
+    .start_pending           (rfctrl2_start_pending_dac)
+  );
 
   // ==========================================================
   // DDR 域：配置帧打包，commit 时写入 cfg FIFO
@@ -609,7 +1141,8 @@ module Top (
       ch6_len_beats,
       ch7_len_beats,
       ch8_len_beats,
-      7'd0,
+      6'd0,
+      cfg_loop,
       cfg_auto_start,
       ch1_arm,
       ch2_arm,
@@ -672,6 +1205,7 @@ module Top (
   reg [31:0] ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac;
   reg [31:0] ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac;
   reg        cfg_auto_start_dac;
+  reg        cfg_loop_dac;
   reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
   reg        ch5_arm_dac, ch6_arm_dac, ch7_arm_dac, ch8_arm_dac;
   reg [15:0] seq_id_dac;
@@ -684,6 +1218,7 @@ module Top (
       ch1_len_dac   <= 0; ch2_len_dac   <= 0; ch3_len_dac <= 0; ch4_len_dac <= 0;
       ch5_len_dac   <= 0; ch6_len_dac   <= 0; ch7_len_dac <= 0; ch8_len_dac <= 0;
       cfg_auto_start_dac <= 0;
+      cfg_loop_dac <= 0;
       ch1_arm_dac   <= 0; ch2_arm_dac   <= 0; ch3_arm_dac <= 0; ch4_arm_dac <= 0;
       ch5_arm_dac   <= 0; ch6_arm_dac   <= 0; ch7_arm_dac <= 0; ch8_arm_dac <= 0;
       seq_id_dac    <= 0;
@@ -707,6 +1242,7 @@ module Top (
         ch6_len_dac   <= cfg_rd_data[127:96];
         ch7_len_dac   <= cfg_rd_data[95:64];
         ch8_len_dac   <= cfg_rd_data[63:32];
+        cfg_loop_dac <= cfg_rd_data[25];
         cfg_auto_start_dac <= cfg_rd_data[24];
         ch1_arm_dac   <= cfg_rd_data[23];
         ch2_arm_dac   <= cfg_rd_data[22];
@@ -770,8 +1306,6 @@ module Top (
   // ==========================================================
   wire [255:0] dac_in_ch1_tdata, dac_in_ch2_tdata, dac_in_ch3_tdata, dac_in_ch4_tdata;
   wire [255:0] dac_in_ch5_tdata, dac_in_ch6_tdata, dac_in_ch7_tdata, dac_in_ch8_tdata;
-  wire         dac_in_ch1_tvalid, dac_in_ch2_tvalid, dac_in_ch3_tvalid, dac_in_ch4_tvalid;
-  wire         dac_in_ch5_tvalid, dac_in_ch6_tvalid, dac_in_ch7_tvalid, dac_in_ch8_tvalid;
   wire         dac_ch1_ready_gated, dac_ch2_ready_gated, dac_ch3_ready_gated, dac_ch4_ready_gated;
   wire         dac_ch5_ready_gated, dac_ch6_ready_gated, dac_ch7_ready_gated, dac_ch8_ready_gated;
   wire         dac_ch1_valid_gated, dac_ch2_valid_gated, dac_ch3_valid_gated, dac_ch4_valid_gated;
@@ -789,7 +1323,7 @@ module Top (
   wire ch8_prog_empty, ch8_prog_full;
 
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
-  wire        pc_trig_pulse, pc_new_cfg, pc_trig_start, pc_started;
+  wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
   wire [15:0] pc_last_seq_id;
   wire        pc_done_pulse;
   wire [7:0]  pc_underflow_seen;
@@ -802,9 +1336,14 @@ module Top (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
     .trigger(ps_trigger_dac_sync),
+    .rfctrl2_trigger(rfctrl2_play_trigger),
+    .prepare(rfctrl2_play_prepare),
+    .abort(rfctrl2_play_abort),
+    .armed(rfctrl2_armed_dac),
 
     .cfg_seq_id(seq_id_dac),
     .auto_start(cfg_auto_start_dac),
+    .loop_enable(cfg_loop_dac),
 
     .ch1_delay_cycles(ch1_delay_dac),
     .ch2_delay_cycles(ch2_delay_dac),
@@ -874,6 +1413,7 @@ module Top (
     .ch6_active(),
     .ch7_active(),
     .ch8_active(),
+    .prepared(rfctrl2_prepared_dac),
 
     .dbg_trig_pulse (pc_trig_pulse),
     .dbg_new_cfg    (pc_new_cfg),
@@ -1206,6 +1746,42 @@ module Top (
   wire        M_AXI_RFDC_wready;
   wire [3:0]  M_AXI_RFDC_wstrb;
   wire        M_AXI_RFDC_wvalid;
+
+  wire [17:0] RFDC_S_AXI_araddr;
+  wire        RFDC_S_AXI_arready;
+  wire        RFDC_S_AXI_arvalid;
+  wire [17:0] RFDC_S_AXI_awaddr;
+  wire        RFDC_S_AXI_awready;
+  wire        RFDC_S_AXI_awvalid;
+  wire        RFDC_S_AXI_bready;
+  wire [1:0]  RFDC_S_AXI_bresp;
+  wire        RFDC_S_AXI_bvalid;
+  wire [31:0] RFDC_S_AXI_rdata;
+  wire        RFDC_S_AXI_rready;
+  wire [1:0]  RFDC_S_AXI_rresp;
+  wire        RFDC_S_AXI_rvalid;
+  wire [31:0] RFDC_S_AXI_wdata;
+  wire        RFDC_S_AXI_wready;
+  wire [3:0]  RFDC_S_AXI_wstrb;
+  wire        RFDC_S_AXI_wvalid;
+  axilite_arbiter_2to1 #(.ADDR_WIDTH(18)) ps_pl_rfdc_axil_arbiter_i (
+      .clk(pl_clk), .rst_n(pl_aresetn),
+      .s0_awaddr(M_AXI_RFDC_awaddr), .s0_awvalid(M_AXI_RFDC_awvalid), .s0_awready(M_AXI_RFDC_awready),
+      .s0_wdata(M_AXI_RFDC_wdata), .s0_wstrb(M_AXI_RFDC_wstrb), .s0_wvalid(M_AXI_RFDC_wvalid), .s0_wready(M_AXI_RFDC_wready),
+      .s0_bresp(M_AXI_RFDC_bresp), .s0_bvalid(M_AXI_RFDC_bvalid), .s0_bready(M_AXI_RFDC_bready),
+      .s0_araddr(M_AXI_RFDC_araddr), .s0_arvalid(M_AXI_RFDC_arvalid), .s0_arready(M_AXI_RFDC_arready),
+      .s0_rdata(M_AXI_RFDC_rdata), .s0_rresp(M_AXI_RFDC_rresp), .s0_rvalid(M_AXI_RFDC_rvalid), .s0_rready(M_AXI_RFDC_rready),
+      .s1_awaddr(RV_AXI_RFDC_awaddr), .s1_awvalid(RV_AXI_RFDC_awvalid), .s1_awready(RV_AXI_RFDC_awready),
+      .s1_wdata(RV_AXI_RFDC_wdata), .s1_wstrb(RV_AXI_RFDC_wstrb), .s1_wvalid(RV_AXI_RFDC_wvalid), .s1_wready(RV_AXI_RFDC_wready),
+      .s1_bresp(RV_AXI_RFDC_bresp), .s1_bvalid(RV_AXI_RFDC_bvalid), .s1_bready(RV_AXI_RFDC_bready),
+      .s1_araddr(RV_AXI_RFDC_araddr), .s1_arvalid(RV_AXI_RFDC_arvalid), .s1_arready(RV_AXI_RFDC_arready),
+      .s1_rdata(RV_AXI_RFDC_rdata), .s1_rresp(RV_AXI_RFDC_rresp), .s1_rvalid(RV_AXI_RFDC_rvalid), .s1_rready(RV_AXI_RFDC_rready),
+      .m_awaddr(RFDC_S_AXI_awaddr), .m_awvalid(RFDC_S_AXI_awvalid), .m_awready(RFDC_S_AXI_awready),
+      .m_wdata(RFDC_S_AXI_wdata), .m_wstrb(RFDC_S_AXI_wstrb), .m_wvalid(RFDC_S_AXI_wvalid), .m_wready(RFDC_S_AXI_wready),
+      .m_bresp(RFDC_S_AXI_bresp), .m_bvalid(RFDC_S_AXI_bvalid), .m_bready(RFDC_S_AXI_bready),
+      .m_araddr(RFDC_S_AXI_araddr), .m_arvalid(RFDC_S_AXI_arvalid), .m_arready(RFDC_S_AXI_arready),
+      .m_rdata(RFDC_S_AXI_rdata), .m_rresp(RFDC_S_AXI_rresp), .m_rvalid(RFDC_S_AXI_rvalid), .m_rready(RFDC_S_AXI_rready)
+  );
 
   wire [39:0]  M_AXI_DDR4_araddr;
   wire [1:0]   M_AXI_DDR4_arburst;
@@ -1616,23 +2192,23 @@ module Top (
   RfdcCustomXczu47dr rfdc_custom_i (
       .s_axi_aclk(pl_clk),
       .s_axi_aresetn(pl_aresetn),
-      .s_axi_awaddr(M_AXI_RFDC_awaddr),
-      .s_axi_awvalid(M_AXI_RFDC_awvalid),
-      .s_axi_awready(M_AXI_RFDC_awready),
-      .s_axi_wdata(M_AXI_RFDC_wdata),
-      .s_axi_wstrb(M_AXI_RFDC_wstrb),
-      .s_axi_wvalid(M_AXI_RFDC_wvalid),
-      .s_axi_wready(M_AXI_RFDC_wready),
-      .s_axi_bresp(M_AXI_RFDC_bresp),
-      .s_axi_bvalid(M_AXI_RFDC_bvalid),
-      .s_axi_bready(M_AXI_RFDC_bready),
-      .s_axi_araddr(M_AXI_RFDC_araddr),
-      .s_axi_arvalid(M_AXI_RFDC_arvalid),
-      .s_axi_arready(M_AXI_RFDC_arready),
-      .s_axi_rdata(M_AXI_RFDC_rdata),
-      .s_axi_rresp(M_AXI_RFDC_rresp),
-      .s_axi_rvalid(M_AXI_RFDC_rvalid),
-      .s_axi_rready(M_AXI_RFDC_rready),
+      .s_axi_awaddr(RFDC_S_AXI_awaddr),
+      .s_axi_awvalid(RFDC_S_AXI_awvalid),
+      .s_axi_awready(RFDC_S_AXI_awready),
+      .s_axi_wdata(RFDC_S_AXI_wdata),
+      .s_axi_wstrb(RFDC_S_AXI_wstrb),
+      .s_axi_wvalid(RFDC_S_AXI_wvalid),
+      .s_axi_wready(RFDC_S_AXI_wready),
+      .s_axi_bresp(RFDC_S_AXI_bresp),
+      .s_axi_bvalid(RFDC_S_AXI_bvalid),
+      .s_axi_bready(RFDC_S_AXI_bready),
+      .s_axi_araddr(RFDC_S_AXI_araddr),
+      .s_axi_arvalid(RFDC_S_AXI_arvalid),
+      .s_axi_arready(RFDC_S_AXI_arready),
+      .s_axi_rdata(RFDC_S_AXI_rdata),
+      .s_axi_rresp(RFDC_S_AXI_rresp),
+      .s_axi_rvalid(RFDC_S_AXI_rvalid),
+      .s_axi_rready(RFDC_S_AXI_rready),
       .sysref_in_p(sysref_in_diff_p),
       .sysref_in_n(sysref_in_diff_n),
       .dac2_clk_p(dac2_clk_clk_p),
@@ -1769,14 +2345,14 @@ module Top (
       udp_instr_word,                  // 123
       udp_instr_tvalid,                // 122
       udp_instr_tready,                // 121
-      instr_tvalid,                    // 120
-      instr_tready,                    // 119
-      cfg_commit,                      // 118
-      dm_cmd_tvalid,                   // 117
-      dm_cmd_tready,                   // 116
-      dm_data_tvalid,                  // 115
-      dm_data_tready,                  // 114
-      dm_data_tlast,                   // 113
+      rvctrl64_tvalid,                 // 120
+      rvctrl64_tfirst,                 // 119
+      rvctrl64_tlast,                  // 118
+      rv_instr_tvalid,                 // 117
+      rv_instr_tready,                 // 116
+      instr_tvalid,                    // 115
+      instr_tready,                    // 114
+      cfg_commit,                      // 113
       ch1_wave_tvalid,                 // 112
       ch1_wave_tready_internal,        // 111
       ch2_wave_tvalid,                 // 110
@@ -1787,7 +2363,7 @@ module Top (
       M_AXI_DM_rready,                 // 105
       M_AXI_DM_rlast,                  // 104
       dm_mm2s_err,                     // 103
-      udp_trigger_pulse,               // 102
+      control_trigger_pulse,           // 102
       M_AXI_WAVE_awvalid,              // 101
       M_AXI_WAVE_awready,              // 100
       M_AXI_WAVE_wvalid,               // 99
@@ -1803,26 +2379,62 @@ module Top (
       ex_dbg_dm_sel_ch1,               // 89
       ex_dbg_dm_st,                    // 88:87
       ex_dbg_st,                       // 86:84
-      udp_wave_state,                  // 83:81
+      udp_wave_state[2:0],             // 83:81
       M_AXI_DM_rresp,                  // 80:79
       M_AXI_WAVE_bresp,                // 78:77
       udp_wave_last_bresp,             // 76:75
-      dm_mm2s_sts_tdata,               // 74:67
+      rv_dbg_state,                    // 74:71
+      dm_mm2s_sts_tdata[3:0],          // 70:67
       udp_wave_fifo_count[7:0],        // 66:59
       ch1_fifo_level_beats,            // 58:43
       ch2_fifo_level_beats,            // 42:27
       udp_wave_write_count[8:0],       // 26:18
       udp_wave_drop_count[8:0],        // 17:9
-      udp_wave_align_error_count[8:0]  // 8:0
+      {rfctrl2_trigger_pulse,          // 8
+       rfctrl2_arm_pulse,              // 7
+       rfctrl2_prepared_ddr,           // 6
+       rfctrl2_armed_ddr,              // 5
+       rfctrl2_abort_mute_pulse,       // 4
+       udp_wave_align_error_count[3:0]} // 3:0
     }),
     .probe1(udp64_rcv_dat),
     .probe2(M_AXI_WAVE_wdata),
-    .probe3({24'd0, dm_cmd_tdata}),
+    .probe3({
+      rv_dbg_state,                    // 127:124
+      rv_dbg_status,                   // 123:92
+      rv_dbg_last_seq,                 // 91:60
+      rv_dbg_last_cmd,                 // 59:28
+      rvctrl64_protocol,                // 27:26
+      rvctrl64_word_count[6:0],         // 25:19
+      rv_dbg_scratch[10:0],             // 18:8
+      udp_control_tx_debug             // 7:0
+    }),
     .probe4(instr_tdata),
     .probe5(dm_cmd_tdata),
     .probe6(dm_data_tdata),
-    .probe7({ex_dbg_ch1_base_addr, ex_dbg_ch2_base_addr}),
-    .probe8({ex_dbg_ch1_bytes_left, ex_dbg_ch2_bytes_left}),
+    .probe7({
+      rvresp64_word_count[10:0],       // 127:117
+      rvresp64_tlast,                  // 116
+      rvresp64_tready,                 // 115
+      rvresp64_tvalid,                 // 114
+      RV_AXI_RFDC_awvalid,             // 113
+      RV_AXI_RFDC_awready,             // 112
+      RV_AXI_RFDC_wvalid,              // 111
+      RV_AXI_RFDC_wready,              // 110
+      RV_AXI_RFDC_bvalid,              // 109
+      RV_AXI_RFDC_bready,              // 108
+      RV_AXI_RFDC_arvalid,             // 107
+      RV_AXI_RFDC_arready,             // 106
+      RV_AXI_RFDC_rvalid,              // 105
+      RV_AXI_RFDC_rready,              // 104
+      RV_AXI_RFDC_bresp,               // 103:102
+      RV_AXI_RFDC_rresp,               // 101:100
+      RV_AXI_RFDC_awaddr,              // 99:82
+      RV_AXI_RFDC_wdata,               // 81:50
+      RV_AXI_RFDC_araddr,              // 49:32
+      RV_AXI_RFDC_rdata                // 31:0
+    }),
+    .probe8({rvresp64_tdata, ex_dbg_ch1_bytes_left}),
     .probe9(ch1_wave_tdata),
     .probe10(ch2_wave_tdata),
     .probe11(udp_wave_last_wdata)
@@ -1831,7 +2443,12 @@ module Top (
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      12'd0,
+      7'd0,
+      rfctrl2_play_prepare,
+      rfctrl2_play_trigger,
+      rfctrl2_play_abort,
+      rfctrl2_prepared_dac,
+      rfctrl2_armed_dac,
       pc_done_pulse,
       pc_underflow_seen,
       trig_1_dac_valid_pulse,
