@@ -1,0 +1,78 @@
+{
+  "mode": "golden",
+  "sample_format": "16-bit little-endian raw DAC codes",
+  "encoding": "uint16-viewed-as-int16",
+  "sample_rate_hz": 400000000.0,
+  "rfdc_interpolation": 16,
+  "analog_sample_rate_hz": 6400000000.0,
+  "dac_fs_hz": 6400000000.0,
+  "axis_hz": 50000000.0,
+  "record_duration_s": 5.12e-06,
+  "samples_per_channel": 2048,
+  "bytes_per_channel": 4096,
+  "layout": "interleaved_512b",
+  "tile_bytes": 4096,
+  "superblock_bytes": 32768,
+  "beat_bytes": 64,
+  "lane_bytes": 8,
+  "lanes": 8,
+  "x_ddr_offset": "0x0000000000000000",
+  "y_ddr_offset": "0x0000000000000008",
+  "loop": false,
+  "ch1_ddr_offset": "0x0000000000000000",
+  "ch1_logical_bytes": 4096,
+  "ch1_dac_port": "s00_axis",
+  "ch1_dac_outputs": [
+    "vout00"
+  ],
+  "ch2_ddr_offset": "0x0000000000000008",
+  "ch2_logical_bytes": 4096,
+  "ch2_dac_port": "s02_axis",
+  "ch2_dac_outputs": [
+    "vout02"
+  ],
+  "ch3_ddr_offset": "0x0000000000000010",
+  "ch3_logical_bytes": 4096,
+  "ch3_dac_port": "s10_axis",
+  "ch3_dac_outputs": [
+    "vout10"
+  ],
+  "ch4_ddr_offset": "0x0000000000000018",
+  "ch4_logical_bytes": 4096,
+  "ch4_dac_port": "s12_axis",
+  "ch4_dac_outputs": [
+    "vout12"
+  ],
+  "ch5_ddr_offset": "0x0000000000000020",
+  "ch5_logical_bytes": 4096,
+  "ch5_dac_port": "s20_axis",
+  "ch5_dac_outputs": [
+    "vout20"
+  ],
+  "ch6_ddr_offset": "0x0000000000000028",
+  "ch6_logical_bytes": 4096,
+  "ch6_dac_port": "s22_axis",
+  "ch6_dac_outputs": [
+    "vout22"
+  ],
+  "ch7_ddr_offset": "0x0000000000000030",
+  "ch7_logical_bytes": 4096,
+  "ch7_dac_port": "s30_axis",
+  "ch7_dac_outputs": [
+    "vout30"
+  ],
+  "ch8_ddr_offset": "0x0000000000000038",
+  "ch8_logical_bytes": 4096,
+  "ch8_dac_port": "s32_axis",
+  "ch8_dac_outputs": [
+    "vout32"
+  ],
+  "ch1_start": 0,
+  "ch2_start": 262144,
+  "ch3_start": 524288,
+  "ch4_start": 786432,
+  "ch5_start": 1048576,
+  "ch6_start": 1310720,
+  "ch7_start": 1572864,
+  "ch8_start": 1835008
+}

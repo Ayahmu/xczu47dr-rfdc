@@ -25,7 +25,7 @@ open_project ${proj_file}
 # Do not reset or regenerate XXV Ethernet during bitstream generation.
 # The generated Design_Linking checkpoint cannot produce a bitstream in this environment.
 # Restore the known-good reference checkpoint instead.
-restore_reference_xxv_dcp ${vivado_dir} ${target}
+#restore_reference_xxv_dcp ${vivado_dir} ${target}
 
 # Create output directory
 file mkdir ${output_dir}

@@ -94,9 +94,54 @@ if {!$is_bandwidth_target} {
         exit 1
     }
     set_property generate_synth_checkpoint true ${rfdc_ip_file}
+    set_property CONFIG.DAC2_Refclk_Freq {133.333} [get_ips rfdc_custom_xczu47dr_ip]
+    set_property -dict [list \
+  CONFIG.DAC0_Multi_Tile_Sync {true} \
+  CONFIG.DAC1_Multi_Tile_Sync {true} \
+  CONFIG.DAC2_Multi_Tile_Sync {true} \
+  CONFIG.DAC3_Multi_Tile_Sync {true} \
+] [get_ips rfdc_custom_xczu47dr_ip]
     generate_target all ${rfdc_ip_file}
-}
 
+    puts "INFO: Creating VIO control for the master HMC7044 SYNC sequence"
+    set vio_ip_dir "${vivado_dir}/ip"
+    file mkdir ${vio_ip_dir}
+    create_ip -force -name vio -vendor xilinx.com -library ip -version 3.0 \
+        -module_name vio_0 -dir ${vio_ip_dir}
+    set vio_ip [get_ips vio_0]
+    set_property -dict [list \
+        CONFIG.C_NUM_PROBE_IN {0} \
+        CONFIG.C_NUM_PROBE_OUT {1} \
+        CONFIG.C_PROBE_OUT0_WIDTH {1} \
+        CONFIG.C_PROBE_OUT0_INIT_VAL {0x0} \
+    ] ${vio_ip}
+    set vio_ip_file [get_files -quiet "${vio_ip_dir}/vio_0/vio_0.xci"]
+    if {[llength ${vio_ip_file}] == 0} {
+        puts "ERROR: VIO IP XCI not found after create_ip"
+        exit 1
+    }
+    add_files -norecurse ${vio_ip_file}
+    generate_target all ${vio_ip_file}
+    set vio_synth_file "${vio_ip_dir}/vio_0/synth/vio_0.v"
+    if {[file exists ${vio_synth_file}]} {
+        add_files -norecurse ${vio_synth_file}
+    } else {
+        puts "ERROR: VIO synthesis wrapper not found: ${vio_synth_file}"
+        exit 1
+    }
+    set vio_hdl_files [glob -nocomplain ${vio_ip_dir}/vio_0/hdl/*.v]
+    if {[llength ${vio_hdl_files}] > 0} {
+        add_files -norecurse ${vio_hdl_files}
+    } else {
+        puts "ERROR: VIO support HDL not found under ${vio_ip_dir}/vio_0/hdl"
+        exit 1
+    }
+    set_property include_dirs [list \
+        "${vio_ip_dir}/vio_0/hdl" \
+        "${vio_ip_dir}/vio_0/hdl/verilog" \
+    ] [get_filesets sources_1]
+}
+    
 puts "INFO: Creating project-level DDR4 IP outside block design"
 set ddr_ip_dir "${vivado_dir}/ip"
 file mkdir ${ddr_ip_dir}
@@ -235,6 +280,7 @@ puts "INFO: Creating standalone IP cores..."
 set datamover_script "${script_path}/axi_datamover_0.tcl"
 if {[file exists ${datamover_script}]} {
     source ${datamover_script}
+    generate_target all [get_ips axi_datamover_0]
     puts "INFO: AXI DataMover IP created"
 } else {
     puts "WARN: AXI DataMover script not found: ${datamover_script}"
@@ -244,6 +290,7 @@ if {[file exists ${datamover_script}]} {
 set instr_fifo_script "${script_path}/axis_data_fifo_1.tcl"
 if {[file exists ${instr_fifo_script}]} {
     source ${instr_fifo_script}
+    generate_target all [get_ips axis_data_fifo_1]
     puts "INFO: AXIS Data FIFO IP created"
 } else {
     puts "WARN: AXIS Data FIFO script not found: ${instr_fifo_script}"
@@ -253,6 +300,7 @@ if {[file exists ${instr_fifo_script}]} {
 set async_fifo_script "${script_path}/axis_async_fifo_256.tcl"
 if {!$is_bandwidth_target && [file exists ${async_fifo_script}]} {
     source ${async_fifo_script}
+    generate_target all [get_ips axis_async_fifo_256]
     puts "INFO: AXIS Async FIFO IP created"
 } else {
     puts "WARN: AXIS Async FIFO script not found: ${async_fifo_script}"
