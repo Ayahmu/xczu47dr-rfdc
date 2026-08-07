@@ -43,6 +43,14 @@ module rfdc_runtime_config_pl #(
     output reg  [255:0]  actual_phase_word,
     output reg  [255:0]  actual_vop_code,
 
+    output reg           nco_commit_start,
+    output reg  [7:0]    nco_commit_mask,
+    output reg  [383:0]  nco_commit_freq_words,
+    output reg  [143:0]  nco_commit_phase_words,
+    input  wire          nco_commit_busy,
+    input  wire          nco_commit_done,
+    input  wire [1:0]    nco_commit_error,
+
     output wire [17:0]   m_axil_awaddr,
     output wire          m_axil_awvalid,
     input  wire          m_axil_awready,
@@ -72,6 +80,7 @@ module rfdc_runtime_config_pl #(
   localparam [15:0] ST_AXI_TIMEOUT    = 16'h0009;
   localparam [15:0] ST_READBACK       = 16'h000A;
   localparam [15:0] ST_PARTIAL        = 16'h000B;
+  localparam [15:0] ST_NCO_SYNC       = 16'h000C;
 
   localparam [31:0] STAGE_VALIDATE = 32'd1;
   localparam [31:0] STAGE_READY    = 32'd2;
@@ -184,6 +193,9 @@ module rfdc_runtime_config_pl #(
   localparam [7:0] S_VOP_QUANT_DONE   = 8'd78;
   localparam [7:0] S_READY_PROBE_READ = 8'd79;
   localparam [7:0] S_READY_PROBE_WAIT = 8'd80;
+  localparam [7:0] S_NCO_COMMIT_START = 8'd81;
+  localparam [7:0] S_NCO_COMMIT_WAIT  = 8'd82;
+  localparam [7:0] S_VALIDATE         = 8'd83;
 
   reg [7:0] state;
   reg [2:0] channel_index;
@@ -193,6 +205,7 @@ module rfdc_runtime_config_pl #(
   reg [15:0] request_zone;
   reg [255:0] request_phase;
   reg [255:0] request_current;
+  reg [7:0] request_validation_error_mask;
   reg [17:0] block_base;
   reg [17:0] tile_base;
   reg signed [63:0] selected_nco_hz;
@@ -231,6 +244,14 @@ module rfdc_runtime_config_pl #(
   reg [31:0] ready_probe_count;
   reg [1:0] ready_probe_tile;
   reg [3:0] ready_probe_mask;
+  reg [7:0] staged_mask;
+  reg [511:0] staged_actual_nco_hz;
+  reg [15:0] staged_actual_nyquist_zone;
+  reg [255:0] staged_actual_phase_mdeg;
+  reg [255:0] staged_actual_current_ua;
+  reg [511:0] staged_actual_nco_word;
+  reg [255:0] staged_actual_phase_word;
+  reg [255:0] staged_actual_vop_code;
 
   reg [7:0] validation_error_mask;
   integer vi;
@@ -399,8 +420,11 @@ module rfdc_runtime_config_pl #(
       rfdc_ready <= 1'b0; actual_nco_hz <= 512'd0; actual_nyquist_zone <= 16'd0;
       actual_phase_mdeg <= 256'd0; actual_current_ua <= 256'd0; channel_status <= 256'd0;
       actual_nco_word <= 512'd0; actual_phase_word <= 256'd0; actual_vop_code <= 256'd0;
+      nco_commit_start <= 1'b0; nco_commit_mask <= 8'd0;
+      nco_commit_freq_words <= 384'd0; nco_commit_phase_words <= 144'd0;
       state <= S_IDLE; channel_index <= 3'd0; request_mask <= 8'd0; request_sequence <= 32'd0;
       request_nco_hz <= 512'd0; request_zone <= 16'd0; request_phase <= 256'd0; request_current <= 256'd0;
+      request_validation_error_mask <= 8'd0;
       block_base <= 18'd0; tile_base <= 18'd0; selected_nco_hz <= 64'sd0;
       selected_phase_mdeg <= 32'sd0; selected_current_ua <= 32'd0; selected_zone <= 2'd1;
       expected_nco_word <= 48'd0; expected_phase_word <= 18'd0; rmw_value <= 16'd0;
@@ -416,12 +440,17 @@ module rfdc_runtime_config_pl #(
       ramp_up <= 1'b0; vop_readback_only <= 1'b0;
       ready_probe_count <= READY_PROBE_INTERVAL_CYCLES - 1;
       ready_probe_tile <= 2'd0; ready_probe_mask <= 4'd0;
+      staged_mask <= 8'd0; staged_actual_nco_hz <= 512'd0;
+      staged_actual_nyquist_zone <= 16'd0; staged_actual_phase_mdeg <= 256'd0;
+      staged_actual_current_ua <= 256'd0; staged_actual_nco_word <= 512'd0;
+      staged_actual_phase_word <= 256'd0; staged_actual_vop_code <= 256'd0;
       axi_start <= 1'b0; axi_write <= 1'b0; axi_address <= 18'd0;
       axi_write_data <= 32'd0; axi_write_strobe <= 4'b0011;
     end else begin
       done <= 1'b0;
       force_mute_pulse <= 1'b0;
       axi_start <= 1'b0;
+      nco_commit_start <= 1'b0;
 
       case (state)
         S_IDLE: begin
@@ -436,19 +465,17 @@ module rfdc_runtime_config_pl #(
             end else if (playback_armed || playback_running) begin
               status <= ST_UNSAFE_STATE; error_mask <= cmd_channel_mask; failure_stage <= STAGE_VALIDATE;
               revision <= cmd_revision; force_mute_pulse <= 1'b1; done <= 1'b1; cached_response_valid <= 1'b0;
-            end else if (validation_error_mask != 8'd0) begin
-              status <= ST_RANGE; error_mask <= validation_error_mask; failure_stage <= STAGE_VALIDATE;
-              revision <= cmd_revision; force_mute_pulse <= 1'b1; done <= 1'b1; cached_response_valid <= 1'b0;
             end else begin
+              // Capture the request and validation result before entering the
+              // transaction. Keeping validation out of the later state
+              // decode prevents the wide staging-register enables from
+              // depending on raw AXI command inputs at 300 MHz.
               busy <= 1'b1; status <= ST_OK; revision <= cmd_revision;
-              applied_mask <= 8'd0; error_mask <= 8'd0; failure_stage <= 32'd0;
-              failure_address <= 18'd0; failure_axi_response <= 2'd0;
               request_mask <= cmd_channel_mask; request_sequence <= cmd_sequence;
               request_nco_hz <= cmd_nco_hz; request_zone <= cmd_nyquist_zone;
               request_phase <= cmd_phase_mdeg; request_current <= cmd_current_ua;
-              config_valid_mask <= config_valid_mask & ~cmd_channel_mask;
-              channel_status <= 256'd0; channel_index <= 3'd0;
-              force_mute_pulse <= 1'b1; state <= S_SELECT;
+              request_validation_error_mask <= validation_error_mask;
+              state <= S_VALIDATE;
             end
           end else if (ready_probe_count == 0) begin
             // RFDC startup is performed once by the PS. Probe all four DAC
@@ -461,6 +488,47 @@ module rfdc_runtime_config_pl #(
             state <= S_READY_PROBE_READ;
           end else begin
             ready_probe_count <= ready_probe_count - 1'b1;
+          end
+        end
+
+        S_VALIDATE: begin
+          if (request_validation_error_mask != 8'd0) begin
+            status <= ST_RANGE;
+            error_mask <= request_validation_error_mask;
+            failure_stage <= STAGE_VALIDATE;
+            done <= 1'b1;
+            busy <= 1'b0;
+            cached_response_valid <= 1'b0;
+            force_mute_pulse <= 1'b1;
+            state <= S_IDLE;
+          end else begin
+            applied_mask <= 8'd0; error_mask <= 8'd0; failure_stage <= 32'd0;
+            failure_address <= 18'd0; failure_axi_response <= 2'd0;
+            config_valid_mask <= config_valid_mask & ~request_mask;
+            channel_status <= 256'd0; channel_index <= 3'd0;
+            staged_mask <= 8'd0;
+            staged_actual_nco_hz <= actual_nco_hz;
+            staged_actual_nyquist_zone <= actual_nyquist_zone;
+            staged_actual_phase_mdeg <= actual_phase_mdeg;
+            staged_actual_current_ua <= actual_current_ua;
+            staged_actual_nco_word <= actual_nco_word;
+            staged_actual_phase_word <= actual_phase_word;
+            staged_actual_vop_code <= actual_vop_code;
+            nco_commit_mask <= request_mask;
+            nco_commit_freq_words <= {
+                actual_nco_word[448 +: 48], actual_nco_word[384 +: 48],
+                actual_nco_word[320 +: 48], actual_nco_word[256 +: 48],
+                actual_nco_word[192 +: 48], actual_nco_word[128 +: 48],
+                actual_nco_word[64 +: 48], actual_nco_word[0 +: 48]
+            };
+            nco_commit_phase_words <= {
+                actual_phase_word[224 +: 18], actual_phase_word[192 +: 18],
+                actual_phase_word[160 +: 18], actual_phase_word[128 +: 18],
+                actual_phase_word[96 +: 18], actual_phase_word[64 +: 18],
+                actual_phase_word[32 +: 18], actual_phase_word[0 +: 18]
+            };
+            force_mute_pulse <= 1'b1;
+            state <= S_SELECT;
           end
         end
 
@@ -484,7 +552,7 @@ module rfdc_runtime_config_pl #(
 
         S_SELECT: begin
           if (!request_mask[channel_index]) begin
-            if (channel_index == 3'd7) state <= S_FINISH;
+            if (channel_index == 3'd7) state <= S_NCO_COMMIT_START;
             else channel_index <= channel_index + 3'd1;
           end else begin
             block_base <= channel_block_base(channel_index);
@@ -562,6 +630,10 @@ module rfdc_runtime_config_pl #(
           expected_phase_word <= calc_negative
               ? ((~calc_quotient[17:0]) + 18'd1)
               : calc_quotient[17:0];
+          nco_commit_freq_words[channel_index*48 +: 48] <= expected_nco_word;
+          nco_commit_phase_words[channel_index*18 +: 18] <= calc_negative
+              ? ((~calc_quotient[17:0]) + 18'd1)
+              : calc_quotient[17:0];
           state <= S_TILE_READ;
         end
 
@@ -587,7 +659,7 @@ module rfdc_runtime_config_pl #(
           else begin rmw_value <= (selected_zone == 2) ? (axi_read_data[15:0] | NYQUIST_MASK) : (axi_read_data[15:0] & ~NYQUIST_MASK); state <= S_NYQ_WRITE; end
         end
         S_NYQ_WRITE: begin launch_write16(block_base + OFF_CFG0, rmw_value); state <= S_NYQ_WRITE_WAIT; end
-        S_NYQ_WRITE_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_NYQUIST); else state <= S_UPDMODE_READ; end
+        S_NYQ_WRITE_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_NYQUIST); else state <= S_VOP_CTRL_READ; end
         S_UPDMODE_READ: begin launch_read(block_base + OFF_NCO_UPDT); state <= S_UPDMODE_READ_WAIT; end
         S_UPDMODE_READ_WAIT: if (axi_done) begin
           if (axi_error != 0) fail_transaction(STAGE_NCO); else begin rmw_value <= axi_read_data[15:0] & 16'hFFF8; state <= S_UPDMODE_WRITE; end
@@ -735,7 +807,7 @@ module rfdc_runtime_config_pl #(
         S_RB_CFG0_READ: begin launch_read(block_base + OFF_CFG0); state <= S_RB_CFG0_WAIT; end
         S_RB_CFG0_WAIT: if (axi_done) begin
           if (axi_error != 0) fail_transaction(STAGE_READBACK);
-          else begin readback_cfg0 <= axi_read_data[15:0]; state <= S_RB_NCO_LO_READ; end
+          else begin readback_cfg0 <= axi_read_data[15:0]; state <= S_RB_CFG2_READ; end
         end
         S_RB_NCO_LO_READ: begin launch_read(block_base + OFF_NCO_LOWER); state <= S_RB_NCO_LO_WAIT; end
         S_RB_NCO_LO_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_nco_word[15:0] <= axi_read_data[15:0]; state <= S_RB_NCO_MI_READ; end end
@@ -755,7 +827,6 @@ module rfdc_runtime_config_pl #(
           else begin
             readback_cfg3 <= axi_read_data[15:0];
             if ((((readback_cfg0 & NYQUIST_MASK) != ((selected_zone == 2) ? NYQUIST_MASK : 16'd0))) ||
-                (readback_nco_word != expected_nco_word) || (readback_phase_word != expected_phase_word) ||
                 (vop_write_performed &&
                  (((readback_cfg2 & CFG2_VOP_MASK) != (expected_cfg2 & CFG2_VOP_MASK)) ||
                   ((axi_read_data[15:0] & CFG3_VOP_MASK) != (expected_cfg3 & CFG3_VOP_MASK))))) begin
@@ -773,21 +844,48 @@ module rfdc_runtime_config_pl #(
         end
 
         S_CHANNEL_DONE: begin
-          applied_mask[channel_index] <= 1'b1;
-          config_valid_mask[channel_index] <= 1'b1;
-          actual_nco_word[channel_index*64 +: 64] <= {16'd0, readback_nco_word};
-          // The raw readback word is the authoritative quantized value. Keep
-          // integer display units at the confirmed request value; software can
-          // derive sub-Hz precision from actual_nco_word without a 300 MHz DSP chain.
-          actual_nco_hz[channel_index*64 +: 64] <= selected_nco_hz;
-          actual_nyquist_zone[channel_index*2 +: 2] <= (readback_cfg0 & NYQUIST_MASK) ? 2'd2 : 2'd1;
-          actual_phase_word[channel_index*32 +: 32] <= {14'd0, readback_phase_word};
-          actual_phase_mdeg[channel_index*32 +: 32] <= selected_phase_mdeg;
-          actual_vop_code[channel_index*32 +: 32] <= {16'd0, vop_code};
-          actual_current_ua[channel_index*32 +: 32] <= 32'd1400 + (vop_current_scaled >> 2);
+          staged_mask[channel_index] <= 1'b1;
+          staged_actual_nco_word[channel_index*64 +: 64] <= {16'd0, expected_nco_word};
+          staged_actual_nco_hz[channel_index*64 +: 64] <= selected_nco_hz;
+          staged_actual_nyquist_zone[channel_index*2 +: 2] <= (readback_cfg0 & NYQUIST_MASK) ? 2'd2 : 2'd1;
+          staged_actual_phase_word[channel_index*32 +: 32] <= {14'd0, expected_phase_word};
+          staged_actual_phase_mdeg[channel_index*32 +: 32] <= selected_phase_mdeg;
+          staged_actual_vop_code[channel_index*32 +: 32] <= {16'd0, vop_code};
+          staged_actual_current_ua[channel_index*32 +: 32] <= 32'd1400 + (vop_current_scaled >> 2);
           channel_status[channel_index*32 +: 32] <= 32'd0;
-          if (channel_index == 3'd7) state <= S_FINISH;
+          if (channel_index == 3'd7) state <= S_NCO_COMMIT_START;
           else begin channel_index <= channel_index + 3'd1; state <= S_SELECT; end
+        end
+
+        S_NCO_COMMIT_START: begin
+          if (!nco_commit_busy) begin
+            nco_commit_start <= 1'b1;
+            state <= S_NCO_COMMIT_WAIT;
+          end
+        end
+
+        S_NCO_COMMIT_WAIT: begin
+          if (nco_commit_done) begin
+            if (nco_commit_error != 0) begin
+              status <= ST_NCO_SYNC;
+              error_mask <= request_mask;
+              failure_stage <= STAGE_UPDATE;
+              failure_address <= 18'd0;
+              failure_axi_response <= nco_commit_error;
+              force_mute_pulse <= 1'b1;
+            end else begin
+              applied_mask <= request_mask;
+              config_valid_mask <= config_valid_mask | request_mask;
+              actual_nco_hz <= staged_actual_nco_hz;
+              actual_nyquist_zone <= staged_actual_nyquist_zone;
+              actual_phase_mdeg <= staged_actual_phase_mdeg;
+              actual_current_ua <= staged_actual_current_ua;
+              actual_nco_word <= staged_actual_nco_word;
+              actual_phase_word <= staged_actual_phase_word;
+              actual_vop_code <= staged_actual_vop_code;
+            end
+            state <= S_FINISH;
+          end
         end
 
         S_FINISH: begin

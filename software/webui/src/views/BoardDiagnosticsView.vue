@@ -92,6 +92,8 @@ onBeforeUnmount(() => window.clearInterval(pollTimer))
           <div><dt>协议版本</dt><dd>{{ status?.protocol_version || '-' }}</dd></div><div><dt>硬件配置</dt><dd>{{ status?.hardware_profile || '-' }}</dd></div>
           <div><dt>采样率</dt><dd>{{ status ? (status.sample_rate_hz / 1e9).toFixed(3) + ' GS/s' : '-' }}</dd></div><div><dt>插值倍数</dt><dd>{{ status?.interpolation || '-' }}x</dd></div>
           <div><dt>HMC 锁定</dt><dd>{{ status?.hmc_locked == null ? '未知' : status.hmc_locked ? '已锁定' : '未锁定' }}</dd></div><div><dt>RFDC 就绪</dt><dd>{{ status?.rfdc_ready == null ? '未知' : status.rfdc_ready ? '是' : '否' }}</dd></div>
+          <div><dt>DAC MTS</dt><dd>{{ status?.dac_mts_ready ? '已同步' : status?.dac_mts_failed ? '失败' : '未就绪' }}</dd></div><div><dt>MTS Tile</dt><dd>{{ maskHex(status?.dac_mts_tile_mask || 0) }}</dd></div>
+          <div><dt>MTS 错误</dt><dd>0x{{ (status?.dac_mts_error || 0).toString(16).padStart(4, '0') }}</dd></div><div><dt>NCO 同步</dt><dd>{{ status?.nco_sync_ready ? '已提交 #' + status.nco_sync_epoch : '等待首次配置' }}</dd></div>
           <div><dt>配置 revision</dt><dd>{{ rfdc?.revision || status?.rfdc_last_revision || 0 }}</dd></div><div><dt>有效通道</dt><dd>{{ maskHex(rfdc?.config_valid_mask || 0) }}</dd></div>
           <div><dt>Underflow</dt><dd>{{ maskHex(status?.underflow_mask || 0) }}</dd></div><div><dt>错误计数</dt><dd>{{ status?.error_count || 0 }}</dd></div>
         </dl>

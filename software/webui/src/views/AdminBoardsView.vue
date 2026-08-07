@@ -108,10 +108,10 @@ function linkLayers(board: BoardProfile): LinkLayer[] {
     {
       key: 'playback',
       label: 'Playback',
-      state: status?.rfdc_ready === true ? 'pass' : status?.rfdc_ready === false ? 'fail' : 'warning',
-      summary: status?.rfdc_ready === true ? `RFDC ready · ${playbackState}` : status?.rfdc_ready === false ? 'RFDC not ready' : '等待状态读取',
+      state: status?.rfdc_ready === true && status.dac_mts_ready && !status.dac_mts_failed ? 'pass' : status?.rfdc_ready === false || status?.dac_mts_failed ? 'fail' : 'warning',
+      summary: status?.rfdc_ready === true && status.dac_mts_ready ? `MTS ready · ${playbackState}` : status?.dac_mts_failed ? 'DAC MTS failed' : status?.rfdc_ready === false ? 'RFDC not ready' : '等待状态读取',
       detail: status
-        ? `cfg=0x${status.rfdc_config_valid_mask.toString(16).padStart(2, '0')} play=0x${status.play_config_channel_mask.toString(16).padStart(2, '0')} fifo=0x${status.play_fifo_valid_mask.toString(16).padStart(2, '0')}/0x${status.play_fifo_ready_mask.toString(16).padStart(2, '0')} exec=0x${status.play_executor_state.toString(16).padStart(2, '0')}`
+        ? `mts=0x${status.dac_mts_tile_mask.toString(16)} err=0x${status.dac_mts_error.toString(16).padStart(4, '0')} nco=${status.nco_sync_ready ? 'ready' : 'pending'}@${status.nco_sync_epoch} cfg=0x${status.rfdc_config_valid_mask.toString(16).padStart(2, '0')} play=0x${status.play_config_channel_mask.toString(16).padStart(2, '0')}`
         : '尚未读取 RFCTRL2 status',
     },
   ]

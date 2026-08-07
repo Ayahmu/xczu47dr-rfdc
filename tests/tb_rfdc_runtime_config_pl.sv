@@ -39,6 +39,14 @@ module tb_rfdc_runtime_config_pl;
   integer write_count_before_retry=0;
   reg [17:0] inject_write_error_addr=18'h3ffff;
   reg nco_low_seen=0, update_seen=0, vop_seen=0;
+  wire nco_commit_start;
+  wire [7:0] nco_commit_mask;
+  wire [383:0] nco_commit_freq_words;
+  wire [143:0] nco_commit_phase_words;
+  reg nco_commit_busy=0, nco_commit_done=0;
+  reg [1:0] nco_commit_error=0;
+  integer nco_commit_delay=0;
+  integer nco_commit_count=0;
 
   rfdc_runtime_config_pl #(
     .CLOCK_HZ(1000000), .AXI_TIMEOUT_CYCLES(100), .READY_PROBE_INTERVAL_CYCLES(20)
@@ -54,6 +62,10 @@ module tb_rfdc_runtime_config_pl;
     .actual_current_ua(actual_current), .channel_status(channel_status),
     .actual_nco_word(actual_nco_word), .actual_phase_word(actual_phase_word),
     .actual_vop_code(actual_vop),
+    .nco_commit_start(nco_commit_start), .nco_commit_mask(nco_commit_mask),
+    .nco_commit_freq_words(nco_commit_freq_words), .nco_commit_phase_words(nco_commit_phase_words),
+    .nco_commit_busy(nco_commit_busy), .nco_commit_done(nco_commit_done),
+    .nco_commit_error(nco_commit_error),
     .m_axil_awaddr(awaddr), .m_axil_awvalid(awvalid), .m_axil_awready(awready),
     .m_axil_wdata(wdata), .m_axil_wstrb(wstrb), .m_axil_wvalid(wvalid), .m_axil_wready(wready),
     .m_axil_bresp(bresp), .m_axil_bvalid(bvalid), .m_axil_bready(bready),
@@ -79,6 +91,24 @@ module tb_rfdc_runtime_config_pl;
         rresp <= 2'b00;
         rvalid_reg <= 1;
       end else if (rvalid_reg && rready) rvalid_reg <= 0;
+    end
+  end
+
+  always @(posedge clk) begin
+    nco_commit_done <= 0;
+    if (!rst_n) begin
+      nco_commit_busy <= 0;
+      nco_commit_delay <= 0;
+      nco_commit_count <= 0;
+    end else if (nco_commit_start && !nco_commit_busy) begin
+      nco_commit_busy <= 1;
+      nco_commit_delay <= 3;
+      nco_commit_count <= nco_commit_count + 1;
+    end else if (nco_commit_busy && nco_commit_delay == 0) begin
+      nco_commit_busy <= 0;
+      nco_commit_done <= 1;
+    end else if (nco_commit_busy) begin
+      nco_commit_delay <= nco_commit_delay - 1;
     end
   end
 
@@ -128,10 +158,11 @@ module tb_rfdc_runtime_config_pl;
     pulse_start(); wait_done();
     check(status == 0, "valid CH1 apply should succeed");
     check(applied_mask == 8'h01 && valid_mask[0], "CH1 masks were not confirmed");
-    check(nco_low_seen && update_seen && vop_seen, "NCO/update/VOP register paths were not exercised");
+    check(!nco_low_seen && !update_seen && vop_seen, "NCO must use RTS while VOP remains AXI-controlled");
+    check(nco_commit_count == 1 && nco_commit_mask == 8'h01, "NCO RTS commit did not preserve the request mask");
+    check(nco_commit_freq_words[0 +: 48] == 48'h400000000000, "NCO RTS frequency word mismatch");
+    check(nco_commit_phase_words[0 +: 18] == 18'h10000, "NCO RTS phase word mismatch");
     check(memory[18'h061c4 >> 2][1] == 1'b1, "Nyquist zone RMW failed");
-    check(memory[18'h0608c >> 2][2:0] == 3'd0, "NCO event source must be immediate");
-    check(memory[18'h06020 >> 2][3:0] == 4'h2, "NCO dynamic update event mask mismatch");
     check(actual_nco_word[0 +: 64] == 64'h0000400000000000, "1.6 GHz NCO word mismatch");
     check(actual_phase_word[0 +: 32] == 32'h00010000, "90 degree phase word mismatch");
     check($signed(actual_nco_hz[0 +: 64]) == 64'sd1600000000, "confirmed NCO Hz mismatch");
@@ -154,16 +185,16 @@ module tb_rfdc_runtime_config_pl;
     pulse_start(); wait_done();
     check(write_count == write_count_before_retry, "duplicate sequence/revision repeated RFDC writes");
 
-    // A new request that fails on CH2 NCO-low must report an AXI error and remain muted.
+    // A new request that fails on CH2 Nyquist write must report an AXI error and remain muted.
     seq_num=32'h57; revision=6; mask=8'h02;
     nco_hz[64 +: 64]=64'sd0; zones[2 +: 2]=2'd1; phases[32 +: 32]=0; currents[32 +: 32]=20000;
     memory[18'h069d0 >> 2]=(425 << 6);
-    inject_write_error_addr=18'h0689c;
+    inject_write_error_addr=18'h069c4;
     pulse_start(); wait_done();
     check(status == 16'h0008, "injected SLVERR was not reported");
-    check(error_mask == 8'h02 && failure_address == 18'h0689c, "failure metadata mismatch");
+    check(error_mask == 8'h02 && failure_address == 18'h069c4, "failure metadata mismatch");
 
-    $display("PASS: PL RFDC controller probes readiness, validates, writes, reads back, caches retries, and reports AXI failures");
+    $display("PASS: PL RFDC controller stages NCO RTS, probes readiness, validates VOP/Nyquist, caches retries, and reports failures");
     $finish;
   end
 endmodule

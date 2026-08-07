@@ -106,10 +106,16 @@ class BoardGateway:
                         hmc_locked=True if self.simulation else None,
                         rfdc_ready=True if self.simulation else None,
                         rfdc_capabilities=(
-                            host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG
+                            host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG |
+                            host.RF2_CAP_DAC_MTS | host.RF2_CAP_NCO_SYNC
                             if self.simulation else 0
                         ),
                         rfdc_config_valid_mask=0xFF if self.simulation else 0,
+                        dac_mts_required=self.simulation,
+                        dac_mts_ready=self.simulation,
+                        dac_mts_tile_mask=0xF if self.simulation else 0,
+                        nco_sync_ready=self.simulation,
+                        nco_sync_epoch=1 if self.simulation else 0,
                         physical_link=True if self.simulation else None,
                         udp_interface=board.udp_interface,
                         udp_source_ip=board.udp_source_ip,
@@ -169,8 +175,17 @@ class BoardGateway:
                 protocol_version=2,
                 hmc_locked=True,
                 rfdc_ready=True,
-                rfdc_capabilities=host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG,
+                rfdc_capabilities=(
+                    host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG |
+                    host.RF2_CAP_DAC_MTS | host.RF2_CAP_NCO_SYNC
+                ),
                 rfdc_config_valid_mask=int(simulated.get("config_valid_mask", 0xFF)),
+                dac_mts_required=True,
+                dac_mts_ready=True,
+                dac_mts_failed=False,
+                dac_mts_tile_mask=0xF,
+                nco_sync_ready=bool(simulated.get("nco_sync_ready", True)),
+                nco_sync_epoch=int(simulated.get("nco_sync_epoch", 1)),
                 rfdc_last_revision=int(simulated.get("revision", 0)),
                 playback_armed=bool(simulated.get("playback_armed", False)),
                 playback_prepared=bool(simulated.get("playback_prepared", False)),
@@ -296,6 +311,13 @@ class BoardGateway:
                 rfdc_capabilities=int(decoded["capabilities"]),
                 rfdc_config_valid_mask=int(decoded["config_valid_mask"]) & 0xFF,
                 rfdc_config_busy=bool(decoded["rfdc_busy"]),
+                dac_mts_required=bool(decoded.get("dac_mts_required")),
+                dac_mts_ready=bool(decoded.get("dac_mts_ready")),
+                dac_mts_failed=bool(decoded.get("dac_mts_failed")),
+                dac_mts_tile_mask=int(decoded.get("dac_mts_tile_mask", 0)) & 0xF,
+                dac_mts_error=int(decoded.get("dac_mts_error", 0)) & 0xFFFF,
+                nco_sync_ready=bool(decoded.get("nco_sync_ready")),
+                nco_sync_epoch=int(decoded.get("nco_sync_epoch", 0)) & 0xFFFFFFFF,
                 playback_armed=bool(decoded["armed"]),
                 playback_prepared=bool(decoded["prepared"]),
                 playback_running=bool(decoded["running"]),
@@ -396,6 +418,14 @@ class BoardGateway:
                 raise RuntimeError("board is already armed; ABORT_MUTE before re-arming")
             if not status.rfdc_capabilities & host.RF2_CAP_PL_RFDC_CONFIG:
                 raise RuntimeError("installed bitstream does not support PL RFDC runtime configuration")
+            if not status.dac_mts_required or not status.dac_mts_ready or status.dac_mts_failed:
+                raise RuntimeError(
+                    "DAC MTS is not ready; refusing ARM "
+                    f"(required={int(status.dac_mts_required)}, ready={int(status.dac_mts_ready)}, "
+                    f"failed={int(status.dac_mts_failed)}, error=0x{status.dac_mts_error:04X})"
+                )
+            if not status.nco_sync_ready:
+                raise RuntimeError("NCO RTS synchronization has not completed; apply RFDC configuration before ARM")
             if channel_mask & ~status.rfdc_config_valid_mask:
                 raise RuntimeError(
                     f"ARM mask 0x{channel_mask:02X} is not a subset of PL config_valid_mask "
@@ -989,6 +1019,13 @@ class BoardGateway:
             f"pending_valid={int(bool(decoded.get('play_pending_valid')))}, "
             f"ddr_read_counter={int(decoded.get('play_ddr_read_counter', 0)) & 0xFFFFFFFF}, "
             f"bad_instr_count={int(decoded.get('play_bad_instr_count', 0)) & 0xFFFFFFFF}, "
+            f"mts_required={int(bool(decoded.get('dac_mts_required')))}, "
+            f"mts_ready={int(bool(decoded.get('dac_mts_ready')))}, "
+            f"mts_failed={int(bool(decoded.get('dac_mts_failed')))}, "
+            f"mts_tiles=0x{int(decoded.get('dac_mts_tile_mask', 0)) & 0xF:X}, "
+            f"mts_error=0x{int(decoded.get('dac_mts_error', 0)) & 0xFFFF:04X}, "
+            f"nco_sync_ready={int(bool(decoded.get('nco_sync_ready')))}, "
+            f"nco_sync_epoch={int(decoded.get('nco_sync_epoch', 0)) & 0xFFFFFFFF}, "
             f"last_error=0x{int(decoded.get('last_error', 0)) & 0xFFFFFFFF:08X}, "
             f"last_error_stage=0x{int(decoded.get('last_error_stage', 0)) & 0xFFFFFFFF:08X}, "
             f"last_error_addr=0x{int(decoded.get('last_error_addr', 0)) & 0xFFFFFFFF:08X}"

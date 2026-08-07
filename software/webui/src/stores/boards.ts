@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/client'
-import type { BoardPreflight, BoardProfile, BoardRfdcConfig, BoardScanResponse, BoardStatus, DiscoveryResource, NetworkConfigSnapshot, NetworkInterfaceInfo } from '../types'
+import type { BoardPreflight, BoardProfile, BoardRfdcConfig, BoardScanResponse, BoardStatus, DiscoveryResource, NetworkConfigSnapshot, NetworkInterfaceInfo, PhaseCalibrationRecord } from '../types'
 
 export const useBoardsStore = defineStore('boards', {
   state: () => ({
@@ -52,6 +52,10 @@ export const useBoardsStore = defineStore('boards', {
       return result
     },
     rfdc(boardId: string, refresh = false) { return api<BoardRfdcConfig>('/api/boards/' + boardId + '/rfdc-config?refresh=' + refresh) },
+    phaseCalibrations(boardId: string) { return api<PhaseCalibrationRecord[]>('/api/boards/' + boardId + '/phase-calibration') },
+    savePhaseCalibration(boardId: string, payload: { frequency_hz: number; channel: number; phase_deg: number }) {
+      return api<PhaseCalibrationRecord>('/api/boards/' + boardId + '/phase-calibration', { method: 'PUT', body: payload })
+    },
     preflight(boardId: string, refresh = true) { return api<BoardPreflight>('/api/boards/' + boardId + '/preflight?refresh=' + refresh) },
     network(boardId: string, refresh = true) { return api<NetworkConfigSnapshot>('/api/boards/' + boardId + '/network-config?refresh=' + refresh) },
     async applyNetwork(boardId: string, payload: { revision: number; ip: string; mac: string; subnet_mask: string; gateway: string; port: number }) {

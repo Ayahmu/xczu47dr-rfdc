@@ -113,6 +113,13 @@ class BoardStatus(BaseModel):
     rfdc_capabilities: int = 0
     rfdc_config_valid_mask: int = 0
     rfdc_config_busy: bool = False
+    dac_mts_required: bool = False
+    dac_mts_ready: bool = False
+    dac_mts_failed: bool = False
+    dac_mts_tile_mask: int = 0
+    dac_mts_error: int = 0
+    nco_sync_ready: bool = False
+    nco_sync_epoch: int = 0
     playback_armed: bool = False
     playback_prepared: bool = False
     playback_running: bool = False
@@ -156,6 +163,9 @@ class RfdcChannelConfig(BaseModel):
     data_amplitude: float = Field(0.5, ge=-1.0, le=1.0)
     data_phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
     nco_phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
+    # The user-requested NCO phase remains separate from the server-side
+    # calibration applied at RFDC programming time.
+    calibration_phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
     actual_nco_hz: float | None = None
     actual_nyquist_zone: int | None = Field(default=None, ge=1, le=2)
     actual_nco_phase_deg: float | None = None
@@ -185,6 +195,22 @@ class BoardRfdcConfig(BaseModel):
         if sorted(channel.channel for channel in self.channels) != list(range(1, 9)):
             raise ValueError("RFDC config requires exactly one configuration for CH1..CH8")
         return self
+
+
+class PhaseCalibrationRequest(BaseModel):
+    frequency_hz: int = Field(ge=0, le=6_400_000_000)
+    channel: int = Field(ge=1, le=8)
+    phase_deg: float = Field(ge=-3600.0, le=3600.0)
+
+
+class PhaseCalibrationRecord(BaseModel):
+    board_id: str
+    device_uid: str
+    frequency_hz: int
+    channel: int
+    phase_deg: float
+    updated_at: str
+    updated_by: str | None = None
 
 
 class RfdcConfigApplyRequest(BaseModel):

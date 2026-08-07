@@ -24,7 +24,7 @@ module tb_rfctrl2_control_path;
   wire        rvresp_tlast;
   wire [15:0] rvresp_word_count;
 
-  reg [63:0] responses [0:10];
+  reg [63:0] responses [0:11];
   integer response_count = 0;
 
   udp_waveform_ddr_writer writer (
@@ -115,6 +115,9 @@ module tb_rfctrl2_control_path;
     .rfdc_failure_address(18'd0),
     .rfdc_failure_axi_response(2'd0),
     .rfdc_ready(1'b1),
+    .dac_mts_required(1'b1), .dac_mts_ready(1'b1), .dac_mts_failed(1'b0),
+    .dac_mts_tile_mask(4'hF), .dac_mts_error(16'd0),
+    .nco_sync_ready(1'b1), .nco_sync_epoch(32'd7),
     .playback_armed(1'b0),
     .playback_prepared(1'b0),
     .playback_running(1'b0),
@@ -194,7 +197,7 @@ module tb_rfctrl2_control_path;
 
   always @(posedge clk) begin
     if (rst_n && rvresp_tvalid && rvresp_tready) begin
-      if (response_count < 11)
+      if (response_count < 12)
         responses[response_count] <= rvresp_tdata;
       response_count <= response_count + 1;
     end
@@ -228,7 +231,7 @@ module tb_rfctrl2_control_path;
     integer timeout_cycles;
     begin
       timeout_cycles = 0;
-      while ((response_count < 11) && (timeout_cycles < 64)) begin
+      while ((response_count < 12) && (timeout_cycles < 64)) begin
         @(negedge clk);
         timeout_cycles = timeout_cycles + 1;
       end
@@ -244,17 +247,18 @@ module tb_rfctrl2_control_path;
     send_status_packet();
     wait_for_status_response();
 
-    check_condition(response_count == 11, "STATUS must produce eleven RFRESP2 words");
+    check_condition(response_count == 12, "STATUS must produce twelve RFRESP2 words");
     check_condition(rvresp_word_count == 0, "response word count must clear after the final handshake");
     check_condition(responses[0] == RFRESP2_MAGIC, "response magic mismatch");
     check_condition(responses[1] == 64'h0000000200000002, "response STATUS header mismatch");
-    check_condition(responses[2] == 64'h0000004000510002, "response sequence mismatch");
+    check_condition(responses[2] == 64'h0000004800510002, "response sequence mismatch");
     check_condition(responses[3][32] == 1'b1, "RFDC ready flag must be present in STATUS");
     check_condition(responses[4] == 64'h12345678000000FF, "RFDC revision and valid mask mismatch");
     check_condition(responses[7] == 64'h0000000200000003, "playback config/fifo-valid debug mismatch");
     check_condition(responses[8] == 64'h000000050000000F, "executor/fifo-ready debug mismatch");
     check_condition(responses[9] == 64'h0000001200000034, "playback counter debug mismatch");
     check_condition(responses[10] == 64'h0000000300000001, "prefill/active/pending debug mismatch");
+    check_condition(responses[11] == 64'h00000007000000F5, "MTS/NCO synchronization debug mismatch");
 
     $display("PASS: full RFCTRL2 STATUS payload crosses the UDP writer and PL control response path");
     $finish;

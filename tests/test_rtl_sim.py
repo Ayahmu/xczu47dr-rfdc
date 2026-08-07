@@ -140,7 +140,17 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/rfdc_runtime_config_pl.v",
                 ROOT / "tests/tb_rfdc_runtime_config_pl.sv",
             ],
-            "PASS: PL RFDC controller probes readiness, validates, writes, reads back, caches retries, and reports AXI failures",
+            "PASS: PL RFDC controller stages NCO RTS, probes readiness, validates VOP/Nyquist, caches retries, and reports failures",
+        )
+
+    def test_rfdc_nco_rts_bridge_commits_all_tiles_on_one_edge(self):
+        self.run_sim(
+            "tb_rfdc_nco_rts_bridge",
+            [
+                ROOT / "hardware/vivado/src/rfdc_nco_rts_bridge.v",
+                ROOT / "tests/tb_rfdc_nco_rts_bridge.sv",
+            ],
+            "PASS: NCO RTS bridge gates SYSREF and commits enabled channels across four tiles",
         )
 
     def test_axilite_arbiter_locks_complete_transactions(self):

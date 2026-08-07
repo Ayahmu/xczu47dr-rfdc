@@ -58,7 +58,7 @@ async function leaseAction() {
     <div class="status-rail">
       <div><Cable :size="18" /><span>设备发现<small>USB / JTAG</small></span><el-tag :type="detected ? 'success' : 'info'">{{ detected ? '已发现' : '未发现' }}</el-tag></div>
       <div><Network :size="18" /><span>控制链路<small>RFCTRL2 UDP</small></span><el-tag :type="status?.online ? 'success' : 'danger'">{{ status?.online ? '已连接' : '未响应' }}</el-tag></div>
-      <div><Cpu :size="18" /><span>RFDC<small>Tile / PLL</small></span><el-tag :type="status?.rfdc_ready === true ? 'success' : status?.rfdc_ready === false ? 'warning' : 'info'">{{ status?.rfdc_ready === true ? '已就绪' : status?.rfdc_ready === false ? '未就绪' : '无法确认' }}</el-tag></div>
+      <div><Cpu :size="18" /><span>RFDC / MTS<small>Tile 同步</small></span><el-tag :type="status?.rfdc_ready === true && status?.dac_mts_ready ? 'success' : status?.dac_mts_failed || status?.rfdc_ready === false ? 'warning' : 'info'">{{ status?.dac_mts_failed ? '同步失败' : status?.rfdc_ready === true && status?.dac_mts_ready ? '已就绪' : status?.rfdc_ready === false ? '未就绪' : '无法确认' }}</el-tag></div>
       <div><Radio :size="18" /><span>播放状态<small>PL datapath</small></span><el-tag :type="stateType(status?.state)">{{ stateLabel(status?.state) }}</el-tag></div>
       <div><ShieldCheck :size="18" /><span>使用权<small>控制互斥</small></span><el-tag :type="ownsLease ? 'success' : board.lease ? 'warning' : 'info'">{{ ownsLease ? '由我持有' : board.lease ? board.lease.username : '未申请' }}</el-tag></div>
     </div>

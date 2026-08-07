@@ -63,7 +63,7 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test hardware hardware-clean chisel vivado-project synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test hardware hardware-clean chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -78,6 +78,7 @@ help:
 	@echo "Step targets:"
 	@echo "  make chisel           Generate Chisel Verilog"
 	@echo "  make vivado-project   Create Vivado project"
+	@echo "  make preflight        Elaborate RTL and run structural checks without synthesis"
 	@echo "  make synth            Run Vivado synthesis"
 	@echo "  make impl             Run Vivado implementation"
 	@echo "  make bitstream        Generate/copy bitstream and debug probes"
@@ -129,6 +130,9 @@ chisel:
 
 vivado-project: chisel
 	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/create_project.tcl -tclargs $(TARGET)
+
+preflight: vivado-project
+	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/preflight.tcl -tclargs $(TARGET)
 
 synth: vivado-project
 	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)

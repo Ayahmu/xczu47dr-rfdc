@@ -39,6 +39,7 @@ int rfdcStartup(void);
 int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
 int Configure_Custom_DAC_NCO(void);
+int Configure_DAC_MTS(void);
 int Report_Custom_DAC_Status(const char *Stage);
 int Report_Custom_DAC_Clock_Status(const char *Stage);
 
@@ -88,6 +89,26 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
 #define HMC7044_POLL_COUNT 50
 #define HMC7044_POLL_INTERVAL_US 100000
+#define DAC_MTS_TILE_MASK 0x0FU
+#define FW_STATUS_MTS_REQUIRED (1U << 1)
+#define FW_STATUS_MTS_READY (1U << 2)
+#define FW_STATUS_MTS_FAILED (1U << 3)
+#define FW_STATUS_MTS_TILE_SHIFT 4U
+#define FW_STATUS_MTS_ERROR_SHIFT 8U
+
+static void Publish_DAC_MTS_Status(u32 Ready, u32 Failed, u32 Error)
+{
+	u32 Status = FW_STATUS_MTS_REQUIRED |
+		((DAC_MTS_TILE_MASK & 0xFU) << FW_STATUS_MTS_TILE_SHIFT) |
+		((Error & 0xFFFFU) << FW_STATUS_MTS_ERROR_SHIFT);
+
+	if (Ready != 0U)
+		Status |= FW_STATUS_MTS_READY;
+	if (Failed != 0U)
+		Status |= FW_STATUS_MTS_FAILED;
+
+	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, Status);
+}
 
 static void preload_debug_waveforms(void)
 {
@@ -115,6 +136,7 @@ int Init_GPIO(void)
 {
 	Xil_Out32(GPIO_BASE_ADDR + GPIO_TRI_CH1_OFFSET, 0x00000000);
 	Xil_Out32(GPIO_BASE_ADDR + GPIO_TRI_CH2_OFFSET, 0x00000000);
+	Publish_DAC_MTS_Status(0U, 0U, 0U);
 
 	return XST_SUCCESS;
 }
@@ -366,6 +388,53 @@ int Configure_Custom_DAC_NCO(void)
 	return XST_SUCCESS;
 }
 
+int Configure_DAC_MTS(void)
+{
+	XRFdc_MultiConverter_Sync_Config DacSyncConfig;
+	u32 Status;
+	u32 Tile;
+	u32 InterpolationFactor;
+
+	/* CH1 is DAC Tile 0 / Block 0, so use Tile 0 as the stable phase
+	 * reference for MTS diagnostics and the host-side calibration workflow. */
+	Status = XRFdc_MultiConverter_Init(&DacSyncConfig, NULL, NULL, XRFDC_TILE_ID0);
+	if (Status != XRFDC_MTS_OK)
+	{
+		xil_printf("ERROR: DAC MTS init failed, status=0x%08lx\r\n", (unsigned long)Status);
+		Publish_DAC_MTS_Status(0U, 1U, Status);
+		return XST_FAILURE;
+	}
+
+	DacSyncConfig.Tiles = DAC_MTS_TILE_MASK;
+	xil_printf("Running DAC MTS: tiles=0x%lx reference_tile=%u\r\n",
+		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
+	Status = XRFdc_MultiConverter_Sync(&RFdcInst, XRFDC_DAC_TILE, &DacSyncConfig);
+	if (Status != XRFDC_MTS_OK)
+	{
+		xil_printf("ERROR: DAC MTS failed, status=0x%08lx\r\n", (unsigned long)Status);
+		Publish_DAC_MTS_Status(0U, 1U, Status);
+		return XST_FAILURE;
+	}
+
+	for (Tile = 0U; Tile < NUM_TILES; Tile++)
+	{
+		if ((DacSyncConfig.Tiles & (1U << Tile)) == 0U)
+			continue;
+		InterpolationFactor = 0U;
+		(void)XRFdc_GetInterpolationFactor(&RFdcInst, Tile, 0U, &InterpolationFactor);
+		xil_printf("DAC MTS Tile%lu: latency_t1=%d offset_t%lu=%d\r\n",
+			   (unsigned long)Tile,
+			   DacSyncConfig.Latency[Tile],
+			   (unsigned long)InterpolationFactor,
+			   DacSyncConfig.Offset[Tile]);
+	}
+
+	Publish_DAC_MTS_Status(1U, 0U, 0U);
+	xil_printf("DAC MTS ready: tiles=0x%lx reference_tile=%u\r\n",
+		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
+	return XST_SUCCESS;
+}
+
 /*****************************************************************************/
 /**
  *
@@ -390,6 +459,8 @@ int main(void)
 	int Status;
 	XRFdc_Config *ConfigPtr;
 	init_platform();
+	if (Init_GPIO() != XST_SUCCESS)
+		return XST_FAILURE;
 
 	// Initialize CLI commands structure
 
@@ -488,13 +559,16 @@ int main(void)
 	{
 		return XST_FAILURE;
 	}
+	if (Configure_DAC_MTS() != XST_SUCCESS)
+	{
+		xil_printf("RF output remains blocked because DAC MTS is not ready.\r\n");
+		while (1)
+			usleep(1000000);
+	}
 	Report_Custom_DAC_Status("after custom config");
 	Report_Custom_DAC_Clock_Status("after custom config");
 
 	// init_dma_ip(&AxiDma, CH0_DMA_DEV_ID, CH0_MM2S_INTR_ID, &INST);
-
-	if (Init_GPIO() != XST_SUCCESS)
-		return XST_FAILURE;
 
 #if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
 	// Host uploads all PL DDR waveform slots; firmware must not preload them.

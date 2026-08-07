@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { BoardOverride, BoardRfdcConfig, ManualChannel, RfdcChannelConfig, WaveformRequest } from '../types'
+import type { BoardOverride, BoardRfdcConfig, ManualChannel, PhaseCalibrationRecord, RfdcChannelConfig, WaveformRequest } from '../types'
 
 export type NcoMode = 'auto' | 'manual'
 export type PlayMode = 'single' | 'continuous_sine'
@@ -33,7 +33,11 @@ function defaultDraft(): OutputDraft {
   return { name: '单板 8 通道输出', playMode: 'single', loop: false, recordDurationNs: 10000, outputDurationMs: 100,
     channels: Array.from({ length: 8 }, (_, index) => defaultChannel(index + 1)), selectedChannels: [1], activeChannel: 1, dirty: false }
 }
-function hydrate(draft: OutputDraft, rfdc?: BoardRfdcConfig | null) {
+function calibrationFor(records: PhaseCalibrationRecord[], channel: number, targetRfGhz: number) {
+  const frequencyHz = Math.round(targetRfGhz * 1e9)
+  return records.find((item) => item.channel === channel && item.frequency_hz === frequencyHz)?.phase_deg || 0
+}
+function hydrate(draft: OutputDraft, rfdc?: BoardRfdcConfig | null, records: PhaseCalibrationRecord[] = []) {
   if (!draft.playMode) draft.playMode = draft.loop ? 'continuous_sine' : 'single'
   draft.loop = draft.playMode === 'continuous_sine'
   if (!rfdc) return draft
@@ -44,6 +48,7 @@ function hydrate(draft: OutputDraft, rfdc?: BoardRfdcConfig | null) {
     channel.dataPhaseDeg = source.data_phase_deg; channel.dataOffsetMhz = source.data_offset_hz / 1e6
     channel.dacCurrentMa = source.dac_output_current_ma; channel.ncoMhz = source.nco_hz / 1e6
     channel.ncoPhaseDeg = source.nco_phase_deg; channel.nyquistZone = source.nyquist_zone
+    channel.calibrationPhaseDeg = calibrationFor(records, channel.channel, channel.targetRfGhz)
   }
   return draft
 }
@@ -53,13 +58,17 @@ export const useDraftsStore = defineStore('drafts', {
   actions: {
     setUser(username: string) { this.username = username },
     key(boardId: string) { return 'rfdc.output.' + (this.username || 'anonymous') + '.' + boardId },
-    output(boardId: string, rfdc?: BoardRfdcConfig | null) {
+    output(boardId: string, rfdc?: BoardRfdcConfig | null, records: PhaseCalibrationRecord[] = []) {
       if (!this.outputs[boardId]) {
         let draft: OutputDraft | null = null
         try { draft = JSON.parse(localStorage.getItem(this.key(boardId)) || 'null') as OutputDraft | null } catch { draft = null }
-        this.outputs[boardId] = hydrate(draft?.channels?.length === 8 ? draft : defaultDraft(), rfdc)
+        this.outputs[boardId] = hydrate(draft?.channels?.length === 8 ? draft : defaultDraft(), rfdc, records)
       }
       return this.outputs[boardId]
+    },
+    syncFromServer(boardId: string, rfdc: BoardRfdcConfig, records: PhaseCalibrationRecord[]) {
+      const current = this.outputs[boardId] || defaultDraft()
+      this.outputs[boardId] = hydrate(current, rfdc, records)
     },
     save(boardId: string) { const draft = this.outputs[boardId]; if (draft) { draft.dirty = false; localStorage.setItem(this.key(boardId), JSON.stringify(draft)) } },
     discard(boardId: string, rfdc?: BoardRfdcConfig | null) {
@@ -96,7 +105,7 @@ export function outputWaveform(draft: OutputDraft): WaveformRequest {
 export function outputOverride(boardId: string, draft: OutputDraft): BoardOverride {
   return { board_id: boardId, channel_enabled: Object.fromEntries(draft.channels.map((item) => [item.channel, item.enabled])),
     nco_offset_hz: {},
-    phase_offset_deg: Object.fromEntries(draft.channels.map((item) => [item.channel, item.calibrationPhaseDeg])), start_offset_ns: {} }
+    phase_offset_deg: Object.fromEntries(draft.channels.map((item) => [item.channel, 0])), start_offset_ns: {} }
 }
 export function outputRfdc(boardId: string, draft: OutputDraft, base: BoardRfdcConfig): BoardRfdcConfig {
   const channels: RfdcChannelConfig[] = base.channels.map((source) => {
@@ -104,7 +113,7 @@ export function outputRfdc(boardId: string, draft: OutputDraft, base: BoardRfdcC
     const plan = item.ncoMode === 'auto' ? ncoPlan(item.targetRfGhz) : { ncoMhz: item.ncoMhz, nyquistZone: item.nyquistZone }
     return { ...source, target_rf_hz: item.targetRfGhz * 1e9, nco_hz: (plan.ncoMhz + item.calibrationNcoMhz) * 1e6,
       nyquist_zone: plan.nyquistZone, data_offset_hz: item.dataOffsetMhz * 1e6, data_amplitude: item.dataAmplitude,
-      data_phase_deg: item.dataPhaseDeg, nco_phase_deg: item.ncoPhaseDeg, dac_output_current_ma: item.dacCurrentMa }
+      data_phase_deg: item.dataPhaseDeg, nco_phase_deg: item.ncoPhaseDeg, calibration_phase_deg: 0, dac_output_current_ma: item.dacCurrentMa }
   })
   return { ...base, board_id: boardId, channels }
 }

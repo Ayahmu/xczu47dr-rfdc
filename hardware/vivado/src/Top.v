@@ -273,6 +273,48 @@ module Top (
   wire [511:0] rfdc_actual_nco_word;
   wire [255:0] rfdc_actual_phase_word;
   wire [255:0] rfdc_actual_vop_code;
+  wire         rfdc_nco_commit_start;
+  wire [7:0]   rfdc_nco_commit_mask;
+  wire [383:0] rfdc_nco_commit_freq_words;
+  wire [143:0] rfdc_nco_commit_phase_words;
+  wire         rfdc_nco_commit_busy;
+  wire         rfdc_nco_commit_done;
+  wire [1:0]   rfdc_nco_commit_error;
+  wire         rfdc_nco_sync_ready;
+  wire [31:0]  rfdc_nco_sync_epoch;
+  wire [383:0] rfdc_dac_nco_freq;
+  wire [143:0] rfdc_dac_nco_phase;
+  wire [7:0]   rfdc_dac_nco_phase_reset;
+  wire [47:0]  rfdc_dac_nco_update_enable;
+  wire [3:0]   rfdc_dac_tile_update_req;
+  // RFDC NCO RTS busy widths are asymmetric: Tile 0 exposes DRP and
+  // SYSREF-gate busy bits; Tiles 1-3 expose one DRP busy bit each.
+  wire [1:0]   rfdc_dac0_nco_update_busy;
+  wire         rfdc_dac1_nco_update_busy;
+  wire         rfdc_dac2_nco_update_busy;
+  wire         rfdc_dac3_nco_update_busy;
+  wire [4:0]   rfdc_dac_tile_update_busy = {
+      rfdc_dac3_nco_update_busy,
+      rfdc_dac2_nco_update_busy,
+      rfdc_dac1_nco_update_busy,
+      rfdc_dac0_nco_update_busy[1],
+      rfdc_dac0_nco_update_busy[0]
+  };
+  wire         rfdc_dac0_sysref_int_gating;
+  wire         rfdc_dac0_sysref_int_reenable;
+  wire         pl_sysref_dac;
+  wire [31:0]  gpio_out_reg;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_meta;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
+  wire         dac_mts_required = firmware_status_ddr[1];
+  wire         dac_mts_ready = firmware_status_ddr[2];
+  wire         dac_mts_failed = firmware_status_ddr[3];
+  wire [3:0]   dac_mts_tile_mask = firmware_status_ddr[7:4];
+  wire [15:0]  dac_mts_error = firmware_status_ddr[23:8];
+  wire         rfdc_operational_ready = rfdc_runtime_ready && dac_mts_required &&
+                                          dac_mts_ready && !dac_mts_failed;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] rfdc_output_permitted_dac_sync;
+  wire         rfdc_output_permitted_dac = rfdc_output_permitted_dac_sync[1];
   wire         network_apply_start;
   wire [31:0]  network_apply_revision;
   wire [31:0]  network_apply_ip;
@@ -467,14 +509,32 @@ module Top (
       .loop_en     (1'b0)
   );
 
+  // Keep the 300 MHz UDP parser local to its input registers. This preserves
+  // one-word-per-cycle throughput while removing the long high-fanout path
+  // from the 10G RX core directly into the packet state machine.
+  reg        udp_writer_tvalid;
+  reg [63:0] udp_writer_tdata;
+  reg        udp_writer_tlast;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      udp_writer_tvalid <= 1'b0;
+      udp_writer_tdata <= 64'd0;
+      udp_writer_tlast <= 1'b0;
+    end else begin
+      udp_writer_tvalid <= udp64_rcv_vld;
+      udp_writer_tdata <= udp64_rcv_dat;
+      udp_writer_tlast <= udp64_rcv_last;
+    end
+  end
+
   udp_waveform_ddr_writer #(
       .DDR_ADDR_BASE(EXT_DDR_ADDR_BASE)
   ) udp_waveform_ddr_writer_i (
       .clk              (ddr4_ui_clk),
       .rst_n            (ddr4_ui_aresetn),
-      .udp_tvalid       (udp64_rcv_vld),
-      .udp_tdata        (udp64_rcv_dat),
-      .udp_tlast        (udp64_rcv_last),
+      .udp_tvalid       (udp_writer_tvalid),
+      .udp_tdata        (udp_writer_tdata),
+      .udp_tlast        (udp_writer_tlast),
       .instr_tvalid     (udp_instr64_tvalid),
       .instr_tdata      (udp_instr64_tdata),
       .trigger_pulse    (udp_trigger_pulse),
@@ -594,7 +654,14 @@ module Top (
       .rfdc_failure_stage  (rfdc_failure_stage),
       .rfdc_failure_address(rfdc_failure_address),
       .rfdc_failure_axi_response(rfdc_failure_axi_response),
-      .rfdc_ready          (rfdc_runtime_ready),
+      .rfdc_ready          (rfdc_operational_ready),
+      .dac_mts_required    (dac_mts_required),
+      .dac_mts_ready       (dac_mts_ready),
+      .dac_mts_failed      (dac_mts_failed),
+      .dac_mts_tile_mask   (dac_mts_tile_mask),
+      .dac_mts_error       (dac_mts_error),
+      .nco_sync_ready      (rfdc_nco_sync_ready),
+      .nco_sync_epoch      (rfdc_nco_sync_epoch),
       .playback_armed      (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
       .playback_prepared   (rfctrl2_prepared_ddr),
       .playback_running    (pc_started_ddr),
@@ -696,6 +763,11 @@ module Top (
       .actual_current_ua(rfdc_actual_current_ua), .channel_status(rfdc_channel_status),
       .actual_nco_word(rfdc_actual_nco_word), .actual_phase_word(rfdc_actual_phase_word),
       .actual_vop_code(rfdc_actual_vop_code),
+      .nco_commit_start(rfdc_nco_commit_start), .nco_commit_mask(rfdc_nco_commit_mask),
+      .nco_commit_freq_words(rfdc_nco_commit_freq_words),
+      .nco_commit_phase_words(rfdc_nco_commit_phase_words),
+      .nco_commit_busy(rfdc_nco_commit_busy), .nco_commit_done(rfdc_nco_commit_done),
+      .nco_commit_error(rfdc_nco_commit_error),
       .m_axil_awaddr(RFDC_CFG_AXI_awaddr), .m_axil_awvalid(RFDC_CFG_AXI_awvalid),
       .m_axil_awready(RFDC_CFG_AXI_awready), .m_axil_wdata(RFDC_CFG_AXI_wdata),
       .m_axil_wstrb(RFDC_CFG_AXI_wstrb), .m_axil_wvalid(RFDC_CFG_AXI_wvalid),
@@ -705,6 +777,33 @@ module Top (
       .m_axil_arready(RFDC_CFG_AXI_arready), .m_axil_rdata(RFDC_CFG_AXI_rdata),
       .m_axil_rresp(RFDC_CFG_AXI_rresp), .m_axil_rvalid(RFDC_CFG_AXI_rvalid),
       .m_axil_rready(RFDC_CFG_AXI_rready)
+  );
+
+  rfdc_nco_rts_bridge #(
+      .TIMEOUT_CYCLES(500000)
+  ) rfdc_nco_rts_bridge_i (
+      .src_clk(ddr4_ui_clk), .src_rst_n(ddr4_ui_aresetn),
+      .src_start(rfdc_nco_commit_start), .src_channel_mask(rfdc_nco_commit_mask),
+      .src_nco_freq(rfdc_nco_commit_freq_words), .src_nco_phase(rfdc_nco_commit_phase_words),
+      .src_busy(rfdc_nco_commit_busy), .src_done(rfdc_nco_commit_done),
+      .src_error(rfdc_nco_commit_error), .src_sync_ready(rfdc_nco_sync_ready),
+      .src_sync_epoch(rfdc_nco_sync_epoch),
+      .rfdc_clk(pl_clk), .rfdc_rst_n(pl_aresetn),
+      .rfdc_tile_update_busy(rfdc_dac_tile_update_busy),
+      .dac_nco_freq(rfdc_dac_nco_freq), .dac_nco_phase(rfdc_dac_nco_phase),
+      .dac_nco_phase_reset(rfdc_dac_nco_phase_reset),
+      .dac_nco_update_enable(rfdc_dac_nco_update_enable),
+      .dac_tile_update_req(rfdc_dac_tile_update_req),
+      .dac_sysref_int_gating(rfdc_dac0_sysref_int_gating),
+      .dac_sysref_int_reenable(rfdc_dac0_sysref_int_reenable)
+  );
+
+  IBUFDS #(
+      .IBUF_LOW_PWR("FALSE")
+  ) pl_sysref_ibufds_i (
+      .I(PL_SYSREF_P_0),
+      .IB(PL_SYSREF_N_0),
+      .O(pl_sysref_dac)
   );
 
   axilite_arbiter_2to1 #(.ADDR_WIDTH(18)) pl_rfdc_axil_arbiter_i (
@@ -812,8 +911,26 @@ module Top (
   wire [63:0]  dm_data_tkeep;
 
   // ========== GPIO out ==========
-  wire [31:0] gpio_out_reg;
   wire ps_trigger_raw = gpio_out_reg[0];
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      firmware_status_meta <= 32'd0;
+      firmware_status_ddr <= 32'd0;
+    end else begin
+      firmware_status_meta <= gpio_out_reg;
+      firmware_status_ddr <= firmware_status_meta;
+    end
+  end
+
+  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
+    if (!clk104_aresetn)
+      rfdc_output_permitted_dac_sync <= 2'b00;
+    else
+      rfdc_output_permitted_dac_sync <= {
+          rfdc_output_permitted_dac_sync[0],
+          rfdc_operational_ready && rfdc_nco_sync_ready
+      };
+  end
   reg [7:0] udp_trigger_stretch_cnt;
   reg       udp_trigger_stretched;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1484,22 +1601,22 @@ module Top (
   assign dac_ch7_valid_gated = dac_in_ch7_tvalid & ch7_allow;
   assign dac_ch8_valid_gated = dac_in_ch8_tvalid & ch8_allow;
 
-  wire [255:0] rfdc_ch1_tdata = ch1_allow ? dac_in_ch1_tdata : 256'd0;
-  wire [255:0] rfdc_ch2_tdata = ch2_allow ? dac_in_ch2_tdata : 256'd0;
-  wire [255:0] rfdc_ch3_tdata = ch3_allow ? dac_in_ch3_tdata : 256'd0;
-  wire [255:0] rfdc_ch4_tdata = ch4_allow ? dac_in_ch4_tdata : 256'd0;
-  wire [255:0] rfdc_ch5_tdata = ch5_allow ? dac_in_ch5_tdata : 256'd0;
-  wire [255:0] rfdc_ch6_tdata = ch6_allow ? dac_in_ch6_tdata : 256'd0;
-  wire [255:0] rfdc_ch7_tdata = ch7_allow ? dac_in_ch7_tdata : 256'd0;
-  wire [255:0] rfdc_ch8_tdata = ch8_allow ? dac_in_ch8_tdata : 256'd0;
-  wire         rfdc_ch1_tvalid = ch1_allow ? dac_in_ch1_tvalid : 1'b1;
-  wire         rfdc_ch2_tvalid = ch2_allow ? dac_in_ch2_tvalid : 1'b1;
-  wire         rfdc_ch3_tvalid = ch3_allow ? dac_in_ch3_tvalid : 1'b1;
-  wire         rfdc_ch4_tvalid = ch4_allow ? dac_in_ch4_tvalid : 1'b1;
-  wire         rfdc_ch5_tvalid = ch5_allow ? dac_in_ch5_tvalid : 1'b1;
-  wire         rfdc_ch6_tvalid = ch6_allow ? dac_in_ch6_tvalid : 1'b1;
-  wire         rfdc_ch7_tvalid = ch7_allow ? dac_in_ch7_tvalid : 1'b1;
-  wire         rfdc_ch8_tvalid = ch8_allow ? dac_in_ch8_tvalid : 1'b1;
+  wire [255:0] rfdc_ch1_tdata = (rfdc_output_permitted_dac && ch1_allow) ? dac_in_ch1_tdata : 256'd0;
+  wire [255:0] rfdc_ch2_tdata = (rfdc_output_permitted_dac && ch2_allow) ? dac_in_ch2_tdata : 256'd0;
+  wire [255:0] rfdc_ch3_tdata = (rfdc_output_permitted_dac && ch3_allow) ? dac_in_ch3_tdata : 256'd0;
+  wire [255:0] rfdc_ch4_tdata = (rfdc_output_permitted_dac && ch4_allow) ? dac_in_ch4_tdata : 256'd0;
+  wire [255:0] rfdc_ch5_tdata = (rfdc_output_permitted_dac && ch5_allow) ? dac_in_ch5_tdata : 256'd0;
+  wire [255:0] rfdc_ch6_tdata = (rfdc_output_permitted_dac && ch6_allow) ? dac_in_ch6_tdata : 256'd0;
+  wire [255:0] rfdc_ch7_tdata = (rfdc_output_permitted_dac && ch7_allow) ? dac_in_ch7_tdata : 256'd0;
+  wire [255:0] rfdc_ch8_tdata = (rfdc_output_permitted_dac && ch8_allow) ? dac_in_ch8_tdata : 256'd0;
+  wire         rfdc_ch1_tvalid = (rfdc_output_permitted_dac && ch1_allow) ? dac_in_ch1_tvalid : 1'b1;
+  wire         rfdc_ch2_tvalid = (rfdc_output_permitted_dac && ch2_allow) ? dac_in_ch2_tvalid : 1'b1;
+  wire         rfdc_ch3_tvalid = (rfdc_output_permitted_dac && ch3_allow) ? dac_in_ch3_tvalid : 1'b1;
+  wire         rfdc_ch4_tvalid = (rfdc_output_permitted_dac && ch4_allow) ? dac_in_ch4_tvalid : 1'b1;
+  wire         rfdc_ch5_tvalid = (rfdc_output_permitted_dac && ch5_allow) ? dac_in_ch5_tvalid : 1'b1;
+  wire         rfdc_ch6_tvalid = (rfdc_output_permitted_dac && ch6_allow) ? dac_in_ch6_tvalid : 1'b1;
+  wire         rfdc_ch7_tvalid = (rfdc_output_permitted_dac && ch7_allow) ? dac_in_ch7_tvalid : 1'b1;
+  wire         rfdc_ch8_tvalid = (rfdc_output_permitted_dac && ch8_allow) ? dac_in_ch8_tvalid : 1'b1;
 
   wire dac_any_valid_gated = dac_ch1_valid_gated | dac_ch2_valid_gated |
                              dac_ch3_valid_gated | dac_ch4_valid_gated |
@@ -2211,6 +2328,7 @@ module Top (
       .s_axi_rready(RFDC_S_AXI_rready),
       .sysref_in_p(sysref_in_diff_p),
       .sysref_in_n(sysref_in_diff_n),
+      .user_sysref_dac(pl_sysref_dac),
       .dac2_clk_p(dac2_clk_clk_p),
       .dac2_clk_n(dac2_clk_clk_n),
       .clk_dac0(clk_dac0),
@@ -2225,6 +2343,48 @@ module Top (
       .clk_dac3(clk_dac3),
       .s3_axis_aclk(dac_axis_clk),
       .s3_axis_aresetn(clk104_aresetn),
+      .dac00_nco_freq(rfdc_dac_nco_freq[0 +: 48]),
+      .dac00_nco_phase(rfdc_dac_nco_phase[0 +: 18]),
+      .dac00_nco_phase_rst(rfdc_dac_nco_phase_reset[0]),
+      .dac00_nco_update_en(rfdc_dac_nco_update_enable[0 +: 6]),
+      .dac02_nco_freq(rfdc_dac_nco_freq[48 +: 48]),
+      .dac02_nco_phase(rfdc_dac_nco_phase[18 +: 18]),
+      .dac02_nco_phase_rst(rfdc_dac_nco_phase_reset[1]),
+      .dac02_nco_update_en(rfdc_dac_nco_update_enable[6 +: 6]),
+      .dac0_nco_update_req(rfdc_dac_tile_update_req[0]),
+      .dac0_nco_update_busy(rfdc_dac0_nco_update_busy),
+      .dac0_sysref_int_gating(rfdc_dac0_sysref_int_gating),
+      .dac0_sysref_int_reenable(rfdc_dac0_sysref_int_reenable),
+      .dac10_nco_freq(rfdc_dac_nco_freq[96 +: 48]),
+      .dac10_nco_phase(rfdc_dac_nco_phase[36 +: 18]),
+      .dac10_nco_phase_rst(rfdc_dac_nco_phase_reset[2]),
+      .dac10_nco_update_en(rfdc_dac_nco_update_enable[12 +: 6]),
+      .dac12_nco_freq(rfdc_dac_nco_freq[144 +: 48]),
+      .dac12_nco_phase(rfdc_dac_nco_phase[54 +: 18]),
+      .dac12_nco_phase_rst(rfdc_dac_nco_phase_reset[3]),
+      .dac12_nco_update_en(rfdc_dac_nco_update_enable[18 +: 6]),
+      .dac1_nco_update_req(rfdc_dac_tile_update_req[1]),
+      .dac1_nco_update_busy(rfdc_dac1_nco_update_busy),
+      .dac20_nco_freq(rfdc_dac_nco_freq[192 +: 48]),
+      .dac20_nco_phase(rfdc_dac_nco_phase[72 +: 18]),
+      .dac20_nco_phase_rst(rfdc_dac_nco_phase_reset[4]),
+      .dac20_nco_update_en(rfdc_dac_nco_update_enable[24 +: 6]),
+      .dac22_nco_freq(rfdc_dac_nco_freq[240 +: 48]),
+      .dac22_nco_phase(rfdc_dac_nco_phase[90 +: 18]),
+      .dac22_nco_phase_rst(rfdc_dac_nco_phase_reset[5]),
+      .dac22_nco_update_en(rfdc_dac_nco_update_enable[30 +: 6]),
+      .dac2_nco_update_req(rfdc_dac_tile_update_req[2]),
+      .dac2_nco_update_busy(rfdc_dac2_nco_update_busy),
+      .dac30_nco_freq(rfdc_dac_nco_freq[288 +: 48]),
+      .dac30_nco_phase(rfdc_dac_nco_phase[108 +: 18]),
+      .dac30_nco_phase_rst(rfdc_dac_nco_phase_reset[6]),
+      .dac30_nco_update_en(rfdc_dac_nco_update_enable[36 +: 6]),
+      .dac32_nco_freq(rfdc_dac_nco_freq[336 +: 48]),
+      .dac32_nco_phase(rfdc_dac_nco_phase[126 +: 18]),
+      .dac32_nco_phase_rst(rfdc_dac_nco_phase_reset[7]),
+      .dac32_nco_update_en(rfdc_dac_nco_update_enable[42 +: 6]),
+      .dac3_nco_update_req(rfdc_dac_tile_update_req[3]),
+      .dac3_nco_update_busy(rfdc_dac3_nco_update_busy),
       .vout00_p(vout00_v_p),
       .vout00_n(vout00_v_n),
       .vout02_p(vout02_v_p),

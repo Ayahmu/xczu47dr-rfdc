@@ -5,6 +5,7 @@
 hardware/vivado/work/
 hardware/vivado/.Xil/
 hardware/vivado/output/
+hardware/vivado/reports/
 hardware/vivado/bitstream_recovery/
 hardware/vivado/myproj/
 hardware/vivado/*.jou

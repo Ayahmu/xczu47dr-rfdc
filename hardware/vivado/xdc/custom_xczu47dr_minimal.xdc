@@ -48,7 +48,6 @@ set_property PACKAGE_PIN C8 [get_ports PL_SYSREF_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_P_0]
 set_property PACKAGE_PIN C7 [get_ports PL_SYSREF_N_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_N_0]
-set_property IOB false [get_ports PL_SYSREF_P_0]
 
 # HMC7044 CLKOUT2 10MHz return to the FPGA. Board A forwards it to Board B.
 set_property PACKAGE_PIN B8 [get_ports mclk_10m_p]

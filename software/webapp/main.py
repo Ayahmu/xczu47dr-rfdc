@@ -39,6 +39,8 @@ from .models import (
     NetworkInterfaceInfo,
     NetworkConfigRequest,
     NetworkConfigSnapshot,
+    PhaseCalibrationRecord,
+    PhaseCalibrationRequest,
     PreviewRequest,
     PreviewResponse,
     PreflightCheck,
@@ -285,6 +287,15 @@ def _require_live_board_ready(app_services: AppServices, board_id: str) -> Board
         )
     if status.rfdc_ready is not True:
         raise RuntimeError(f"board {board_id} RFDC is not ready")
+    if not status.dac_mts_required:
+        raise RuntimeError(
+            f"board {board_id} installed bitstream/firmware does not declare mandatory DAC MTS"
+        )
+    if not status.dac_mts_ready or status.dac_mts_failed:
+        raise RuntimeError(
+            f"board {board_id} DAC MTS is not ready"
+            + (f": error 0x{status.dac_mts_error:04X}" if status.dac_mts_error else "")
+        )
     return status
 
 
@@ -670,6 +681,21 @@ def board_preflight(board_id: str, artifact_id: str | None = None, refresh: bool
             "LOCKED" if status.hmc_locked is True else "UNLOCKED" if status.hmc_locked is False else "固件未返回锁定状态")
         add("rfdc", "RFDC 初始化", "pass" if status.rfdc_ready is True else "fail" if status.rfdc_ready is False else "warning",
             "READY" if status.rfdc_ready is True else "NOT READY" if status.rfdc_ready is False else "固件未返回初始化状态")
+        mts_ok = status.dac_mts_required and status.dac_mts_ready and not status.dac_mts_failed
+        add(
+            "dac_mts", "DAC 多 Tile 同步", "pass" if mts_ok else "fail",
+            (
+                f"READY · tiles=0x{status.dac_mts_tile_mask:X}"
+                if mts_ok else
+                f"NOT READY · error=0x{status.dac_mts_error:04X}"
+                if status.dac_mts_failed else
+                "当前 bitstream/firmware 未确认 MTS 就绪"
+            ),
+        )
+        add(
+            "nco_sync", "NCO 同步提交", "pass" if status.nco_sync_ready else "warning",
+            f"READY · epoch={status.nco_sync_epoch}" if status.nco_sync_ready else "将在首次 RFDC 配置后就绪",
+        )
 
         if not board.serial_path:
             add("uart", "只读 UART", "warning", "未绑定稳定串口路径")
@@ -709,7 +735,7 @@ def board_preflight(board_id: str, artifact_id: str | None = None, refresh: bool
             f"{recent_fault.name}: {recent_fault.error or '任务故障'}" if recent_fault else "最近记录中没有故障")
 
         can_start = board.enabled and status.online and protocol_ok and network_applied and status.hmc_locked is not False \
-            and status.rfdc_ready is True and owns_lease and active_run is None and artifact_ok
+            and status.rfdc_ready is True and mts_ok and owns_lease and active_run is None and artifact_ok
         return BoardPreflight(board_id=board_id, can_start_live=can_start, checks=checks, checked_at=datetime.now(UTC).isoformat())
     except Exception as exc:
         raise http_error(exc) from exc
@@ -960,6 +986,39 @@ def get_rfdc_config(
 ) -> BoardRfdcConfig:
     try:
         return services().rfdc.get(board_id, refresh=refresh)
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
+@app.get("/api/boards/{board_id}/phase-calibration", response_model=list[PhaseCalibrationRecord])
+def list_phase_calibrations(
+    board_id: str,
+    _user: UserRecord = Depends(require_user),
+) -> list[PhaseCalibrationRecord]:
+    try:
+        return services().management.list_phase_calibrations(board_id)
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
+@app.put("/api/boards/{board_id}/phase-calibration", response_model=PhaseCalibrationRecord)
+def save_phase_calibration(
+    board_id: str,
+    request: PhaseCalibrationRequest,
+    user: UserRecord = Depends(require_mutation_user),
+) -> PhaseCalibrationRecord:
+    try:
+        if user.role != UserRole.ADMIN:
+            services().management.require_lease(user, board_id)
+        result = services().management.save_phase_calibration(board_id, request, user)
+        services().management.add_audit(
+            "rfdc.phase_calibration.updated",
+            f"{user.username} updated CH{request.channel} phase calibration at {request.frequency_hz} Hz",
+            user.id,
+            board_id,
+            {"frequency_hz": request.frequency_hz, "channel": request.channel, "phase_deg": request.phase_deg},
+        )
+        return result
     except Exception as exc:
         raise http_error(exc) from exc
 

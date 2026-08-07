@@ -12,6 +12,7 @@ from software.webapp.models import (
     BoardProfile,
     BoardState,
     BoardStatus,
+    PhaseCalibrationRecord,
     RfdcConfigApplyRequest,
 )
 from software.webapp.network import ensure_auto_link_ready, list_udp_interfaces, process_capability_report, udp_path_error
@@ -164,6 +165,9 @@ class NetworkInterfaceTests(unittest.TestCase):
             board_id=board.id,
             state=BoardState.READY,
             online=True,
+            dac_mts_required=True,
+            dac_mts_ready=True,
+            dac_mts_tile_mask=0xF,
         )
         boards.rfdc_apply.return_value = {
             "status": 0,
@@ -183,6 +187,59 @@ class NetworkInterfaceTests(unittest.TestCase):
 
         self.assertEqual(result.apply_status, "applied")
         boards.rfdc_apply.assert_called_once()
+
+    def test_rfdc_apply_adds_exact_server_phase_calibration_to_nco(self):
+        board = BoardProfile(
+            id="board-a", name="A", ip="192.168.1.128", mac="", device_uid="dna-1", clock_source="onboard"
+        )
+        config = default_rfdc_config(board.id)
+        store = Mock()
+        store.board.return_value = board
+        store.load_rfdc_config.return_value = config
+        store.save_rfdc_config.side_effect = lambda value: value
+        store.list_phase_calibrations.return_value = [
+            PhaseCalibrationRecord(
+                board_id=board.id, device_uid=board.device_uid, frequency_hz=4_500_000_000,
+                channel=1, phase_deg=12.5, updated_at="2026-01-01T00:00:00+00:00",
+            )
+        ]
+        boards = Mock()
+        boards.status.return_value = BoardStatus(
+            board_id=board.id, state=BoardState.READY, online=True,
+            dac_mts_required=True, dac_mts_ready=True, dac_mts_tile_mask=0xF,
+        )
+        boards.rfdc_apply.return_value = {
+            "status": 0, "revision": 1, "applied_mask": 1, "error_mask": 0,
+            "config_valid_mask": 1, "channels": [],
+        }
+        result = RfdcConfigService(store, boards, Mock(), Mock()).apply(
+            board.id, RfdcConfigApplyRequest(channels=config.channels, channel_mask=1)
+        )
+        hardware_channels = boards.rfdc_apply.call_args.args[1]
+        self.assertEqual(hardware_channels[0].nco_phase_deg, 12.5)
+        self.assertEqual(result.channels[0].nco_phase_deg, 0.0)
+        self.assertEqual(result.channels[0].calibration_phase_deg, 12.5)
+
+    def test_rfdc_apply_rejects_bitstream_without_mts_declaration(self):
+        board = BoardProfile(id="board-a", name="A", ip="192.168.1.128", mac="", clock_source="onboard")
+        config = default_rfdc_config(board.id)
+        store = Mock()
+        store.board.return_value = board
+        store.load_rfdc_config.return_value = config
+        boards = Mock()
+        boards.status.return_value = BoardStatus(
+            board_id=board.id,
+            state=BoardState.READY,
+            online=True,
+            rfdc_ready=True,
+        )
+
+        with self.assertRaisesRegex(ManagementError, "does not declare mandatory DAC MTS"):
+            RfdcConfigService(store, boards, Mock(), Mock()).apply(
+                board.id,
+                RfdcConfigApplyRequest(channels=config.channels, channel_mask=1),
+            )
+        boards.rfdc_apply.assert_not_called()
 
     def test_control_timeout_clears_stale_hardware_and_playback_state(self):
         board = BoardProfile(
@@ -241,8 +298,13 @@ class NetworkInterfaceTests(unittest.TestCase):
             online=True,
             protocol_version=2,
             rfdc_ready=True,
-            rfdc_capabilities=host.RF2_CAP_PL_RFDC_CONFIG,
+            rfdc_capabilities=host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_DAC_MTS | host.RF2_CAP_NCO_SYNC,
             rfdc_config_valid_mask=0x03,
+            dac_mts_required=True,
+            dac_mts_ready=True,
+            dac_mts_tile_mask=0xF,
+            nco_sync_ready=True,
+            nco_sync_epoch=1,
         )
         status_payload = struct.pack(
             "<IIIIIIIIQQQQ",

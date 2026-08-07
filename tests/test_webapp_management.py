@@ -10,6 +10,7 @@ from software.webapp.hardware_services import DiscoveryService, ProgrammerServic
 from software.webapp.management import ManagementError, ManagementStore, PermissionError
 from software.webapp.models import (
     BoardUpdateRequest,
+    PhaseCalibrationRequest,
     PerformanceTestCreateRequest,
     RunCreateRequest,
     UserCreateRequest,
@@ -185,6 +186,26 @@ class ManagementStoreTests(unittest.TestCase):
         )
         self.assertEqual(updated.id, board.id)
         self.assertEqual(len([item for item in self.store.list_boards() if item.device_uid == "0000000047d00081"]), 1)
+
+    def test_phase_calibration_is_keyed_by_exact_frequency_and_channel(self):
+        saved = self.store.save_phase_calibration(
+            "board-a",
+            PhaseCalibrationRequest(frequency_hz=4_500_000_000, channel=2, phase_deg=12.5),
+            self.admin,
+        )
+        self.assertEqual(saved.device_uid, "sim-board-a")
+        self.assertEqual(saved.frequency_hz, 4_500_000_000)
+        self.assertEqual(saved.phase_deg, 12.5)
+        self.store.save_phase_calibration(
+            "board-a",
+            PhaseCalibrationRequest(frequency_hz=4_500_001_000, channel=2, phase_deg=-3.0),
+            self.admin,
+        )
+        records = self.store.list_phase_calibrations("board-a")
+        self.assertEqual(
+            [(item.frequency_hz, item.channel, item.phase_deg) for item in records],
+            [(4_500_000_000, 2, 12.5), (4_500_001_000, 2, -3.0)],
+        )
 
     def test_empty_interface_pool_uses_profile_target_before_other_addresses(self):
         os.environ.pop("RFSOC_WEB_SIMULATION", None)

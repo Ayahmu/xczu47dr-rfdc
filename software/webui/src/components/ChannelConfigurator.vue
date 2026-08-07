@@ -3,9 +3,10 @@ import { computed, reactive, ref, watch } from 'vue'
 import { Copy, Settings2 } from 'lucide-vue-next'
 import { channelColors } from '../utils/format'
 import { ncoPlan, type OutputDraft } from '../stores/drafts'
+import type { PhaseCalibrationRecord } from '../types'
 
-const props = defineProps<{ draft: OutputDraft; readbackRevision?: number; validMask?: number }>()
-const emit = defineEmits<{ dirty: [] }>()
+const props = defineProps<{ draft: OutputDraft; readbackRevision?: number; validMask?: number; calibrations?: PhaseCalibrationRecord[] }>()
+const emit = defineEmits<{ dirty: []; 'calibration-change': [channel: number, frequencyHz: number, phaseDeg: number] }>()
 const advanced = ref(false)
 const bulkOpen = ref(false)
 const bulk = reactive({ targets: [] as number[], fields: ['dataAmplitude', 'dataPhaseDeg', 'dataOffsetMhz'] as string[] })
@@ -17,6 +18,10 @@ const fieldOptions = [
   ['ncoMode', 'NCO 模式'], ['ncoMhz', 'NCO 频率'], ['ncoPhaseDeg', 'NCO 相位'], ['nyquistZone', 'Nyquist zone'],
 ]
 function touch() { emit('dirty') }
+function calibrationChanged() {
+  emit('calibration-change', active.value.channel, Math.round(active.value.targetRfGhz * 1e9), active.value.calibrationPhaseDeg)
+  touch()
+}
 function selectChannel(channel: number, event?: MouseEvent) {
   props.draft.activeChannel = channel
   if (event?.ctrlKey || event?.metaKey) {
@@ -40,6 +45,10 @@ function applyBulk() {
   bulkOpen.value = false; touch()
 }
 watch(() => active.value.ncoMode, updateAutoNco)
+watch(() => [active.value.channel, active.value.targetRfGhz], () => {
+  const frequencyHz = Math.round(active.value.targetRfGhz * 1e9)
+  active.value.calibrationPhaseDeg = props.calibrations?.find((item) => item.channel === active.value.channel && item.frequency_hz === frequencyHz)?.phase_deg || 0
+})
 </script>
 <template>
   <div class="channel-configurator">
@@ -76,7 +85,7 @@ watch(() => active.value.ncoMode, updateAutoNco)
           <label><span>NCO 频率 <small>MHz</small></span><el-input-number v-model="active.ncoMhz" :disabled="active.ncoMode === 'auto'" :min="-3200" :max="3200" :step="0.1" :precision="6" controls-position="right" @change="touch" /></label>
           <label><span>NCO 相位 <small>deg</small></span><el-input-number v-model="active.ncoPhaseDeg" :min="-3600" :max="3600" :step="1" controls-position="right" @change="touch" /></label>
           <label><span>Nyquist zone</span><el-select v-model="active.nyquistZone" :disabled="active.ncoMode === 'auto'" @change="touch"><el-option label="Zone 1" :value="1" /><el-option label="Zone 2" :value="2" /></el-select></label>
-          <label><span>相位校准偏移 <small>deg</small></span><el-input-number v-model="active.calibrationPhaseDeg" :step="0.1" :precision="3" controls-position="right" @change="touch" /></label>
+          <label><span>相位校准偏移 <small>deg，服务器精确频点</small></span><el-input-number v-model="active.calibrationPhaseDeg" :step="0.1" :precision="3" controls-position="right" @change="calibrationChanged" /></label>
           <label><span>NCO 校准偏移 <small>MHz</small></span><el-input-number v-model="active.calibrationNcoMhz" :step="0.001" :precision="6" controls-position="right" @change="touch" /></label>
           <div class="readback-box"><span>PL 回读</span><strong>revision {{ readbackRevision || 0 }}</strong><small>有效通道 0x{{ (validMask || 0).toString(16).toUpperCase().padStart(2, '0') }}</small></div>
         </div>

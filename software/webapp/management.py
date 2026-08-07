@@ -22,6 +22,8 @@ from .models import (
     LeaseRecord,
     ProgramJob,
     BoardRfdcConfig,
+    PhaseCalibrationRecord,
+    PhaseCalibrationRequest,
     SerialLogLine,
     UserCreateRequest,
     UserRecord,
@@ -216,6 +218,17 @@ class ManagementStore:
                     apply_error TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS phase_calibrations (
+                    device_uid TEXT NOT NULL,
+                    frequency_hz INTEGER NOT NULL CHECK(frequency_hz >= 0 AND frequency_hz <= 6400000000),
+                    channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 8),
+                    phase_deg REAL NOT NULL CHECK(phase_deg >= -3600.0 AND phase_deg <= 3600.0),
+                    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(device_uid, frequency_hz, channel)
+                );
+                CREATE INDEX IF NOT EXISTS phase_calibrations_device_index
+                    ON phase_calibrations(device_uid, frequency_hz, channel);
                 """
             )
             # Keep the database file backwards compatible with installations
@@ -892,6 +905,52 @@ class ManagementStore:
                  config.apply_error, now()),
             )
         return config
+
+    def list_phase_calibrations(self, board_id: str) -> list[PhaseCalibrationRecord]:
+        board = self.board(board_id)
+        if not board.device_uid:
+            return []
+        with self._transaction() as connection:
+            rows = connection.execute(
+                """SELECT c.*, u.username AS updated_by_name
+                   FROM phase_calibrations AS c
+                   LEFT JOIN users AS u ON u.id=c.updated_by
+                   WHERE c.device_uid=?
+                   ORDER BY c.frequency_hz, c.channel""",
+                (board.device_uid,),
+            ).fetchall()
+        return [
+            PhaseCalibrationRecord(
+                board_id=board_id,
+                device_uid=row["device_uid"],
+                frequency_hz=int(row["frequency_hz"]),
+                channel=int(row["channel"]),
+                phase_deg=float(row["phase_deg"]),
+                updated_at=row["updated_at"],
+                updated_by=row["updated_by_name"],
+            )
+            for row in rows
+        ]
+
+    def save_phase_calibration(
+        self, board_id: str, request: PhaseCalibrationRequest, user: UserRecord
+    ) -> PhaseCalibrationRecord:
+        board = self.board(board_id)
+        if not board.device_uid:
+            raise ManagementError("板卡尚未完成 RFCTRL2 discovery，不能保存相位校准")
+        timestamp = now()
+        with self._transaction(immediate=True) as connection:
+            connection.execute(
+                """INSERT INTO phase_calibrations(device_uid, frequency_hz, channel, phase_deg, updated_by, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(device_uid, frequency_hz, channel) DO UPDATE SET
+                     phase_deg=excluded.phase_deg, updated_by=excluded.updated_by, updated_at=excluded.updated_at""",
+                (board.device_uid, request.frequency_hz, request.channel, request.phase_deg, user.id, timestamp),
+            )
+        return next(
+            item for item in self.list_phase_calibrations(board_id)
+            if item.frequency_hz == request.frequency_hz and item.channel == request.channel
+        )
 
     def set_serial_binding(self, board_id: str, path: str, baud_rate: int) -> BoardProfile:
         with self._transaction(immediate=True) as connection:

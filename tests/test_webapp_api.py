@@ -255,6 +255,19 @@ class WebAppApiTests(unittest.TestCase):
         self.assertEqual(applied["config_valid_mask"], 0x31)
         self.assertIsNotNone(applied["channels"][0]["actual_nco_hz"])
 
+    def test_phase_calibration_is_persisted_and_returned_by_exact_key(self):
+        response = self.client.put(
+            "/api/boards/board-a/phase-calibration",
+            json={"frequency_hz": 4500000000, "channel": 2, "phase_deg": 7.25},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["device_uid"], "sim-board-a")
+        records = self.client.get("/api/boards/board-a/phase-calibration")
+        self.assertEqual(records.status_code, 200, records.text)
+        self.assertEqual(records.json()[0]["frequency_hz"], 4500000000)
+        self.assertEqual(records.json()[0]["phase_deg"], 7.25)
+
     def test_administrator_can_disable_user(self):
         created = self.client.post(
             "/api/admin/users", json={"username": "disabled-user", "password": "password123", "role": "user", "enabled": True},

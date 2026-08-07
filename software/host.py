@@ -200,6 +200,8 @@ RF2_OP_NETWORK_RESTART = 0x0000000E
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
 RF2_CAP_NETWORK_CONFIG = 0x00040000
+RF2_CAP_DAC_MTS = 0x00080000
+RF2_CAP_NCO_SYNC = 0x00100000
 RF2_BUILD_PROFILE_UNKNOWN = 0
 RF2_BUILD_PROFILE_NORMAL = 1
 RF2_BUILD_PROFILE_BANDWIDTH = 3
@@ -212,6 +214,10 @@ RF2_STATUS_RFDC_BUSY = 0x00000002
 RF2_STATUS_ARMED = 0x00000004
 RF2_STATUS_RUNNING = 0x00000008
 RF2_STATUS_PREPARED = 0x00000010
+RF2_STATUS_DAC_MTS_READY = 0x00000020
+RF2_STATUS_DAC_MTS_FAILED = 0x00000040
+RF2_STATUS_NCO_SYNC_READY = 0x00000080
+RF2_STATUS_DAC_MTS_REQUIRED = 0x00000100
 
 RF2_STATUS_OK = 0x0000
 RF2_STATUS_BAD_VERSION = 0x0001
@@ -865,6 +871,13 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         "play_prefill_ready": False,
         "play_active_valid": False,
         "play_pending_valid": False,
+        "dac_mts_required": False,
+        "dac_mts_ready": False,
+        "dac_mts_failed": False,
+        "dac_mts_tile_mask": 0,
+        "dac_mts_error": 0,
+        "nco_sync_ready": False,
+        "nco_sync_epoch": 0,
     })
     if len(payload) >= 32:
         (
@@ -888,11 +901,22 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         result["play_prefill_ready"] = bool(play_flags & 0x1)
         result["play_pending_valid"] = bool((play_flags >> 32) & 0x1)
         result["play_active_valid"] = bool((play_flags >> 33) & 0x1)
+    if len(payload) >= 72:
+        mts_flags, result["nco_sync_epoch"] = struct.unpack_from("<II", payload, 64)
+        result["dac_mts_ready"] = bool(mts_flags & 0x1)
+        result["dac_mts_failed"] = bool(mts_flags & 0x2)
+        result["dac_mts_required"] = bool(mts_flags & 0x4)
+        result["dac_mts_tile_mask"] = (mts_flags >> 4) & 0xF
+        result["dac_mts_error"] = (mts_flags >> 16) & 0xFFFF
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)
     result["running"] = bool(result["state_flags"] & RF2_STATUS_RUNNING)
     result["prepared"] = bool(result["state_flags"] & RF2_STATUS_PREPARED)
+    result["dac_mts_ready"] = result["dac_mts_ready"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_READY)
+    result["dac_mts_failed"] = result["dac_mts_failed"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_FAILED)
+    result["nco_sync_ready"] = bool(result["state_flags"] & RF2_STATUS_NCO_SYNC_READY)
+    result["dac_mts_required"] = result["dac_mts_required"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_REQUIRED)
     return result
 
 

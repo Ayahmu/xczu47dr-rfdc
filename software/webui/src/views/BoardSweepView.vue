@@ -11,7 +11,7 @@ import { useBoardsStore } from '../stores/boards'
 import { useDraftsStore, outputRfdc, type SweepAxis } from '../stores/drafts'
 import { useSessionStore } from '../stores/session'
 import { useTestsStore } from '../stores/tests'
-import type { BoardRfdcConfig, PerformancePointRecord } from '../types'
+import type { BoardRfdcConfig, PerformancePointRecord, PhaseCalibrationRecord } from '../types'
 import { stateLabel, stateType } from '../utils/format'
 
 const route = useRoute()
@@ -22,6 +22,7 @@ const tests = useTestsStore()
 const boardId = computed(() => String(route.params.boardId))
 const board = computed(() => boards.byId(boardId.value))
 const rfdc = ref<BoardRfdcConfig | null>(null)
+const calibrations = ref<PhaseCalibrationRecord[]>([])
 const output = computed(() => drafts.output(boardId.value, rfdc.value))
 const sweep = computed(() => drafts.sweep(boardId.value))
 const selectedTestId = ref('')
@@ -120,8 +121,12 @@ function exportTest(extension: 'csv' | 'json') { if (selectedTestId.value) windo
 onMounted(async () => {
   drafts.setUser(session.user?.username || '')
   if (!boards.loaded) await boards.fetchAll(false)
-  rfdc.value = await boards.rfdc(boardId.value, false)
-  drafts.output(boardId.value, rfdc.value); drafts.sweep(boardId.value)
+  const [nextRfdc, nextCalibrations] = await Promise.all([boards.rfdc(boardId.value, false), boards.phaseCalibrations(boardId.value)])
+  rfdc.value = nextRfdc
+  calibrations.value = nextCalibrations
+  drafts.output(boardId.value, rfdc.value, calibrations.value)
+  drafts.syncFromServer(boardId.value, rfdc.value, calibrations.value)
+  drafts.sweep(boardId.value)
   await tests.fetchAll()
   const requested = String(route.query.test || '')
   if (requested && tests.byId(requested)?.board_id === boardId.value) await selectTest(requested)
@@ -135,7 +140,7 @@ watch(() => sweep.value.axis, () => { sweep.value.dirty = true })
       <div class="page-stack">
         <section class="work-surface">
           <div class="config-section-head"><div><h2>扫描基线</h2><p>扫描轴只覆盖选定字段，其余参数取下方通道配置。</p></div><el-button :icon="Save" @click="drafts.saveSweep(boardId)">保存扫描草稿</el-button></div>
-          <ChannelConfigurator :draft="output" :readback-revision="rfdc?.revision" :valid-mask="rfdc?.config_valid_mask" @dirty="drafts.markDirty(boardId)" />
+          <ChannelConfigurator :draft="output" :calibrations="calibrations" :readback-revision="rfdc?.revision" :valid-mask="rfdc?.config_valid_mask" @dirty="drafts.markDirty(boardId)" />
         </section>
       </div>
       <aside class="sweep-control">

@@ -48,6 +48,13 @@ module pl_riscv_control_v1 #(
     input  wire [17:0]  rfdc_failure_address,
     input  wire [1:0]   rfdc_failure_axi_response,
     input  wire         rfdc_ready,
+    input  wire         dac_mts_required,
+    input  wire         dac_mts_ready,
+    input  wire         dac_mts_failed,
+    input  wire [3:0]   dac_mts_tile_mask,
+    input  wire [15:0]  dac_mts_error,
+    input  wire         nco_sync_ready,
+    input  wire [31:0]  nco_sync_epoch,
     input  wire         playback_armed,
     input  wire         playback_prepared,
     input  wire         playback_running,
@@ -159,7 +166,7 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_RFDC_GET_CONFIG   = 32'h0000000B;
   // Structured RFDC apply, RFDC readback, and runtime network identity
   // configuration are all advertised through HELLO/STATUS.
-  localparam [31:0] RF2_CAPABILITIES         = 32'h00070000;
+  localparam [31:0] RF2_CAPABILITIES         = 32'h001F0000;
   localparam [31:0] RF2_RFDC_REQUEST_BYTES   = 32'd200;
   localparam [31:0] RF2_NETWORK_APPLY_BYTES  = 32'd32;
   localparam [31:0] RF2_NETWORK_RESPONSE_BYTES = 32'd80;
@@ -455,7 +462,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd64, 64'd0, 64'd0);
+      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd72, 64'd0, 64'd0);
     end
   endtask
 
@@ -502,7 +509,10 @@ module pl_riscv_control_v1 #(
     reg [31:0] state_flags;
     begin
       if (!rvresp_tvalid) begin
-        state_flags = {27'd0, playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
+        state_flags = {
+            23'd0, dac_mts_required, nco_sync_ready, dac_mts_failed, dac_mts_ready,
+            playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready
+        };
         resp_words[0] <= resp_request_magic;
         resp_words[1] <= {opcode, 16'h0000, resp_request_version};
         resp_words[2] <= {resp_request_payload_bytes, resp_seq};
@@ -514,9 +524,13 @@ module pl_riscv_control_v1 #(
         resp_words[8] <= {24'd0, play_executor_state, 24'd0, play_fifo_ready_mask};
         resp_words[9] <= {play_bad_instr_count, play_ddr_read_counter};
         resp_words[10] <= {30'd0, play_active_valid, play_pending_valid, 31'd0, play_prefill_ready};
-        resp_count <= 6'd11;
+        resp_words[11] <= {
+            nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
+            1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
+        };
+        resp_count <= 6'd12;
         resp_index <= 6'd0;
-        rvresp_word_count <= 16'd11;
+        rvresp_word_count <= 16'd12;
         rvresp_tdata <= resp_request_magic;
         rvresp_tvalid <= 1'b1;
         rvresp_tlast <= 1'b0;
@@ -1038,6 +1052,9 @@ module pl_riscv_control_v1 #(
                 dbg_status <= 32'hBAD2_0003;
                 dbg_error_pending <= 1'b1;
                 queue_resp0(RF2_OP_RFDC_APPLY, 16'h0003, cmd_seq);
+              end else if (!rfdc_ready || !dac_mts_ready || dac_mts_failed) begin
+                dbg_status <= 32'hBAD2_2003;
+                queue_resp0(RF2_OP_RFDC_APPLY, 16'h0005, cmd_seq);
               end else if (rfdc_apply_busy) begin
                 dbg_status <= 32'hBAD2_0004;
                 queue_resp0(RF2_OP_RFDC_APPLY, 16'h0004, cmd_seq);
@@ -1064,7 +1081,10 @@ module pl_riscv_control_v1 #(
               queue_rfdc_response(RF2_OP_RFDC_GET_CONFIG, cmd_seq);
             end
             DEC_RF2_ARM: begin
-              if ((cmd_payload_bytes != 32'd8) ||
+              if (!rfdc_ready || !dac_mts_ready || dac_mts_failed || !nco_sync_ready) begin
+                dbg_status <= 32'hBAD2_2006;
+                queue_resp0(RF2_OP_ARM, 16'h0005, cmd_seq);
+              end else if ((cmd_payload_bytes != 32'd8) ||
                   ((payload_words[5][7:0] & ~rfdc_config_valid_mask) != 8'd0)) begin
                 dbg_status <= 32'hBAD2_0006;
                 queue_resp0(RF2_OP_ARM, 16'h0006, cmd_seq);

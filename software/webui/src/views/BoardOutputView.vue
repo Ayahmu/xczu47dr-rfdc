@@ -12,7 +12,7 @@ import { useBoardsStore } from '../stores/boards'
 import { useDraftsStore, outputOverride, outputRfdc, outputWaveform, type PlayMode } from '../stores/drafts'
 import { useRunsStore } from '../stores/runs'
 import { useSessionStore } from '../stores/session'
-import type { BoardPreflight, BoardRfdcConfig, PreviewResponse, RunRecord } from '../types'
+import type { BoardPreflight, BoardRfdcConfig, PhaseCalibrationRecord, PreviewResponse, RunRecord } from '../types'
 import { stateLabel, stateType } from '../utils/format'
 
 const route = useRoute()
@@ -25,6 +25,7 @@ const board = computed(() => boards.byId(boardId.value))
 const status = computed(() => boards.statusById(boardId.value))
 const draft = computed(() => drafts.output(boardId.value, rfdc.value))
 const rfdc = ref<BoardRfdcConfig | null>(null)
+const calibrations = ref<PhaseCalibrationRecord[]>([])
 const preview = ref<PreviewResponse | null>(null)
 const previewBusy = ref(false)
 const sendBusy = ref(false)
@@ -86,12 +87,22 @@ const runSteps = computed(() => {
 
 async function load() {
   if (!boards.loaded) await boards.fetchAll(false)
-  rfdc.value = await boards.rfdc(boardId.value, false)
+  const [nextRfdc, nextCalibrations] = await Promise.all([boards.rfdc(boardId.value, false), boards.phaseCalibrations(boardId.value)])
+  rfdc.value = nextRfdc
+  calibrations.value = nextCalibrations
   drafts.setUser(session.user?.username || '')
-  drafts.output(boardId.value, rfdc.value)
+  drafts.output(boardId.value, rfdc.value, calibrations.value)
+  drafts.syncFromServer(boardId.value, rfdc.value, calibrations.value)
   selectedPreviewChannels.value = enabledChannels.value.map((item) => item.channel)
 }
 function dirty() { drafts.markDirty(boardId.value) }
+async function saveCalibration(channel: number, frequencyHz: number, phaseDeg: number) {
+  try {
+    const saved = await boards.savePhaseCalibration(boardId.value, { channel, frequency_hz: frequencyHz, phase_deg: phaseDeg })
+    calibrations.value = [...calibrations.value.filter((item) => !(item.channel === channel && item.frequency_hz === frequencyHz)), saved]
+    ElMessage.success('CH' + channel + ' ' + frequencyHz + ' Hz 校准已保存')
+  } catch (error) { ElMessage.error('保存相位校准失败：' + errorMessage(error)) }
+}
 function setPlayMode(mode: PlayMode) {
   draft.value.playMode = mode
   draft.value.loop = mode === 'continuous_sine'
@@ -179,7 +190,7 @@ watch(boardId, load)
             <label v-else><span>触发后静音延迟 <small>ms</small></span><el-input-number v-model="draft.outputDurationMs" :min="1" :max="3600000" :step="10" controls-position="right" @change="dirty" /></label>
           </div>
         </section>
-        <section class="work-surface"><ChannelConfigurator :draft="draft" :readback-revision="rfdc?.revision" :valid-mask="rfdc?.config_valid_mask" @dirty="dirty" /></section>
+        <section class="work-surface"><ChannelConfigurator :draft="draft" :calibrations="calibrations" :readback-revision="rfdc?.revision" :valid-mask="rfdc?.config_valid_mask" @dirty="dirty" @calibration-change="saveCalibration" /></section>
       </div>
       <aside class="preview-column">
         <section class="work-surface preview-surface">

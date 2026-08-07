@@ -59,6 +59,37 @@ class RfdcPlProtocolTests(unittest.TestCase):
         self.assertTrue(decoded["play_pending_valid"])
         self.assertTrue(decoded["play_active_valid"])
 
+    def test_mts_status_extension_reports_tile_and_nco_sync_state(self):
+        state_flags = (
+            host.RF2_STATUS_RFDC_READY
+            | host.RF2_STATUS_DAC_MTS_READY
+            | host.RF2_STATUS_NCO_SYNC_READY
+            | host.RF2_STATUS_DAC_MTS_REQUIRED
+        )
+        mts_flags = 0x1 | 0x4 | (0xF << 4) | (0x1234 << 16)
+        payload = struct.pack(
+            "<IIIIIIIIQQQQII",
+            host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_DAC_MTS | host.RF2_CAP_NCO_SYNC,
+            state_flags,
+            0xFF,
+            12,
+            0,
+            0,
+            0,
+            0,
+            0, 0, 0, 0,
+            mts_flags,
+            9,
+        )
+        decoded = host.parse_rfctrl2_status_payload({"payload": payload})
+        self.assertTrue(decoded["dac_mts_required"])
+        self.assertTrue(decoded["dac_mts_ready"])
+        self.assertFalse(decoded["dac_mts_failed"])
+        self.assertEqual(decoded["dac_mts_tile_mask"], 0xF)
+        self.assertEqual(decoded["dac_mts_error"], 0x1234)
+        self.assertTrue(decoded["nco_sync_ready"])
+        self.assertEqual(decoded["nco_sync_epoch"], 9)
+
     def test_apply_packet_has_fixed_eight_channel_layout(self):
         nco, zones, phases, currents = channel_maps()
         packet = host.pack_rfctrl2_rfdc_apply(

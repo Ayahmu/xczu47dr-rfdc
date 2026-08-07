@@ -54,6 +54,7 @@ class RfdcConfigService:
     def get(self, board_id: str, refresh: bool = False) -> BoardRfdcConfig:
         self.store.board(board_id)
         current = self.store.load_rfdc_config(board_id) or default_rfdc_config(board_id)
+        current = current.model_copy(update={"channels": self._annotate_calibrations(board_id, current.channels)})
         if not refresh:
             return current
         response = self.boards.rfdc_get_config(board_id)
@@ -78,8 +79,29 @@ class RfdcConfigService:
                 f"RFCTRL2 UDP 控制不可用：{board.udp_interface} / {board.udp_source_ip} "
                 f"-> {board.ip}:{board.port}；{status.message or 'PL 未响应'}"
             )
+        if not status.dac_mts_required:
+            raise ManagementError(
+                "installed bitstream/firmware does not declare mandatory DAC MTS; "
+                "refusing RFDC configuration"
+            )
+        if not status.dac_mts_ready or status.dac_mts_failed:
+            detail = f" error=0x{status.dac_mts_error:04X}" if status.dac_mts_error else ""
+            raise ManagementError(f"DAC MTS is not ready; refusing RFDC configuration.{detail}")
 
         channels = sorted(request.channels, key=lambda item: item.channel)
+        calibration_by_key = self._calibration_by_key(board_id, channels)
+        channels = [
+            item.model_copy(update={
+                "calibration_phase_deg": calibration_by_key.get((int(round(item.target_rf_hz)), item.channel), 0.0),
+            })
+            for item in channels
+        ]
+        hardware_channels = [
+            item.model_copy(update={
+                "nco_phase_deg": item.nco_phase_deg + item.calibration_phase_deg,
+            })
+            for item in channels
+        ]
         revision = current.revision + 1
         pending = BoardRfdcConfig(
             board_id=board_id,
@@ -99,7 +121,7 @@ class RfdcConfigService:
         try:
             response = self.boards.rfdc_apply(
                 board_id,
-                channels,
+                hardware_channels,
                 revision=revision,
                 channel_mask=request.channel_mask,
             )
@@ -128,6 +150,25 @@ class RfdcConfigService:
             self.store.save_rfdc_config(failed)
             self.events.publish({"type": "rfdc.apply.failed", "data": failed.model_dump(mode="json")})
             raise
+
+    def _calibration_by_key(self, board_id: str, channels) -> dict[tuple[int, int], float]:
+        records = self.store.list_phase_calibrations(board_id)
+        # Lightweight test doubles may not implement the new store method.
+        if not isinstance(records, list):
+            return {}
+        return {
+            (item.frequency_hz, item.channel): item.phase_deg
+            for item in records
+        }
+
+    def _annotate_calibrations(self, board_id: str, channels):
+        calibration_by_key = self._calibration_by_key(board_id, channels)
+        return [
+            item.model_copy(update={
+                "calibration_phase_deg": calibration_by_key.get((int(round(item.target_rf_hz)), item.channel), 0.0),
+            })
+            for item in channels
+        ]
 
     @staticmethod
     def _config_from_hardware(

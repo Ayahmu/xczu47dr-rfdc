@@ -130,6 +130,13 @@ export interface BoardStatus {
   rfdc_capabilities: number
   rfdc_config_valid_mask: number
   rfdc_config_busy: boolean
+  dac_mts_required: boolean
+  dac_mts_ready: boolean
+  dac_mts_failed: boolean
+  dac_mts_tile_mask: number
+  dac_mts_error: number
+  nco_sync_ready: boolean
+  nco_sync_epoch: number
   playback_armed: boolean
   playback_prepared: boolean
   playback_running: boolean
@@ -236,6 +243,7 @@ export interface RfdcChannelConfig {
   data_amplitude: number
   data_phase_deg: number
   nco_phase_deg: number
+  calibration_phase_deg: number
   actual_nco_hz?: number | null
   actual_nyquist_zone?: 1 | 2 | null
   actual_nco_phase_deg?: number | null
@@ -260,6 +268,16 @@ export interface BoardRfdcConfig {
   failure_stage: number
   failure_address: number
   axi_response: number
+}
+
+export interface PhaseCalibrationRecord {
+  board_id: string
+  device_uid: string
+  frequency_hz: number
+  channel: number
+  phase_deg: number
+  updated_at: string
+  updated_by?: string | null
 }
 
 export interface PreviewSeries {
