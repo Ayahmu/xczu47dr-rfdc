@@ -8,6 +8,11 @@ module TopCustomXczu47dr (
 
     output RST_88E1111,
     output TRIG_1,
+    //output PL_SYSREF_out,
+    output hmc7044_sync_test,
+    input sync_3_tx_p,
+    input sync_3_tx_n,
+    input dac_trigger_start, 
 
     // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
     input  PL_CLK_P_0,
@@ -69,9 +74,15 @@ module TopCustomXczu47dr (
 );
 
   assign RST_88E1111 = 1'b1;
+  assign hmc7044_sync_test = H7044_SYNC_0;
 
   Top top_i (
       .TRIG_1(TRIG_1),
+      .dac_trigger_start(dac_trigger_start),
+      //.hmc7044_sync_test(hmc7044_sync_test),
+      //.PL_SYSREF_out(PL_SYSREF_out),
+      .sync_3_tx_p(sync_3_tx_p),
+      .sync_3_tx_n(sync_3_tx_n),
 
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),

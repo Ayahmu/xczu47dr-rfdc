@@ -7,7 +7,7 @@ module Top (
     output H7044_SCLK_0,
     output H7044_SDATA_0,
 
-    // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
+    // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 50 MHz / 2 MHz)
     input  PL_CLK_P_0,
     input  PL_CLK_N_0,
     input  PL_SYSREF_P_0,
@@ -47,6 +47,14 @@ module Top (
     output vout32_v_n,
     output vout32_v_p,
     output TRIG_1,
+    //input hmc7044_sync_in,
+    //output PL_SYSREF_out,
+    // Type-C differential SYNC input from the master card.
+    input sync_3_tx_p,
+    input sync_3_tx_n,
+    input dac_trigger_start,
+    //output dac_trigger_start,
+    
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -83,8 +91,26 @@ module Top (
   wire        ddr4_ui_clk_sync_rst;
 
   assign pl_ps_irq = 1'b0;
-
+  
+  wire PL_CLK_50M_ibuf;
+  wire PL_CLK_50M;
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) PL_CLK_inst (
+      .I  (PL_CLK_P_0),
+      .IB (PL_CLK_N_0),
+      .O  (PL_CLK_50M_ibuf)
+  );
+  BUFGCE PL_CLK_BUFG_inst (
+      .I  (PL_CLK_50M_ibuf),
+      .CE (1'b1),
+      .O  (PL_CLK_50M)
+  );
+  // MTS marker insertion must use the RFDC fabric clock derived from the
+  // active DAC clock tree. Keep PL_CLK_50M as an external phase reference.
   assign dac_axis_clk = clk_dac2;
+  //assign dac_axis_clk = PL_CLK_50M;
   ChiselProcSysReset u_pl_reset (
     .io_slowest_sync_clk(pl_clk),
     .io_ext_reset_in(pl_resetn0),
@@ -130,7 +156,34 @@ module Top (
   );
 
   assign RESET_H7044_H_0 = 1'b0;
-  assign H7044_SYNC_0 = hmc7044_set_finish;
+
+  // The Type-C differential input is the active HMC7044 SYNC source.
+  // Keep hmc7044_sync_in as a legacy top-level port for old pinouts, but do
+  // not combine it with the Type-C signal because that could create spurious
+  // HMC SYNC edges.
+  wire hmc7044_sync_typec;
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) sync_3_tx_ibufds (
+      .I  (sync_3_tx_p),
+      .IB (sync_3_tx_n),
+      .O  (hmc7044_sync_typec)
+  );
+  assign H7044_SYNC_0 = hmc7044_sync_typec;
+  
+  wire PL_SYSREF;
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) PL_SYSREF_P_0_inst (
+      .I  (PL_SYSREF_P_0),
+      .IB (PL_SYSREF_N_0),
+      .O  (PL_SYSREF)
+  );
+  // The RFDC user SYSREF input performs its own sampling and edge detection.
+  // Keep the HMC7044 SYSREF waveform intact instead of re-timing it in PL.
+  wire user_sysref_dac_pulse = PL_SYSREF;
 
   // ========== PS 指令 AXIS（128-bit） ==========
   wire [127:0] ps_instr_tdata;
@@ -792,6 +845,7 @@ module Top (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
     .trigger(ps_trigger_dac_sync),
+    .trigger_start(dac_trigger_start),
 
     .cfg_seq_id(seq_id_dac),
     .auto_start(cfg_auto_start_dac),
@@ -964,7 +1018,15 @@ module Top (
 
   wire trig_1_dac_valid = (trig_1_dac_valid_count != 16'd0);
   wire trig_1_dac_valid_pulse = dac_any_valid_gated & ~dac_any_valid_gated_d;
-  assign TRIG_1 = trig_1_dac_valid;
+  
+
+
+  
+  
+
+  
+  assign TRIG_1 = clk_dac2; //clk_dac2;//dac_trigger_start;//PL_SYSREF;//PL_CLK_50M;//PL_CLK;//dac_trigger_start;
+  //assign PL_SYSREF_out = clk_dac2;
 
   axis_async_fifo_256 fifo_ch1_inst (
     .s_axis_aresetn(wave_fifo_aresetn),
@@ -1669,6 +1731,7 @@ module Top (
       .s32_axis_tdata(rfdc_ch8_tdata),
       .s32_axis_tvalid(rfdc_ch8_tvalid),
       .s32_axis_tready(dac_ch8_ready),
+      .user_sysref_dac(user_sysref_dac_pulse),
       .irq(rfdc_irq)
   );
 
@@ -1811,7 +1874,9 @@ module Top (
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      21'd0,
+      19'd0,
+      dac_trigger_start,
+      H7044_SYNC_0,
       trig_1_dac_valid_pulse,
       trig_1_dac_valid,
       ps_trigger_dac_sync,

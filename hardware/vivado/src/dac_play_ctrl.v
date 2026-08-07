@@ -15,6 +15,7 @@ module dac_play_ctrl #(
     input  wire        trigger,      // DAC 域同步后的 trigger 电平
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
+    input  trigger_start,
 
     input  wire [31:0] ch1_delay_cycles,
     input  wire [31:0] ch2_delay_cycles,
@@ -189,7 +190,7 @@ module dac_play_ctrl #(
         trigger_pending <= 1'b0;
       end
 
-      if(start_pending && start_warm) begin
+      if(/*start_pending && start_warm*/trigger_start) begin
         started       <= 1'b1;
         start_pending <= 1'b0;
         dly1          <= ch1_delay_cycles;

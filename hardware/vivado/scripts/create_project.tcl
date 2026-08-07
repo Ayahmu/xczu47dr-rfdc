@@ -93,6 +93,15 @@ if {!$is_bandwidth_target} {
         exit 1
     }
     set_property generate_synth_checkpoint true ${rfdc_ip_file}
+    set_property CONFIG.DAC2_Refclk_Freq {133.333} [get_ips rfdc_custom_xczu47dr_ip]
+    
+    set_property -dict [list \
+  CONFIG.DAC0_Multi_Tile_Sync {true} \
+  CONFIG.DAC1_Multi_Tile_Sync {true} \
+  CONFIG.DAC2_Multi_Tile_Sync {true} \
+  CONFIG.DAC3_Multi_Tile_Sync {true} \
+] [get_ips rfdc_custom_xczu47dr_ip]
+
     generate_target all ${rfdc_ip_file}
 }
 
@@ -234,6 +243,7 @@ puts "INFO: Creating standalone IP cores..."
 set datamover_script "${script_path}/axi_datamover_0.tcl"
 if {[file exists ${datamover_script}]} {
     source ${datamover_script}
+    generate_target all [get_ips axi_datamover_0]
     puts "INFO: AXI DataMover IP created"
 } else {
     puts "WARN: AXI DataMover script not found: ${datamover_script}"
@@ -243,6 +253,7 @@ if {[file exists ${datamover_script}]} {
 set instr_fifo_script "${script_path}/axis_data_fifo_1.tcl"
 if {[file exists ${instr_fifo_script}]} {
     source ${instr_fifo_script}
+    generate_target all [get_ips axis_data_fifo_1]
     puts "INFO: AXIS Data FIFO IP created"
 } else {
     puts "WARN: AXIS Data FIFO script not found: ${instr_fifo_script}"
@@ -252,6 +263,7 @@ if {[file exists ${instr_fifo_script}]} {
 set async_fifo_script "${script_path}/axis_async_fifo_256.tcl"
 if {!$is_bandwidth_target && [file exists ${async_fifo_script}]} {
     source ${async_fifo_script}
+    generate_target all [get_ips axis_async_fifo_256]
     puts "INFO: AXIS Async FIFO IP created"
 } else {
     puts "WARN: AXIS Async FIFO script not found: ${async_fifo_script}"

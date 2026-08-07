@@ -63,15 +63,17 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test hardware hardware-clean chisel vivado-project synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all incremental test hardware hardware-incremental hardware-clean chisel vivado-project synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make all              Build hardware and firmware"
+	@echo "  make incremental      Incremental hardware and firmware build"
 	@echo "  make test             Run software/unit and script syntax checks"
 	@echo "  make hardware         Build Chisel, Vivado project, synth, impl, bitstream, XSA"
+	@echo "  make hardware-incremental  Build hardware while reusing Vivado checkpoints"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
 	@echo "  make artifacts        Verify expected .bit/.ltx/.xsa/.elf artifacts exist"
 	@echo ""
@@ -113,6 +115,8 @@ help:
 
 all: hardware firmware artifacts
 
+incremental: hardware-incremental firmware artifacts
+
 test:
 	python3 -m unittest discover -s tests
 	python3 -m py_compile software/dashboard_server.py
@@ -145,6 +149,11 @@ xsa: bitstream
 hardware:
 	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) BIT=$(BIT) LTX=$(LTX) XSA=$(XSA)"
 	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh --clean
+
+hardware-incremental:
+	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) BIT=$(BIT) LTX=$(LTX) XSA=$(XSA)"
+	@echo "INFO: Reusing Vivado work directory and incremental checkpoints"
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh
 
 hardware-clean:
 	rm -rf "$(VIVADO_DIR)/work"
