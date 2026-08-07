@@ -24,7 +24,7 @@ end ;
 architecture MAPPED of hmc7044 is
 
 
-type 	 statetype is (config_wait,config_start,idle0,idle1,idle2,idle3,wr_clkl0,wr_clkl1,wr_clkh0,wr_clkh1,config_wait1,config_end);
+type 	 statetype is (config_wait,config_start,idle0,idle1,idle2,idle3,wr_clkl0,wr_clkl1,wr_clkh0,wr_clkh1,config_wait1,wait_lock,wait_reseed,config_end);
 signal spi_cntr_status : statetype;
 ---------------------------parameter------------------
 	signal HMC7044_SCLK		:	std_logic;
@@ -58,6 +58,10 @@ signal HMC7043_SDATA4 :		STD_LOGIC;
 
 	signal rst_cnt				:	std_logic_vector(27 downto 0);
 	signal reset 				:	std_logic;
+
+	-- Keep SYSREF on the channel divider output with no added delay.
+	constant SYSREF_FINE_DELAY_STEPS : std_logic_vector(7 downto 0) := x"00";
+	constant SYSREF_ANALOG_DELAY_MUX : std_logic_vector(7 downto 0) := x"00";
 
 
 begin
@@ -110,8 +114,8 @@ H7044_SDATA <=HMC7044_SDIO;
 														                                               --10 --pulse generator.request a pulse generator stream from any channels configured for dynamic startup.this behaves in the same way as a gpi requested pulse generator
                                                                                          --11 causes sync if alarm exits,otherwise causes pulse generator
 
-				--    config_reg <= x"0005" & x"5A";--�ⲿ�ο�ʱ��
-				    config_reg <= x"0005" & x"56";---����ʱ��
+--				      config_reg <= x"0005" & x"5A";--�ⲿ�ο�ʱ��
+		    config_reg <= x"0005" & x"56";---����ʱ��
 
 				--config_reg <= x"0005" & x"41";
 
@@ -191,8 +195,8 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"01F" =>
 				--	config_reg <= x"0026" & x"04";		--N1 DIVIDER[7:0]
 
-					--    config_reg <= x"0026" & x"0A";  ---�ⲿ�ο�ʱ��10MHz
-					     config_reg <= x"0026" & x"01";  ---����ʱ��100MHz
+--					      config_reg <= x"0026" & x"0A";  ---�ⲿ�ο�ʱ��10MHz
+			     config_reg <= x"0026" & x"01";  ---����ʱ��100MHz
 
 				when x"020" =>
 					config_reg <= x"0027" & x"00";		--N1 DIVIDER[15:8]
@@ -417,9 +421,9 @@ H7044_SDATA <=HMC7044_SDIO;
 																										--10   froce to logic 0
 																										--11  force output to float,goes naturally to vcm
 				when x"07A" =>
-						config_reg <= x"00D2" & x"F3";	--channel1   PLCLK 100MHz
+						config_reg <= x"00D2" & x"F3";	--channel1   PLCLK 50MHz
 					when x"07B" =>
-					   config_reg <= x"00D3" & x"20";	--
+					   config_reg <= x"00D3" & x"40";	--
 				when x"07C" =>
 				   config_reg <= x"00D4" & x"00";	 --
 				when x"07D" =>
@@ -490,13 +494,13 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"09D" =>
 					config_reg <= x"00F8" & x"10";
 				when x"09E" =>
-						config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2.5MHz
+						 config_reg <= x"00FA" & x"F1";	--channel5 SYSREF; preserve server divider/frequency
 					when x"09F" =>
-						config_reg <= x"00FB" & x"00";
+						config_reg <= x"00FB" & x"40";
 					when x"0A0" =>
-						config_reg <= x"00FC" & x"05";
+						config_reg <= x"00FC" & x"06";
 				when x"0A1" =>
-					config_reg <= x"00FD" & x"00";
+					config_reg <= x"00FD" & SYSREF_FINE_DELAY_STEPS;
 				when x"0A2" =>
 					config_reg <= x"00FE" & x"00";
 				when x"0A3" =>
@@ -504,7 +508,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"0A4" =>
 					config_reg <= x"0100" & x"00";
 				when x"0A5" =>
-					config_reg <= x"0101" & x"00";	--
+					config_reg <= x"0101" & SYSREF_ANALOG_DELAY_MUX;	-- channel5 analog-delay output
 				when x"0A6" =>
 					config_reg <= x"0102" & x"10";
 				when x"0A7" =>
@@ -526,21 +530,21 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"0AF" =>
 					config_reg <= x"010C" & x"10";
 				when x"0B0" =>
-						config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2.5MHz
+						 config_reg <= x"010E" & x"F1";	--channel7 SYSREF; preserve server divider/frequency
 					when x"0B1" =>
-						      config_reg <= x"010F" & x"00";
+						      config_reg <= x"010F" & x"40";
 					when x"0B2" =>
-						      config_reg <= x"0110" & x"05";
+						      config_reg <= x"0110" & x"06";
 				when x"0B3" =>
-					config_reg <= x"0111" & x"00";	--
+					config_reg <= x"0111" & SYSREF_FINE_DELAY_STEPS;
 				when x"0B4" =>
-					config_reg <= x"0112" & x"00";
+					config_reg <= x"0112" & x"03";
 				when x"0B5" =>
 					config_reg <= x"0113" & x"00";
 				when x"0B6" =>
 					config_reg <= x"0114" & x"00";
 				when x"0B7" =>
-					config_reg <= x"0115" & x"00";
+					config_reg <= x"0115" & SYSREF_ANALOG_DELAY_MUX;	-- channel7 analog-delay output
 
 				when x"0B8" =>
 					config_reg <= x"0116" & x"10";
@@ -660,6 +664,12 @@ H7044_SDATA <=HMC7044_SDIO;
 				   config_reg <= x"0001" & x"22";
 				when x"0F1" =>
 				   config_reg <= x"0001" & x"20";
+				when x"0F2" =>
+				   config_reg <= x"0001" & x"20";
+				when x"0F3" =>
+				   config_reg <= x"0001" & x"A0";	-- reseed request after PLLs have settled
+				when x"0F4" =>
+				   config_reg <= x"0001" & x"20";
 --				when x"0F1" =>
 --				   config_reg <= x"0050" & x"E0";
 --				when x"0F2" =>
@@ -690,6 +700,7 @@ H7044_SDATA <=HMC7044_SDIO;
 			HMC7044_SDIO		<= '0';
 			SET_FINISH<='0';
         delay_cnt<= (others => '0');
+			rst_cnt			<= (others => '0');
 			spi_reg			<= (others => '0');
 			config_reg_cnt	<= (others => '0');
 			wr_reg_cnt		<= (others => '0');
@@ -765,8 +776,13 @@ H7044_SDATA <=HMC7044_SDIO;
 						wr_reg_cnt <= (others => '0');
 
 						if config_reg_cnt = x"0F1" then
-							spi_cntr_status <= config_end;
-							config_reg_cnt <= (others => '0');
+							-- Allow the PLLs to lock before the reseed sequence.
+							spi_cntr_status <= wait_lock;
+							rst_cnt <= (others => '0');
+						elsif config_reg_cnt = x"0F4" then
+							-- Allow the reseed/output phase operation to complete.
+							spi_cntr_status <= wait_reseed;
+							rst_cnt <= (others => '0');
 						else
 --						   if delay_cnt=x"f0" then
 --							delay_cnt<= (others => '0');
@@ -779,6 +795,30 @@ H7044_SDATA <=HMC7044_SDIO;
 						end if;
 					else
 						spi_cntr_status <= wr_clkl0;
+					end if;
+
+				when wait_lock =>
+					HMC7044_SCLK		<= '0';
+					HMC7044_CS_N		<= '1';
+					HMC7044_SDIO		<= '0';
+					if rst_cnt = x"00F423F" then	-- 1,000,000 clocks = 100 ms at 10 MHz
+						rst_cnt <= (others => '0');
+						config_reg_cnt <= x"0F2";
+						spi_cntr_status <= config_start;
+					else
+						rst_cnt <= rst_cnt + 1;
+					end if;
+
+				when wait_reseed =>
+					HMC7044_SCLK		<= '0';
+					HMC7044_CS_N		<= '1';
+					HMC7044_SDIO		<= '0';
+					if rst_cnt = x"00003E7" then	-- 1,000 clocks = 100 us at 10 MHz
+						rst_cnt <= (others => '0');
+						config_reg_cnt <= (others => '0');
+						spi_cntr_status <= config_end;
+					else
+						rst_cnt <= rst_cnt + 1;
 					end if;
 
 				when config_end =>

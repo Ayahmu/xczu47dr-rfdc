@@ -653,7 +653,7 @@ def _waveform_config_to_dict(config: WaveformConfig) -> dict[str, object]:
         "sample_rate_hz": config.sample_rate_hz,
         "rfdc_interpolation": config.rfdc_interpolation,
         "axis_freq_hz": config.axis_freq_hz,
-        "loop": False,
+        "loop": bool(config.loop),
         "wait_for_trigger": config.wait_for_trigger,
         "dry_run": config.dry_run,
         "ch1_freq_hz": config.ch1_freq_hz,
@@ -730,7 +730,7 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
         "y_start",
     }
     kwargs: dict[str, Any] = {key: value for key, value in data.items() if key in allowed}
-    kwargs["loop"] = False
+    kwargs["loop"] = bool(kwargs.get("loop", False))
     saved_sample_rate = float(kwargs.get("sample_rate_hz", host.DAC_XY_FS))
     if saved_sample_rate in {float(host.DAC_TILE_FS), 9_600_000_000.0, 8_000_000_000.0, 6_000_000_000.0}:
         kwargs["sample_rate_hz"] = host.DAC_XY_FS
@@ -935,7 +935,7 @@ def generate_waveforms(config: WaveformConfig) -> GeneratedWaveforms:
             mode=mode,
             sample_rate_hz=config.sample_rate_hz,
             encoding="signed-iq-interleaved",
-            loop=False,
+            loop=config.loop,
             layout=config.ddr_layout,
             ch1_freq_hz=config.x_freq_hz,
             ch2_freq_hz=config.y_freq_hz,
@@ -1435,7 +1435,7 @@ def _generate_ezq_quantum_waveforms(config: WaveformConfig) -> GeneratedWaveform
         sample_rate_hz=config.sample_rate_hz,
         axis_freq_hz=config.axis_freq_hz,
         encoding="signed-iq-interleaved",
-        loop=False,
+        loop=config.loop,
         layout=config.ddr_layout,
         ch1_label=CHANNEL_LABELS["ch1"],
         ch2_label=CHANNEL_LABELS["ch2"],
@@ -2237,7 +2237,7 @@ class WaveformController:
             timeout_s=connection.timeout_s,
             post_upload_sleep_s=connection.post_upload_sleep_s,
             output_dir=output_dir,
-            loop=False,
+            loop=config.loop,
             auto_start=not config.wait_for_trigger,
             ch3=generated.ch3,
             ch4=generated.ch4,

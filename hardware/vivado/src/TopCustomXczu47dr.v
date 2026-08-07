@@ -8,6 +8,15 @@ module TopCustomXczu47dr (
 
     output RST_88E1111,
     output TRIG_1,
+    //output H7044_SYNC_out,
+    output PL_SYSREF_out,
+    output sync_1_tx_p,
+    output sync_1_tx_n,
+    //output dac_clk_out,
+    
+    input  FPGA_CLK1_P,
+    input  FPGA_CLK1_N,
+    output  FPGA_CLK1_P_O,
 
     // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
     input  PL_CLK_P_0,
@@ -69,9 +78,54 @@ module TopCustomXczu47dr (
 );
 
   assign RST_88E1111 = 1'b1;
+  //assign H7044_SYNC_out = H7044_SYNC_0;
+  
+  wire fpga_clk1_ibuf;
+  wire fpga_clk1_bufg;
+
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) FPGA_CLK1_IBUFDS_inst (
+      .I  (FPGA_CLK1_P),
+      .IB (FPGA_CLK1_N),
+      .O  (fpga_clk1_ibuf)
+  );
+
+  BUFGCE FPGA_CLK1_BUFG_inst (
+      .I  (fpga_clk1_ibuf),
+      .CE (1'b1),
+      .O  (fpga_clk1_bufg)
+  );
+
+  ODDRE1 #(
+      .IS_C_INVERTED(1'b0),
+      .SRVAL(1'b0)
+  ) FPGA_CLK1_P_ODDR_inst (
+      .Q  (FPGA_CLK1_P_O),
+      .C  (fpga_clk1_bufg),
+      .D1 (1'b1),
+      .D2 (1'b0),
+      .SR (1'b0)
+  );
+  /*
+  wire FPGA_CLK1_N_O;
+  ODDRE1 #(
+      .IS_C_INVERTED(1'b0),
+      .SRVAL(1'b0)
+  ) FPGA_CLK1_N_ODDR_inst (
+      .Q  (FPGA_CLK1_N_O),
+      .C  (fpga_clk1_bufg),
+      .D1 (1'b0),
+      .D2 (1'b1),
+      .SR (1'b0)
+  );*/
 
   Top top_i (
       .TRIG_1(TRIG_1),
+      .sync_1_tx_p(sync_1_tx_p),
+      .sync_1_tx_n(sync_1_tx_n),
+      .PL_SYSREF_out(PL_SYSREF_out),
 
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),

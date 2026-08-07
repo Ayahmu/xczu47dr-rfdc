@@ -20,9 +20,23 @@ set proj_file "${proj_dir}/${proj_name}.xpr"
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 
+# Reuse the last successful routed design as the implementation reference.
+# Keep this checkpoint outside impl_1 because reset_run removes the run
+# directory contents before the next launch.
+set incremental_dir "${vivado_dir}/work/incremental"
+file mkdir ${incremental_dir}
+set impl_incremental_checkpoint "${incremental_dir}/${proj_name}_impl.dcp"
+set impl_run [get_runs -quiet impl_1]
+if {[llength ${impl_run}] > 0 && [file exists ${impl_incremental_checkpoint}]} {
+    #set_property INCREMENTAL_CHECKPOINT ${impl_incremental_checkpoint} ${impl_run}
+    puts "INFO: Incremental implementation enabled with ${impl_incremental_checkpoint}"
+} else {
+    puts "INFO: No implementation checkpoint found; running a full implementation"
+}
+
 puts "INFO: Skipping XXV Ethernet OOC synthesis; using reference DCP"
 
-restore_reference_xxv_dcp ${vivado_dir} ${target}
+#restore_reference_xxv_dcp ${vivado_dir} ${target}
 
 set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]
 if {[llength ${bd_file}] > 0} {
@@ -91,6 +105,11 @@ if {${impl_status} != "route_design Complete!"} {
 
 # Open implemented design for reporting
 open_run impl_1
+
+# Save a stable checkpoint for the next implementation iteration only after
+# the current run has completed successfully.
+write_checkpoint -force ${impl_incremental_checkpoint}
+puts "INFO: Saved implementation incremental checkpoint: ${impl_incremental_checkpoint}"
 
 # Generate reports
 set report_dir "${vivado_dir}/work/${proj_name}.runs/impl_1/reports"

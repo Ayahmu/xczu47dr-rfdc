@@ -15,6 +15,7 @@ module dac_play_ctrl #(
     input  wire        trigger,      // DAC 域同步后的 trigger 电平
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
+    output trigger_start,
 
     input  wire [31:0] ch1_delay_cycles,
     input  wire [31:0] ch2_delay_cycles,
@@ -146,6 +147,17 @@ module dac_play_ctrl #(
   wire ch7_fire = ch7_allow && ch7_fifo_tvalid && dac_ch7_ready_in;
   wire ch8_fire = ch8_allow && ch8_fifo_tvalid && dac_ch8_ready_in;
 
+  reg trigger_start_r; 
+  reg [1:0] delay_signal;
+  assign trigger_start = trigger_start_r;
+  always @(posedge clk or negedge rst_n) begin
+    if(!rst_n) begin
+      trigger_start_r <= 0;
+    end else begin
+      trigger_start_r <= start_pending && start_warm;
+    end
+  end
+  
   always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
       started     <= 1'b0;
@@ -178,6 +190,7 @@ module dac_play_ctrl #(
 
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
+      delay_signal <= 0;
     end else begin
       if(trig_pulse && !started && !start_pending) begin
         trigger_pending <= 1'b1;
@@ -187,30 +200,34 @@ module dac_play_ctrl #(
       if(trig_start) begin
         start_pending <= 1'b1;
         trigger_pending <= 1'b0;
+        delay_signal <= 0;
       end
 
-      if(start_pending && start_warm) begin
-        started       <= 1'b1;
-        start_pending <= 1'b0;
-        dly1          <= ch1_delay_cycles;
-        dly2          <= ch2_delay_cycles;
-        dly3          <= ch3_delay_cycles;
-        dly4          <= ch4_delay_cycles;
-        dly5          <= ch5_delay_cycles;
-        dly6          <= ch6_delay_cycles;
-        dly7          <= ch7_delay_cycles;
-        dly8          <= ch8_delay_cycles;
-        beats1        <= ch1_len_beats;
-        beats2        <= ch2_len_beats;
-        beats3        <= ch3_len_beats;
-        beats4        <= ch4_len_beats;
-        beats5        <= ch5_len_beats;
-        beats6        <= ch6_len_beats;
-        beats7        <= ch7_len_beats;
-        beats8        <= ch8_len_beats;
+      if(/*start_pending && start_warm*/trigger_start) begin
+        //delay_signal <= delay_signal + 1;
+        if(delay_signal == 0) begin
+		started       <= 1'b1;
+		start_pending <= 1'b0;
+		dly1          <= ch1_delay_cycles;
+		dly2          <= ch2_delay_cycles;
+		dly3          <= ch3_delay_cycles;
+		dly4          <= ch4_delay_cycles;
+		dly5          <= ch5_delay_cycles;
+		dly6          <= ch6_delay_cycles;
+		dly7          <= ch7_delay_cycles;
+		dly8          <= ch8_delay_cycles;
+		beats1        <= ch1_len_beats;
+		beats2        <= ch2_len_beats;
+		beats3        <= ch3_len_beats;
+		beats4        <= ch4_len_beats;
+		beats5        <= ch5_len_beats;
+		beats6        <= ch6_len_beats;
+		beats7        <= ch7_len_beats;
+		beats8        <= ch8_len_beats;
 
-        cfg_seen      <= 1'b1;
-        last_seq_id   <= cfg_seq_id;
+		cfg_seen      <= 1'b1;
+		last_seq_id   <= cfg_seq_id;        
+        end
       end
 
       if(started) begin
