@@ -117,7 +117,9 @@ module Top (
 
 
   wire        hmc7044_set_finish;
-  wire        hmc_use_external_10mhz = 1'b0;
+  // This single-board measurement target is disciplined by the 10 MHz
+  // laboratory reference connected to XS17 (HMC7044 CLKIN1).
+  wire        hmc_use_external_10mhz = 1'b1;
 
   hmc7044 hmc7044_i (
       .clk(pl_clk),

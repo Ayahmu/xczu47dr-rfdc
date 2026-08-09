@@ -5,6 +5,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HMC7044_VHDL = REPO_ROOT / "hardware" / "vivado" / "src" / "hmc7044.vhd"
+TOP_VERILOG = REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v"
+TARGET_CONFIG = REPO_ROOT / "hardware" / "vivado" / "scripts" / "target_config.tcl"
+FIRMWARE_MAIN = REPO_ROOT / "firmware" / "src" / "main.c"
+RFCTRL2_RTL = REPO_ROOT / "hardware" / "vivado" / "src" / "pl_riscv_control_v1.v"
+HOST_SOFTWARE = REPO_ROOT / "software" / "host.py"
 VCXO_HZ = 100_000_000.0
 
 
@@ -19,6 +24,41 @@ def _reg12(registers: dict[int, int], low_addr: int, high_addr: int) -> int:
 
 
 class Hmc7044ConfigTests(unittest.TestCase):
+    def test_single_board_target_selects_external_10mhz_reference(self):
+        top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
+        target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
+
+        self.assertRegex(top, r"hmc_use_external_10mhz\s*=\s*1'b1")
+        self.assertIn("clock_policy external_10mhz_xs17", target_config)
+
+    def test_external_10mhz_register_branch_uses_clkin1_and_divide_by_10(self):
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+
+        expected_writes = (
+            'x"0003" & x"2F"',
+            'x"0005" & x"5A"',
+            'x"0026" & x"0A"',
+        )
+        for write in expected_writes:
+            self.assertIn(write, text)
+
+    def test_external_10mhz_selects_high_vco_core_for_3072_ghz(self):
+        regs = _hmc7044_registers()
+
+        self.assertEqual(regs[0x0003], 0x2F)
+        self.assertEqual((regs[0x0003] >> 3) & 0x3, 0x1)
+        self.assertNotEqual((regs[0x0003] >> 3) & 0x3, 0x3)
+        self.assertTrue(regs[0x0003] & 0x07 == 0x07)
+
+    def test_single_board_measurement_target_does_not_require_dac_mts(self):
+        firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
+        rfctrl2 = RFCTRL2_RTL.read_text(encoding="utf-8", errors="ignore")
+        host = HOST_SOFTWARE.read_text(encoding="utf-8", errors="ignore")
+
+        self.assertNotIn("XRFdc_MultiConverter_Sync", firmware)
+        self.assertNotIn("dac_mts", rfctrl2.lower())
+        self.assertNotIn("dac_mts", host.lower())
+
     def test_dac_refclk_registers_generate_exact_128_mhz_with_supported_divider(self):
         regs = _hmc7044_registers()
         pll2_r2 = _reg12(regs, 0x0033, 0x0034)
@@ -49,6 +89,51 @@ class Hmc7044ConfigTests(unittest.TestCase):
             divider = _reg12(regs, low_addr, high_addr)
             self.assertEqual(divider, 1536)
             self.assertEqual(vco_hz / divider, 2_000_000.0)
+
+    def test_pll2_autotune_precedes_settle_and_divider_restart(self):
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+
+        expected_tail = (
+            ("0EF", "0002", "00"),
+            ("0F0", "0002", "04"),
+            ("0F1", "0002", "00"),
+            ("0F2", "0001", "20"),
+            ("0F3", "0001", "22"),
+            ("0F4", "0001", "20"),
+        )
+        for count, address, value in expected_tail:
+            self.assertRegex(
+                text,
+                rf'when\s+x"{count}"\s*=>\s*config_reg\s*<=\s*x"{address}"\s*&\s*x"{value}"',
+            )
+
+        self.assertRegex(
+            text,
+            r'config_reg_cnt\s*=\s*x"0F1"\s+then[\s\S]*?spi_cntr_status\s*<=\s*pll2_settle_wait',
+        )
+        self.assertRegex(
+            text,
+            r'when\s+pll2_settle_wait\s*=>[\s\S]*?config_reg_cnt\s*<=\s*x"0F2"',
+        )
+
+    def test_pll2_settle_wait_is_100_ms_at_25_mhz_state_cadence(self):
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+
+        self.assertRegex(text, r'PLL2_SETTLE_TICKS\s*:\s*positive\s*:=\s*2500000')
+        self.assertIn("integer range 0 to PLL2_SETTLE_TICKS - 1", text)
+        self.assertRegex(text, r'pll2_settle_cnt\s*=\s*PLL2_SETTLE_TICKS\s*-\s*1\s+then')
+        self.assertAlmostEqual(2_500_000 / 25_000_000, 0.1)
+
+    def test_finish_only_follows_final_divider_restart(self):
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+
+        self.assertRegex(
+            text,
+            r'config_reg_cnt\s*=\s*x"0F4"\s+then\s+spi_cntr_status\s*<=\s*config_end',
+        )
+        config_end = text.index("when config_end =>")
+        finish = text.index("SET_FINISH<='1'", config_end)
+        self.assertGreater(finish, config_end)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ module TopCustomXczu47dr (
     input  PL_SYSREF_P_0,
     input  PL_SYSREF_N_0,
 
-    // 10MHz external reference clock for HMC7044 (differential)
+    // HMC7044-generated 10 MHz monitor clock returned to the FPGA.
     input  mclk_10m_p,
     input  mclk_10m_n,
     input  EXT_TRIGGER_P,
@@ -92,7 +92,7 @@ module TopCustomXczu47dr (
       .PL_SYSREF_P_0(PL_SYSREF_P_0),
       .PL_SYSREF_N_0(PL_SYSREF_N_0),
       
-      // 10MHz reference clock
+      // HMC7044 10 MHz monitor clock
       .mclk_10m_p(mclk_10m_p),
       .mclk_10m_n(mclk_10m_n),
       .EXT_TRIGGER_P(EXT_TRIGGER_P),
