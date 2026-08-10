@@ -18,7 +18,7 @@ const selected = ref<RunRecord | null>(null)
 const filtered = computed(() => runs.items.filter((item) => (!filter.value.board || item.board_ids.includes(filter.value.board)) && (!filter.value.state || item.state === filter.value.state) && (!filter.value.query || (item.name + item.id).toLowerCase().includes(filter.value.query.toLowerCase()))))
 function runModeLabel(row: RunRecord) {
   if (row.dry_run) return '生成校验'
-  if (row.playback_mode === 'continuous_sine') return '连续正弦'
+  if (row.playback_mode === 'continuous_sine') return '连续播放'
   if (row.completion_mode === 'one_shot') return '自动静音'
   return '仅上传'
 }

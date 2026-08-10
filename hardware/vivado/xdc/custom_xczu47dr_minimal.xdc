@@ -48,11 +48,11 @@ set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports sync_1_tx_n]
 set_property SLEW MEDIUM [get_ports sync_1_tx_p]
 set_property SLEW MEDIUM [get_ports sync_1_tx_n]
 
-# XS18/TRIG_2 is the master board's RFCTRL2 sync epoch pulse.
+# XS18/TRIG_2 is reserved by this single-board target.
 set_property PACKAGE_PIN D10 [get_ports TRIG_2]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_2]
 
-# XS18/TRIG_3 forwards the HMC7044 10MHz reference output to XS17.
+# XS18/TRIG_3 is reserved by this single-board target.
 set_property PACKAGE_PIN C10 [get_ports TRIG_3]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
 
@@ -70,7 +70,7 @@ set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_P_0]
 set_property PACKAGE_PIN C7 [get_ports PL_SYSREF_N_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_N_0]
 
-# HMC7044 CLKOUT2 10MHz return to the FPGA. Board A forwards it to Board B.
+# HMC7044 CLKOUT2 10 MHz monitor clock returned to the FPGA.
 set_property PACKAGE_PIN B8 [get_ports mclk_10m_p]
 set_property IOSTANDARD LVDS_25 [get_ports mclk_10m_p]
 set_property PACKAGE_PIN B7 [get_ports mclk_10m_n]

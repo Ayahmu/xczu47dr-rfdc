@@ -32,7 +32,7 @@ proc target_config_load {target} {
                 firmware_app rfdc_app \
                 firmware_elf firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf \
                 psu_init firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl \
-                clock_policy unified_onboard_100mhz \
+                clock_policy external_10mhz_xs17 \
                 generics {}]
         }
         custom_xczu47dr_bw {

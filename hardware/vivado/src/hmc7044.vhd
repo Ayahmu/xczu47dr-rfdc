@@ -12,6 +12,9 @@ USE IEEE.STD_LOGIC_ARITH.ALL;
 --  ****************************************************************************/
 entity hmc7044 is
 
+generic(
+PLL2_SETTLE_TICKS : positive := 2500000
+);
 port(
 clk   :	IN	STD_LOGIC;
 rst   :	IN	STD_LOGIC;
@@ -25,7 +28,7 @@ end ;
 architecture MAPPED of hmc7044 is
 
 
-type 	 statetype is (config_wait,config_start,idle0,idle1,idle2,idle3,wr_clkl0,wr_clkl1,wr_clkh0,wr_clkh1,config_wait1,config_end);
+type 	 statetype is (config_wait,config_start,idle0,idle1,idle2,idle3,wr_clkl0,wr_clkl1,wr_clkh0,wr_clkh1,config_wait1,pll2_settle_wait,config_end);
 signal spi_cntr_status : statetype;
 ---------------------------parameter------------------
 	signal HMC7044_SCLK		:	std_logic;
@@ -56,6 +59,7 @@ signal HMC7043_SDATA4 :		STD_LOGIC;
 	signal wr_reg_cnt			:	std_logic_vector(7 downto 0);
 
 	signal delay_cnt			:	std_logic_vector(7 downto 0);
+	signal pll2_settle_cnt	:	integer range 0 to PLL2_SETTLE_TICKS - 1;
 
 	signal rst_cnt				:	std_logic_vector(27 downto 0);
 	signal reset 				:	std_logic;
@@ -102,10 +106,12 @@ H7044_SDATA <=HMC7044_SDIO;
 																													--  01 high
 																													--  10 low
 
+					-- 3.072 GHz must use the High VCO core:
+					-- 0x0003[4:3] = 01. 0x37 (VCO selection 11) is reserved.
 					if USE_EXTERNAL_10MHZ = '1' then
-						config_reg <= x"0003" & x"37"; -- CLKIN1 / XS17 10MHz path
+						config_reg <= x"0003" & x"2F"; -- CLKIN1 / XS17 10MHz path, High VCO core
 					else
-						config_reg <= x"0003" & x"2F"; -- existing CLKIN2 100MHz path
+						config_reg <= x"0003" & x"2F"; -- existing CLKIN2 100MHz path, High VCO core
 					end if;
 
 				when x"006" =>
@@ -678,10 +684,16 @@ H7044_SDATA <=HMC7044_SDIO;
 					config_reg <= x"0152" & x"08";
 					------------------------------------------------------------------------
 			   when x"0EF" =>
-				   config_reg <= x"0001" & x"20";
+				   config_reg <= x"0002" & x"00"; -- establish low before PLL2 autotune pulse
 			  	when x"0F0" =>
-				   config_reg <= x"0001" & x"22";
+				   config_reg <= x"0002" & x"04"; -- assert PLL2 autotune trigger
 				when x"0F1" =>
+				   config_reg <= x"0002" & x"00"; -- clear PLL2 autotune trigger
+				when x"0F2" =>
+				   config_reg <= x"0001" & x"20"; -- restart dividers after PLL2 settles
+				when x"0F3" =>
+				   config_reg <= x"0001" & x"22";
+				when x"0F4" =>
 				   config_reg <= x"0001" & x"20";
 --				when x"0F1" =>
 --				   config_reg <= x"0050" & x"E0";
@@ -713,7 +725,8 @@ H7044_SDATA <=HMC7044_SDIO;
 			HMC7044_CS_N		<= '1';
 			HMC7044_SDIO		<= '0';
 			SET_FINISH<='0';
-        delay_cnt<= (others => '0');
+	        delay_cnt<= (others => '0');
+			pll2_settle_cnt <= 0;
 			spi_reg			<= (others => '0');
 			config_reg_cnt	<= (others => '0');
 			wr_reg_cnt		<= (others => '0');
@@ -789,9 +802,14 @@ H7044_SDATA <=HMC7044_SDIO;
 					if wr_reg_cnt = x"18" then
 						wr_reg_cnt <= (others => '0');
 
-						if config_reg_cnt = x"0F1" then
+						if config_reg_cnt = x"0F4" then
 							spi_cntr_status <= config_end;
 							config_reg_cnt <= (others => '0');
+						elsif config_reg_cnt = x"0F1" then
+							-- clk_div qualifies this process at 25 MHz, so 2,500,000
+							-- qualified cycles provide 100 ms for PLL2 autotune/lock.
+							spi_cntr_status <= pll2_settle_wait;
+							pll2_settle_cnt <= 0;
 						else
 --						   if delay_cnt=x"f0" then
 --							delay_cnt<= (others => '0');
@@ -804,6 +822,18 @@ H7044_SDATA <=HMC7044_SDIO;
 						end if;
 					else
 						spi_cntr_status <= wr_clkl0;
+					end if;
+
+				when pll2_settle_wait =>
+					HMC7044_SCLK		<= '0';
+					HMC7044_CS_N		<= '1';
+					HMC7044_SDIO		<= '0';
+					if pll2_settle_cnt = PLL2_SETTLE_TICKS - 1 then
+						pll2_settle_cnt <= 0;
+							config_reg_cnt <= x"0F2";
+						spi_cntr_status <= config_start;
+					else
+						pll2_settle_cnt <= pll2_settle_cnt + 1;
 					end if;
 
 				when config_end =>

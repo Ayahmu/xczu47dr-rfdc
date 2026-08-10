@@ -118,8 +118,13 @@ puts "INFO: Starting implementation..."
 set impl_run [get_runs impl_1]
 
 # The 300 MHz DDR UI domain is close to the device routing limit. Run a
-# post-route physical optimization pass so small routing regressions are
-# repaired before timing is used to qualify the bitstream.
+# timing-driven placement/route flow plus pre- and post-route physical
+# optimization so small netlist changes do not leave the dense UDP/DDR path
+# dependent on Vivado's default placement choice.
+set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraNetDelay_high ${impl_run}
+set_property STEPS.PHYS_OPT_DESIGN.IS_ENABLED true ${impl_run}
+set_property STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore ${impl_run}
+set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE AggressiveExplore ${impl_run}
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true ${impl_run}
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore ${impl_run}
 

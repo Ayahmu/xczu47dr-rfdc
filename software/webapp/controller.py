@@ -15,7 +15,7 @@ if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
 import host  # noqa: E402
-import waveform_gui_model as gui_model  # noqa: E402
+import waveform_model as gui_model  # noqa: E402
 
 from .models import (
     ActionResponse,
@@ -1264,7 +1264,7 @@ class RunCoordinator:
                         self._event(run_id, f"{board_id}: {self._board_playback_summary(status)}")
                 if continuous_sine and request.one_shot_duration_ms <= 0:
                     record = self.store.update(run_id, RunState.RUNNING, 1.0)
-                    self._event(run_id, "continuous sine playback is running until Stop/Mute is requested")
+                    self._event(run_id, "continuous playback is running until Stop/Mute is requested")
                     self._publish_run(record)
                     return
                 output_duration_s = request.one_shot_duration_ms / 1000.0
@@ -1276,7 +1276,7 @@ class RunCoordinator:
                     else:
                         self.boards.mute(board_id)
                 if continuous_sine:
-                    self._event(run_id, f"continuous sine playback triggered once for {request.one_shot_duration_ms:g} ms and muted")
+                    self._event(run_id, f"continuous playback triggered once for {request.one_shot_duration_ms:g} ms and muted")
                 elif request.jobs[0].waveform.loop:
                     self._event(run_id, f"loop playback triggered once for {request.one_shot_duration_ms:g} ms and muted")
                 else:

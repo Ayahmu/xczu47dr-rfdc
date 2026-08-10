@@ -850,7 +850,7 @@ def bind_serial(board_id: str, request: SerialBindingRequest, actor: UserRecord 
 @app.post("/api/waveforms/preview", response_model=PreviewResponse)
 def preview(request: PreviewRequest, _user: UserRecord = Depends(require_user)) -> PreviewResponse:
     try:
-        return preview_waveforms(request.waveform, request.override, request.fft_channel)
+        return preview_waveforms(request.waveform, request.override, request.rfdc_config, request.fft_channel)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

@@ -22,11 +22,19 @@ def manual_waveform_payload(loop=False):
             {
                 "channel": channel,
                 "enabled": channel in {1, 3, 8},
-                "waveform": "iq-sine",
+                "waveform": "xy",
+                "format": "real" if channel in (5, 6) else "iq",
                 "frequency_mhz": 10.0 * channel,
+                "data_offset_mhz": 10.0 * channel,
                 "phase_deg": 15.0 * channel,
                 "amplitude": 1200,
+                "data_amplitude": 1200 / 32767,
                 "duration_ns": 200,
+                "delay_ns": 0,
+                "target_rf_mhz": 4500.0,
+                "nco_mhz": -1900.0,
+                "nyquist_zone": 2,
+                "nco_phase_deg": 0.0,
             }
             for channel in range(1, 9)
         ],
@@ -394,7 +402,7 @@ class WebAppApiTests(unittest.TestCase):
         self.assertFalse(record["loaded"])
         events = self.client.get(f"/api/runs/{record['id']}/events").json()
         messages = [event["message"] for event in events]
-        self.assertTrue(any("continuous sine playback triggered once" in message for message in messages))
+        self.assertTrue(any("continuous playback triggered once" in message for message in messages))
         self.assertFalse(any("loop playback sent" in message for message in messages))
         self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
         next_run = self.client.post("/api/runs", json=run_payload(dry_run=False), headers=self.headers)
@@ -425,20 +433,19 @@ class WebAppApiTests(unittest.TestCase):
         self.assertEqual(stopped.json()["state"], "ABORTED")
         self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
 
-    def test_continuous_sine_rejects_non_loop_or_non_sine_payload(self):
+    def test_continuous_playback_rejects_non_loop_and_accepts_other_waveforms(self):
         not_loop = run_payload(waveform=manual_waveform_payload(loop=False))
         not_loop["playback_mode"] = "continuous_sine"
         response = self.client.post("/api/runs", json=not_loop, headers=self.headers)
         self.assertEqual(response.status_code, 422, response.text)
         self.assertIn("waveform.loop=true", response.text)
 
-        non_sine_waveform = manual_waveform_payload(loop=True)
-        non_sine_waveform["manual_channels"][0]["waveform"] = "dc-iq-cw"
-        non_sine = run_payload(waveform=non_sine_waveform)
-        non_sine["playback_mode"] = "continuous_sine"
-        response = self.client.post("/api/runs", json=non_sine, headers=self.headers)
-        self.assertEqual(response.status_code, 422, response.text)
-        self.assertIn("requires iq-sine", response.text)
+        z_waveform = manual_waveform_payload(loop=True)
+        z_waveform["manual_channels"][0]["waveform"] = "z"
+        z_playback = run_payload(waveform=z_waveform)
+        z_playback["playback_mode"] = "continuous_sine"
+        response = self.client.post("/api/runs", json=z_playback, headers=self.headers)
+        self.assertEqual(response.status_code, 202, response.text)
 
     def test_live_run_auto_mutes_stale_armed_board_before_rfdc_apply(self):
         leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)

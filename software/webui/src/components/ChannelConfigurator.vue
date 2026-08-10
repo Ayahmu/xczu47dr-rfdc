@@ -13,8 +13,8 @@ const bulk = reactive({ targets: [] as number[], fields: ['dataAmplitude', 'data
 const active = computed(() => props.draft.channels[props.draft.activeChannel - 1])
 const currentRange = computed(() => active.value.channel === 5 || active.value.channel === 6 ? { min: 6.4, max: 32 } : { min: 2.25, max: 40.5 })
 const fieldOptions = [
-  ['waveform', '波形类型'], ['targetRfGhz', '最终 RF'], ['dataAmplitude', 'IQ 幅值'], ['dataPhaseDeg', '数据相位'],
-  ['dataOffsetMhz', '基带偏移'], ['channelDurationNs', '通道波形长度'], ['dacCurrentMa', 'DAC 输出电流'],
+  ['waveform', '波形类型'], ['format', 'IQ / Real'], ['targetRfGhz', '最终 RF'], ['dataAmplitude', '幅值'], ['dataPhaseDeg', '数据相位'],
+  ['dataOffsetMhz', '基带偏移'], ['channelDurationNs', '通道波形长度'], ['delayNs', '延迟'], ['dacCurrentMa', 'DAC 输出电流'],
   ['ncoMode', 'NCO 模式'], ['ncoMhz', 'NCO 频率'], ['ncoPhaseDeg', 'NCO 相位'], ['nyquistZone', 'Nyquist zone'],
 ]
 function touch() { emit('dirty') }
@@ -70,11 +70,13 @@ watch(() => [active.value.channel, active.value.targetRfGhz], () => {
         <el-switch v-model="active.enabled" active-text="启用输出" @change="touch" />
       </div>
       <div class="form-grid basic-grid">
-        <label><span>波形类型</span><el-select v-model="active.waveform" @change="touch"><el-option label="IQ 正弦" value="iq-sine" /><el-option label="IQ 高斯正弦" value="iq-gaussian-sine" /><el-option label="IQ 连续波" value="dc-iq-cw" /></el-select></label>
+        <label><span>波形类型</span><el-select v-model="active.waveform" @change="touch"><el-option label="正弦" value="sine" /><el-option label="XY" value="xy" /><el-option label="Readout" value="readout" /><el-option label="Z" value="z" /></el-select></label>
+        <label><span>数据格式</span><el-segmented v-model="active.format" :options="[{ label: 'IQ', value: 'iq' }, { label: 'Real', value: 'real' }]" @change="touch" /></label>
         <label><span>最终 RF <small>GHz</small></span><el-input-number v-model="active.targetRfGhz" :min="0" :max="6.4" :step="0.001" :precision="6" controls-position="right" @change="updateAutoNco" /></label>
-        <label><span>IQ 数据幅值 <small>-1 .. 1</small></span><el-input-number v-model="active.dataAmplitude" :min="-1" :max="1" :step="0.01" :precision="4" controls-position="right" @change="touch" /></label>
+        <label><span>数据幅值 <small>-1 .. 1</small></span><el-input-number v-model="active.dataAmplitude" :min="-1" :max="1" :step="0.01" :precision="4" controls-position="right" @change="touch" /></label>
         <label><span>数据相位 <small>deg</small></span><el-input-number v-model="active.dataPhaseDeg" :min="-3600" :max="3600" :step="1" controls-position="right" @change="touch" /></label>
         <label><span>通道波形长度 <small>ns</small></span><el-input-number v-model="active.channelDurationNs" :min="1" :max="draft.recordDurationNs" :step="10" controls-position="right" @change="touch" /></label>
+        <label><span>延迟 <small>ns</small></span><el-input-number v-model="active.delayNs" :min="0" :max="draft.recordDurationNs" :step="10" controls-position="right" @change="touch" /></label>
         <label><span>DAC 输出电流 <small>mA，不是 dBm</small></span><el-input-number v-model="active.dacCurrentMa" :min="currentRange.min" :max="currentRange.max" :step="0.05" :precision="2" controls-position="right" @change="touch" /></label>
       </div>
       <button class="advanced-toggle" @click="advanced = !advanced"><Settings2 :size="17" /><span>{{ advanced ? '收起高级参数' : '展开高级参数' }}</span></button>
