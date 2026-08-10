@@ -180,12 +180,19 @@ export interface BoardPreflight {
 export interface ManualChannel {
   channel: number
   enabled: boolean
-  waveform: 'dc-iq-cw' | 'iq-sine' | 'iq-gaussian-sine'
+  waveform: 'sine' | 'xy' | 'readout' | 'z'
+  format: 'iq' | 'real'
   frequency_mhz: number
+  data_offset_mhz?: number | null
   phase_deg: number
   amplitude: number
   data_amplitude?: number | null
   duration_ns: number
+  delay_ns: number
+  target_rf_mhz: number
+  nco_mhz: number
+  nyquist_zone: 1 | 2
+  nco_phase_deg: number
 }
 
 export interface EzqChannel {
@@ -265,7 +272,9 @@ export interface BoardRfdcConfig {
 export interface PreviewSeries {
   channel: number
   role: string
+  domain: 'iq' | 'real'
   time_ns: number[]
+  value: number[]
   i: number[]
   q: number[]
   active_start_ns: number | null

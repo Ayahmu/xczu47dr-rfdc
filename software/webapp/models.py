@@ -412,12 +412,45 @@ class NetworkConfigSnapshot(BaseModel):
 class ManualChannel(BaseModel):
     channel: int = Field(ge=1, le=8)
     enabled: bool = True
-    waveform: Literal["dc-iq-cw", "iq-sine", "iq-gaussian-sine"] = "iq-sine"
+    waveform: str = "sine"
+    format: Literal["iq", "real"] = "iq"
     frequency_mhz: float = Field(0.0, ge=-160.0, le=160.0)
+    data_offset_mhz: float | None = Field(default=None, ge=-160.0, le=160.0)
     phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
-    amplitude: int = Field(12000, ge=0, le=32767)
+    amplitude: int | None = Field(default=None, ge=0, le=32767)
     data_amplitude: float | None = Field(default=None, ge=-1.0, le=1.0)
     duration_ns: float = Field(1000.0, gt=0.0, le=1e9)
+    delay_ns: float = Field(0.0, ge=0.0, le=1e9)
+    target_rf_mhz: float = Field(0.0, ge=0.0, le=6400.0)
+    nco_mhz: float = Field(0.0, ge=-3200.0, le=3200.0)
+    nyquist_zone: Literal[1, 2] = 1
+    nco_phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
+
+    @field_validator("waveform")
+    @classmethod
+    def normalize_waveform(cls, value: str) -> str:
+        waveform = str(value).lower()
+        mapping = {
+            "iq-sine": "sine",
+            "sine": "sine",
+            "iq-gaussian-sine": "xy",
+            "pypulse": "xy",
+            "burst": "xy",
+            "quantum": "xy",
+            "dc-iq-cw": "sine",
+            "xy": "xy",
+            "readout": "readout",
+            "z": "z",
+        }
+        if waveform not in mapping:
+            raise ValueError(f"waveform must be one of sine, xy, readout, z; got {value!r}")
+        return mapping[waveform]
+
+    @model_validator(mode="after")
+    def resolve_data_offset(self) -> "ManualChannel":
+        if self.data_offset_mhz is None:
+            self.data_offset_mhz = self.frequency_mhz
+        return self
 
 
 class EzqChannel(BaseModel):
@@ -483,13 +516,16 @@ class BoardWaveformJob(BaseModel):
 class PreviewRequest(BaseModel):
     waveform: WaveformRequest
     override: BoardOverride | None = None
+    rfdc_config: BoardRfdcConfig | None = None
     fft_channel: int = Field(1, ge=1, le=8)
 
 
 class PreviewSeries(BaseModel):
     channel: int
     role: str
+    domain: Literal["iq", "real"]
     time_ns: list[float]
+    value: list[float]
     i: list[int]
     q: list[int]
     active_start_ns: float | None
@@ -525,15 +561,12 @@ class RunCreateRequest(BaseModel):
         if self.playback_mode == "continuous_sine":
             waveform = self.jobs[0].waveform
             if not waveform.loop:
-                raise ValueError("continuous_sine playback requires waveform.loop=true")
+                raise ValueError("continuous playback requires waveform.loop=true")
             if waveform.mode != "manual":
-                raise ValueError("continuous_sine playback currently supports manual sine waveforms only")
+                raise ValueError("continuous playback currently supports manual waveforms only")
             enabled = [channel for channel in waveform.manual_channels if channel.enabled]
             if not enabled:
-                raise ValueError("continuous_sine playback requires at least one enabled channel")
-            non_sine = [channel.channel for channel in enabled if channel.waveform != "iq-sine"]
-            if non_sine:
-                raise ValueError(f"continuous_sine playback requires iq-sine on enabled channels, got CH{non_sine}")
+                raise ValueError("continuous playback requires at least one enabled channel")
         return self
 
     @property

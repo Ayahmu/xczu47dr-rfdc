@@ -28,8 +28,12 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
   const response = await fetch(path, { ...options, headers, body, credentials: 'include' })
   if (response.status === 401) unauthorizedHandler?.()
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { detail?: string }
-    throw new ApiError(response.status, payload.detail || response.statusText || '请求失败')
+    const payload = await response.json().catch(() => ({})) as { detail?: string | unknown[] }
+    const detail = payload.detail
+    const message = typeof detail === 'string' ? detail
+      : Array.isArray(detail) ? detail.map((item) => typeof item === 'object' && item && 'msg' in item ? String((item as { msg: unknown }).msg) : String(item)).join('；')
+      : response.statusText || '请求失败'
+    throw new ApiError(response.status, message)
   }
   if (response.status === 204) return undefined as T
   return await response.json() as T

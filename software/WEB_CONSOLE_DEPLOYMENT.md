@@ -99,19 +99,21 @@ manager only after validating the corresponding physical links. The number of
 boards in the workspace is determined by RFCTRL2 discovery, not by this
 example table or by the number of configured NIC profiles.
 
-## Continuous Sine Output
+## Continuous Playback Output
 
-The output page offers `Single Shot` and `Continuous Sine` modes. Continuous
-sine is a hardware loop mode for basic RF tests: the server configures RFDC over
-RFCTRL2 UDP, generates one phase-continuous sine record, uploads it to DDR, then
-sends exactly one `ARM` and one `TRIGGER`. After that the PL refills the same
-DDR frame locally and keeps the DAC stream running until the requested duration
-expires or the operator clicks stop/mute.
+The output page offers `Single Shot` and `Continuous Playback` modes.
+Continuous playback is a hardware loop mode: the server configures RFDC over
+RFCTRL2 UDP, generates one shared loop cache (sine/XY/readout/Z in either IQ or
+Real format), uploads it to DDR, then sends exactly one `ARM` and one
+`TRIGGER`. After that the PL refills the same DDR frame locally and keeps the
+DAC stream running until the requested duration expires or the operator clicks
+stop/mute. Each channel's delay and trailing zero padding are inside the
+uploaded loop cache, so every cycle is `delay zeros -> waveform -> remaining
+zeros`.
 
 This mode does not repeatedly upload waveform data and does not send a UDP
 trigger for every loop. The terminal task state is `DONE` after the timed mute,
 so the board run lock is released and the next task can be created immediately.
-Only enabled `iq-sine` channels are accepted in this mode.
 
 ## Environment Variables
 

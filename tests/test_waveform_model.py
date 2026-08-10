@@ -15,21 +15,21 @@ sys.path.insert(0, str(SOFTWARE_DIR))
 
 import host  # type: ignore[import-not-found]  # noqa: E402
 import waveform_tools  # type: ignore[import-not-found]  # noqa: E402
-import waveform_gui_model  # type: ignore[import-not-found]  # noqa: E402
+import waveform_model  # type: ignore[import-not-found]  # noqa: E402
 
 
-class WaveformGuiModelTests(unittest.TestCase):
+class WaveformModelTests(unittest.TestCase):
     def test_default_sample_rate_matches_custom_rfdc_config(self):
-        self.assertEqual(waveform_gui_model.WaveformConfig().sample_rate_hz, 400_000_000.0)
+        self.assertEqual(waveform_model.WaveformConfig().sample_rate_hz, 400_000_000.0)
 
     def test_default_axis_frequency_matches_custom_rfdc_axis_clock(self):
-        self.assertEqual(waveform_gui_model.WaveformConfig().axis_freq_hz, 50_000_000.0)
+        self.assertEqual(waveform_model.WaveformConfig().axis_freq_hz, 50_000_000.0)
 
     def test_default_rfdc_interpolation_matches_custom_rfdc_config(self):
-        self.assertEqual(waveform_gui_model.WaveformConfig().rfdc_interpolation, 16)
+        self.assertEqual(waveform_model.WaveformConfig().rfdc_interpolation, 16)
 
     def test_default_gui_config_is_board_test_preset(self):
-        config = waveform_gui_model.WaveformConfig()
+        config = waveform_model.WaveformConfig()
 
         self.assertEqual(config.mode, "ezq-quantum")
         self.assertEqual(config.ddr_layout, host.DDR_LAYOUT_INTERLEAVED_512B)
@@ -66,7 +66,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(config.ezq.ch8.readout_phase_rad, np.pi / 2.0)
 
     def test_default_gui_config_generates_all_8_test_channels(self):
-        result = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig())
+        result = waveform_model.generate_waveforms(waveform_model.WaveformConfig())
 
         self.assertEqual(result.metadata["mode"], "ezq-quantum")
         self.assertEqual(result.metadata["layout"], host.DDR_LAYOUT_INTERLEAVED_512B)
@@ -92,13 +92,13 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(result.metadata[f"ch{channel}"]["delay_cycles"], 0)
 
     def test_rfdc_interpolation_does_not_scale_python_frequency(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=1_200_000_000.0,
             rfdc_interpolation=2,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=200_000_000.0),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=200_000_000.0),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["sample_rate_hz"], 1_200_000_000.0)
         self.assertEqual(result.metadata["rfdc_interpolation"], 2)
@@ -107,7 +107,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch1"]["python_freq_hz"], 200_000_000.0)
 
     def test_legacy_saved_analog_sample_rate_is_migrated_to_iq_rate(self):
-        settings = waveform_gui_model.gui_settings_from_dict({
+        settings = waveform_model.gui_settings_from_dict({
             "waveform": {
                 "sample_rate_hz": 6_000_000_000.0,
                 "ch1": {"waveform_type": "iq-sine", "freq_hz": 20_000_000.0},
@@ -117,19 +117,19 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(settings.waveform.sample_rate_hz, 400_000_000.0)
 
     def test_iq_frequency_above_input_nyquist_is_rejected(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=400_000_000.0,
-            ch1=waveform_gui_model.ChannelWaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="iq-sine",
                 freq_hz=500_000_000.0,
             ),
         )
 
         with self.assertRaisesRegex(ValueError, "exceeds the RFDC input Nyquist"):
-            waveform_gui_model.generate_waveforms(config)
+            waveform_model.generate_waveforms(config)
 
     def test_generated_waveforms_are_channel_primary_with_xy_aliases(self):
-        fields = set(waveform_gui_model.GeneratedWaveforms.__dataclass_fields__)
+        fields = set(waveform_model.GeneratedWaveforms.__dataclass_fields__)
 
         self.assertIn("ch1", fields)
         self.assertIn("ch2", fields)
@@ -137,7 +137,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertNotIn("y", fields)
 
     def test_connection_defaults_match_10g_bringup_link(self):
-        connection = waveform_gui_model.ConnectionConfig()
+        connection = waveform_model.ConnectionConfig()
 
         self.assertEqual(connection.ip, host.DEFAULT_BOARD_IP)
         self.assertEqual(connection.port, host.DEFAULT_BOARD_PORT)
@@ -147,22 +147,22 @@ class WaveformGuiModelTests(unittest.TestCase):
     def test_local_gui_settings_round_trip_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings_path = Path(temp_dir) / "waveform_gui_settings.json"
-            settings = waveform_gui_model.GuiSettings(
-                waveform=waveform_gui_model.WaveformConfig(
+            settings = waveform_model.GuiSettings(
+                waveform=waveform_model.WaveformConfig(
                     mode="per-channel",
                     output_dir=Path("/tmp/custom-waveforms"),
                     sample_rate_hz=1_200_000_000.0,
                     loop=True,
                     wait_for_trigger=True,
                     dry_run=False,
-                    ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=80e6, delay_s=12e-9),
-                    ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=120e6, phase_rad=0.25),
-                    ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", amplitude=21000),
-                    ch4=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", encoding="offset-binary"),
-                    ch5=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=host.DDR_CH5_ADDR),
-                    ch8=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=180e6),
+                    ch1=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=80e6, delay_s=12e-9),
+                    ch2=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=120e6, phase_rad=0.25),
+                    ch3=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", amplitude=21000),
+                    ch4=waveform_model.ChannelWaveformConfig(waveform_type="sine", encoding="offset-binary"),
+                    ch5=waveform_model.ChannelWaveformConfig(waveform_type="golden", start=host.DDR_CH5_ADDR),
+                    ch8=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=180e6),
                 ),
-                connection=waveform_gui_model.ConnectionConfig(
+                connection=waveform_model.ConnectionConfig(
                     ip="192.0.2.44",
                     port=4321,
                     udp_interface="eth-local",
@@ -170,7 +170,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                     timeout_s=2.5,
                     post_upload_sleep_s=0.2,
                 ),
-                ila=waveform_gui_model.IlaReportConfig(
+                ila=waveform_model.IlaReportConfig(
                     bitstream_path=Path("build/custom.bit"),
                     ltx_path=Path("build/custom.ltx"),
                     output_dir=Path("reports/ila"),
@@ -179,8 +179,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 ),
             )
 
-            waveform_gui_model.save_gui_settings(settings, settings_path)
-            loaded = waveform_gui_model.load_gui_settings(settings_path)
+            waveform_model.save_gui_settings(settings, settings_path)
+            loaded = waveform_model.load_gui_settings(settings_path)
 
             self.assertEqual(loaded.connection.ip, "192.0.2.44")
             self.assertEqual(loaded.connection.port, 4321)
@@ -190,7 +190,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertFalse(loaded.waveform.dry_run)
             self.assertEqual(loaded.waveform.ch1.waveform_type, "iq-gaussian-sine")
             self.assertEqual(loaded.waveform.ch1.pypulse_waveform, "xy")
-            self.assertEqual(loaded.waveform.ch2.waveform_type, "iq-sine")
+            self.assertEqual(loaded.waveform.ch2.waveform_type, "sine")
             self.assertEqual(loaded.waveform.ch3.quantum_gate, "y")
             self.assertEqual(loaded.waveform.ch4.encoding, "offset-binary")
             self.assertEqual(loaded.waveform.ch5.start, host.DDR_CH5_ADDR)
@@ -201,7 +201,7 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_missing_local_gui_settings_use_defaults(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            settings = waveform_gui_model.load_gui_settings(Path(temp_dir) / "missing.json")
+            settings = waveform_model.load_gui_settings(Path(temp_dir) / "missing.json")
 
         self.assertEqual(settings.connection.ip, host.DEFAULT_BOARD_IP)
         self.assertEqual(settings.waveform.sample_rate_hz, host.DAC_XY_FS)
@@ -215,7 +215,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            settings = waveform_gui_model.load_gui_settings(settings_path)
+            settings = waveform_model.load_gui_settings(settings_path)
 
         self.assertEqual(settings.waveform.ch1.waveform_type, "iq-gaussian-sine")
         self.assertEqual(settings.waveform.ch1.freq_hz, 90e6)
@@ -228,7 +228,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            settings = waveform_gui_model.load_gui_settings(settings_path)
+            settings = waveform_model.load_gui_settings(settings_path)
 
         self.assertEqual(settings.waveform.ch1.waveform_type, "dc-iq-cw")
         self.assertEqual(settings.waveform.ch1.amplitude, 16000)
@@ -241,7 +241,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            settings = waveform_gui_model.load_gui_settings(settings_path)
+            settings = waveform_model.load_gui_settings(settings_path)
 
         self.assertEqual(settings.waveform.ch1.waveform_type, "off")
         self.assertEqual(settings.waveform.ch1.freq_hz, 80e6)
@@ -249,10 +249,10 @@ class WaveformGuiModelTests(unittest.TestCase):
     def test_ezq_settings_round_trip_quantum_parameters(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings_path = Path(temp_dir) / "waveform_gui_settings.json"
-            settings = waveform_gui_model.GuiSettings(
-                waveform=waveform_gui_model.WaveformConfig(
+            settings = waveform_model.GuiSettings(
+                waveform=waveform_model.WaveformConfig(
                     mode="ezq-quantum",
-                    ezq=waveform_gui_model.EzqPulseConfig(
+                    ezq=waveform_model.EzqPulseConfig(
                         f10_hz=4.61e9,
                         fc_hz=4.5e9,
                         pi_df_hz=-10e6,
@@ -264,8 +264,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 )
             )
 
-            waveform_gui_model.save_gui_settings(settings, settings_path)
-            loaded = waveform_gui_model.load_gui_settings(settings_path)
+            waveform_model.save_gui_settings(settings, settings_path)
+            loaded = waveform_model.load_gui_settings(settings_path)
 
         self.assertEqual(loaded.waveform.mode, "ezq-quantum")
         self.assertEqual(loaded.waveform.ezq.f10_hz, 4.61e9)
@@ -277,11 +277,11 @@ class WaveformGuiModelTests(unittest.TestCase):
     def test_ezq_settings_round_trip_per_channel_parameters(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings_path = Path(temp_dir) / "waveform_gui_settings.json"
-            settings = waveform_gui_model.GuiSettings(
-                waveform=waveform_gui_model.WaveformConfig(
+            settings = waveform_model.GuiSettings(
+                waveform=waveform_model.WaveformConfig(
                     mode="ezq-quantum",
-                    ezq=waveform_gui_model.EzqPulseConfig(
-                        ch1=waveform_gui_model.EzqChannelConfig(
+                    ezq=waveform_model.EzqPulseConfig(
+                        ch1=waveform_model.EzqChannelConfig(
                             enabled=True,
                             f10_hz=4.62e9,
                             fc_hz=4.5e9,
@@ -289,7 +289,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                             pi_amp=0.25,
                             timing_lag_xy_s=40e-9,
                         ),
-                        ch2=waveform_gui_model.EzqChannelConfig(
+                        ch2=waveform_model.EzqChannelConfig(
                             enabled=False,
                             f10_hz=4.55e9,
                             fc_hz=4.5e9,
@@ -301,8 +301,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 )
             )
 
-            waveform_gui_model.save_gui_settings(settings, settings_path)
-            loaded = waveform_gui_model.load_gui_settings(settings_path)
+            waveform_model.save_gui_settings(settings, settings_path)
+            loaded = waveform_model.load_gui_settings(settings_path)
 
         self.assertTrue(loaded.waveform.ezq.ch1.enabled)
         self.assertEqual(loaded.waveform.ezq.ch1.f10_hz, 4.62e9)
@@ -312,11 +312,11 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(loaded.waveform.ezq.ch2.timing_lag_xy_s, 80e-9)
 
     def test_ezq_quantum_generates_gaussian_iq_from_frequency_rule_and_mask(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
             axis_freq_hz=100_000_000.0,
-            ezq=waveform_gui_model.EzqPulseConfig(
+            ezq=waveform_model.EzqPulseConfig(
                 f10_hz=4.62e9,
                 fc_hz=4.5e9,
                 pi_df_hz=-20e6,
@@ -329,7 +329,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["mode"], "ezq-quantum")
         self.assertEqual(result.metadata["ezq"]["xy_baseband_hz"], -20e6)
@@ -343,13 +343,13 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertFalse(np.any(result.ch1[-16:]))
 
     def test_ezq_quantum_per_channel_table_controls_frequency_amplitude_and_delay(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
             axis_freq_hz=100_000_000.0,
-            ezq=waveform_gui_model.EzqPulseConfig(
+            ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
-                ch1=waveform_gui_model.EzqChannelConfig(
+                ch1=waveform_model.EzqChannelConfig(
                     enabled=True,
                     f10_hz=4.62e9,
                     fc_hz=4.5e9,
@@ -358,7 +358,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                     start_time_s=40e-9,
                     period_s=120e-9,
                 ),
-                ch2=waveform_gui_model.EzqChannelConfig(
+                ch2=waveform_model.EzqChannelConfig(
                     enabled=True,
                     f10_hz=4.58e9,
                     fc_hz=4.5e9,
@@ -367,11 +367,11 @@ class WaveformGuiModelTests(unittest.TestCase):
                     start_time_s=80e-9,
                     period_s=120e-9,
                 ),
-                ch3=waveform_gui_model.EzqChannelConfig(enabled=False),
+                ch3=waveform_model.EzqChannelConfig(enabled=False),
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["ch1"]["target_rf_hz"], 4.62e9)
         self.assertEqual(result.metadata["ch2"]["target_rf_hz"], 4.58e9)
@@ -386,16 +386,16 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertTrue(np.any(result.ch1[32:]))
         self.assertFalse(np.any(result.ch2[:64]))
         self.assertTrue(np.any(result.ch2[64:]))
-        self.assertEqual(waveform_gui_model.channel_delay_cycles(config), {})
+        self.assertEqual(waveform_model.channel_delay_cycles(config), {})
 
     def test_ezq_quantum_channel_table_uses_fixed_xy_z_and_readout_roles(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
             axis_freq_hz=100_000_000.0,
-            ezq=waveform_gui_model.EzqPulseConfig(
+            ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
-                ch1=waveform_gui_model.EzqChannelConfig(
+                ch1=waveform_model.EzqChannelConfig(
                     enabled=True,
                     waveform="xy",
                     f10_hz=4.6e9,
@@ -404,7 +404,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                     timing_lag_xy_s=10e-9,
                     period_s=160e-9,
                 ),
-                ch5=waveform_gui_model.EzqChannelConfig(
+                ch5=waveform_model.EzqChannelConfig(
                     enabled=True,
                     waveform="z",
                     z_amp=0.4,
@@ -415,7 +415,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                     timing_lag_xy_s=20e-9,
                     period_s=320e-9,
                 ),
-                ch7=waveform_gui_model.EzqChannelConfig(
+                ch7=waveform_model.EzqChannelConfig(
                     enabled=True,
                     waveform="readout",
                     readout_freq_hz=5.8e9,
@@ -430,7 +430,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["ch1"]["type"], "ezq-xy")
         self.assertEqual(result.metadata["ch5"]["type"], "ezq-z")
@@ -461,7 +461,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertGreater(float(np.std(readout_env)), 1000.0)
 
     def test_ezq_xy_gate_variants_select_driver_style_parameters(self):
-        base = waveform_gui_model.EzqChannelConfig(
+        base = waveform_model.EzqChannelConfig(
             enabled=True,
             waveform="xy",
             f10_hz=4.6e9,
@@ -478,10 +478,10 @@ class WaveformGuiModelTests(unittest.TestCase):
             spec_len_s=1e-6,
             period_s=1.2e-6,
         )
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
-            ezq=waveform_gui_model.EzqPulseConfig(
+            ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
                 ch1=dataclasses.replace(base, xy_gate="x_pi"),
                 ch2=dataclasses.replace(base, xy_gate="x_half"),
@@ -490,7 +490,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["ch1"]["xy_gate"], "x_pi")
         self.assertEqual(result.metadata["ch2"]["xy_gate"], "x_half")
@@ -515,17 +515,17 @@ class WaveformGuiModelTests(unittest.TestCase):
             z_ripple3=0.9,
             period_s=300e-9,
         )
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
-            ezq=waveform_gui_model.EzqPulseConfig(
+            ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
-                ch5=waveform_gui_model.EzqChannelConfig(**common, z_shape="square"),
-                ch6=waveform_gui_model.EzqChannelConfig(**common, z_shape="diabatic_cz"),
+                ch5=waveform_model.EzqChannelConfig(**common, z_shape="square"),
+                ch6=waveform_model.EzqChannelConfig(**common, z_shape="diabatic_cz"),
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["ch5"]["role"], "z")
         self.assertEqual(result.metadata["ch6"]["role"], "z")
@@ -535,25 +535,25 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch6"]["backend"], "hls-diabatic-cz")
 
     def test_ezq_baseband_offset_above_recommended_limit_is_rejected(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
-            ezq=waveform_gui_model.EzqPulseConfig(pi_df_hz=300e6),
+            ezq=waveform_model.EzqPulseConfig(pi_df_hz=300e6),
         )
 
         with self.assertRaisesRegex(ValueError, "recommended"):
-            waveform_gui_model.generate_waveforms(config)
+            waveform_model.generate_waveforms(config)
 
     def test_ezq_channel_sequences_use_generated_delay_and_length(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
             sample_rate_hz=host.DAC_XY_FS,
             axis_freq_hz=100_000_000.0,
-            ezq=waveform_gui_model.EzqPulseConfig(timing_lag_xy_s=90e-9, period_s=120e-9),
+            ezq=waveform_model.EzqPulseConfig(timing_lag_xy_s=90e-9, period_s=120e-9),
         )
-        generated = waveform_gui_model.generate_waveforms(config)
+        generated = waveform_model.generate_waveforms(config)
 
-        sequences = waveform_gui_model.ezq_channel_sequences(generated)
+        sequences = waveform_model.ezq_channel_sequences(generated)
 
         self.assertEqual(int(sequences[1][0][2]), 0)
         self.assertEqual(int(sequences[1][1][1]), len(generated.ch1) // 4)
@@ -561,15 +561,15 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_controller_saves_ezq_metadata_with_quantum_profile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.WaveformConfig(
+            config = waveform_model.WaveformConfig(
                 mode="ezq-quantum",
                 output_dir=Path(temp_dir),
-                ezq=waveform_gui_model.EzqPulseConfig(f10_hz=4.61e9, fc_hz=4.5e9, channel_mask=0x01),
+                ezq=waveform_model.EzqPulseConfig(f10_hz=4.61e9, fc_hz=4.5e9, channel_mask=0x01),
                 dry_run=True,
             )
-            controller = waveform_gui_model.WaveformController(uploader=mock.Mock())
+            controller = waveform_model.WaveformController(uploader=mock.Mock())
 
-            controller.run(config, waveform_gui_model.ConnectionConfig())
+            controller.run(config, waveform_model.ConnectionConfig())
             saved_meta = json.loads((Path(temp_dir) / "ezq_metadata.json").read_text(encoding="utf-8"))
             self.assertTrue((Path(temp_dir) / "ch1_ezq_wave_iq.npy").exists())
             self.assertTrue((Path(temp_dir) / "ch1_ezq_seq.npy").exists())
@@ -579,7 +579,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(saved_meta["channels"][0]["type"], "ezq-xy")
 
     def test_ila_capture_command_uses_current_python_connection_and_artifacts(self):
-        connection = waveform_gui_model.ConnectionConfig(
+        connection = waveform_model.ConnectionConfig(
             ip="192.168.1.55",
             port=4096,
             udp_interface="eno1",
@@ -587,7 +587,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             timeout_s=9.0,
             post_upload_sleep_s=0.25,
         )
-        config = waveform_gui_model.IlaReportConfig(
+        config = waveform_model.IlaReportConfig(
             artifact_dir=Path("/tmp/gui-artifacts"),
             bitstream_path=Path("hardware/vivado/output/custom.bit"),
             ltx_path=Path("hardware/vivado/output/custom.ltx"),
@@ -595,7 +595,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             program_mode="auto",
         )
 
-        command = waveform_gui_model.build_ila_capture_command(config, connection)
+        command = waveform_model.build_ila_capture_command(config, connection)
 
         self.assertEqual(command[0], sys.executable)
         self.assertEqual(command[1], str(SOFTWARE_DIR / "ila_capture_report.py"))
@@ -615,8 +615,8 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertIn("--yes", command)
 
     def test_ila_capture_command_never_program_mode_omits_yes(self):
-        connection = waveform_gui_model.ConnectionConfig()
-        config = waveform_gui_model.IlaReportConfig(
+        connection = waveform_model.ConnectionConfig()
+        config = waveform_model.IlaReportConfig(
             artifact_dir=Path("/tmp/gui-artifacts"),
             bitstream_path=Path("hardware/vivado/output/custom.bit"),
             ltx_path=Path("hardware/vivado/output/custom.ltx"),
@@ -624,7 +624,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             program_mode="never",
         )
 
-        command = waveform_gui_model.build_ila_capture_command(config, connection)
+        command = waveform_model.build_ila_capture_command(config, connection)
 
         self.assertEqual(command[command.index("--program-mode") + 1], "never")
         self.assertNotIn("--yes", command)
@@ -636,8 +636,8 @@ class WaveformGuiModelTests(unittest.TestCase):
             stderr="vivado warning\n",
         )
         runner = mock.Mock(return_value=completed)
-        connection = waveform_gui_model.ConnectionConfig(ip="192.168.1.55", port=4096)
-        config = waveform_gui_model.IlaReportConfig(
+        connection = waveform_model.ConnectionConfig(ip="192.168.1.55", port=4096)
+        config = waveform_model.IlaReportConfig(
             artifact_dir=Path("/tmp/gui-artifacts"),
             bitstream_path=Path("hardware/vivado/output/custom.bit"),
             ltx_path=Path("hardware/vivado/output/custom.ltx"),
@@ -645,7 +645,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             program_mode="never",
         )
 
-        result = waveform_gui_model.run_ila_capture_report(config, connection, runner=runner)
+        result = waveform_model.run_ila_capture_report(config, connection, runner=runner)
 
         self.assertFalse(result.ok)
         self.assertEqual(result.returncode, 2)
@@ -657,7 +657,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         runner.assert_called_once()
 
     def test_sine_config_generates_distinct_xy_waveforms_and_metadata(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="sine",
             x_freq_hz=20e6,
             y_freq_hz=80e6,
@@ -669,7 +669,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             encoding="signed",
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
         expected_len = (
             waveform_tools.iq_duration_to_sample_count(config.duration_s, config.sample_rate_hz)
             + waveform_tools.iq_duration_to_sample_count(config.zero_tail_s, config.sample_rate_hz)
@@ -691,10 +691,10 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["zero_tail_s"], 50e-9)
 
     def test_per_channel_iq_gaussian_sine_generates_finite_iq_record(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="per-channel",
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="iq-gaussian-sine",
                 freq_hz=100e6,
                 phase_rad=0.0,
@@ -704,7 +704,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.ch1.dtype, np.int16)
         self.assertGreater(int(np.max(np.abs(result.ch1[0::2]))), 10000)
@@ -713,7 +713,7 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch1"]["encoding"], "signed-iq-interleaved")
 
     def test_burst_config_preserves_timing_parameters_in_metadata(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="burst",
             x_freq_hz=80e6,
             y_freq_hz=120e6,
@@ -725,7 +725,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             axis_freq_hz=250_000_000.0,
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertGreater(np.max(np.abs(result.x)), 1000)
         self.assertGreater(np.max(np.abs(result.y)), 1000)
@@ -738,9 +738,9 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["duration_s"], 120e-9)
 
     def test_golden_config_generates_incrementing_debug_pattern(self):
-        config = waveform_gui_model.WaveformConfig(mode="golden", x_start=0, y_start=0x1000)
+        config = waveform_model.WaveformConfig(mode="golden", x_start=0, y_start=0x1000)
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         np.testing.assert_array_equal(result.x[:8], np.arange(8, dtype=np.int16))
         self.assertEqual(result.y[:4].view(np.uint16).tolist(), [0x1000, 0x1001, 0x1002, 0x1003])
@@ -749,9 +749,9 @@ class WaveformGuiModelTests(unittest.TestCase):
     def test_pulse_presets_generate_channel_waveforms_and_metadata(self):
         for preset in ("x", "y", "z"):
             with self.subTest(preset=preset):
-                config = waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset=preset, amplitude=18000)
+                config = waveform_model.WaveformConfig(mode="pulse", pulse_preset=preset, amplitude=18000)
 
-                result = waveform_gui_model.generate_waveforms(config)
+                result = waveform_model.generate_waveforms(config)
 
                 self.assertEqual(result.x.dtype, np.int16)
                 self.assertEqual(result.y.dtype, np.int16)
@@ -762,39 +762,39 @@ class WaveformGuiModelTests(unittest.TestCase):
                 self.assertEqual(result.metadata["ch1_label"], "CH1 / XY / lane0 / vout00")
                 self.assertEqual(result.metadata["ch2_label"], "CH2 / XY / lane1 / vout02")
 
-        x_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="x"))
-        y_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="y"))
-        z_pulse = waveform_gui_model.generate_waveforms(waveform_gui_model.WaveformConfig(mode="pulse", pulse_preset="z"))
+        x_pulse = waveform_model.generate_waveforms(waveform_model.WaveformConfig(mode="pulse", pulse_preset="x"))
+        y_pulse = waveform_model.generate_waveforms(waveform_model.WaveformConfig(mode="pulse", pulse_preset="y"))
+        z_pulse = waveform_model.generate_waveforms(waveform_model.WaveformConfig(mode="pulse", pulse_preset="z"))
 
         self.assertGreater(np.max(np.abs(x_pulse.x)), np.max(np.abs(x_pulse.y)))
         self.assertGreater(np.max(np.abs(y_pulse.y)), np.max(np.abs(y_pulse.x)))
         np.testing.assert_array_equal(z_pulse.x, -z_pulse.y)
 
     def test_independent_channel_generation_allows_different_types_and_off(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="sine",
                 freq_hz=20e6,
                 phase_rad=0.0,
                 amplitude=9000,
                 encoding="signed",
             ),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="off"),
-            ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=0x2000),
-            ch4=waveform_gui_model.ChannelWaveformConfig(
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="off"),
+            ch3=waveform_model.ChannelWaveformConfig(waveform_type="golden", start=0x2000),
+            ch4=waveform_model.ChannelWaveformConfig(
                 waveform_type="sine",
                 freq_hz=60e6,
                 phase_rad=0.5,
                 amplitude=7000,
                 encoding="signed",
             ),
-            ch5=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=0x4000),
-            ch8=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=90e6, amplitude=6000),
+            ch5=waveform_model.ChannelWaveformConfig(waveform_type="golden", start=0x4000),
+            ch8=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=90e6, amplitude=6000),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
-        default_channel = waveform_gui_model.ChannelWaveformConfig()
+        result = waveform_model.generate_waveforms(config)
+        default_channel = waveform_model.ChannelWaveformConfig()
         expected_len = (
             waveform_tools.iq_duration_to_sample_count(default_channel.duration_s, config.sample_rate_hz)
             + waveform_tools.iq_duration_to_sample_count(default_channel.zero_tail_s, config.sample_rate_hz)
@@ -831,14 +831,14 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch8"]["upload_arg"], "ch8")
 
     def test_pypulse_channel_generation_packs_interleaved_iq_and_metadata(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=90e6),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="z", freq_hz=90e6),
-            ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="readout", freq_hz=140e6),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=90e6),
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="z", freq_hz=90e6),
+            ch3=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="readout", freq_hz=140e6),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.ch1.dtype, np.int16)
         self.assertEqual(len(result.ch1), host.NUM_SAMPLES)
@@ -851,12 +851,12 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertFalse(np.any(result.ch2[1::2]))
 
     def test_dc_iq_cw_channel_generation_uses_interleaved_i_and_zero_q(self):
-        config = waveform_gui_model.WaveformConfig(
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="dc-iq-cw", amplitude=12345),
-            ch5=waveform_gui_model.ChannelWaveformConfig(waveform_type="dc-iq-cw", amplitude=23456),
+        config = waveform_model.WaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="dc-iq-cw", amplitude=12345),
+            ch5=waveform_model.ChannelWaveformConfig(waveform_type="dc-iq-cw", amplitude=23456),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         tail_len = waveform_tools.iq_duration_to_sample_count(50e-9, host.DAC_XY_FS)
         self.assertTrue(np.all(result.ch1[:-tail_len:2] == 12345))
@@ -870,11 +870,11 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch1"]["semantics"], "DC complex baseband with interleaved I/Q lanes")
 
     def test_iq_sine_channel_generation_uses_varying_interleaved_iq_with_negative_q(self):
-        config = waveform_gui_model.WaveformConfig(
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="iq-sine", freq_hz=70e6, amplitude=16000),
+        config = waveform_model.WaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="iq-sine", freq_hz=70e6, amplitude=16000),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertGreater(len(set(result.ch1[0:64:2].tolist())), 4)
         self.assertGreater(len(set(result.ch1[1:64:2].tolist())), 4)
@@ -884,42 +884,84 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch1"]["encoding"], "signed-iq-interleaved")
         self.assertEqual(result.metadata["ch1"]["semantics"], "continuous complex sine with interleaved I/Q lanes")
 
+    def test_new_waveform_types_support_iq_real_delay_and_shared_record(self):
+        config = waveform_model.WaveformConfig(
+            sample_rate_hz=host.DAC_XY_FS,
+            ch1=waveform_model.ChannelWaveformConfig(
+                waveform_type="xy",
+                domain="iq",
+                freq_hz=20e6,
+                amplitude=12000,
+                duration_s=500e-9,
+                delay_s=100e-9,
+                record_duration_s=1e-6,
+            ),
+            ch5=waveform_model.ChannelWaveformConfig(
+                waveform_type="z",
+                domain="real",
+                amplitude=9000,
+                duration_s=200e-9,
+                delay_s=0.0,
+                record_duration_s=1e-6,
+            ),
+            ch7=waveform_model.ChannelWaveformConfig(
+                waveform_type="readout",
+                domain="iq",
+                freq_hz=140e6,
+                amplitude=8000,
+                duration_s=400e-9,
+                delay_s=200e-9,
+                record_duration_s=1e-6,
+            ),
+        )
+
+        result = waveform_model.generate_waveforms(config)
+
+        self.assertEqual(len(result.ch1), 800)
+        self.assertFalse(np.any(result.ch1[:80]))
+        self.assertTrue(np.any(result.ch1[80:480]))
+        self.assertFalse(np.any(result.ch1[480:]))
+        self.assertFalse(np.any(result.ch5[1::2]))
+        self.assertEqual(result.metadata["ch5"]["domain"], "real")
+        self.assertEqual(result.metadata["ch1"]["domain"], "iq")
+        self.assertEqual(result.metadata["ch7"]["type"], "readout")
+
     def test_channel_delay_cycles_use_axis_frequency_not_waveform_samples(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             ddr_layout=host.DDR_LAYOUT_TILED,
             sample_rate_hz=1_200_000_000.0,
             axis_freq_hz=250_000_000.0,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", delay_s=80e-9),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", delay_s=120e-9),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", delay_s=80e-9),
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="quantum", delay_s=120e-9),
         )
 
-        self.assertEqual(waveform_gui_model.channel_delay_cycles(config), {1: 20, 2: 30})
+        self.assertEqual(waveform_model.channel_delay_cycles(config), {1: 20, 2: 30})
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.metadata["ch1"]["delay_cycles"], 20)
         self.assertEqual(result.metadata["ch2"]["delay_cycles"], 30)
 
     def test_quantum_z_delay_is_ignored_by_default_interleaved_layout(self):
-        no_delay = waveform_gui_model.WaveformConfig(
+        no_delay = waveform_model.WaveformConfig(
             axis_freq_hz=300_000_000.0,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="z", delay_s=0.0),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="z", delay_s=0.0),
         )
-        delayed = waveform_gui_model.WaveformConfig(
+        delayed = waveform_model.WaveformConfig(
             axis_freq_hz=300_000_000.0,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="z", delay_s=80e-9),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="z", delay_s=80e-9),
         )
 
         np.testing.assert_array_equal(
-            waveform_gui_model.generate_waveforms(no_delay).ch1,
-            waveform_gui_model.generate_waveforms(delayed).ch1,
+            waveform_model.generate_waveforms(no_delay).ch1,
+            waveform_model.generate_waveforms(delayed).ch1,
         )
-        self.assertEqual(waveform_gui_model.channel_delay_cycles(delayed), {})
+        self.assertEqual(waveform_model.channel_delay_cycles(delayed), {})
 
     def test_independent_channels_preserve_ddr_x_y_upload_mapping(self):
-        config = waveform_gui_model.WaveformConfig(
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="golden", start=0x20),
-            ch2=waveform_gui_model.ChannelWaveformConfig(
+        config = waveform_model.WaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="golden", start=0x20),
+            ch2=waveform_model.ChannelWaveformConfig(
                 waveform_type="pulse",
                 pulse_preset="z",
                 pulse_sigma_s=20e-9,
@@ -928,7 +970,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertEqual(result.x[:4].view(np.uint16).tolist(), [0x20, 0x21, 0x22, 0x23])
         self.assertLess(int(np.min(result.y)), -1000)
@@ -938,14 +980,14 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch2"]["upload_arg"], "y")
 
     def test_quantum_x_gate_is_per_channel(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
         )
         expected = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         np.testing.assert_array_equal(result.x, expected)
         np.testing.assert_array_equal(result.y, expected)
@@ -957,14 +999,14 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch2"]["semantics"], "X rotation drive on this DAC channel")
 
     def test_quantum_y_gate_is_per_channel_quadrature_phase(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
         expected = waveform_tools.make_gaussian_burst(120e6, np.pi / 2.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         np.testing.assert_array_equal(result.x, expected)
         np.testing.assert_array_equal(result.y, expected)
@@ -977,23 +1019,23 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertEqual(result.metadata["ch2"]["pulse_backend"], "scipy")
 
     def test_pulse_x_y_presets_match_send_xy_gaussian_bursts(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
         expected_x = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
         expected_y = waveform_tools.make_gaussian_burst(120e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         np.testing.assert_array_equal(result.x, expected_x)
         np.testing.assert_array_equal(result.y, expected_y)
 
     def test_quantum_z_gate_emits_scipy_phase_marker_pulse(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="quantum",
                 quantum_gate="z",
                 virtual_z_phase_rad=1.57079632679,
@@ -1001,7 +1043,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 duration_s=120e-9,
                 delay_s=80e-9,
             ),
-            ch2=waveform_gui_model.ChannelWaveformConfig(
+            ch2=waveform_model.ChannelWaveformConfig(
                 waveform_type="quantum",
                 quantum_gate="z",
                 virtual_z_phase_rad=1.57079632679,
@@ -1011,7 +1053,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         self.assertGreater(int(np.max(result.x)), 1000)
         self.assertLess(int(np.min(result.y)), -1000)
@@ -1022,17 +1064,17 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertAlmostEqual(result.metadata["ch1"]["virtual_z_phase_rad"], 1.57079632679)
 
     def test_burst_delay_controls_idle_cycles_not_waveform_prefix(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             mode="per-channel",
             sample_rate_hz=host.DAC_XY_FS,
-            ch1=waveform_gui_model.ChannelWaveformConfig(
+            ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="burst",
                 freq_hz=80e6,
                 delay_s=0.0,
                 duration_s=120e-9,
                 amplitude=20000,
             ),
-            ch2=waveform_gui_model.ChannelWaveformConfig(
+            ch2=waveform_model.ChannelWaveformConfig(
                 waveform_type="burst",
                 freq_hz=80e6,
                 delay_s=80e-9,
@@ -1041,7 +1083,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             ),
         )
 
-        result = waveform_gui_model.generate_waveforms(config)
+        result = waveform_model.generate_waveforms(config)
 
         np.testing.assert_array_equal(result.ch1, result.ch2)
         self.assertEqual(result.metadata["ch1"]["delay_cycles"], 0)
@@ -1049,9 +1091,9 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_dry_run_saves_artifacts_without_uploading(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.WaveformConfig(mode="sine", output_dir=Path(temp_dir), dry_run=True)
-            connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.10", port=1234)
-            controller = waveform_gui_model.WaveformController(uploader=mock.Mock())
+            config = waveform_model.WaveformConfig(mode="sine", output_dir=Path(temp_dir), dry_run=True)
+            connection = waveform_model.ConnectionConfig(ip="192.0.2.10", port=1234)
+            controller = waveform_model.WaveformController(uploader=mock.Mock())
 
             result = controller.run(config, connection)
 
@@ -1071,13 +1113,13 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_extreme_playback_dry_run_writes_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.ExtremePlaybackConfig(
+            config = waveform_model.ExtremePlaybackConfig(
                 output_dir=Path(temp_dir),
                 bytes_per_channel="64MiB",
                 dry_run=True,
             )
 
-            result = waveform_gui_model.run_extreme_playback(config, waveform_gui_model.ConnectionConfig())
+            result = waveform_model.run_extreme_playback(config, waveform_model.ConnectionConfig())
 
             metadata = json.loads((Path(temp_dir) / "extreme_playback_metadata.json").read_text(encoding="utf-8"))
             self.assertTrue(result.dry_run)
@@ -1134,7 +1176,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 self.closed = True
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            extreme = waveform_gui_model.ExtremePlaybackConfig(
+            extreme = waveform_model.ExtremePlaybackConfig(
                 output_dir=Path(temp_dir),
                 bytes_per_channel="4096",
                 beats_per_datagram=host.DEFAULT_UDP_BULK_BEATS,
@@ -1142,8 +1184,8 @@ class WaveformGuiModelTests(unittest.TestCase):
                 wait_for_trigger=True,
                 dry_run=False,
             )
-            waveform = waveform_gui_model.WaveformConfig(mode="ezq-quantum", output_dir=Path(temp_dir), dry_run=True)
-            connection = waveform_gui_model.ConnectionConfig(
+            waveform = waveform_model.WaveformConfig(mode="ezq-quantum", output_dir=Path(temp_dir), dry_run=True)
+            connection = waveform_model.ConnectionConfig(
                 ip="192.0.2.90",
                 port=9090,
                 udp_interface="eth-test",
@@ -1152,7 +1194,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 post_upload_sleep_s=0.0,
             )
 
-            result = waveform_gui_model.run_extreme_playback(
+            result = waveform_model.run_extreme_playback(
                 extreme,
                 connection,
                 waveform_config=waveform,
@@ -1186,14 +1228,14 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_send_uses_upload_helper_with_connection_settings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.WaveformConfig(
+            config = waveform_model.WaveformConfig(
                 mode="ezq-quantum",
                 output_dir=Path(temp_dir),
                 dry_run=False,
                 loop=True,
                 wait_for_trigger=True,
             )
-            connection = waveform_gui_model.ConnectionConfig(
+            connection = waveform_model.ConnectionConfig(
                 ip="192.0.2.20",
                 port=4567,
                 udp_interface="eth-test",
@@ -1202,7 +1244,7 @@ class WaveformGuiModelTests(unittest.TestCase):
                 post_upload_sleep_s=0.05,
             )
             uploader = mock.Mock()
-            controller = waveform_gui_model.WaveformController(uploader=uploader)
+            controller = waveform_model.WaveformController(uploader=uploader)
 
             result = controller.run(config, connection)
 
@@ -1231,19 +1273,19 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_send_uses_enabled_channel_subset_for_manual_waveforms(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.WaveformConfig(
+            config = waveform_model.WaveformConfig(
                 mode="manual-channels",
                 output_dir=Path(temp_dir),
                 dry_run=False,
-                ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=10e6),
-                ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=20e6),
-                ch3=waveform_gui_model.ChannelWaveformConfig(waveform_type="off"),
-                ch4=waveform_gui_model.ChannelWaveformConfig(waveform_type="off"),
+                ch1=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=10e6),
+                ch2=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=20e6),
+                ch3=waveform_model.ChannelWaveformConfig(waveform_type="off"),
+                ch4=waveform_model.ChannelWaveformConfig(waveform_type="off"),
             )
             uploader = mock.Mock()
-            controller = waveform_gui_model.WaveformController(uploader=uploader)
+            controller = waveform_model.WaveformController(uploader=uploader)
 
-            result = controller.run(config, waveform_gui_model.ConnectionConfig())
+            result = controller.run(config, waveform_model.ConnectionConfig())
 
             self.assertFalse(result.dry_run)
             _, kwargs = uploader.call_args
@@ -1251,16 +1293,16 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertEqual(result.generated.metadata["enabled_channel_mask"], 0x03)
 
     def test_build_send_summary_includes_target_and_channel_plan(self):
-        config = waveform_gui_model.WaveformConfig(
+        config = waveform_model.WaveformConfig(
             sample_rate_hz=host.DAC_XY_FS,
             loop=True,
             wait_for_trigger=True,
-            ch1=waveform_gui_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x"),
-            ch2=waveform_gui_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=40e6),
+            ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x"),
+            ch2=waveform_model.ChannelWaveformConfig(waveform_type="sine", freq_hz=40e6),
         )
-        connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.30", port=7890, udp_interface="eth-test", udp_source_ip="192.0.2.2")
+        connection = waveform_model.ConnectionConfig(ip="192.0.2.30", port=7890, udp_interface="eth-test", udp_source_ip="192.0.2.2")
 
-        summary = waveform_gui_model.build_send_summary(config, connection)
+        summary = waveform_model.build_send_summary(config, connection)
 
         self.assertIn("Target: 192.0.2.30:7890", summary)
         self.assertIn("UDP interface: eth-test", summary)
@@ -1281,19 +1323,19 @@ class WaveformGuiModelTests(unittest.TestCase):
             calls.append((connection, payload))
             return len(payload)
 
-        connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.40", port=9876)
-        result = waveform_gui_model.test_connection(connection, sender=sender)
+        connection = waveform_model.ConnectionConfig(ip="192.0.2.40", port=9876)
+        result = waveform_model.test_connection(connection, sender=sender)
 
         self.assertTrue(result.ok)
         self.assertIn("sent", result.message)
         self.assertEqual(calls[0][0], connection)
-        self.assertEqual(calls[0][1], waveform_gui_model.CONNECTION_TEST_PAYLOAD)
+        self.assertEqual(calls[0][1], waveform_model.CONNECTION_TEST_PAYLOAD)
 
     def test_controller_logs_progress_stages_for_real_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.WaveformConfig(mode="golden", output_dir=Path(temp_dir), dry_run=False)
-            connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.50", port=1357)
-            controller = waveform_gui_model.WaveformController(uploader=mock.Mock())
+            config = waveform_model.WaveformConfig(mode="golden", output_dir=Path(temp_dir), dry_run=False)
+            connection = waveform_model.ConnectionConfig(ip="192.0.2.50", port=1357)
+            controller = waveform_model.WaveformController(uploader=mock.Mock())
 
             result = controller.run(config, connection)
 
@@ -1305,9 +1347,9 @@ class WaveformGuiModelTests(unittest.TestCase):
 
     def test_controller_logs_progress_stages_for_dry_run(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = waveform_gui_model.WaveformConfig(mode="golden", output_dir=Path(temp_dir), dry_run=True)
-            connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.60", port=2468)
-            controller = waveform_gui_model.WaveformController(uploader=mock.Mock())
+            config = waveform_model.WaveformConfig(mode="golden", output_dir=Path(temp_dir), dry_run=True)
+            connection = waveform_model.ConnectionConfig(ip="192.0.2.60", port=2468)
+            controller = waveform_model.WaveformController(uploader=mock.Mock())
 
             result = controller.run(config, connection)
 
@@ -1318,14 +1360,14 @@ class WaveformGuiModelTests(unittest.TestCase):
             self.assertNotIn("progress: sending UDP packets", joined)
 
     def test_ila_report_command_uses_connection_and_capture_settings(self):
-        config = waveform_gui_model.IlaReportConfig(
+        config = waveform_model.IlaReportConfig(
             bit_path=Path("hardware/vivado/output/test.bit"),
             ltx_path=Path("hardware/vivado/output/test.ltx"),
             report_dir=Path("software/ila_reports"),
             artifact_dir=Path("software/waveform_out"),
             program_fpga=True,
         )
-        connection = waveform_gui_model.ConnectionConfig(
+        connection = waveform_model.ConnectionConfig(
             ip="192.0.2.70",
             port=4321,
             udp_interface="eth-ila",
@@ -1333,7 +1375,7 @@ class WaveformGuiModelTests(unittest.TestCase):
             timeout_s=7.5,
         )
 
-        command = waveform_gui_model.build_ila_report_command(config, connection)
+        command = waveform_model.build_ila_report_command(config, connection)
 
         self.assertEqual(command[0], sys.executable)
         self.assertIn(str(SOFTWARE_DIR / "ila_capture_report.py"), command)
@@ -1353,10 +1395,10 @@ class WaveformGuiModelTests(unittest.TestCase):
         self.assertIn("--yes", command)
 
     def test_ila_report_command_disables_programming_by_default(self):
-        config = waveform_gui_model.IlaReportConfig(artifact_dir=Path("/tmp/artifacts"))
-        connection = waveform_gui_model.ConnectionConfig()
+        config = waveform_model.IlaReportConfig(artifact_dir=Path("/tmp/artifacts"))
+        connection = waveform_model.ConnectionConfig()
 
-        command = waveform_gui_model.build_ila_report_command(config, connection)
+        command = waveform_model.build_ila_report_command(config, connection)
 
         self.assertEqual(command[command.index("--program-mode") + 1], "never")
         self.assertNotIn("--yes", command)
@@ -1373,10 +1415,10 @@ class WaveformGuiModelTests(unittest.TestCase):
                 stderr="",
             )
 
-        config = waveform_gui_model.IlaReportConfig(artifact_dir=Path("software/waveform_out"))
-        connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.80", port=8080)
+        config = waveform_model.IlaReportConfig(artifact_dir=Path("software/waveform_out"))
+        connection = waveform_model.ConnectionConfig(ip="192.0.2.80", port=8080)
 
-        result = waveform_gui_model.run_ila_capture_report(config, connection, runner=fake_runner)
+        result = waveform_model.run_ila_capture_report(config, connection, runner=fake_runner)
 
         self.assertTrue(result.ok)
         self.assertEqual(result.returncode, 0)
@@ -1396,10 +1438,10 @@ class WaveformGuiModelTests(unittest.TestCase):
                 stderr="vivado missing\n",
             )
 
-        config = waveform_gui_model.IlaReportConfig(artifact_dir=Path("software/waveform_out"))
-        connection = waveform_gui_model.ConnectionConfig(ip="192.0.2.90", port=9090)
+        config = waveform_model.IlaReportConfig(artifact_dir=Path("software/waveform_out"))
+        connection = waveform_model.ConnectionConfig(ip="192.0.2.90", port=9090)
 
-        result = waveform_gui_model.run_ila_capture_report(config, connection, runner=fake_runner)
+        result = waveform_model.run_ila_capture_report(config, connection, runner=fake_runner)
 
         self.assertFalse(result.ok)
         self.assertEqual(result.returncode, 1)

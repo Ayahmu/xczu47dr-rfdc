@@ -3,7 +3,7 @@
 ## Browser Console
 
 Use the browser console as the primary operating interface. It replaces the
-desktop Tkinter workflow with a Vue 3 frontend and a headless FastAPI service;
+legacy desktop workflow with a Vue 3 frontend and a headless FastAPI service;
 the Python code remains a backend transport and waveform-generation layer, not
 a desktop application.
 
@@ -20,7 +20,7 @@ RFSOC_WEB_ADMIN_PASSWORD='replace-this-password' \
 python3 -m uvicorn software.webapp.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`. The console provides manual eight-channel and
+Open `http://127.0.0.1:8000`. The console provides sine/XY/readout/Z manual and
 ez-Q waveform editors, waveform/FFT previews, dynamic registered-board
 selection, exclusive leases, dry-run, run history, WebSocket events, ARM,
 board-local trigger, and abort/mute controls. The selected board has its own
@@ -218,7 +218,7 @@ python3 software/send_waveform_udp.py pypulse \
   --loop
 ```
 
-In the normal ez-Q/GUI flow CH1-CH4 are XY, CH5-CH6 are Z, and CH7-CH8 are readout I/Q buffers.
+In the normal ez-Q flow CH1-CH4 are XY, CH5-CH6 are Z, and CH7-CH8 are readout I/Q buffers.
 Within every 256-bit RFDC AXIS word,
 the 16 little-endian int16 lanes are interleaved as
 `I0,Q0,I1,Q1,...,I7,Q7`. Each generated channel is uploaded as a logical
@@ -248,60 +248,26 @@ Dry run without touching the board:
 python3 software/send_waveform_udp.py sine --dry-run --duration-s 1e-6 --ch1-freq-hz 80000000 --ch3-freq-hz 100000000
 ```
 
-## Legacy Local GUI
+## Waveform Types
 
-The Tkinter GUI is retained only for compatibility/debug. Use the browser
-console for board operation. Launch it from the repository root only when
-needed:
+Each enabled channel can be configured as one of `sine`, `xy`, `readout`, or
+`z`, and each waveform can be generated as `IQ` or `Real`:
 
-```bash
-python3 software/waveform_gui.py
-```
+- `sine`: finite sine record.
+- `xy`: Gaussian-envelope drive pulse.
+- `readout`: flat-top measurement pulse with cosine edges.
+- `z`: square/DC pulse on the I lane with Q=0.
 
-If dependencies have not been installed yet, install the Python requirements
-first:
+`Real` mode writes the real waveform on the I lane with Q=0 and forces the RFDC
+NCO to 0 for that channel. `IQ` mode writes I/Q samples and the preview shows
+the final real waveform after RFDC C2R NCO mixing.
 
-```bash
-python3 -m pip install -r software/requirements.txt
-```
-
-The GUI uses only standard-library `tkinter` plus the existing `matplotlib`
-dependency. It provides separate panels for target connection settings, global
-playback settings, independent CH1-CH8 waveform controls, artifact output, an
-eight-channel waveform preview, and a status log. Each channel can choose only
-`dc-iq-cw` or `iq-sine` independently, with a per-channel `Length (ns)` field, and
-the right-side preview refreshes automatically after a short debounce when
-relevant fields change. Dry run is enabled by default, so `Save / Dry Run` writes
-the same artifact bundle as the CLI without sending UDP packets. The default NIC
-binding is `enp225s0f0` with source IP `192.168.1.10`, matching the current 10G
-bring-up host link. Use `Send to Board` only after confirming the target IP, UDP
-port, NIC binding, source IP, finite waveform length, and trigger mode.
-
-For the current custom XCZU47DR build, keep the GUI/global I/Q sample rate at
-`400e6` and the AXIS/fabric rate at `50e6` unless the RFDC configuration
-changes. The RFDC analog DAC sample rate target is `6.4e9`; the DAC IP then
-applies 16x interpolation to the uploaded I/Q stream. The GUI sends
-the same PL-side UDP waveform/control protocol as the CLI; it does not depend on
-the removed PS Ethernet/lwIP firmware server.
-
-The GUI always generates RFDC C2R interleaved I/Q buffers. `dc-iq-cw` writes a
-constant I value with Q held at zero, so the RFDC fine NCO sets the emitted RF
-tone. `iq-sine` writes quadrature I/Q samples with per-channel frequency, phase,
-amplitude, and finite-length controls. The per-channel frequency is the RFDC
-input baseband offset, not the final RF frequency. With the default 400 MS/s I/Q
-rate, keep it within +/-160 MHz for this bring-up path; use the RFDC NCO to
-place the RF center frequency. CH1 still maps to legacy upload argument `x`; CH2 maps to `y`;
-CH3-CH8 map to `ch3` through `ch8`.
-
-If launching from SSH or a non-desktop shell, `tkinter` needs a graphical display
-(`DISPLAY`) or X11 forwarding. Without one, the GUI exits with a clear message
-instead of a Python traceback.
-
-For a non-display dependency smoke check, run:
-
-```bash
-python3 software/waveform_gui.py --smoke
-```
+Every channel also has a per-channel `delay_ns`. The web console generates one
+shared record of `record_duration_ns` (the loop cache length in continuous
+playback mode), pads the delay with zeros, places the channel waveform, and
+pads the remainder with zeros. For example, with a 1000 ns loop cache, 100 ns
+delay, and a 500 ns XY pulse, each cycle is 0-100 ns zero, 100-600 ns XY, and
+600-1000 ns zero.
 
 ## Important Parameters
 
@@ -315,8 +281,8 @@ python3 software/waveform_gui.py --smoke
 - `--zero-tail-s`: zero I/Q tail appended after `--duration-s` for finite sine
   records. This makes the RFDC output settle to zero instead of holding the last
   nonzero I/Q sample after `tvalid` stops.
-- `--loop`: legacy debug option for non-sine modes. The `sine` mode and GUI
-  finite waveform path force the END loop bit off.
+- `--loop`: legacy debug option for non-sine modes. The web console continuous
+  playback path controls the loop bit directly.
 - `--wait-for-trigger`: sends a non-auto-start END instruction and waits for an
   external/PS trigger instead of immediately playing.
 - `--output-dir`: stores exact `.npy`, `.csv`, `.bin`, `.txt`, and metadata files
@@ -383,7 +349,7 @@ The outputs are a Markdown report and a JSON detail file under `--out-dir`.
 
 ## Fixed Hardware Contract
 
-Current GUI/CLI artifacts use `interleaved_512b` by default. For a finite record,
+Current web/CLI artifacts use `interleaved_512b` by default. For a finite record,
 software zero-pads all eight channels to a shared logical duration, then packs
 them into DDR as one continuous 512-bit stream:
 
@@ -403,12 +369,12 @@ bit  [9]    tiled DDR layout on PLAY
 bit  [10]   interleaved_512b DDR layout on PLAY
 ```
 
-For web-console loop runs, `bit[8]` reloads the same DDR frame after completion
-but does not auto-start it. The server waits for RFCTRL2 `PREPARED` and sends a
-new RFCTRL2 `TRIGGER` for every iteration until the configured total output time
-expires, then sends `ABORT_MUTE`. This mode intentionally includes the UDP
-status/trigger round-trip between iterations and is not phase-continuous or
-gapless looping.
+For web-console continuous playback, `bit[8]` enables the PL seamless loop.
+The server sends one `ARM` and one `TRIGGER`; after the first trigger the PL
+reloads the same DDR frame locally and keeps the DAC stream running until the
+configured output duration expires or the operator sends `ABORT_MUTE`. Each
+loop period replays the full shared record, so a per-cycle delay and trailing
+zero padding are already inside the DDR samples.
 
 `send_waveform_udp.py` is the supported CLI entry point. Shared waveform
 generation and protocol helpers live in `waveform_tools.py`.
@@ -422,5 +388,5 @@ current interleaved_512b int16 layout.
 Run the Python protocol and waveform tests:
 
 ```bash
-python3 -m unittest tests.test_waveform_tools tests.test_host_udp_waveform tests.test_golden_pattern_udp tests.test_waveform_gui_model
+python3 -m unittest tests.test_waveform_tools tests.test_host_udp_waveform tests.test_golden_pattern_udp tests.test_waveform_model
 ```

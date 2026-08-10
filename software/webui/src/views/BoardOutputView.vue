@@ -25,27 +25,27 @@ const board = computed(() => boards.byId(boardId.value))
 const status = computed(() => boards.statusById(boardId.value))
 const draft = computed(() => drafts.output(boardId.value, rfdc.value))
 const rfdc = ref<BoardRfdcConfig | null>(null)
+watch(draft, () => drafts.persist(boardId.value), { deep: true })
 const preview = ref<PreviewResponse | null>(null)
 const previewBusy = ref(false)
 const sendBusy = ref(false)
 const confirmOpen = ref(false)
 const selectedPreviewChannels = ref([1, 2])
-const iqMode = ref<'i' | 'q' | 'iq'>('iq')
 const fftChannel = ref(1)
 const currentRunId = ref('')
 const currentRun = computed(() => runs.byId(currentRunId.value))
 const ownsLease = computed(() => board.value?.lease?.user_id === session.user?.id)
 const enabledChannels = computed(() => draft.value.channels.filter((item) => item.enabled))
 const channelMask = computed(() => enabledChannels.value.reduce((mask, item) => mask | (1 << (item.channel - 1)), 0))
-const isContinuousSine = computed(() => draft.value.playMode === 'continuous_sine')
-const modeLabel = computed(() => isContinuousSine.value ? '连续正弦' : '单次输出')
+const isContinuous = computed(() => draft.value.playMode === 'continuous_sine')
+const modeLabel = computed(() => isContinuous.value ? '连续播放' : '单次输出')
 const recordDurationMs = computed(() => Math.max(draft.value.recordDurationNs / 1e6, 0))
 const continuousDurationSeconds = computed({
   get: () => Number((draft.value.outputDurationMs / 1000).toFixed(3)),
   set: (value: number | undefined) => { draft.value.outputDurationMs = Math.max(0, Number(value || 0) * 1000) },
 })
 const runDurationLabel = computed(() => {
-  if (isContinuousSine.value) {
+  if (isContinuous.value) {
     if (draft.value.outputDurationMs <= 0) return '直到手动停止'
     return `${Number((draft.value.outputDurationMs / 1000).toFixed(3))} s`
   }
@@ -55,11 +55,11 @@ const runProgressTitle = computed(() => {
   if (currentRun.value?.state === 'DONE') return '发送成功并已自动静音'
   if (currentRun.value?.state === 'FAULT') return '发送失败'
   if (currentRun.value?.state === 'ABORTED') return '已停止并静音'
-  if (currentRun.value?.state === 'RUNNING' && currentRun.value?.playback_mode === 'continuous_sine') return '正在连续正弦输出'
+  if (currentRun.value?.state === 'RUNNING' && currentRun.value?.playback_mode === 'continuous_sine') return '正在连续播放'
   return '正在执行一键发送'
 })
 const estimatedLoopCount = computed(() => {
-  if (!isContinuousSine.value || recordDurationMs.value <= 0) return 0
+  if (!isContinuous.value || recordDurationMs.value <= 0) return 0
   if (draft.value.outputDurationMs <= 0) return null
   return Math.max(1, Math.floor(draft.value.outputDurationMs / recordDurationMs.value))
 })
@@ -96,7 +96,6 @@ function setPlayMode(mode: PlayMode) {
   draft.value.playMode = mode
   draft.value.loop = mode === 'continuous_sine'
   if (draft.value.loop) {
-    draft.value.channels.forEach((item) => { if (item.enabled) item.waveform = 'iq-sine' })
     if (draft.value.outputDurationMs === 100) draft.value.outputDurationMs = 0
   } else if (draft.value.outputDurationMs <= 0) {
     draft.value.outputDurationMs = 100
@@ -106,7 +105,7 @@ function setPlayMode(mode: PlayMode) {
 async function generatePreview() {
   previewBusy.value = true
   try {
-    preview.value = await api<PreviewResponse>('/api/waveforms/preview', { method: 'POST', body: { waveform: outputWaveform(draft.value), override: outputOverride(boardId.value, draft.value), fft_channel: fftChannel.value } })
+    preview.value = await api<PreviewResponse>('/api/waveforms/preview', { method: 'POST', body: { waveform: outputWaveform(draft.value), override: outputOverride(boardId.value, draft.value), rfdc_config: outputRfdc(boardId.value, draft.value, rfdc.value!), fft_channel: fftChannel.value } })
     selectedPreviewChannels.value = enabledChannels.value.map((item) => item.channel)
   } catch (error) { ElMessage.error('预览失败：' + errorMessage(error)) }
   finally { previewBusy.value = false }
@@ -131,7 +130,7 @@ async function send() {
     currentRunId.value = record.id
     confirmOpen.value = false
     drafts.save(boardId.value)
-    ElMessage.success(isContinuousSine.value && draft.value.outputDurationMs <= 0 ? '连续正弦已启动，点击停止并静音结束输出' : '任务已创建，将自动发送并静音')
+    ElMessage.success(isContinuous.value && draft.value.outputDurationMs <= 0 ? '连续播放已启动，点击停止并静音结束输出' : '任务已创建，将自动发送并静音')
   } catch (error) { ElMessage.error('创建任务失败：' + errorMessage(error)) }
   finally { sendBusy.value = false }
 }
@@ -170,12 +169,12 @@ watch(boardId, load)
     <section class="output-workbench">
       <div class="output-config-column">
         <section class="work-surface compact-surface">
-          <div class="config-section-head"><div><h2>输出任务</h2><p>连续正弦会循环播放 DDR 缓存；单次输出只播放每个通道设置的波形长度，随后按静音延迟执行 MUTE。</p></div><div class="inline-actions"><el-button :icon="RotateCcw" @click="reset">重置</el-button><el-button :icon="Save" @click="drafts.save(boardId)">保存草稿</el-button></div></div>
+          <div class="config-section-head"><div><h2>输出任务</h2><p>连续播放会循环播放 DDR 缓存；每个循环按“延迟 + 波形 + 补零”输出。单次输出只播放记录长度。</p></div><div class="inline-actions"><el-button :icon="RotateCcw" @click="reset">重置</el-button><el-button :icon="Save" @click="drafts.save(boardId)">保存草稿</el-button></div></div>
           <div class="task-form-grid">
             <label><span>任务名称</span><el-input v-model="draft.name" @input="dirty" /></label>
-            <label><span>输出模式</span><el-segmented :model-value="draft.playMode" :options="[{ label: '单次输出', value: 'single' }, { label: '连续正弦', value: 'continuous_sine' }]" @change="setPlayMode($event as PlayMode)" /></label>
-            <label><span>{{ isContinuousSine ? '循环缓存长度' : '记录长度' }} <small>ns</small></span><el-input-number v-model="draft.recordDurationNs" :min="10" :max="1e9" :step="100" controls-position="right" @change="dirty" /></label>
-            <label v-if="isContinuousSine"><span>连续输出时长 <small>s</small></span><el-input-number v-model="continuousDurationSeconds" :min="0" :max="3600" :step="1" :precision="3" controls-position="right" @change="dirty" /><small class="field-hint">0 = 一直输出，直到点击停止并静音；100 秒请输入 100。</small></label>
+            <label><span>输出模式</span><el-segmented :model-value="draft.playMode" :options="[{ label: '单次输出', value: 'single' }, { label: '连续播放', value: 'continuous_sine' }]" @change="setPlayMode($event as PlayMode)" /></label>
+            <label><span>{{ isContinuous ? '循环缓存长度' : '记录长度' }} <small>ns</small></span><el-input-number v-model="draft.recordDurationNs" :min="10" :max="1e9" :step="100" controls-position="right" @change="dirty" /></label>
+            <label v-if="isContinuous"><span>连续输出时长 <small>s</small></span><el-input-number v-model="continuousDurationSeconds" :min="0" :max="3600" :step="1" :precision="3" controls-position="right" @change="dirty" /><small class="field-hint">0 = 一直输出，直到点击停止并静音；100 秒请输入 100。</small></label>
             <label v-else><span>触发后静音延迟 <small>ms</small></span><el-input-number v-model="draft.outputDurationMs" :min="1" :max="3600000" :step="10" controls-position="right" @change="dirty" /></label>
           </div>
         </section>
@@ -183,19 +182,18 @@ watch(boardId, load)
       </div>
       <aside class="preview-column">
         <section class="work-surface preview-surface">
-          <div class="config-section-head"><div><h2>波形预览</h2><p>{{ isContinuousSine ? '显示一段循环缓存；硬件会重复播放该段 DDR 数据。' : '预览与实际发送使用同一份板卡草稿。' }}</p></div><el-button type="primary" plain :icon="Eye" :loading="previewBusy" @click="generatePreview">生成预览</el-button></div>
+          <div class="config-section-head"><div><h2>波形预览</h2><p>{{ isContinuous ? '显示循环缓存中的最终输出：延迟补零 + 波形 + 尾部补零。' : '预览与实际发送使用同一份板卡草稿。' }}</p></div><el-button type="primary" plain :icon="Eye" :loading="previewBusy" @click="generatePreview">生成预览</el-button></div>
           <div class="preview-toolbar">
             <el-select v-model="selectedPreviewChannels" multiple collapse-tags collapse-tags-tooltip placeholder="显示通道"><el-option v-for="item in draft.channels.filter(channel => channel.enabled)" :key="item.channel" :label="'CH' + item.channel" :value="item.channel" /></el-select>
-            <el-segmented v-model="iqMode" :options="[{ label: 'I', value: 'i' }, { label: 'Q', value: 'q' }, { label: 'I / Q', value: 'iq' }]" />
             <el-select v-model="fftChannel" @change="generatePreview"><el-option v-for="item in draft.channels.filter(channel => channel.enabled)" :key="item.channel" :label="'FFT · CH' + item.channel" :value="item.channel" /></el-select>
           </div>
-          <WavePreview :preview="preview" :channels="selectedPreviewChannels" :iq-mode="iqMode" />
+          <WavePreview :preview="preview" :channels="selectedPreviewChannels" />
           <div v-if="preview" class="preview-metrics">
             <span>采样率<strong>{{ (preview.sample_rate_hz / 1e6).toFixed(0) }} MS/s</strong></span>
             <span>单通道数据<strong>{{ (preview.bytes_per_channel / 1024).toFixed(1) }} KiB</strong></span>
             <span>启用通道<strong>{{ enabledChannels.length }}</strong></span>
             <span>总数据量<strong>{{ (preview.bytes_per_channel * enabledChannels.length / 1024).toFixed(1) }} KiB</strong></span>
-            <span v-if="isContinuousSine">预计循环<strong>{{ estimatedLoopCount === null ? '持续循环' : estimatedLoopCount + ' 次' }}</strong></span>
+            <span v-if="isContinuous">预计循环<strong>{{ estimatedLoopCount === null ? '持续循环' : estimatedLoopCount + ' 次' }}</strong></span>
           </div>
           <el-alert v-for="warning in preview?.warnings || []" :key="warning" type="warning" :closable="false" show-icon :title="warning" />
         </section>
@@ -215,12 +213,12 @@ watch(boardId, load)
       <el-button type="danger" plain size="large" :icon="Square" @click="stop">停止并静音</el-button>
     </div>
     <el-dialog v-model="confirmOpen" title="确认发送波形" width="720px">
-      <el-alert :title="isContinuousSine ? '连续正弦会上传一段缓存，只发送一次 ARM/TRIGGER，PL 自动循环；时长为 0 时只会在手动停止时静音。' : '该流程将自动预检、配置 RFDC、上传、触发，并在设定时间后静音。'" type="info" show-icon :closable="false" />
+      <el-alert :title="isContinuous ? '连续播放会上传一段循环缓存；首次 Trigger 后 PL 自动循环，每个循环周期按 延迟+波形+补零 输出；时长为 0 时只会在手动停止时静音。' : '该流程将自动预检、配置 RFDC、上传、触发，并在设定时间后静音。'" type="info" show-icon :closable="false" />
       <dl class="send-summary">
         <div><dt>目标板卡</dt><dd>{{ board?.name }} · {{ board?.ip }}</dd></div><div><dt>输出通道</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel).join(', ') }}</dd></div>
         <div><dt>目标 RF</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.targetRfGhz.toFixed(3) + ' GHz').join('；') }}</dd></div>
-        <div><dt>IQ 幅值</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.dataAmplitude).join('；') }}</dd></div>
-        <div><dt>模式与时长</dt><dd>{{ modeLabel }} · {{ runDurationLabel }}{{ isContinuousSine && draft.outputDurationMs <= 0 ? '' : ' 后自动静音' }}</dd></div>
+        <div><dt>数据幅值</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.dataAmplitude).join('；') }}</dd></div>
+        <div><dt>模式与时长</dt><dd>{{ modeLabel }} · {{ runDurationLabel }}{{ isContinuous && draft.outputDurationMs <= 0 ? '' : ' 后自动静音' }}</dd></div>
         <div><dt>DAC 电流</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.dacCurrentMa + ' mA').join('；') }}</dd></div>
       </dl>
       <template #footer><el-button @click="confirmOpen = false">返回检查</el-button><el-button type="primary" :loading="sendBusy" @click="send">确认并发送</el-button></template>

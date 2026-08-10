@@ -133,7 +133,7 @@ label small { color: #8893a2; font-weight: 500; }
 .readback-box strong { color: #263243; font-family: ui-monospace, monospace; }.readback-box small { color: #687588; }
 .bulk-dialog-row { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 15px; align-items: start; margin-top: 18px; }
 .bulk-dialog-row > span { color: #667489; font-size: 14px; font-weight: 650; }.bulk-dialog-row .el-checkbox-group { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-.preview-toolbar { display: grid; grid-template-columns: minmax(160px, 1fr) auto minmax(120px, .6fr); gap: 9px; margin-bottom: 14px; }
+.preview-toolbar { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(120px, .6fr); gap: 9px; margin-bottom: 14px; }
 .preview-stack { display: grid; gap: 9px; }.chart-title { display: flex; justify-content: space-between; color: #38465a; font-size: 13px; font-weight: 650; }.chart-title small { color: #8390a1; font-weight: 500; }
 .chart-canvas { width: 100%; height: 290px; }.chart-canvas-small { height: 220px; }
 .preview-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 12px; background: #dfe5eb; border: 1px solid #dfe5eb; }

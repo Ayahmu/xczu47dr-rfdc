@@ -115,7 +115,6 @@ all: hardware firmware artifacts
 
 test:
 	python3 -m unittest discover -s tests
-	python3 -m py_compile software/dashboard_server.py
 	bash -n software/capture_uart.sh
 	bash -n firmware/build.sh
 

@@ -64,16 +64,15 @@ RFSOC_WEB_SIMULATION=1 python3 -m uvicorn software.webapp.main:app --host 127.0.
 ```
 
 Open `http://127.0.0.1:8000` after the service starts. The browser console is
-the normal control interface; the old Tkinter utility remains only as a
-compatibility/debug tool.
+the normal control interface.
 
 ## Browser Control Console
 
 The web console is a Vue 3 / TypeScript / Element Plus application served by a
 headless FastAPI control service. It retains the useful operating functions of
-the old GUI while separating waveform preparation from actual board control:
+the earlier desktop tool while separating waveform preparation from actual board control:
 
-- Eight-channel manual I/Q waveform editor with preview and spectrum.
+- Eight-channel sine / XY / readout / Z editor with IQ or Real output, per-channel delay, and final-output preview/spectrum.
 - ez-Q XY / Z / readout editor with the existing fixed channel-role map.
 - Dynamic registered-board inventory with login, exclusive leases, Linux USB
   discovery for Digilent JTAG serials, RFCTRL2 status, and read-only UART logs.
