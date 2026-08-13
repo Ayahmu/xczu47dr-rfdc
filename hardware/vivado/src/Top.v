@@ -7,7 +7,7 @@ module Top (
     output H7044_SCLK_0,
     output H7044_SDATA_0,
 
-    // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
+    // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz / 2 MHz)
     input  PL_CLK_P_0,
     input  PL_CLK_N_0,
     input  PL_SYSREF_P_0,
@@ -47,6 +47,10 @@ module Top (
     output vout32_v_n,
     output vout32_v_p,
     output TRIG_1,
+    // Type-C differential SYNC output to the slave card.
+    output sync_1_tx_p,
+    output sync_1_tx_n,
+    output PL_SYSREF_out,
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -84,7 +88,33 @@ module Top (
 
   assign pl_ps_irq = 1'b0;
 
+  
+  wire PL_CLK_100M_ibuf;
+  wire PL_CLK_100M;
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) PL_CLK_inst (
+      .I  (PL_CLK_P_0),
+      .IB (PL_CLK_N_0),
+      .O  (PL_CLK_100M_ibuf)
+  );
+  BUFGCE PL_CLK_BUFG_inst (
+      .I  (PL_CLK_100M_ibuf),
+      .CE (1'b1),
+      .O  (PL_CLK_100M)
+  );
+
+  // HMC7044 PL_CLK is the common clock domain for the VIO-controlled SYNC
+  // generator. The PS PL clock remains the AXI/SPI clock domain.
+  wire sync_clk;
+  assign sync_clk = PL_CLK_100M;
+  
+  // MTS marker insertion must use the RFDC fabric clock derived from the
+  // active DAC clock tree. Keep the HMC PL_CLK as an external phase reference.
   assign dac_axis_clk = clk_dac2;
+  //assign dac_clk_out = clk_dac2;
+  
   ChiselProcSysReset u_pl_reset (
     .io_slowest_sync_clk(pl_clk),
     .io_ext_reset_in(pl_resetn0),
@@ -130,7 +160,171 @@ module Top (
   );
 
   assign RESET_H7044_H_0 = 1'b0;
-  assign H7044_SYNC_0 = hmc7044_set_finish;
+
+  // A rising edge on the VIO control starts one complete two-pulse sequence.
+  // sync_clk is the 100 MHz HMC7044 PL_CLK: 1 ms = 100000 cycles, 1 us = 100 cycles.
+  wire vio_sync_request;
+  reg  sync_req_meta;
+  reg  sync_req_sync;
+  reg  sync_req_prev;
+  reg  sync_pulse;
+  reg  sync_trig_d1;
+  reg  sync_trig_d2;
+  reg  sync_trig_d3;
+  reg  sync_out;
+  reg  slave_sync_out;
+  reg  [2:0]  sync_seq_state;
+  reg  [31:0] sync_seq_count;
+
+  localparam [2:0] SYNC_IDLE       = 3'd0;
+  localparam [2:0] SYNC_WAIT_FIRST = 3'd1;
+  localparam [2:0] SYNC_HIGH_FIRST = 3'd2;
+  localparam [2:0] SYNC_GAP        = 3'd3;
+  localparam [2:0] SYNC_HIGH_SECOND= 3'd4;
+  localparam [2:0] SYNC_WAIT_END   = 3'd5;
+  localparam [31:0] SYNC_WAIT_CYCLES = 32'd100000;
+  localparam [31:0] SYNC_HIGH_CYCLES = 32'd100;
+
+  vio_0 vio_sync_i (
+      .clk       (sync_clk),
+      .probe_out0(vio_sync_request)
+  );
+
+  always @(posedge sync_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn) begin
+      sync_req_meta  <= 1'b0;
+      sync_req_sync  <= 1'b0;
+      sync_req_prev  <= 1'b0;
+    end else begin
+      sync_req_meta <= vio_sync_request;
+      sync_req_sync <= sync_req_meta;
+      sync_req_prev <= sync_req_sync;
+    end
+  end
+
+  always @(posedge sync_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn) begin
+      sync_seq_state <= SYNC_IDLE;
+      sync_seq_count <= 32'd0;
+      sync_pulse     <= 1'b0;
+    end else begin
+      case (sync_seq_state)
+        SYNC_IDLE: begin
+          sync_seq_count <= 32'd0;
+          sync_pulse     <= 1'b0;
+          if (sync_req_sync && !sync_req_prev)
+            sync_seq_state <= SYNC_WAIT_FIRST;
+        end
+
+        SYNC_WAIT_FIRST: begin
+          sync_pulse <= 1'b0;
+          if (sync_seq_count == SYNC_WAIT_CYCLES - 1) begin
+            sync_seq_count <= 32'd0;
+            sync_pulse     <= 1'b1;
+            sync_seq_state <= SYNC_HIGH_FIRST;
+          end else begin
+            sync_seq_count <= sync_seq_count + 1'b1;
+          end
+        end
+
+        SYNC_HIGH_FIRST: begin
+          sync_pulse <= 1'b1;
+          if (sync_seq_count == SYNC_HIGH_CYCLES - 1) begin
+            sync_seq_count <= 32'd0;
+            sync_pulse     <= 1'b0;
+            sync_seq_state <= SYNC_GAP;
+          end else begin
+            sync_seq_count <= sync_seq_count + 1'b1;
+          end
+        end
+
+        SYNC_GAP: begin
+          sync_pulse <= 1'b0;
+          if (sync_seq_count == SYNC_WAIT_CYCLES - 1) begin
+            sync_seq_count <= 32'd0;
+            sync_pulse     <= 1'b1;
+            sync_seq_state <= SYNC_HIGH_SECOND;
+          end else begin
+            sync_seq_count <= sync_seq_count + 1'b1;
+          end
+        end
+
+        SYNC_HIGH_SECOND: begin
+          sync_pulse <= 1'b1;
+          if (sync_seq_count == SYNC_HIGH_CYCLES - 1) begin
+            sync_seq_count <= 32'd0;
+            sync_pulse     <= 1'b0;
+            sync_seq_state <= SYNC_WAIT_END;
+          end else begin
+            sync_seq_count <= sync_seq_count + 1'b1;
+          end
+        end
+
+        SYNC_WAIT_END: begin
+          sync_pulse <= 1'b0;
+          if (sync_seq_count == SYNC_WAIT_CYCLES - 1) begin
+            sync_seq_count <= 32'd0;
+            sync_seq_state <= SYNC_IDLE;
+          end else begin
+            sync_seq_count <= sync_seq_count + 1'b1;
+          end
+        end
+
+        default: begin
+          sync_seq_state <= SYNC_IDLE;
+          sync_seq_count <= 32'd0;
+          sync_pulse     <= 1'b0;
+        end
+      endcase
+    end
+  end
+
+  // Match the engineer reference timing: the local HMC SYNC is one
+  // sync_clk cycle later than the SYNC sent to the slave over Type-C.
+  always @(posedge sync_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn) begin
+      sync_trig_d1 <= 1'b0;
+      sync_trig_d2 <= 1'b0;
+      sync_trig_d3 <= 1'b0;
+    end else begin
+      sync_trig_d1 <= sync_pulse;
+      sync_trig_d2 <= sync_trig_d1;
+      sync_trig_d3 <= sync_trig_d2;
+    end
+  end
+
+  always @(negedge sync_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn) begin
+      sync_out       <= 1'b0;
+      slave_sync_out <= 1'b0;
+    end else begin
+      sync_out       <= sync_trig_d3;
+      slave_sync_out <= sync_trig_d2;
+    end
+  end
+
+  assign H7044_SYNC_0 = sync_out;
+
+  // The one-stage-earlier copy is sent to the slave over Type-C.
+  OBUFDS sync_1_tx_obufds (
+      .I (slave_sync_out),
+      .O (sync_1_tx_p),
+      .OB(sync_1_tx_n)
+  );
+
+  wire PL_SYSREF;
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) PL_SYSREF_P_0_inst (
+      .I  (PL_SYSREF_P_0),
+      .IB (PL_SYSREF_N_0),
+      .O  (PL_SYSREF)
+  );
+  assign PL_SYSREF_out = clk_dac2;
+  // The RFDC user SYSREF input performs its own sampling and edge detection.
+  // Keep the HMC7044 SYSREF waveform intact instead of re-timing it in PL.
+  wire user_sysref_dac_pulse = PL_SYSREF;
 
   // ========== PS 指令 AXIS（128-bit） ==========
   wire [127:0] ps_instr_tdata;
@@ -792,6 +986,7 @@ module Top (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
     .trigger(ps_trigger_dac_sync),
+    .trigger_start(dac_trigger_start),
 
     .cfg_seq_id(seq_id_dac),
     .auto_start(cfg_auto_start_dac),
@@ -964,7 +1159,10 @@ module Top (
 
   wire trig_1_dac_valid = (trig_1_dac_valid_count != 16'd0);
   wire trig_1_dac_valid_pulse = dac_any_valid_gated & ~dac_any_valid_gated_d;
-  assign TRIG_1 = trig_1_dac_valid;
+  wire dac_trigger_start;
+  
+
+  assign TRIG_1 = dac_trigger_start;//dac_trigger_start;//PL_SYSREF;//clk_dac2;//PL_CLK_100M;//dac_trigger_start;//trig_1_dac_valid;
 
   axis_async_fifo_256 fifo_ch1_inst (
     .s_axis_aresetn(wave_fifo_aresetn),
@@ -1669,6 +1867,7 @@ module Top (
       .s32_axis_tdata(rfdc_ch8_tdata),
       .s32_axis_tvalid(rfdc_ch8_tvalid),
       .s32_axis_tready(dac_ch8_ready),
+      .user_sysref_dac(user_sysref_dac_pulse),
       .irq(rfdc_irq)
   );
 

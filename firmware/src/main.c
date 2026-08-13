@@ -11,6 +11,7 @@
 #include "xstatus.h"
 #include "xil_printf.h"
 #include "xil_cache.h"
+#include "xuartps_hw.h"
 
 #include "xrfdc.h"
 
@@ -36,11 +37,15 @@ void my_metal_default_log_handler(enum metal_log_level level,
 
 void reverse32bArray(u32 *src, int size);
 int rfdcStartup(void);
+int Configure_DAC_MTS(void);
 int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
 int Configure_Custom_DAC_NCO(void);
+void Wait_Before_DAC_MTS(void);
+int Align_DAC_NCO_To_SYSREF(void);
 int Report_Custom_DAC_Status(const char *Stage);
 int Poll_Rfdc_Nco_Mailbox(void);
+static int Wait_For_Start_Command(int service_mailbox);
 
 /* Default 6.4 GS/s role map:
  * CH1-CH4 XY: target 4.5 GHz, Zone2 image, NCO = -1.9 GHz.
@@ -56,6 +61,16 @@ int Poll_Rfdc_Nco_Mailbox(void);
 #define RFDC_CTRL_MAILBOX_HEADER_WORDS 8U
 #define RFDC_CTRL_MAILBOX_ENTRY_WORDS 4U
 #define RFDC_CTRL_MAILBOX_APPLY_IMMEDIATE 0x1U
+#define RFDC_DAC_MTS_REF_TILE 2U
+#define RFDC_DAC_SYSREF_ALIGN_DELAY_SEC 2U
+
+#if defined(STDIN_BASEADDRESS)
+#define RFDC_CONSOLE_UART_BASEADDR STDIN_BASEADDRESS
+#elif defined(XPAR_PSU_UART_0_BASEADDR)
+#define RFDC_CONSOLE_UART_BASEADDR XPAR_PSU_UART_0_BASEADDR
+#else
+#define RFDC_CONSOLE_UART_BASEADDR 0xFF000000U
+#endif
 
 /************************** Variable Definitions *****************************/
 
@@ -165,6 +180,153 @@ int Configure_DAC_Output_Current(void)
 			return XST_FAILURE;
 		}
 	}
+
+	return XST_SUCCESS;
+}
+
+int Configure_DAC_MTS(void)
+{
+	XRFdc *RFdcInstPtr = &RFdcInst;
+	XRFdc_IPStatus ipStatus;
+	XRFdc_MultiConverter_Sync_Config DACSyncConfig = {0};
+	u32 enabledTiles = 0U;
+	u32 refTile = RFDC_DAC_MTS_REF_TILE;
+	int Tile_Id;
+	u32 Status;
+
+	XRFdc_GetIPStatus(RFdcInstPtr, &ipStatus);
+
+	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
+	{
+		if (ipStatus.DACTileStatus[Tile_Id].IsEnabled == 1)
+		{
+			enabledTiles |= (1U << Tile_Id);
+		}
+	}
+
+	if (enabledTiles == 0U)
+	{
+		xil_printf("RFDC DAC MTS failed: no enabled DAC tiles.\r\n");
+		return XST_FAILURE;
+	}
+
+	if ((enabledTiles & (1U << refTile)) == 0U)
+	{
+		for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
+		{
+			if ((enabledTiles & (1U << Tile_Id)) != 0U)
+			{
+				refTile = (u32)Tile_Id;
+				break;
+			}
+		}
+	}
+
+	Status = XRFdc_MultiConverter_Init(&DACSyncConfig, NULL, NULL, refTile);
+	if (Status != XRFDC_MTS_OK)
+	{
+		xil_printf("RFDC DAC MTS init failed: status=0x%08lx ref_tile=%lu\r\n",
+			   (unsigned long)Status,
+			   (unsigned long)refTile);
+		return XST_FAILURE;
+	}
+
+	DACSyncConfig.Tiles = enabledTiles;
+	DACSyncConfig.SysRef_Enable = 1;
+
+	xil_printf("RFDC DAC MTS start: tiles=0x%08lx ref_tile=%lu\r\n",
+		   (unsigned long)DACSyncConfig.Tiles,
+		   (unsigned long)DACSyncConfig.RefTile);
+
+	xil_printf("Checking DAC Tiles PLL status and configuration...\r\n");
+	XRFdc_GetIPStatus(RFdcInstPtr, &ipStatus);
+	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
+	{
+		if (ipStatus.DACTileStatus[Tile_Id].IsEnabled == 1)
+		{
+			XRFdc_PLL_Settings PLLSettings = {0};
+			u32 PLLStatus = XRFdc_GetPLLConfig(RFdcInstPtr, XRFDC_DAC_TILE, Tile_Id, &PLLSettings);
+
+			if (PLLStatus == XST_SUCCESS)
+			{
+				xil_printf("  DAC Tile%d: PLLState=%lu enabled=%lu refclk=%lu MHz sample=%lu MSPS "
+					   "refdiv=%lu fbdiv=%lu outdiv=%lu\r\n",
+					   Tile_Id,
+					   (unsigned long)ipStatus.DACTileStatus[Tile_Id].PLLState,
+					   (unsigned long)PLLSettings.Enabled,
+					   (unsigned long)(PLLSettings.RefClkFreq + 0.5),
+					   (unsigned long)(PLLSettings.SampleRate * 1000.0 + 0.5),
+					   (unsigned long)PLLSettings.RefClkDivider,
+					   (unsigned long)PLLSettings.FeedbackDivider,
+					   (unsigned long)PLLSettings.OutputDivider);
+			}
+			else
+			{
+				xil_printf("  DAC Tile%d: PLLState=%lu XRFdc_GetPLLConfig failed status=%lu\r\n",
+					   Tile_Id,
+					   (unsigned long)ipStatus.DACTileStatus[Tile_Id].PLLState,
+					   (unsigned long)PLLStatus);
+			}
+		}
+	}
+
+	Status = XRFdc_MultiConverter_Sync(RFdcInstPtr, XRFDC_DAC_TILE, &DACSyncConfig);
+	if (Status != XRFDC_MTS_OK)
+	{
+		xil_printf("RFDC DAC MTS sync failed: status=0x%08lx tiles=0x%08lx ref_tile=%lu\r\n",
+			   (unsigned long)Status,
+			   (unsigned long)DACSyncConfig.Tiles,
+			   (unsigned long)DACSyncConfig.RefTile);
+		xil_printf("  decoded:%s%s%s%s%s%s%s%s%s%s%s%s\r\n",
+			   (Status & XRFDC_MTS_NOT_SUPPORTED) ? " NOT_SUPPORTED" : "",
+			   (Status & XRFDC_MTS_TIMEOUT) ? " TIMEOUT" : "",
+			   (Status & XRFDC_MTS_MARKER_RUN) ? " MARKER_RUN" : "",
+			   (Status & XRFDC_MTS_MARKER_MISM) ? " MARKER_MISM" : "",
+			   (Status & XRFDC_MTS_DELAY_OVER) ? " DELAY_OVER" : "",
+			   (Status & XRFDC_MTS_TARGET_LOW) ? " TARGET_LOW" : "",
+			   (Status & XRFDC_MTS_IP_NOT_READY) ? " IP_NOT_READY" : "",
+			   (Status & XRFDC_MTS_DTC_INVALID) ? " DTC_INVALID" : "",
+			   (Status & XRFDC_MTS_NOT_ENABLED) ? " NOT_ENABLED" : "",
+			   (Status & XRFDC_MTS_SYSREF_GATE_ERROR) ? " SYSREF_GATE_ERROR" : "",
+			   (Status & XRFDC_MTS_SYSREF_FREQ_NDONE) ? " SYSREF_FREQ_NDONE" : "",
+			   (Status & XRFDC_MTS_BAD_REF_TILE) ? " BAD_REF_TILE" : "");
+		for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
+		{
+			if ((DACSyncConfig.Tiles & (1U << Tile_Id)) != 0U)
+			{
+				xil_printf("  Tile%d: pll_target=%d pll_dtc=%d t1_target=%d t1_dtc=%d "
+					   "latency=%d offset=%d\r\n",
+					   Tile_Id,
+					   DACSyncConfig.DTC_Set_PLL.Target[Tile_Id],
+					   DACSyncConfig.DTC_Set_PLL.DTC_Code[Tile_Id],
+					   DACSyncConfig.DTC_Set_T1.Target[Tile_Id],
+					   DACSyncConfig.DTC_Set_T1.DTC_Code[Tile_Id],
+					   DACSyncConfig.Latency[Tile_Id],
+					   DACSyncConfig.Offset[Tile_Id]);
+			}
+		}
+		xil_printf("  target_latency=%d marker_delay=%d\r\n",
+			   DACSyncConfig.Target_Latency,
+			   DACSyncConfig.Marker_Delay);
+		return XST_FAILURE;
+	}
+
+	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
+	{
+		if ((DACSyncConfig.Tiles & (1U << Tile_Id)) != 0U)
+		{
+			xil_printf("RFDC DAC MTS Tile%d: pll_dtc=%d t1_dtc=%d latency=%d offset=%d\r\n",
+				   Tile_Id,
+				   DACSyncConfig.DTC_Set_PLL.DTC_Code[Tile_Id],
+				   DACSyncConfig.DTC_Set_T1.DTC_Code[Tile_Id],
+				   DACSyncConfig.Latency[Tile_Id],
+				   DACSyncConfig.Offset[Tile_Id]);
+		}
+	}
+
+	xil_printf("RFDC DAC MTS complete: target_latency=%d marker_delay=%d\r\n",
+		   DACSyncConfig.Target_Latency,
+		   DACSyncConfig.Marker_Delay);
 
 	return XST_SUCCESS;
 }
@@ -296,6 +458,94 @@ int Configure_Custom_DAC_NCO(void)
 	return XST_SUCCESS;
 }
 
+void Wait_Before_DAC_MTS(void)
+{
+	xil_printf("Waiting %lu seconds before DAC MTS SYSREF alignment...\r\n",
+		   (unsigned long)RFDC_DAC_SYSREF_ALIGN_DELAY_SEC);
+	sleep(RFDC_DAC_SYSREF_ALIGN_DELAY_SEC);
+}
+
+int Align_DAC_NCO_To_SYSREF(void)
+{
+	unsigned int i;
+
+	xil_printf("Aligning DAC NCO phase/update events to SYSREF.\r\n");
+
+	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
+	{
+		u32 Tile_Id = CustomDacChannels[i].Tile_Id;
+		u32 Block_Id = CustomDacChannels[i].Block_Id;
+		XRFdc_Mixer_Settings MixerSettings;
+		int Status;
+
+		Status = XRFdc_GetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYSREF align: XRFdc_GetMixerSettings failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		MixerSettings.EventSource = XRFDC_EVNT_SRC_SYSREF;
+		MixerSettings.PhaseOffset = 0.0;
+
+		Status = XRFdc_SetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYSREF align: XRFdc_SetMixerSettings failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		Status = XRFdc_ResetNCOPhase(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYSREF align: XRFdc_ResetNCOPhase failed for DAC Tile%d Block%d status=%d\r\n",
+				   Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		xil_printf("SYSREF align: %s Tile%d Block%d armed for next SYSREF NCO update/reset\r\n",
+			   CustomDacChannels[i].Channel, Tile_Id, Block_Id);
+	}
+
+	xil_printf("DAC NCO SYSREF alignment complete.\r\n");
+
+	return XST_SUCCESS;
+}
+
+static int Wait_For_Start_Command(int service_mailbox)
+{
+	char start_command;
+
+	xil_printf("\r\nRFDC initialization is paused.\r\n");
+	xil_printf("Confirm HMC7044 PLL lock, complete the VIO SYNC sequence, and verify SYSREF is stable.\r\n");
+	xil_printf("Type S to initialize RFDC and run MTS: ");
+
+	for (;;)
+	{
+		if (XUartPs_IsReceiveData(RFDC_CONSOLE_UART_BASEADDR))
+		{
+			start_command = (char)XUartPs_RecvByte(RFDC_CONSOLE_UART_BASEADDR);
+			if ((start_command == 'S') || (start_command == 's'))
+			{
+				xil_printf("%c\r\n", start_command);
+				return XST_SUCCESS;
+			}
+		}
+
+		/* Keep runtime NCO mailbox updates alive while waiting for the next S. */
+		if (service_mailbox != 0)
+		{
+			if (Poll_Rfdc_Nco_Mailbox() != XST_SUCCESS)
+			{
+				xil_printf("ERROR: RFDC mailbox retune failed.\r\n");
+			}
+		}
+		usleep(100000);
+	}
+}
+
 static int Apply_Custom_DAC_Channel_NCO(unsigned int ChannelIndex, s64 NcoHz, u32 NyquistZone)
 {
 	const CustomDacChannel *Channel;
@@ -332,7 +582,7 @@ static int Apply_Custom_DAC_Channel_NCO(unsigned int ChannelIndex, s64 NcoHz, u3
 
 	MixerSettings.Freq = ((double)NcoHz) / 1000000.0; /* driver expects MHz */
 	MixerSettings.PhaseOffset = 0.0;
-	MixerSettings.EventSource = XRFDC_EVNT_SRC_IMMEDIATE;
+	MixerSettings.EventSource = XRFDC_EVNT_SRC_SYSREF;
 	MixerSettings.CoarseMixFreq = XRFDC_COARSE_MIX_BYPASS;
 	MixerSettings.MixerMode = XRFDC_MIXER_MODE_C2R;
 	MixerSettings.FineMixerScale = XRFDC_MIXER_SCALE_1P0;
@@ -346,17 +596,17 @@ static int Apply_Custom_DAC_Channel_NCO(unsigned int ChannelIndex, s64 NcoHz, u3
 		return XST_FAILURE;
 	}
 
-	Status = XRFdc_UpdateEvent(&RFdcInst, XRFDC_DAC_TILE, Channel->Tile_Id, Channel->Block_Id, XRFDC_EVENT_MIXER);
+	Status = XRFdc_ResetNCOPhase(&RFdcInst, XRFDC_DAC_TILE, Channel->Tile_Id, Channel->Block_Id);
 	if (Status != XST_SUCCESS)
 	{
-		xil_printf("RFDC mailbox: XRFdc_UpdateEvent failed for %s Tile%lu Block%lu status=%d\r\n",
+		xil_printf("RFDC mailbox: XRFdc_ResetNCOPhase failed for %s Tile%lu Block%lu status=%d\r\n",
 			   Channel->Channel, (unsigned long)Channel->Tile_Id, (unsigned long)Channel->Block_Id, Status);
 		return XST_FAILURE;
 	}
 
-	xil_printf("RFDC mailbox: %s role=%s Tile%lu Block%lu zone=%lu nco=%d MHz applied\r\n",
-		   Channel->Channel,
-		   Channel->Role,
+	xil_printf("RFDC mailbox: %s role=%s Tile%lu Block%lu zone=%lu nco=%d MHz armed for SYSREF update\r\n",
+	   Channel->Channel,
+	   Channel->Role,
 		   (unsigned long)Channel->Tile_Id,
 		   (unsigned long)Channel->Block_Id,
 		   (unsigned long)NyquistZone,
@@ -441,6 +691,7 @@ int main(void)
 	u32 Minor;
 	u32 Major;
 	int Status;
+	u32 init_cycle = 0U;
 	XRFdc_Config *ConfigPtr;
 	init_platform();
 
@@ -499,7 +750,7 @@ int main(void)
 		return XRFDC_FAILURE;
 	}
 
-	/* Initialize the RFdc driver. */
+	/* Resolve the RFdc configuration once; hardware initialization starts after S. */
 	ConfigPtr = XRFdc_LookupConfig(RFDC_DEVICE_ID);
 	if (ConfigPtr == NULL)
 	{
@@ -511,56 +762,72 @@ int main(void)
 		xil_printf("\n\rDeviceID: %d \r\nSilicon Revision: %d\r\n", ConfigPtr->DeviceId, ConfigPtr->SiRevision);
 	}
 
-	/* Initializes the controller */
-	Status = XRFdc_CfgInitialize(&RFdcInst, ConfigPtr);
-	if (Status != XST_SUCCESS)
+	// measure_dma_bandwidth();
+	for (;;)
 	{
-		xil_printf("Failed to init RFdc controller\r\n");
-		return XST_FAILURE;
-	}
-	else
-	{
+		if (Wait_For_Start_Command(init_cycle != 0U) != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+
+		xil_printf("Starting RFDC initialization and MTS (cycle %lu)...\r\n",
+			   (unsigned long)(init_cycle + 1U));
+		sleep(2);
+
+		/* Reinitialize the RFdc driver and hardware for every S command. */
+		Status = XRFdc_CfgInitialize(&RFdcInst, ConfigPtr);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("Failed to init RFdc controller\r\n");
+			return XST_FAILURE;
+		}
 		xil_printf("The RFDC controller is initialized.\r\n");
-	}
-	// Display and verify the Power-on Status
-	Status = rfdcStartup();
-	if (Status != XST_SUCCESS)
-	{
-		return Status;
-	}
-	Report_Custom_DAC_Status("after startup");
-	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
-	{
-		return XST_FAILURE;
-	}
-	if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
-	{
-		return XST_FAILURE;
-	}
-	if (Configure_DAC_Output_Current() != XST_SUCCESS)
-	{
-		return XST_FAILURE;
-	}
-	Report_Custom_DAC_Status("after custom config");
 
-	// init_dma_ip(&AxiDma, CH0_DMA_DEV_ID, CH0_MM2S_INTR_ID, &INST);
+		Status = rfdcStartup();
+		if (Status != XST_SUCCESS)
+		{
+			return Status;
+		}
+		Report_Custom_DAC_Status("after startup");
+		if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+		if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+		if (Configure_DAC_Output_Current() != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+		Report_Custom_DAC_Status("after custom config");
+		Wait_Before_DAC_MTS();
+		Status = Configure_DAC_MTS();
+		if (Status != XST_SUCCESS)
+		{
+			return Status;
+		}
+		Report_Custom_DAC_Status("after DAC MTS");
+		if (Align_DAC_NCO_To_SYSREF() != XST_SUCCESS)
+		{
+			return XST_FAILURE;
+		}
+		Report_Custom_DAC_Status("after SYSREF NCO align");
 
-	if (Init_GPIO() != XST_SUCCESS)
-		return XST_FAILURE;
+		if (init_cycle == 0U)
+		{
+			if (Init_GPIO() != XST_SUCCESS)
+				return XST_FAILURE;
 
 #if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
-		// Host uploads all PL DDR waveform slots; firmware must not preload them.
-	preload_debug_waveforms();
+			// Host uploads all PL DDR waveform slots; firmware must not preload them.
+			preload_debug_waveforms();
 #endif
-
-	// measure_dma_bandwidth();
-	while (1)
-	{
-		if (Poll_Rfdc_Nco_Mailbox() != XST_SUCCESS)
-		{
-			xil_printf("ERROR: RFDC mailbox retune failed.\r\n");
 		}
-		usleep(100000);
+
+		init_cycle++;
+		xil_printf("RFDC DAC initialization and MTS complete. HMC7044/SYNC remain unchanged.\r\n");
 	}
 
 	return 0;
@@ -663,11 +930,11 @@ void reverse32bArray(u32 *src, int size)
 /*****************************************************************************/
 /**
  *
- * Startup DAC's and ADC's
+ * Startup DAC tiles for the UDP-to-DAC path.
  *
  * @param	None
  *
- * @return	XST_SUCCESS if enabled RFDC tiles started, otherwise XST_FAILURE.
+ * @return	XST_SUCCESS if enabled DAC tiles started, otherwise XST_FAILURE.
  *
  * @note		TBD
  *
@@ -719,32 +986,10 @@ int rfdcStartup(void)
 		}
 	}
 
-	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
-	{
-		if (ipStatus.ADCTileStatus[Tile_Id].IsEnabled == 1)
-		{
-			val = XRFdc_ReadReg16(RFdcInstPtr, XRFDC_ADC_TILE_CTRL_STATS_ADDR(Tile_Id), XRFDC_ADC_DEBUG_RST_OFFSET);
-			if (val & XRFDC_DBG_RST_CAL_MASK)
-			{
-				xil_printf("ADC Tile: %d NOT ready.\r\n", Tile_Id);
-				return XST_FAILURE;
-			}
-			else
-			{
-				Status = XRFdc_StartUp(RFdcInstPtr, 0, Tile_Id);
-				if (Status != XST_SUCCESS)
-				{
-					xil_printf("XRFdc_StartUp failed for ADC Tile: %d status=%d\r\n", Tile_Id, Status);
-					return XST_FAILURE;
-				}
-				usleep(200000);
-			}
-		}
-	}
-
 	XRFdc_GetIPStatus(RFdcInstPtr, &ipStatus);
 
 	xil_printf("\r\nThe Power-on sequence step. 0xF is complete.\r\n");
+	xil_printf("ADC Tile startup and status checks are skipped (DAC-only mode).\r\n");
 
 	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
 	{
@@ -760,24 +1005,6 @@ int rfdcStartup(void)
 			{
 				xil_printf("DAC Tile: %d Power-on Sequence Step: 0x%08x\r\n", Tile_Id,
 						   Xil_In32(RFDC_BASE + 0x0000C + 0x04000 + Tile_Id * 0x4000));
-			}
-		}
-	}
-
-	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
-	{
-		if (ipStatus.ADCTileStatus[Tile_Id].IsEnabled == 1)
-		{
-			val = XRFdc_ReadReg16(RFdcInstPtr, XRFDC_ADC_TILE_CTRL_STATS_ADDR(Tile_Id), XRFDC_ADC_DEBUG_RST_OFFSET);
-			if (val & XRFDC_DBG_RST_CAL_MASK)
-			{
-				xil_printf("ADC Tile: %d NOT ready.\r\n", Tile_Id);
-				return XST_FAILURE;
-			}
-			else
-			{
-				xil_printf("ADC Tile: %d Power-on Sequence Step: 0x%08x\r\n", Tile_Id,
-						   Xil_In32(RFDC_BASE + 0x0000C + 0x14000 + Tile_Id * 0x4000));
 			}
 		}
 	}

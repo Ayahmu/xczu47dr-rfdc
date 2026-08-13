@@ -2,6 +2,7 @@
 #define CUSTOM_XCZU47DR_METAL_LOG_H
 
 #include <stdarg.h>
+#include <stdio.h>
 
 enum metal_log_level {
 	METAL_LOG_EMERGENCY = 0,
@@ -24,8 +25,25 @@ static inline void metal_default_log_handler(enum metal_log_level level, const c
 
 static inline void metal_log(enum metal_log_level level, const char *format, ...)
 {
-	(void)level;
-	(void)format;
+	static const char *const prefixes[] = {
+		"metal: emergency: ",
+		"metal: alert: ",
+		"metal: critical: ",
+		"metal: error: ",
+		"metal: warning: ",
+		"metal: notice: ",
+		"metal: info: ",
+		"metal: debug: ",
+	};
+	va_list args;
+
+	if ((unsigned int)level > (unsigned int)METAL_LOG_DEBUG) {
+		level = METAL_LOG_EMERGENCY;
+	}
+	printf("%s", prefixes[level]);
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
 }
 
 #endif

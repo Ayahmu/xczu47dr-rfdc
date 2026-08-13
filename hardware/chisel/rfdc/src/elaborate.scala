@@ -224,6 +224,7 @@ module RfdcCustomXczu47dr (
     input  [255:0] s32_axis_tdata,
     input          s32_axis_tvalid,
     output         s32_axis_tready,
+    input	   user_sysref_dac,
     output         irq
 );
 
@@ -338,6 +339,7 @@ module RfdcCustomXczu47dr (
       .s33_axis_tdata(disabled_axis_tdata),
       .s33_axis_tvalid(disabled_axis_tvalid),
       .s33_axis_tready(ch8_axis_tready_unused),
+      .user_sysref_dac(user_sysref_dac),
       .irq(irq)
   );
 

@@ -37,7 +37,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--post-upload-sleep-s", type=float, default=0.5)
     parser.add_argument("--sample-rate-hz", "--sample-rate", dest="sample_rate_hz", type=float, default=host.DAC_XY_FS, help="RFDC input I/Q sample rate used for waveform synthesis")
     parser.add_argument("--axis-freq-hz", type=float, default=host.DAC_AXIS_HZ, help="DAC AXIS clock used to convert hardware delay ns to cycles")
-    parser.add_argument("--loop", action="store_true", help="Replay the uploaded waveform continuously for legacy debug modes")
+    parser.add_argument("--loop", action="store_true", help="Replay the uploaded waveform continuously")
     parser.add_argument("--wait-for-trigger", action="store_true", help="Do not auto-start; wait for PS/external trigger")
     parser.add_argument("--dry-run", action="store_true", help="Only generate local waveform files; do not send UDP packets")
     parser.add_argument(
@@ -170,7 +170,7 @@ def generate_waveforms(args: argparse.Namespace) -> tuple[np.ndarray, ...]:
             mode="iq-sine",
             sample_rate_hz=args.sample_rate_hz,
             encoding="signed-iq-interleaved",
-            loop=False,
+            loop=args.loop,
             layout=args.ddr_layout,
             amplitude=args.amplitude,
             duration_s=args.duration_s,
@@ -352,7 +352,7 @@ def main() -> int:
                 time.sleep(args.post_upload_sleep_s)
             ctrl.send_instructions(
                 waveform_tools.build_play_commands(
-                    loop=bool(metadata.get("loop", False)),
+                    loop=args.loop or bool(metadata.get("loop", False)),
                     auto_start=not args.wait_for_trigger,
                     channel_addrs=None if layout == host.DDR_LAYOUT_INTERLEAVED_512B else channel_addrs,
                     channel_lengths=channel_lengths,
@@ -396,7 +396,7 @@ def main() -> int:
         timeout_s=args.timeout_s,
         post_upload_sleep_s=args.post_upload_sleep_s,
         output_dir=args.output_dir,
-        loop=False if args.mode == "sine" else args.loop,
+        loop=args.loop,
         auto_start=not args.wait_for_trigger,
         ch3=waves[2] if len(waves) > 2 else None,
         ch4=waves[3] if len(waves) > 3 else None,
