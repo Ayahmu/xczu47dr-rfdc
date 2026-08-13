@@ -24,14 +24,27 @@ set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
 
 # XS18 TRIG_1 MMCX output.  Schematic pin table maps TRIG_1 to BANK87
 # package ball A6, with VCCO_87 tied to VCC_2V5.
-set_property PACKAGE_PIN A6 [get_ports TRIG_1]
+set_property PACKAGE_PIN C10 [get_ports dac_trigger_start]
+set_property IOSTANDARD LVCMOS25 [get_ports dac_trigger_start]
+set_property PACKAGE_PIN A6 [get_ports hmc7044_sync_test]
+set_property IOSTANDARD LVCMOS25 [get_ports hmc7044_sync_test]
+set_property PACKAGE_PIN D10 [get_ports TRIG_1]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
+
+# Type-C differential SYNC input from the master card.
+set_property PACKAGE_PIN AN8 [get_ports sync_3_tx_p]
+set_property PACKAGE_PIN AN7 [get_ports sync_3_tx_n]
+set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports sync_3_tx_p]
+set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports sync_3_tx_n]
+set_property SLEW MEDIUM [get_ports sync_3_tx_p]
+set_property SLEW MEDIUM [get_ports sync_3_tx_n]
+
 
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_N_0]
-create_clock -name PL_CLK_P_0 -period 10 [get_ports PL_CLK_P_0]
+create_clock -name PL_CLK_P_0 -period 20 [get_ports PL_CLK_P_0]
 
 set_property PACKAGE_PIN C8 [get_ports PL_SYSREF_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_P_0]
@@ -67,6 +80,10 @@ set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get
 # Only the first synchronizer stage is asynchronous; downstream stages remain timed.
 set_false_path -quiet -to [get_pins -quiet top_i/trigger_ddr_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/trigger_dac_sync_ff_reg[0]/D]
+
+# PL_SYSREF is sampled into the HMC DAC AXIS clock domain in Top.v.
+# Only the first synchronizer stage is asynchronous; downstream stages remain timed.
+set_false_path -quiet -to [get_pins -quiet top_i/user_sysref_dac_sync_reg[0]/D]
 
 # Single-DDR bring-up constraints adapted from the user-provided XCZU47DR
 # reference project MIG implementation. The custom card uses a 64-bit C0 DDR4
@@ -197,3 +214,10 @@ set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet clk_pl_0] \
     -group [get_clocks -quiet mmcm_clkout0] \
     -group [get_clocks -quiet {RFDAC2_CLK clk_out1_design_1_clk_wiz_dac_axis_0_0}]
+
+# HMC PL_CLK_P_0 is retained as an external phase reference. It is independent
+# from the PS PL and DDR UI/MMCM clocks, so do not time these domains as
+# phase-related.
+set_clock_groups -quiet -asynchronous \
+    -group [get_clocks -quiet PL_CLK_P_0] \
+    -group [get_clocks -quiet {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6}]

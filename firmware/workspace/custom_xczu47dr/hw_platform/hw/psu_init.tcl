@@ -14998,12 +14998,12 @@ set psu_ps_pl_reset_config_data {
 
 proc psu_init {} {
     # save current mode
-    set saved_mode [configparams force-mem-accesses]
+    set saved_mode [configparams force-mem-accesses]                  
     # force accesses
-    configparams force-mem-accesses 1
-    variable psu_mio_init_data
+    configparams force-mem-accesses 1 
+    variable psu_mio_init_data 
     variable psu_peripherals_pre_init_data
-    variable psu_pll_init_data
+    variable psu_pll_init_data 
     variable psu_clock_init_data
 	variable psu_ddr_init_data
     variable psu_peripherals_init_data
@@ -15011,21 +15011,21 @@ proc psu_init {} {
     variable psu_resetout_init_data
     variable psu_serdes_init_data
     variable psu_resetin_init_data
-    variable psu_peripherals_powerdwn_data
-    variable psu_afi_config
+    variable psu_peripherals_powerdwn_data 
+    variable psu_afi_config 
     variable psu_ddr_qos_init_data
 
     init_ps [subst {$psu_mio_init_data $psu_peripherals_pre_init_data $psu_pll_init_data $psu_clock_init_data $psu_ddr_init_data }]
-    psu_ddr_phybringup_data
+    psu_ddr_phybringup_data 
     init_ps [subst {$psu_peripherals_init_data $psu_resetin_init_data }]
-    init_serdes
+    init_serdes 
     init_ps [subst {$psu_serdes_init_data $psu_resetout_init_data }]
-    init_peripheral
+    init_peripheral 
     init_ps [subst {$psu_peripherals_powerdwn_data }]
     init_ps [subst {$psu_afi_config }]
     init_ps [subst {$psu_ddr_qos_init_data}]
     # restore original mode
-    configparams force-mem-accesses $saved_mode
+    configparams force-mem-accesses $saved_mode                                       
 }
 
 proc psu_post_config {} {
@@ -15096,7 +15096,7 @@ proc poll { addr mask data} {
 
 proc init_peripheral {} {
 #SMMU_REG Interrrupt Enable: Followig register need to be written all the time to properly catch SMMU messages.
-   mask_write 0xFD5F0018 0x8000001F 0x8000001F
+   mask_write 0xFD5F0018 0x8000001F 0x8000001F 
 }
 proc psu_init_xppu_aper_ram {} {
 
@@ -15107,9 +15107,9 @@ proc psu_lpd_protection {} {
 }
 
 proc psu_ddr_protection {} {
-    set saved_mode [configparams force-mem-accesses]
-    configparams force-mem-accesses 1
-
+    set saved_mode [configparams force-mem-accesses]                  
+    configparams force-mem-accesses 1 
+    
     variable psu_ddr_xmpu0_data
     variable psu_ddr_xmpu1_data
     variable psu_ddr_xmpu2_data
@@ -15117,38 +15117,38 @@ proc psu_ddr_protection {} {
     variable psu_ddr_xmpu4_data
     variable psu_ddr_xmpu5_data
     init_ps [subst {$psu_ddr_xmpu0_data  $psu_ddr_xmpu1_data  $psu_ddr_xmpu2_data  $psu_ddr_xmpu3_data  $psu_ddr_xmpu4_data  $psu_ddr_xmpu5_data}]
-
-	configparams force-mem-accesses $saved_mode
+    
+	configparams force-mem-accesses $saved_mode                                       
 }
 
 proc psu_ocm_protection {} {
-    set saved_mode [configparams force-mem-accesses]
-    configparams force-mem-accesses 1
-
+    set saved_mode [configparams force-mem-accesses]                  
+    configparams force-mem-accesses 1 
+    
     variable psu_ocm_xmpu_data
     init_ps [subst {$psu_ocm_xmpu_data }]
-
-	configparams force-mem-accesses $saved_mode
+    
+	configparams force-mem-accesses $saved_mode                                       
 }
 
 proc psu_fpd_protection {} {
-    set saved_mode [configparams force-mem-accesses]
-    configparams force-mem-accesses 1
-
+    set saved_mode [configparams force-mem-accesses]                  
+    configparams force-mem-accesses 1 
+    
 	variable psu_fpd_xmpu_data
     init_ps [subst {$psu_fpd_xmpu_data }]
-
-	configparams force-mem-accesses $saved_mode
+    
+	configparams force-mem-accesses $saved_mode                                       
 }
 
 proc psu_protection_lock {} {
-    set saved_mode [configparams force-mem-accesses]
-    configparams force-mem-accesses 1
-
+    set saved_mode [configparams force-mem-accesses]                  
+    configparams force-mem-accesses 1 
+    
 	variable psu_protection_lock_data
     init_ps [subst {$psu_protection_lock_data }]
-
-	configparams force-mem-accesses $saved_mode
+    
+	configparams force-mem-accesses $saved_mode                                       
 }
 
 proc psu_protection {} {
@@ -15163,10 +15163,10 @@ proc psu_protection {} {
 proc psu_ddr_phybringup_data {} {
 mwr -force  0xFD080004 0x00040073
 
-poll 0xFD080030 0x0000000F 0x0000000F
+poll 0xFD080030 0x0000000F 0x0000000F  
 	psu_mask_write 0xFD080004 0x00000001 0x00000001
-#poll for PHY initialization to complete
-poll 0xFD080030 0x000000FF 0x0000001F
+#poll for PHY initialization to complete 
+poll 0xFD080030 0x000000FF 0x0000001F 
 
 	psu_mask_write 0xFD070010 0x00000008 0x00000008
 	psu_mask_write 0xFD0701B0 0x00000001 0x00000001
@@ -15175,47 +15175,47 @@ poll 0xFD080030 0x000000FF 0x0000001F
 	psu_mask_write 0xFD070010 0x0000F000 0x00006000
 	psu_mask_write 0xFD070014 0x0003FFFF 0x00000819
 	psu_mask_write 0xFD070010 0x80000000 0x80000000
-poll 0xFD070018 0x00000001 0
+poll 0xFD070018 0x00000001 0 
 	psu_mask_write 0xFD070010 0x00000030 0x00000010
 	psu_mask_write 0xFD070010 0x00000001 0x00000000
 	psu_mask_write 0xFD070010 0x0000F000 0x00006000
 	psu_mask_write 0xFD070014 0x0003FFFF 0x00000899
 	psu_mask_write 0xFD070010 0x80000000 0x80000000
-poll 0xFD070018 0x00000001 0
+poll 0xFD070018 0x00000001 0 
 	psu_mask_write 0xFD070010 0x00000030 0x00000010
 	psu_mask_write 0xFD070010 0x00000001 0x00000000
 	psu_mask_write 0xFD070010 0x0000F000 0x00006000
 	psu_mask_write 0xFD070014 0x0003FFFF 0x00000819
 	psu_mask_write 0xFD070010 0x80000000 0x80000000
-poll 0xFD070018 0x00000001 0
+poll 0xFD070018 0x00000001 0 
 	psu_mask_write 0xFD070010 0x00000008 0x00000000
 mwr -force  0xFD0701B0 0x00000001
 mwr -force  0xFD070320 0x00000001
-#//poll for DDR initialization to complete
-poll 0xFD070004 0x0000000F 0x00000001
+#//poll for DDR initialization to complete 
+poll 0xFD070004 0x0000000F 0x00000001 
 
 	psu_mask_write 0xFD080014 0x00000040 0x00000040
 #Dummy reads before PHY training starts
-mrd -force 0xFD070004
-  #//dummy reads
-mrd -force 0xFD070004
-  #//dummy reads
-mrd -force 0xFD070004
-  #//dummy reads
-mrd -force 0xFD070004
-  #//dummy reads
-mrd -force 0xFD070004
-  #//dummy reads
-mrd -force 0xFD070004
-  #//dummy reads
+mrd -force 0xFD070004    
+  #//dummy reads 
+mrd -force 0xFD070004    
+  #//dummy reads 
+mrd -force 0xFD070004    
+  #//dummy reads 
+mrd -force 0xFD070004    
+  #//dummy reads 
+mrd -force 0xFD070004    
+  #//dummy reads 
+mrd -force 0xFD070004    
+  #//dummy reads 
 psu_mask_write 0xFD080004 0xFFFFFFFF 0x0004FE01
- #trigger PHY training
+ #trigger PHY training 
 poll 0xFD080030 0x00000FFF 0x00000FFF
+ 
+  #Poll PUB_PGSR0 for Trng complete  
 
-  #Poll PUB_PGSR0 for Trng complete
 
-
- # Run Vref training in static read mode
+ # Run Vref training in static read mode  
 mwr -force  0xFD080200 0x100091C7
 mwr -force  0xFD080018 0x00F01E6D
 	psu_mask_write 0xFD08142C 0x00000030 0x00000030
@@ -15224,11 +15224,11 @@ mwr -force  0xFD080018 0x00F01E6D
 	psu_mask_write 0xFD0814EC 0x00000030 0x00000030
 	psu_mask_write 0xFD08152C 0x00000030 0x00000030
 psu_mask_write 0xFD080004 0xFFFFFFFF 0x00060001
-
- #trigger VreFPHY training
+  
+ #trigger VreFPHY training 
 poll 0xFD080030 0x00004001 0x00004001
-
- #//Poll PUB_PGSR0 for Trng complete
+     
+ #//Poll PUB_PGSR0 for Trng complete  
 mwr -force  0xFD080200 0x800091C7
 mwr -force  0xFD080018 0x00F11E55
 	psu_mask_write 0xFD08142C 0x00000030 0x00000000
@@ -15237,14 +15237,15 @@ mwr -force  0xFD080018 0x00F11E55
 	psu_mask_write 0xFD0814EC 0x00000030 0x00000000
 	psu_mask_write 0xFD08152C 0x00000030 0x00000000
 psu_mask_write 0xFD080004 0xFFFFFFFF 0x0000C001
-
- #trigger VreFPHY training
+  
+ #trigger VreFPHY training 
 poll 0xFD080030 0x00000C01 0x00000C01
-
- #//Poll PUB_PGSR0 for Trng complete
+     
+ #//Poll PUB_PGSR0 for Trng complete  
 mwr -force  0xFD070180 0x01000040
 mwr -force  0xFD070060 0x00000000
 	psu_mask_write 0xFD080014 0x00000040 0x00000000
 
-
+ 
 }
+

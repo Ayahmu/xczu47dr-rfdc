@@ -20,9 +20,24 @@ set proj_file "${proj_dir}/${proj_name}.xpr"
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 
+# Reuse the last successful synthesis checkpoint when available.  The
+# checkpoint is kept outside the run directory because reset_run removes the
+# generated files belonging to synth_1.
+set incremental_dir "${vivado_dir}/work/incremental"
+file mkdir ${incremental_dir}
+set synth_incremental_checkpoint "${incremental_dir}/${proj_name}_synth.dcp"
+set synth_run [get_runs -quiet synth_1]
+if {[llength ${synth_run}] > 0 && [file exists ${synth_incremental_checkpoint}]} {
+    set_property STEPS.SYNTH_DESIGN.ARGS.INCREMENTAL_MODE quick ${synth_run}
+    #set_property STEPS.SYNTH_DESIGN.ARGS.INCREMENTAL_CHECKPOINT ${synth_incremental_checkpoint} ${synth_run}
+    puts "INFO: Incremental synthesis enabled with ${synth_incremental_checkpoint}"
+} else {
+    puts "INFO: No synthesis checkpoint found; running a full synthesis"
+}
+
 puts "INFO: Skipping XXV Ethernet OOC synthesis; using reference DCP"
 
-restore_reference_xxv_dcp ${vivado_dir} ${target}
+#restore_reference_xxv_dcp ${vivado_dir} ${target}
 
 set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]
 if {[llength ${bd_file}] > 0} {
@@ -91,6 +106,11 @@ if {${synth_status} != "synth_design Complete!"} {
 
 # Open synthesized design for reporting
 open_run synth_1
+
+# Save a stable checkpoint for the next synthesis iteration only after the
+# current run has completed successfully.
+write_checkpoint -force ${synth_incremental_checkpoint}
+puts "INFO: Saved synthesis incremental checkpoint: ${synth_incremental_checkpoint}"
 
 # Generate reports
 set report_dir "${vivado_dir}/work/${proj_name}.runs/synth_1/reports"
