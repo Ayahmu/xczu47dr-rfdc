@@ -21,6 +21,7 @@ set output_dir [expr {[info exists ::env(VIVADO_OUTPUT_DIR)] ? $::env(VIVADO_OUT
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Do not reset or regenerate XXV Ethernet during bitstream generation.
 # The generated Design_Linking checkpoint cannot produce a bitstream in this environment.

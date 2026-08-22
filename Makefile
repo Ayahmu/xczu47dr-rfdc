@@ -157,17 +157,17 @@ xsa: bitstream
 
 bitstream-master:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
-	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_master.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; echo "MASTER BIT: $$bit"; sha256sum "$$bit"; test ! -e "$$ltx" || echo "MASTER LTX: $$ltx"
+	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_master.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "MASTER LTX: $$ltx"
 
 bitstream-slave:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
-	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_slave.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; sha256sum "$$bit"; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
+	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_slave.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
 
 bitstream-dual: chisel
 	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-master bitstream-slave
 	@echo "Dual bitstream build complete"
 	@for bit in "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit"; do test -s "$$bit" || exit 1; done
-	@sha256sum "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit"
+	@for role in master slave; do bit="$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_$${role}.bit"; echo "$$(printf '%s' "$${role}" | tr '[:lower:]' '[:upper:]') SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "$$(printf '%s' "$${role}" | tr '[:lower:]' '[:upper:]') SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; done
 
 bitstream-dual-clean:
 	rm -rf "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual"

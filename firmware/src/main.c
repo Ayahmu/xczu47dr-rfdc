@@ -541,7 +541,10 @@ int main(void)
 	// Configure board clocks
 	xil_printf("\nConfiguring the data converter clocks...\r\n");
 
-	xil_printf("Custom XCZU47DR clock policy: HMC7044 is programmed by PL sequencer.\r\n");
+	xil_printf("Custom XCZU47DR clock policy: XS17 external ref=%lu MHz, HMC7044 PLL1 PFD=%lu MHz, DAC ref=%lu MHz; PL sequencer programs HMC7044.\r\n",
+		   (unsigned long)(HMC7044_INPUT_REF_HZ / 1000000U),
+		   (unsigned long)(HMC7044_PLL1_PFD_HZ / 1000000U),
+		   (unsigned long)(HMC7044_DAC_REFCLK_HZ / 1000000U));
 	xil_printf("HMC7044 reset policy: PL drives RESET_H7044_H_0 low to release the active-high reset net.\r\n");
 	u32 hmcStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
 	xil_printf("HMC7044 PL sequencer initial status: 0x%08lx (done mask 0x%08lx)\r\n",

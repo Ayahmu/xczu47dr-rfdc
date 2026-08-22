@@ -48,6 +48,7 @@ set proj_file "${proj_dir}/${proj_name}.xpr"
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Reuse the last successful routed design as the implementation reference.
 # Keep this checkpoint outside impl_1 because reset_run removes the run
@@ -122,6 +123,9 @@ if {[llength ${bd_file}] > 0} {
         puts "INFO: No standalone DDR4 OOC run found; relying on parent Block Design targets"
     }
 }
+
+# Keep implementation on the same reference checkpoint used by synthesis.
+restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 puts "INFO: Starting implementation..."
 set impl_run [get_runs impl_1]

@@ -47,6 +47,7 @@ set proj_file "${proj_dir}/${proj_name}.xpr"
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Reuse the last successful synthesis checkpoint when available.  The
 # checkpoint is kept outside the run directory because reset_run removes the
@@ -116,6 +117,11 @@ if {[llength ${bd_file}] > 0} {
     }
 }
 
+# generate_target above can refresh the managed XXV IP. Prepare its OOC run
+# metadata without launching protected RTL, then restore the bitstream-capable
+# reference checkpoint immediately before launching top-level synthesis.
+prepare_reference_xxv_ooc_run ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+
 puts "INFO: Starting synthesis..."
 reset_run synth_1
 # Never let an automatically imported prior DCP hide RTL changes. This is
@@ -136,6 +142,13 @@ if {${synth_status} != "synth_design Complete!"} {
     puts "ERROR: Synthesis failed!"
     exit 1
 }
+
+# The Vivado scheduler may have launched the XXV child run because a freshly
+# created project reports it as "Not started". That child can regenerate a
+# Design_Linking-only checkpoint, so restore the bitstream-capable checkpoint
+# again after all synthesis runs have finished and before opening the parent
+# synthesized design.
+restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Open synthesized design for reporting
 open_run synth_1

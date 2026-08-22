@@ -8,7 +8,7 @@ USE IEEE.STD_LOGIC_ARITH.ALL;
 ----���ֲ�����ʽ��˵��
 -- �����                 �Ĵ���03----->27    �Ĵ���05----->66
 -- ����ʱ��100MHz         �Ĵ���03----->37    �Ĵ���05----->56   �Ĵ���26---->01
----�ⲿ�ο�ʱ��10MHz      �Ĵ���03----->37    �Ĵ���05----->5A   �Ĵ���26----->0A
+---�ⲿ�ο�ʱ��250MHz     �Ĵ���03----->2F    �Ĵ���05----->5A   R1=25, N1=10
 --  ****************************************************************************/
 entity hmc7044 is
 
@@ -22,7 +22,7 @@ H7044_SLEN  :	OUT	STD_LOGIC;
 H7044_SCLK  :	OUT	STD_LOGIC;
 H7044_SDATA :	OUT	STD_LOGIC;
 SET_FINISH :	OUT	STD_LOGIC;
-USE_EXTERNAL_10MHZ : IN STD_LOGIC;
+USE_EXTERNAL_250MHZ : IN STD_LOGIC;
 IS_MASTER : IN STD_LOGIC
 );
 end ;
@@ -109,8 +109,8 @@ H7044_SDATA <=HMC7044_SDIO;
 
 					-- 3.072 GHz must use the High VCO core:
 					-- 0x0003[4:3] = 01. 0x37 (VCO selection 11) is reserved.
-					if USE_EXTERNAL_10MHZ = '1' then
-						config_reg <= x"0003" & x"2F"; -- CLKIN1 / XS17 10MHz path, High VCO core
+					if USE_EXTERNAL_250MHZ = '1' then
+						config_reg <= x"0003" & x"2F"; -- CLKIN1 / XS17 250MHz path, High VCO core
 					else
 						config_reg <= x"0003" & x"2F"; -- existing CLKIN2 100MHz path, High VCO core
 					end if;
@@ -134,7 +134,7 @@ H7044_SDATA <=HMC7044_SDIO;
 														                                               --10 --pulse generator.request a pulse generator stream from any channels configured for dynamic startup.this behaves in the same way as a gpi requested pulse generator
                                                                                          --11 causes sync if alarm exits,otherwise causes pulse generator
 
-				if USE_EXTERNAL_10MHZ = '1' then
+				if USE_EXTERNAL_250MHZ = '1' then
 					config_reg <= x"0005" & x"5A"; -- CLKIN1 plus EXT_SYNC
 				else
 					config_reg <= x"0005" & x"56"; -- existing CLKIN2 plus EXT_SYNC
@@ -211,15 +211,19 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"01D" =>
 				--	config_reg <= x"0021" & x"04";	  --R1 DIVIDER[7:0]
 
-					    config_reg <= x"0021" & x"01";
+					if USE_EXTERNAL_250MHZ = '1' then
+						config_reg <= x"0021" & x"19"; -- 250MHz / R1=25 -> 10MHz PLL1 PFD
+					else
+						config_reg <= x"0021" & x"01"; -- existing 100MHz reference
+					end if;
 
 				when x"01E" =>
 					config_reg <= x"0022" & x"00";	  --R1 DIVIDER[15:8]
 				when x"01F" =>
 				--	config_reg <= x"0026" & x"04";		--N1 DIVIDER[7:0]
 
-					if USE_EXTERNAL_10MHZ = '1' then
-						config_reg <= x"0026" & x"0A"; -- external 10MHz reference
+					if USE_EXTERNAL_250MHZ = '1' then
+						config_reg <= x"0026" & x"0A"; -- 10MHz PLL1 PFD -> 100MHz VCXO
 					else
 						config_reg <= x"0026" & x"01"; -- existing 100MHz reference
 					end if;

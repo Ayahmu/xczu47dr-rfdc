@@ -148,9 +148,10 @@ the Xilinx `usp_rf_data_converter` hard IP while moving the custom-board RFDC
 parameter set into the Chisel/Scala generation flow.
 
 **Generated Files:**
-- `rfdc_custom_xczu47dr_config.tcl` - DAC tile/slice enables, 125 MHz refclk,
-  6.0 GS/s sampling, 8x interpolation, 93.75 MHz fabric clocks, C2R fine-NCO
-  mixer settings, and Zone2 settings.
+- `rfdc_custom_xczu47dr_config.tcl` - DAC tile/slice enables, 128 MHz refclk,
+  6.4 GS/s sampling, 16x interpolation, 50 MHz AXIS fabric clock, C2R
+  fine-NCO mixer settings, and Zone2 settings. DAC2 is the PLL reference tile;
+  the HMC7044 supplies the same 128 MHz DAC reference to the active tiles.
 
 ### AXI DMA (`axidma/`)
 
