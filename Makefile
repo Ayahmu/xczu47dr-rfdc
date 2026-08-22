@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 TARGET ?= custom_xczu47dr
-ALLOWED_TARGETS := custom_xczu47dr custom_xczu47dr_bw
+ALLOWED_TARGETS := custom_xczu47dr custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_bw
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -9,6 +9,9 @@ endif
 ROOT := $(CURDIR)
 
 VIVADO_DIR := $(ROOT)/hardware/vivado
+VIVADO_WORK_DIR ?= $(VIVADO_DIR)/work
+VIVADO_OUTPUT_DIR ?= $(VIVADO_DIR)/output
+VIVADO_REPORT_DIR ?= $(VIVADO_DIR)/reports
 CHISEL_DIR := $(ROOT)/hardware/chisel
 FIRMWARE_DIR := $(ROOT)/firmware
 SOFTWARE_DIR := $(ROOT)/software
@@ -63,7 +66,7 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test hardware hardware-clean chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -72,6 +75,7 @@ help:
 	@echo "  make all              Build hardware and firmware"
 	@echo "  make test             Run software/unit and script syntax checks"
 	@echo "  make hardware         Build Chisel, Vivado project, synth, impl, bitstream, XSA"
+	@echo "  make hardware-fast    Reuse the current Vivado project for RTL/constraint iterations"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
 	@echo "  make artifacts        Verify expected .bit/.ltx/.xsa/.elf artifacts exist"
 	@echo ""
@@ -82,6 +86,9 @@ help:
 	@echo "  make synth            Run Vivado synthesis"
 	@echo "  make impl             Run Vivado implementation"
 	@echo "  make bitstream        Generate/copy bitstream and debug probes"
+	@echo "  make bitstream-master Build the master bitstream in an isolated Vivado tree"
+	@echo "  make bitstream-slave  Build the slave bitstream in an isolated Vivado tree"
+	@echo "  make bitstream-dual   Build master and slave bitstreams in parallel"
 	@echo "  make xsa              Export XSA"
 	@echo "  make firmware-create  Create Vitis platform/application"
 	@echo "  make firmware-build   Build firmware ELF"
@@ -96,6 +103,7 @@ help:
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make hardware-clean   Clean Vivado work/output before hardware build"
+	@echo "  make bitstream-dual-clean  Remove only the isolated dual-build trees"
 	@echo "  make firmware-clean   Remove Vitis workspace"
 	@echo "  make clean            Clean firmware workspace and Vivado generated outputs"
 	@echo ""
@@ -107,7 +115,9 @@ help:
 	@echo "  PSU_INIT=$(PSU_INIT)"
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
-	@echo "  Default TARGET=custom_xczu47dr builds the normal eight-output RFDC playback path"
+	@echo "  TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
+	@echo "  TARGET=custom_xczu47dr_slave builds the slave synchronization bitstream"
+	@echo "  Default TARGET=custom_xczu47dr is the master-compatible RFDC playback path"
 	@echo "  Use TARGET=custom_xczu47dr_bw only for the standalone DDR bandwidth pressure path"
 	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
@@ -127,27 +137,49 @@ check-tools:
 chisel:
 	cd $(CHISEL_DIR) && ./build.sh all
 
-vivado-project: chisel
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/create_project.tcl -tclargs $(TARGET)
+vivado-project: $(if $(SKIP_CHISEL),,chisel)
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/create_project.tcl -tclargs $(TARGET)
 
 preflight: vivado-project
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/preflight.tcl -tclargs $(TARGET)
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/preflight.tcl -tclargs $(TARGET)
 
 synth: vivado-project
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)
 
 impl: synth
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_impl.tcl -tclargs $(TARGET)
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_impl.tcl -tclargs $(TARGET)
 
 bitstream: impl
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/run_bitstream.tcl -tclargs $(TARGET)
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_bitstream.tcl -tclargs $(TARGET)
 
 xsa: bitstream
-	cd $(VIVADO_DIR) && vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
+
+bitstream-master:
+	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
+	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_master.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; echo "MASTER BIT: $$bit"; sha256sum "$$bit"; test ! -e "$$ltx" || echo "MASTER LTX: $$ltx"
+
+bitstream-slave:
+	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
+	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_slave.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; sha256sum "$$bit"; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
+
+bitstream-dual: chisel
+	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-master bitstream-slave
+	@echo "Dual bitstream build complete"
+	@for bit in "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit"; do test -s "$$bit" || exit 1; done
+	@sha256sum "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit"
+
+bitstream-dual-clean:
+	rm -rf "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual"
+	rm -f "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.ltx" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.ltx"
 
 hardware:
 	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) BIT=$(BIT) LTX=$(LTX) XSA=$(XSA)"
 	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh --clean
+
+hardware-fast:
+	@echo "INFO: Fast hardware build reusing PROJECT=$(TARGET_PROJECT_BASENAME)"
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh
 
 hardware-clean:
 	rm -rf "$(VIVADO_DIR)/work"

@@ -82,26 +82,6 @@ Thumbs.db
 *.mmi
 *.xsa
 
-# Versioned release artifacts for the custom XCZU47DR RFDC build.
-!hardware/vivado/output/
-hardware/vivado/output/*
-!hardware/vivado/output/custom_xczu47dr_rfdc.bit
-!hardware/vivado/output/custom_xczu47dr_rfdc.ltx
-!firmware/workspace/
-firmware/workspace/*
-!firmware/workspace/custom_xczu47dr/
-firmware/workspace/custom_xczu47dr/*
-!firmware/workspace/custom_xczu47dr/rfdc_app/
-firmware/workspace/custom_xczu47dr/rfdc_app/*
-!firmware/workspace/custom_xczu47dr/rfdc_app/Debug/
-firmware/workspace/custom_xczu47dr/rfdc_app/Debug/*
-!firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf
-!firmware/workspace/custom_xczu47dr/hw_platform/
-firmware/workspace/custom_xczu47dr/hw_platform/*
-!firmware/workspace/custom_xczu47dr/hw_platform/hw/
-firmware/workspace/custom_xczu47dr/hw_platform/hw/*
-!firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl
-
 # Temporary and backup files
 ch*_waveform_hex.txt
 wave_preview_*.png
@@ -133,3 +113,34 @@ hardware/vivado/output/*.ltx
 /ezq-quantum_metadata.json
 /per-channel_metadata.json
 /software/rfsoc_web.sqlite3
+
+# Dual-target Vivado builds and reports are always regeneratable.
+hardware/vivado/work-dual/
+hardware/vivado/reports-dual/
+hardware/vivado/output/
+hardware/vivado/ip/vio_0/
+hardware/vivado/ip/ddr_custom_xczu47dr_ip/
+hardware/vivado/ip/rfdc_custom_xczu47dr_ip/
+hardware/vivado/.cache/
+hardware/vivado/.hw/
+hardware/vivado/.ip_user_files/
+hardware/vivado/**/*.runs/
+hardware/vivado/**/*.cache/
+hardware/vivado/**/*.gen/
+hardware/vivado/**/*.srcs/
+hardware/vivado/**/*.hw/
+hardware/vivado/**/*.ip_user_files/
+hardware/vivado/**/*.Xil/
+
+# Mill, test, and local web application state.
+mill.d*
+.mill/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.egg-info/
+software/rfsoc_web.sqlite3-*
+software/webui/.vite/

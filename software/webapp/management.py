@@ -374,10 +374,10 @@ class ManagementStore:
         ):
             timestamp = now()
             rows = [
-                ("board-a", "XCZU47DR A", "enp225s0f0"),
-                ("board-b", "XCZU47DR B", "enp225s0f1"),
+                ("board-a", "XCZU47DR A", "enp225s0f0", "custom_xczu47dr"),
+                ("board-b", "XCZU47DR B", "enp225s0f1", "custom_xczu47dr_slave"),
             ]
-            for board_id, name, udp_interface in rows:
+            for board_id, name, udp_interface, target_profile in rows:
                 profile = auto_fpga_link_profile(udp_interface) or {}
                 ip = profile.get("target_ip", "192.168.1.128")
                 connection.execute(
@@ -393,7 +393,7 @@ class ManagementStore:
                     (
                         board_id, name, ip, ip, ip, f"sim-{board_id}", udp_interface,
                         profile.get("source_ip", "192.168.1.10"),
-                        profile.get("target_profile", "custom_xczu47dr"),
+                        target_profile,
                         timestamp, timestamp, timestamp,
                     ),
                 )
@@ -431,39 +431,10 @@ class ManagementStore:
                  AND (
                    device_uid=''
                    OR last_seen_at=''
-                   OR name LIKE 'XCZU47DR %'
-                   OR (SELECT COUNT(*) FROM boards AS peers
-                       WHERE peers.device_uid=boards.device_uid AND peers.device_uid!='') > 1
+                   OR active_mac=''
                  )""",
             (timestamp,),
         )
-        duplicates = connection.execute(
-            """SELECT device_uid FROM boards
-               WHERE device_uid!=''
-               GROUP BY device_uid
-               HAVING COUNT(*) > 1"""
-        ).fetchall()
-        for duplicate in duplicates:
-            rows = connection.execute(
-                """SELECT id FROM boards
-                   WHERE device_uid=?
-                   ORDER BY enabled DESC, last_seen_at DESC, updated_at DESC, id ASC""",
-                (duplicate["device_uid"],),
-            ).fetchall()
-            keep = rows[0]["id"] if rows else ""
-            for row in rows[1:]:
-                connection.execute(
-                    """UPDATE boards
-                       SET enabled=0,
-                           notes=CASE
-                             WHEN notes LIKE '%disabled duplicate device_uid%' THEN notes
-                             WHEN notes='' THEN 'disabled duplicate device_uid; inventory is keyed by RFCTRL2 device_uid'
-                             ELSE notes || '\n' || 'disabled duplicate device_uid; inventory is keyed by RFCTRL2 device_uid'
-                           END,
-                           updated_at=?
-                       WHERE id=? AND id!=?""",
-                    (timestamp, row["id"], keep),
-                )
 
     @staticmethod
     def _user(row: sqlite3.Row | None) -> UserRecord | None:
@@ -582,13 +553,20 @@ class ManagementStore:
             connection.execute(f"UPDATE boards SET {', '.join(fields)} WHERE id=?", values)
         return self.board(board_id)
 
-    def allocated_ip_for_discovery(self, interface: str, device_uid: str) -> str:
+    def allocated_ip_for_discovery(self, interface: str, device_uid: str, active_mac: str = "") -> str:
         pool = ip_pool_for_interface(interface)
         profile = auto_fpga_link_profile(interface) or {}
         with self._transaction() as connection:
+            mac_clause = ""
+            params: list[str] = [device_uid]
+            if active_mac:
+                mac_clause = " AND (active_mac=? OR mac=?)"
+                params.extend([active_mac, active_mac])
             existing = connection.execute(
-                "SELECT desired_ip, active_ip, ip, udp_interface FROM boards WHERE device_uid=? ORDER BY last_seen_at DESC, updated_at DESC",
-                (device_uid,),
+                "SELECT desired_ip, active_ip, ip, udp_interface FROM boards WHERE device_uid=?"
+                + mac_clause
+                + " ORDER BY last_seen_at DESC, updated_at DESC",
+                params,
             ).fetchone()
             if existing:
                 for field in ("desired_ip", "active_ip", "ip"):
@@ -632,25 +610,46 @@ class ManagementStore:
         network_apply_error: str = "",
         target_profile: str = "",
     ) -> BoardProfile:
+        def mac_match(left: str, right: str) -> bool:
+            return (left or "").replace(":", "").lower() == (right or "").replace(":", "").lower()
+
         if not device_uid:
             raise ManagementError("discovered FPGA did not report device_uid")
         profile = auto_fpga_link_profile(udp_interface) or {}
         resolved_target_profile = target_profile or profile.get("target_profile", "custom_xczu47dr")
         resolved_target_profile = (
-            resolved_target_profile if resolved_target_profile in {"custom_xczu47dr", "custom_xczu47dr_bw"}
+            resolved_target_profile
+            if resolved_target_profile in {
+                "custom_xczu47dr",
+                "custom_xczu47dr_master",
+                "custom_xczu47dr_slave",
+                "custom_xczu47dr_bw",
+            }
             else "custom_xczu47dr"
         )
         resolved_clock_source = "onboard"
+        inventory_name = profile.get("inventory_name", "")
+        jtag_cable_serial = profile.get("jtag_cable_serial", "")
+        serial_path = profile.get("serial_path", "")
         timestamp = now()
         suffix = "".join(ch.lower() for ch in device_uid if ch.isalnum())[-8:] or uuid.uuid4().hex[:8]
         preferred_id = f"fpga-{suffix}"
         with self._transaction(immediate=True) as connection:
             rows = connection.execute(
-                "SELECT id, name FROM boards WHERE device_uid=? ORDER BY enabled DESC, last_seen_at DESC, updated_at DESC",
+                "SELECT id, name, active_mac, mac FROM boards WHERE device_uid=? ORDER BY enabled DESC, last_seen_at DESC, updated_at DESC",
                 (device_uid,),
             ).fetchall()
-            row = rows[0] if rows else None
-            for duplicate in rows[1:]:
+            if active_mac:
+                matches = [item for item in rows if mac_match(item["active_mac"] or item["mac"], active_mac)]
+                row = matches[0] if matches else None
+                duplicates = [
+                    item for item in rows
+                    if (row is None or item["id"] != row["id"]) and mac_match(item["active_mac"] or item["mac"], active_mac)
+                ]
+            else:
+                row = rows[0] if rows else None
+                duplicates = rows[1:] if row else []
+            for duplicate in duplicates:
                 connection.execute(
                     """UPDATE boards
                        SET enabled=0,
@@ -667,7 +666,7 @@ class ManagementStore:
             if row is None:
                 while connection.execute("SELECT 1 FROM boards WHERE id=?", (board_id,)).fetchone() is not None:
                     board_id = f"fpga-{suffix}-{uuid.uuid4().hex[:4]}"
-                name = f"FPGA {suffix.upper()}"
+                name = inventory_name or f"FPGA {suffix.upper()}"
                 connection.execute(
                     """
                     INSERT INTO boards(id, name, model, ip, port, mac, bootstrap_ip, desired_ip, active_ip,
@@ -675,31 +674,36 @@ class ManagementStore:
                         udp_interface, udp_source_ip, clock_source, target_profile, jtag_cable_serial,
                         serial_path, baud_rate, location, notes, last_seen_at, enabled, created_at, updated_at)
                     VALUES (?, ?, 'XCZU47DR RFDC', ?, 1234, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        '', '', 115200, '', '', ?, 1, ?, ?)
+                        ?, ?, 115200, '', '', ?, 1, ?, ?)
                     """,
                     (
                         board_id, name, active_ip, active_mac, profile.get("bootstrap_ip", "192.168.254.254"),
                         desired_ip, active_ip, desired_mac, active_mac, device_uid, network_revision,
                         network_apply_status, network_apply_error, udp_interface,
                         profile.get("source_ip", "192.168.1.10"), resolved_clock_source, resolved_target_profile,
-                        timestamp, timestamp, timestamp,
+                        jtag_cable_serial, serial_path, timestamp, timestamp, timestamp,
                     ),
                 )
             else:
                 connection.execute(
                     """
-                    UPDATE boards SET ip=?, mac=?, desired_ip=?, active_ip=?, desired_mac=?, active_mac=?,
+                    UPDATE boards SET name=CASE WHEN ?!='' THEN ? ELSE name END,
+                        ip=?, mac=?, desired_ip=?, active_ip=?, desired_mac=?, active_mac=?,
                         device_uid=?,
                         udp_interface=?, udp_source_ip=?, bootstrap_ip=?, target_profile=?, clock_source=?,
+                        jtag_cable_serial=CASE WHEN ?!='' THEN ? ELSE jtag_cable_serial END,
+                        serial_path=CASE WHEN ?!='' THEN ? ELSE serial_path END,
                         network_revision=?, network_apply_status=?, network_apply_error=?,
                         last_seen_at=?, enabled=1, updated_at=?
                     WHERE id=?
                     """,
                     (
+                        inventory_name, inventory_name,
                         active_ip, active_mac, desired_ip, active_ip, desired_mac, active_mac, device_uid,
                         udp_interface, profile.get("source_ip", "192.168.1.10"),
                         profile.get("bootstrap_ip", "192.168.254.254"),
                         resolved_target_profile, resolved_clock_source,
+                        jtag_cable_serial, jtag_cable_serial, serial_path, serial_path,
                         network_revision, network_apply_status, network_apply_error,
                         timestamp, timestamp, board_id,
                     ),

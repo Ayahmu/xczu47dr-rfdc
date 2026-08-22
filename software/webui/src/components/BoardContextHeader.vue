@@ -17,13 +17,11 @@ const router = useRouter()
 const board = computed(() => boards.byId(props.boardId))
 const status = computed(() => boards.statusById(props.boardId))
 const ownsLease = computed(() => board.value?.lease?.user_id === session.user?.id)
-const detected = computed(() => {
-  const serial = board.value?.jtag_cable_serial
-  return Boolean(serial && boards.discoveries.some((item) => item.kind === 'jtag' && String(item.details.cable_serial || '') === serial))
-})
+const detected = computed(() => Boolean(board.value?.device_uid && board.value?.last_seen_at))
 const tabs = computed(() => [
   { label: '输出控制', path: '/boards/' + props.boardId + '/output' },
   { label: '参数扫描', path: '/boards/' + props.boardId + '/sweep' },
+  { label: '极限长度', path: '/boards/' + props.boardId + '/max-length' },
   { label: '诊断与串口', path: '/boards/' + props.boardId + '/diagnostics' },
 ])
 async function leaseAction() {
@@ -56,7 +54,7 @@ async function leaseAction() {
       </div>
     </div>
     <div class="status-rail">
-      <div><Cable :size="18" /><span>设备发现<small>USB / JTAG</small></span><el-tag :type="detected ? 'success' : 'info'">{{ detected ? '已发现' : '未发现' }}</el-tag></div>
+      <div><Cable :size="18" /><span>设备发现<small>RFCTRL2 身份</small></span><el-tag :type="detected ? 'success' : 'info'">{{ detected ? '已发现' : '未发现' }}</el-tag></div>
       <div><Network :size="18" /><span>控制链路<small>RFCTRL2 UDP</small></span><el-tag :type="status?.online ? 'success' : 'danger'">{{ status?.online ? '已连接' : '未响应' }}</el-tag></div>
       <div><Cpu :size="18" /><span>RFDC / MTS<small>Tile 同步</small></span><el-tag :type="status?.rfdc_ready === true && status?.dac_mts_ready ? 'success' : status?.dac_mts_failed || status?.rfdc_ready === false ? 'warning' : 'info'">{{ status?.dac_mts_failed ? '同步失败' : status?.rfdc_ready === true && status?.dac_mts_ready ? '已就绪' : status?.rfdc_ready === false ? '未就绪' : '无法确认' }}</el-tag></div>
       <div><Radio :size="18" /><span>播放状态<small>PL datapath</small></span><el-tag :type="stateType(status?.state)">{{ stateLabel(status?.state) }}</el-tag></div>

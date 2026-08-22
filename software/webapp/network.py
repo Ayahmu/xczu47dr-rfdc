@@ -18,11 +18,15 @@ from .models import BoardProfile, NetworkInterfaceInfo
 PROFILED_UDP_INTERFACES = ("enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1")
 SIOCGIFADDR = 0x8915
 FPGA_BOOTSTRAP_IP = "192.168.254.254"
+FPGA_LINKLOCAL_DEFAULT_IP = "169.254.32.1"
 AUTO_FPGA_LINK_PROFILES = {
     "enp225s0f0": {
         "target_ip": "192.168.1.128",
         "target_mac": "02:00:00:00:00:01",
-        "target_profile": "custom_xczu47dr",
+        "target_profile": "custom_xczu47dr_master",
+        "inventory_name": "XCZU47DR 081",
+        "jtag_cable_serial": "210512180081",
+        "serial_path": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04KVC7-if00-port0",
         "source_ip": "192.168.1.10",
         "source_cidr": "192.168.1.10/24",
         "discovery_source_ip": "169.254.250.10",
@@ -37,7 +41,10 @@ AUTO_FPGA_LINK_PROFILES = {
     "enp225s0f1": {
         "target_ip": "192.168.2.128",
         "target_mac": "02:00:00:00:00:02",
-        "target_profile": "custom_xczu47dr",
+        "target_profile": "custom_xczu47dr_slave",
+        "inventory_name": "XCZU47DR 082",
+        "jtag_cable_serial": "210512180082",
+        "serial_path": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04KVC8-if00-port0",
         "source_ip": "192.168.2.10",
         "source_cidr": "192.168.2.10/24",
         "discovery_source_ip": "169.254.250.11",
@@ -241,12 +248,25 @@ def discovery_targets_for_interface(interface: str, known_ips: list[str] | tuple
     for address in (
         profile["target_ip"],
         profile["bootstrap_ip"],
+        FPGA_LINKLOCAL_DEFAULT_IP,
         "169.254.255.255",
         "255.255.255.255",
     ):
         if address and address not in targets:
             targets.append(address)
     return targets
+
+
+def discovery_target_profile(interface: str, reported_profile: str = "") -> str:
+    """Resolve the fixed master/slave role when older PL reports a generic build."""
+    profile = auto_fpga_link_profile(interface) or {}
+    configured = profile.get("target_profile", "custom_xczu47dr")
+    if reported_profile in {"", "custom_xczu47dr"} and configured in {
+        "custom_xczu47dr_master",
+        "custom_xczu47dr_slave",
+    }:
+        return configured
+    return reported_profile or configured
 
 
 def is_control_pool_ip(interface: str, address: str) -> bool:

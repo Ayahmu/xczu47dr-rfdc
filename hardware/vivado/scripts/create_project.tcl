@@ -13,12 +13,16 @@ if {![target_config_exists $target]} {
 }
 
 set proj_name [target_config_get $target project_basename]
-set proj_dir "${vivado_dir}/work"
+set proj_dir [expr {[info exists ::env(VIVADO_WORK_DIR)] ? $::env(VIVADO_WORK_DIR) : "${vivado_dir}/work"}]
+file mkdir ${proj_dir}
+set generated_ip_dir "${proj_dir}/ip"
+file mkdir ${generated_ip_dir}
 set target_part [target_config_get $target part]
 set target_board_part [target_config_get $target board_part]
 set target_top_module [target_config_get $target top_module]
 set target_generics [target_config_get $target generics]
 set is_bandwidth_target [expr {$target eq "custom_xczu47dr_bw"}]
+set is_master_target [expr {$target ne "custom_xczu47dr_slave" && !$is_bandwidth_target}]
 
 puts "INFO: Creating Vivado project..."
 puts "INFO: Target: ${target}"
@@ -59,8 +63,10 @@ set_property simulator_language Mixed [current_project]
 puts "INFO: Enabling target Verilog define"
 if {$is_bandwidth_target} {
     set_property verilog_define {CUSTOM_XCZU47DR_BW} [current_fileset]
+} elseif {$target eq "custom_xczu47dr_slave"} {
+    set_property verilog_define {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_SLAVE} [current_fileset]
 } else {
-    set_property verilog_define {CUSTOM_XCZU47DR} [current_fileset]
+    set_property verilog_define {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_MASTER} [current_fileset]
 }
 
 set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
@@ -82,7 +88,7 @@ source ${ddr_generated_config}
 
 if {!$is_bandwidth_target} {
     puts "INFO: Creating project-level RFDC IP outside block design"
-    set rfdc_ip_dir "${vivado_dir}/ip"
+    set rfdc_ip_dir "${generated_ip_dir}"
     file mkdir ${rfdc_ip_dir}
     create_ip -force -name usp_rf_data_converter -vendor xilinx.com -library ip -version 2.6 \
         -module_name rfdc_custom_xczu47dr_ip -dir ${rfdc_ip_dir}
@@ -103,8 +109,11 @@ if {!$is_bandwidth_target} {
 ] [get_ips rfdc_custom_xczu47dr_ip]
     generate_target all ${rfdc_ip_file}
 
+}
+
+if {$is_master_target} {
     puts "INFO: Creating VIO control for the master HMC7044 SYNC sequence"
-    set vio_ip_dir "${vivado_dir}/ip"
+    set vio_ip_dir "${generated_ip_dir}"
     file mkdir ${vio_ip_dir}
     create_ip -force -name vio -vendor xilinx.com -library ip -version 3.0 \
         -module_name vio_0 -dir ${vio_ip_dir}
@@ -143,7 +152,7 @@ if {!$is_bandwidth_target} {
 }
     
 puts "INFO: Creating project-level DDR4 IP outside block design"
-set ddr_ip_dir "${vivado_dir}/ip"
+set ddr_ip_dir "${generated_ip_dir}"
 file mkdir ${ddr_ip_dir}
 create_ip -force -name ddr4 -vendor xilinx.com -library ip -version 2.2 \
     -module_name ddr_custom_xczu47dr_ip -dir ${ddr_ip_dir}
@@ -239,7 +248,12 @@ if {!$is_bandwidth_target && [file exists ${udp_src_dir}]} {
 }
 
 # Import the reference XXV Ethernet IP used by udp_10G.
-set xxv_xci "${vivado_dir}/ip/xxv_ethernet_1/xxv_ethernet.xci"
+set xxv_src_dir "${vivado_dir}/ip/xxv_ethernet_1"
+set xxv_local_dir "${generated_ip_dir}/xxv_ethernet_1"
+if {[file exists ${xxv_src_dir}] && ![file exists ${xxv_local_dir}]} {
+    file copy -force ${xxv_src_dir} ${xxv_local_dir}
+}
+set xxv_xci "${xxv_local_dir}/xxv_ethernet.xci"
 if {!$is_bandwidth_target && [file exists ${xxv_xci}]} {
     puts "INFO: Adding reference XXV Ethernet IP: ${xxv_xci}"
     add_files -norecurse ${xxv_xci}
@@ -247,7 +261,12 @@ if {!$is_bandwidth_target && [file exists ${xxv_xci}]} {
     puts "WARN: Reference XXV Ethernet IP not found: ${xxv_xci}"
 }
 
-set fifo64_xci "${vivado_dir}/ip/fifo64_2/fifo64.xci"
+set fifo64_src_dir "${vivado_dir}/ip/fifo64_2"
+set fifo64_local_dir "${generated_ip_dir}/fifo64_2"
+if {[file exists ${fifo64_src_dir}] && ![file exists ${fifo64_local_dir}]} {
+    file copy -force ${fifo64_src_dir} ${fifo64_local_dir}
+}
+set fifo64_xci "${fifo64_local_dir}/fifo64.xci"
 if {!$is_bandwidth_target && [file exists ${fifo64_xci}]} {
     puts "INFO: Adding reference fifo64 IP: ${fifo64_xci}"
     add_files -norecurse ${fifo64_xci}

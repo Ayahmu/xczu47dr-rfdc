@@ -1,4 +1,6 @@
-module Top (
+module Top #(
+    parameter integer IS_MASTER = 1
+) (
 
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
@@ -53,6 +55,15 @@ module Top (
     output TRIG_1,
     output TRIG_2,
     output TRIG_3,
+
+    // Master-only sync output and slave-only sync inputs.  Both are kept in
+    // the common RTL interface so the XDC selects the physical role.
+    output sync_1_tx_p,
+    output sync_1_tx_n,
+    output PL_SYSREF_out,
+    input  sync_3_tx_p,
+    input  sync_3_tx_n,
+    input  dac_trigger_start,
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -117,8 +128,8 @@ module Top (
 
 
   wire        hmc7044_set_finish;
-  // This single-board measurement target is disciplined by the 10 MHz
-  // laboratory reference connected to XS17 (HMC7044 CLKIN1).
+  // Both master and slave lock the HMC7044 to the shared 10 MHz laboratory
+  // reference on XS17 (CLKIN1); only the SYNC/trigger roles differ.
   wire        hmc_use_external_10mhz = 1'b1;
 
   hmc7044 hmc7044_i (
@@ -128,11 +139,86 @@ module Top (
       .H7044_SCLK(H7044_SCLK_0),
       .H7044_SDATA(H7044_SDATA_0),
       .SET_FINISH(hmc7044_set_finish),
-      .USE_EXTERNAL_10MHZ(hmc_use_external_10mhz)
+      .USE_EXTERNAL_10MHZ(hmc_use_external_10mhz),
+      .IS_MASTER(IS_MASTER ? 1'b1 : 1'b0)
   );
 
   assign RESET_H7044_H_0 = 1'b0;
-  assign H7044_SYNC_0 = hmc7044_set_finish;
+
+  wire vio_sync_request;
+  wire hmc7044_sync_typec;
+  wire sync_hmc;
+  wire sync_link_out;
+  wire sync_link_ready;
+  wire role_trigger_raw;
+  wire sync_done_pl;
+  wire sync_seen;
+  wire rfctrl2_sync_epoch_pulse;
+  wire rfctrl2_trigger_pulse;
+
+  generate
+    if (IS_MASTER) begin : gen_master_sync_input
+      vio_0 vio_sync_i (
+          .clk       (pl_clk),
+          .probe_out0(vio_sync_request)
+      );
+      assign hmc7044_sync_typec = 1'b0;
+    end else begin : gen_slave_sync_input
+      assign vio_sync_request = 1'b0;
+      IBUFDS #(
+          .DIFF_TERM("FALSE"),
+          .IBUF_LOW_PWR("FALSE")
+      ) sync_3_tx_ibufds (
+          .I  (sync_3_tx_p),
+          .IB (sync_3_tx_n),
+          .O  (hmc7044_sync_typec)
+      );
+    end
+  endgenerate
+
+  sync_trigger_link #(
+      .IS_MASTER(IS_MASTER),
+      .WAIT_CYCLES(100000),
+      .HIGH_CYCLES(100)
+  ) sync_trigger_link_i (
+      .ddr_clk             (ddr4_ui_clk),
+      .ddr_rst_n           (ddr4_ui_aresetn),
+      .pl_clk              (pl_clk),
+      .pl_rst_n            (pl_aresetn),
+      .sync_request_ddr   (rfctrl2_sync_epoch_pulse),
+      .trigger_request_ddr(rfctrl2_trigger_pulse),
+      .sync_request_vio_pl(vio_sync_request),
+      .sync_in            (hmc7044_sync_typec),
+      .dac_trigger_start  (dac_trigger_start),
+      .hmc_sync           (sync_hmc),
+      .sync_link_out      (sync_link_out),
+      .role_trigger_raw   (role_trigger_raw),
+      .sync_done          (sync_done_pl),
+      .sync_seen          (sync_seen),
+      .sync_link_ready    (sync_link_ready)
+  );
+
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_seen_ddr_sync;
+  wire hmc_done_ddr = hmc_done_ddr_sync[1];
+  wire sync_seen_ddr = sync_seen_ddr_sync[1];
+
+  assign H7044_SYNC_0 = sync_hmc;
+
+  generate
+    if (IS_MASTER) begin : gen_master_sync_output
+      OBUFDS sync_1_tx_obufds (
+          .I (sync_link_out),
+          .O (sync_1_tx_p),
+          .OB(sync_1_tx_n)
+      );
+      assign PL_SYSREF_out = clk_dac2;
+    end else begin : gen_slave_sync_output
+      assign sync_1_tx_p = 1'b0;
+      assign sync_1_tx_n = 1'b1;
+      assign PL_SYSREF_out = 1'b0;
+    end
+  endgenerate
 
   // ========== PS 指令 AXIS（128-bit） ==========
   wire [127:0] ps_instr_tdata;
@@ -200,9 +286,7 @@ module Top (
   wire         udp_trigger_pulse;
   wire         rv_trigger_pulse;
   wire         rfctrl2_arm_pulse;
-  wire         rfctrl2_trigger_pulse;
   wire         rfctrl2_abort_mute_pulse;
-  wire         rfctrl2_sync_epoch_pulse;
   wire [63:0]  rfctrl2_epoch;
   wire         rfctrl2_start_valid;
   wire [63:0]  rfctrl2_start_tick;
@@ -282,8 +366,8 @@ module Top (
   wire         rfdc_nco_commit_busy;
   wire         rfdc_nco_commit_done;
   wire [1:0]   rfdc_nco_commit_error;
-  wire         rfdc_nco_sync_ready;
-  wire [31:0]  rfdc_nco_sync_epoch;
+  wire         rfdc_nco_runtime_sync_ready;
+  wire [31:0]  rfdc_nco_runtime_sync_epoch;
   wire [383:0] rfdc_dac_nco_freq;
   wire [143:0] rfdc_dac_nco_phase;
   wire [7:0]   rfdc_dac_nco_phase_reset;
@@ -313,6 +397,14 @@ module Top (
   wire         dac_mts_failed = firmware_status_ddr[3];
   wire [3:0]   dac_mts_tile_mask = firmware_status_ddr[7:4];
   wire [15:0]  dac_mts_error = firmware_status_ddr[23:8];
+  wire         firmware_nco_sync_ready = firmware_status_ddr[24];
+  reg          rfdc_nco_runtime_required;
+  wire         rfdc_nco_sync_ready = rfdc_nco_runtime_required ?
+                                      rfdc_nco_runtime_sync_ready :
+                                      firmware_nco_sync_ready;
+  wire [31:0]  rfdc_nco_sync_epoch = rfdc_nco_runtime_required ?
+                                       rfdc_nco_runtime_sync_epoch :
+                                       (firmware_nco_sync_ready ? 32'd1 : 32'd0);
   wire         rfdc_operational_ready = rfdc_runtime_ready && dac_mts_required &&
                                           dac_mts_ready && !dac_mts_failed;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] rfdc_output_permitted_dac_sync;
@@ -417,7 +509,9 @@ module Top (
   assign network_capabilities = 32'h00040000;
   localparam [31:0] RF2_BUILD_PROFILE_ID = 32'd1;
   assign network_status_flags = {
-      27'd0,
+      25'd0,
+      sync_seen_ddr,
+      hmc_done_ddr,
       rfctrl2_prepared_ddr,
       pc_started_ddr,
       (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
@@ -788,8 +882,8 @@ module Top (
       .src_start(rfdc_nco_commit_start), .src_channel_mask(rfdc_nco_commit_mask),
       .src_nco_freq(rfdc_nco_commit_freq_words), .src_nco_phase(rfdc_nco_commit_phase_words),
       .src_busy(rfdc_nco_commit_busy), .src_done(rfdc_nco_commit_done),
-      .src_error(rfdc_nco_commit_error), .src_sync_ready(rfdc_nco_sync_ready),
-      .src_sync_epoch(rfdc_nco_sync_epoch),
+      .src_error(rfdc_nco_commit_error), .src_sync_ready(rfdc_nco_runtime_sync_ready),
+      .src_sync_epoch(rfdc_nco_runtime_sync_epoch),
       .rfdc_clk(pl_clk), .rfdc_rst_n(pl_aresetn),
       .rfdc_tile_update_busy(rfdc_dac_tile_update_busy),
       .dac_nco_freq(rfdc_dac_nco_freq), .dac_nco_phase(rfdc_dac_nco_phase),
@@ -799,6 +893,15 @@ module Top (
       .dac_sysref_int_gating(rfdc_dac0_sysref_int_gating),
       .dac_sysref_int_reenable(rfdc_dac0_sysref_int_reenable)
   );
+
+  // Firmware performs the baseline SYSREF NCO reset during startup. Once a
+  // runtime RFDC_APPLY begins, only the RTS bridge may restore readiness.
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn)
+      rfdc_nco_runtime_required <= 1'b0;
+    else if (rfdc_apply_start)
+      rfdc_nco_runtime_required <= 1'b1;
+  end
 
   IBUFDS #(
       .IBUF_LOW_PWR("FALSE")
@@ -918,9 +1021,13 @@ module Top (
     if (!ddr4_ui_aresetn) begin
       firmware_status_meta <= 32'd0;
       firmware_status_ddr <= 32'd0;
+      hmc_done_ddr_sync <= 2'b00;
+      sync_seen_ddr_sync <= 2'b00;
     end else begin
       firmware_status_meta <= gpio_out_reg;
       firmware_status_ddr <= firmware_status_meta;
+      hmc_done_ddr_sync <= {hmc_done_ddr_sync[0], hmc7044_set_finish};
+      sync_seen_ddr_sync <= {sync_seen_ddr_sync[0], sync_seen};
     end
   end
 
@@ -950,12 +1057,34 @@ module Top (
     end
   end
   // ========== trigger CDC ==========
+  // After the initial HMC sequence, AN8/AN7 carries the master playback
+  // trigger. The sync_trigger_link module blocks the second SYNC pulse tail
+  // from entering this playback path and keeps the legacy input as fallback.
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_ddr_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_sync_ff;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if(!ddr4_ui_aresetn)
+      role_trigger_ddr_sync_ff <= 3'b000;
+    else
+      role_trigger_ddr_sync_ff <= {role_trigger_ddr_sync_ff[1:0], role_trigger_raw};
+  end
+  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
+    if(!clk104_aresetn)
+      role_trigger_dac_sync_ff <= 3'b000;
+    else
+      role_trigger_dac_sync_ff <= {role_trigger_dac_sync_ff[1:0], role_trigger_raw};
+  end
+  wire role_trigger_ddr_sync = role_trigger_ddr_sync_ff[2];
+  wire role_trigger_dac_sync = role_trigger_dac_sync_ff[2];
+
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn) ps_trigger_ddr_sync_ff <= 3'b000;
     else                 ps_trigger_ddr_sync_ff <= {ps_trigger_ddr_sync_ff[1:0], ps_trigger_raw};
   end
-  wire ps_trigger_ddr_sync = ps_trigger_ddr_sync_ff[2] | udp_trigger_stretched;
+  wire ps_trigger_ddr_sync = ps_trigger_ddr_sync_ff[2] |
+                              udp_trigger_stretched |
+                              role_trigger_ddr_sync;
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] udp_trigger_dac_sync_ff;
@@ -968,7 +1097,9 @@ module Top (
       udp_trigger_dac_sync_ff <= {udp_trigger_dac_sync_ff[1:0], udp_trigger_stretched};
     end
   end
-  wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] | udp_trigger_dac_sync_ff[2];
+  wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] |
+                              udp_trigger_dac_sync_ff[2] |
+                              role_trigger_dac_sync;
 
 
   // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========
@@ -1066,9 +1197,9 @@ module Top (
   // ========== executor ==========
   Waveform_Interleaved_System_Top #(
     .DDR_ADDR_BASE(EXT_DDR_ADDR_BASE),
-    .LOW_WM(512),
-    .START_WM(1024),
-    .HIGH_WM(1536)
+    .LOW_WM(256),
+    .START_WM(512),
+    .HIGH_WM(768)
   ) executor_inst (
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
@@ -1194,8 +1325,9 @@ module Top (
   wire rfctrl2_play_trigger;
   wire rfctrl2_play_prepare;
   wire rfctrl2_play_abort;
+  wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger | (IS_MASTER ? 1'b0 : role_trigger_dac_sync);
   wire unused_single_board_inputs = mclk_10m_p | mclk_10m_n | EXT_TRIGGER_P | EXT_TRIGGER_N |
-      rfctrl2_sync_epoch_pulse | rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
+      rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if (!ddr4_ui_aresetn) begin
       rfctrl2_armed_meta <= 1'b0;
@@ -1455,7 +1587,7 @@ module Top (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
     .trigger(ps_trigger_dac_sync),
-    .rfctrl2_trigger(rfctrl2_play_trigger),
+    .rfctrl2_trigger(dac_hw_rfctrl2_trigger),
     .prepare(rfctrl2_play_prepare),
     .abort(rfctrl2_play_abort),
     .armed(rfctrl2_armed_dac),
@@ -2478,7 +2610,7 @@ module Top (
       .io_gpio2(gpio_out_reg)
   );
 
-  assign M_AXI_GPIO_rdata = axigpio_rdata | {hmc7044_set_finish, 31'b0};
+  assign M_AXI_GPIO_rdata = axigpio_rdata | {hmc7044_set_finish, sync_seen, 30'b0};
 
 
   ila_s_axi_01 u_ila_s_axi_01 (

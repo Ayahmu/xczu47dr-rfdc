@@ -23,6 +23,15 @@ xczu47dr-rfdc/
 
 Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The default target is `custom_xczu47dr`, which builds the normal eight-output RFDC playback path. Use `TARGET=custom_xczu47dr_bw` only when you explicitly want the standalone DDR bandwidth pressure design.
 
+For the two-board synchronization build, run `make bitstream-dual`. This builds
+the master and slave Vivado projects in parallel using isolated trees under
+`hardware/vivado/work-dual/master` and `hardware/vivado/work-dual/slave`; the
+generated bitstreams and LTX files are written as
+`hardware/vivado/output/custom_xczu47dr_master.*` and
+`hardware/vivado/output/custom_xczu47dr_slave.*`. The physical synchronization
+connection for the current hardware revision is **master A <-> slave A**. Use
+`make bitstream-dual-clean` to remove only the isolated dual-build trees.
+
 ```bash
 # Full normal RFDC playback hardware and firmware build
 make all
@@ -87,6 +96,11 @@ does not select every registered board, require a synchronization group, or
 send `SYNC_EPOCH` / `START_AT`. Requests containing more than one board job are
 rejected before hardware I/O. Synchronization metadata remains in the board
 records for a later hardware-qualified multi-board release.
+
+The host-side software sync step for the master/slave builds is implemented in
+`software/sync_two_boards.py`: it waits for HMC7044 done, sends one
+`RFCTRL2 SYNC_EPOCH` to the master, waits for the two-pulse HMC SYNC on both
+boards, then waits for DAC MTS and NCO SYSREF ready before playback.
 
 For normal use, build the frontend once and run the backend from the repository
 root:

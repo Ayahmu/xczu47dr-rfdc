@@ -187,6 +187,86 @@ class ManagementStoreTests(unittest.TestCase):
         self.assertEqual(updated.id, board.id)
         self.assertEqual(len([item for item in self.store.list_boards() if item.device_uid == "0000000047d00081"]), 1)
 
+    def test_same_device_uid_boards_are_keyed_by_active_mac(self):
+        device_uid = "0000000047d00000"
+        first = self.store.upsert_discovered_board(
+            device_uid=device_uid,
+            udp_interface="enp225s0f0",
+            active_ip="169.254.32.1",
+            active_mac="02:00:00:2c:d6:91",
+            desired_ip="192.168.1.128",
+            desired_mac="02:00:00:2c:d6:91",
+            network_revision=1,
+            network_apply_status="applied",
+        )
+        second = self.store.upsert_discovered_board(
+            device_uid=device_uid,
+            udp_interface="enp225s0f1",
+            active_ip="169.254.32.1",
+            active_mac="02:00:00:ad:15:91",
+            desired_ip="192.168.2.128",
+            desired_mac="02:00:00:ad:15:91",
+            network_revision=1,
+            network_apply_status="applied",
+        )
+
+        self.assertNotEqual(first.id, second.id)
+        self.assertEqual(first.udp_interface, "enp225s0f0")
+        self.assertEqual(second.udp_interface, "enp225s0f1")
+        self.assertEqual(first.name, "XCZU47DR 081")
+        self.assertEqual(second.name, "XCZU47DR 082")
+        self.assertEqual(first.target_profile, "custom_xczu47dr_master")
+        self.assertEqual(second.target_profile, "custom_xczu47dr_slave")
+        self.assertEqual(first.jtag_cable_serial, "210512180081")
+        self.assertEqual(second.jtag_cable_serial, "210512180082")
+        self.assertEqual(
+            [item.id for item in self.store.list_boards() if item.device_uid == device_uid],
+            [first.id, second.id],
+        )
+        self.assertEqual(
+            self.store.allocated_ip_for_discovery("enp225s0f0", device_uid, active_mac="02:00:00:2c:d6:91"),
+            "192.168.1.128",
+        )
+        self.assertEqual(
+            self.store.allocated_ip_for_discovery("enp225s0f1", device_uid, active_mac="02:00:00:ad:15:91"),
+            "192.168.2.128",
+        )
+
+    def test_startup_keeps_same_uid_discovered_boards_and_disables_only_placeholder(self):
+        device_uid = "51ec34c000002001"
+        timestamp = "2026-01-01T00:00:00+00:00"
+        with self.store._transaction(immediate=True) as connection:
+            for board_id, name, interface, source_ip, ip, mac in (
+                ("discovered-081", "XCZU47DR 081", "enp225s0f0", "192.168.1.10", "192.168.1.128", "02:00:00:2c:d6:91"),
+                ("discovered-082", "XCZU47DR 082", "enp225s0f1", "192.168.2.10", "192.168.2.128", "02:00:00:ad:15:91"),
+            ):
+                connection.execute(
+                    """INSERT INTO boards(
+                        id, name, model, ip, port, mac, bootstrap_ip, desired_ip, active_ip,
+                        desired_mac, active_mac, device_uid, network_revision, network_apply_status,
+                        udp_interface, udp_source_ip, clock_source, target_profile, last_seen_at,
+                        enabled, created_at, updated_at
+                    ) VALUES (?, ?, 'XCZU47DR RFDC', ?, 1234, ?, '192.168.254.254', ?, ?, ?, ?, ?, 1, 'applied', ?, ?, 'onboard', ?, ?, 1, ?, ?)""",
+                    (
+                        board_id, name, ip, mac, ip, ip, mac, mac, device_uid, interface, source_ip,
+                        "custom_xczu47dr_master" if interface.endswith("f0") else "custom_xczu47dr_slave",
+                        timestamp, timestamp, timestamp,
+                    ),
+                )
+            connection.execute(
+                """INSERT INTO boards(
+                    id, name, model, ip, port, mac, bootstrap_ip, desired_ip, active_ip,
+                    desired_mac, active_mac, device_uid, udp_interface, udp_source_ip,
+                    clock_source, target_profile, enabled, created_at, updated_at
+                ) VALUES (?, ?, 'XCZU47DR RFDC', ?, 1234, '', '192.168.254.254', '', '', '', '', '', ?, ?, 'onboard', 'custom_xczu47dr', 1, ?, ?)""",
+                ("legacy-placeholder", "Legacy placeholder", "192.168.1.128", "enp225s0f0", "192.168.1.10", timestamp, timestamp),
+            )
+        reopened = ManagementStore(self.store.path)
+        records = {record.id: record for record in reopened.list_inventory_records()}
+        self.assertTrue(records["discovered-081"].enabled)
+        self.assertTrue(records["discovered-082"].enabled)
+        self.assertFalse(records["legacy-placeholder"].enabled)
+
     def test_phase_calibration_is_keyed_by_exact_frequency_and_channel(self):
         saved = self.store.save_phase_calibration(
             "board-a",

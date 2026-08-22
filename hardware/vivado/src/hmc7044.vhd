@@ -22,7 +22,8 @@ H7044_SLEN  :	OUT	STD_LOGIC;
 H7044_SCLK  :	OUT	STD_LOGIC;
 H7044_SDATA :	OUT	STD_LOGIC;
 SET_FINISH :	OUT	STD_LOGIC;
-USE_EXTERNAL_10MHZ : IN STD_LOGIC
+USE_EXTERNAL_10MHZ : IN STD_LOGIC;
+IS_MASTER : IN STD_LOGIC
 );
 end ;
 architecture MAPPED of hmc7044 is
@@ -519,7 +520,11 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"09D" =>
 					config_reg <= x"00F8" & x"10";
 				when x"09E" =>
-						config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2MHz
+						if IS_MASTER = '1' then
+							config_reg <= x"00FA" & x"F3";	--channel5 SYSREF 2MHz, master
+						else
+							config_reg <= x"00FA" & x"F1";	--channel5 SYSREF 2MHz, slave
+						end if;
 					when x"09F" =>
 						config_reg <= x"00FB" & x"00";
 					when x"0A0" =>
@@ -555,7 +560,11 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"0AF" =>
 					config_reg <= x"010C" & x"10";
 				when x"0B0" =>
-						config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2MHz
+						if IS_MASTER = '1' then
+							config_reg <= x"010E" & x"F3";	--channel7 SYSREF 2MHz, master
+						else
+							config_reg <= x"010E" & x"F1";	--channel7 SYSREF 2MHz, slave
+						end if;
 					when x"0B1" =>
 						      config_reg <= x"010F" & x"00";
 					when x"0B2" =>
@@ -563,7 +572,11 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"0B3" =>
 					config_reg <= x"0111" & x"00";	--
 				when x"0B4" =>
-					config_reg <= x"0112" & x"00";
+					if IS_MASTER = '1' then
+						config_reg <= x"0112" & x"03";
+					else
+						config_reg <= x"0112" & x"00";
+					end if;
 				when x"0B5" =>
 					config_reg <= x"0113" & x"00";
 				when x"0B6" =>

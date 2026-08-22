@@ -13,10 +13,12 @@ if {![target_config_exists $target]} {
 }
 
 set proj_name [target_config_get $target project_basename]
-set proj_file "${vivado_dir}/work/${proj_name}.xpr"
+set proj_dir [expr {[info exists ::env(VIVADO_WORK_DIR)] ? $::env(VIVADO_WORK_DIR) : "${vivado_dir}/work"}]
+set proj_file "${proj_dir}/${proj_name}.xpr"
 set target_part [target_config_get $target part]
 set target_top [target_config_get $target top_module]
-set report_dir "${vivado_dir}/reports/${target}"
+set report_root [expr {[info exists ::env(VIVADO_REPORT_DIR)] ? $::env(VIVADO_REPORT_DIR) : "${vivado_dir}/reports"}]
+set report_dir "${report_root}/${target}"
 
 if {![file exists $proj_file]} {
     error "Missing Vivado project: ${proj_file}. Run make vivado-project first."
@@ -85,7 +87,7 @@ foreach ip_name {ila_s_axi_01 ila_udp_ddr ila_dac_axis} {
     }
     generate_target all $ip
     set generated_stub [file normalize \
-        "${vivado_dir}/work/${proj_name}.gen/sources_1/ip/${ip_name}/${ip_name}_bmstub.v"]
+        "${proj_dir}/${proj_name}.gen/sources_1/ip/${ip_name}/${ip_name}_bmstub.v"]
     if {![file exists $generated_stub]} {
         error "Missing generated ILA stub: ${generated_stub}"
     }

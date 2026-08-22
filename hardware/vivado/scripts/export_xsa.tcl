@@ -14,9 +14,9 @@ if {![target_config_exists $target]} {
 
 set proj_name [target_config_get $target project_basename]
 set output_basename [target_config_get $target output_basename]
-set proj_dir "${vivado_dir}/work"
+set proj_dir [expr {[info exists ::env(VIVADO_WORK_DIR)] ? $::env(VIVADO_WORK_DIR) : "${vivado_dir}/work"}]
 set proj_file "${proj_dir}/${proj_name}.xpr"
-set output_dir "${vivado_dir}/output"
+set output_dir [expr {[info exists ::env(VIVADO_OUTPUT_DIR)] ? $::env(VIVADO_OUTPUT_DIR) : "${vivado_dir}/output"}]
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}

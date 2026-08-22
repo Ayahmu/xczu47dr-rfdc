@@ -40,6 +40,7 @@ int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
 int Configure_Custom_DAC_NCO(void);
 int Configure_DAC_MTS(void);
+int Align_DAC_NCO_To_SYSREF(void);
 int Report_Custom_DAC_Status(const char *Stage);
 int Report_Custom_DAC_Clock_Status(const char *Stage);
 
@@ -89,25 +90,37 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
 #define HMC7044_POLL_COUNT 50
 #define HMC7044_POLL_INTERVAL_US 100000
+#define HMC_SYNC_DONE_MASK (1U << 30)
+#define HMC_SYNC_WAIT_COUNT 600
+#define HMC_SYNC_WAIT_INTERVAL_US 100000
 #define DAC_MTS_TILE_MASK 0x0FU
 #define FW_STATUS_MTS_REQUIRED (1U << 1)
 #define FW_STATUS_MTS_READY (1U << 2)
 #define FW_STATUS_MTS_FAILED (1U << 3)
 #define FW_STATUS_MTS_TILE_SHIFT 4U
 #define FW_STATUS_MTS_ERROR_SHIFT 8U
+#define FW_STATUS_NCO_SYNC_READY (1U << 24)
+
+static u32 DacMtsStatus;
 
 static void Publish_DAC_MTS_Status(u32 Ready, u32 Failed, u32 Error)
 {
-	u32 Status = FW_STATUS_MTS_REQUIRED |
+	DacMtsStatus = FW_STATUS_MTS_REQUIRED |
 		((DAC_MTS_TILE_MASK & 0xFU) << FW_STATUS_MTS_TILE_SHIFT) |
 		((Error & 0xFFFFU) << FW_STATUS_MTS_ERROR_SHIFT);
 
 	if (Ready != 0U)
-		Status |= FW_STATUS_MTS_READY;
+		DacMtsStatus |= FW_STATUS_MTS_READY;
 	if (Failed != 0U)
-		Status |= FW_STATUS_MTS_FAILED;
+		DacMtsStatus |= FW_STATUS_MTS_FAILED;
 
-	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, Status);
+	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
+}
+
+static void Publish_DAC_NCO_Sync_Ready(void)
+{
+	DacMtsStatus |= FW_STATUS_NCO_SYNC_READY;
+	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
 }
 
 static void preload_debug_waveforms(void)
@@ -381,7 +394,7 @@ int Configure_Custom_DAC_NCO(void)
 			return XST_FAILURE;
 		}
 
-		xil_printf("Success: DAC Tile%d Block%d role=%s NCO set to %d MHz\r\n",
+		xil_printf("Success: DAC Tile%d Block%d role=%s NCO set to %d MHz, armed for SYSREF\r\n",
 			   Tile_Id, Block_Id, CustomDacChannels[i].Role, (int)(NcoFreqGHz * 1000.0));
 	}
 
@@ -406,6 +419,7 @@ int Configure_DAC_MTS(void)
 	}
 
 	DacSyncConfig.Tiles = DAC_MTS_TILE_MASK;
+	DacSyncConfig.SysRef_Enable = 1;
 	xil_printf("Running DAC MTS: tiles=0x%lx reference_tile=%u\r\n",
 		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
 	Status = XRFdc_MultiConverter_Sync(&RFdcInst, XRFDC_DAC_TILE, &DacSyncConfig);
@@ -432,6 +446,54 @@ int Configure_DAC_MTS(void)
 	Publish_DAC_MTS_Status(1U, 0U, 0U);
 	xil_printf("DAC MTS ready: tiles=0x%lx reference_tile=%u\r\n",
 		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
+	return XST_SUCCESS;
+}
+
+int Align_DAC_NCO_To_SYSREF(void)
+{
+	unsigned int i;
+
+	xil_printf("Aligning DAC NCO phase/update events to SYSREF.\r\n");
+
+	for (i = 0U; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
+	{
+		u32 Tile_Id = CustomDacChannels[i].Tile_Id;
+		u32 Block_Id = CustomDacChannels[i].Block_Id;
+		XRFdc_Mixer_Settings MixerSettings;
+		int Status;
+
+		Status = XRFdc_GetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYSREF align: XRFdc_GetMixerSettings failed for DAC Tile%lu Block%lu status=%d\r\n",
+				   (unsigned long)Tile_Id, (unsigned long)Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		MixerSettings.EventSource = XRFDC_EVNT_SRC_SYSREF;
+		MixerSettings.PhaseOffset = 0.0;
+
+		Status = XRFdc_SetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYSREF align: XRFdc_SetMixerSettings failed for DAC Tile%lu Block%lu status=%d\r\n",
+				   (unsigned long)Tile_Id, (unsigned long)Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		Status = XRFdc_ResetNCOPhase(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYSREF align: XRFdc_ResetNCOPhase failed for DAC Tile%lu Block%lu status=%d\r\n",
+				   (unsigned long)Tile_Id, (unsigned long)Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		xil_printf("SYSREF align: %s Tile%lu Block%lu armed for next SYSREF NCO update/reset\r\n",
+			   CustomDacChannels[i].Channel, (unsigned long)Tile_Id, (unsigned long)Block_Id);
+	}
+
+	xil_printf("DAC NCO SYSREF alignment complete.\r\n");
 	return XST_SUCCESS;
 }
 
@@ -495,6 +557,24 @@ int main(void)
 		xil_printf("ERROR: HMC7044 PL sequencer did not finish before RFDC startup.\r\n");
 		return XST_FAILURE;
 	}
+
+	u32 hmcSyncStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
+	xil_printf("HMC SYNC gate initial status: 0x%08lx (mask 0x%08lx)\r\n",
+		   (unsigned long)hmcSyncStatus, (unsigned long)HMC_SYNC_DONE_MASK);
+	u32 syncWait = 0U;
+	while ((hmcSyncStatus & HMC_SYNC_DONE_MASK) == 0U)
+	{
+		usleep(HMC_SYNC_WAIT_INTERVAL_US);
+		hmcSyncStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
+		syncWait++;
+		if ((syncWait % 10U) == 0U)
+		{
+			xil_printf("HMC SYNC gate waiting: 0x%08lx (elapsed %lu s)\r\n",
+				   (unsigned long)hmcSyncStatus,
+				   (unsigned long)(syncWait * HMC_SYNC_WAIT_INTERVAL_US / 1000000U));
+		}
+	}
+	xil_printf("HMC SYNC gate status: 0x%08lx\r\n", (unsigned long)hmcSyncStatus);
 
 	sleep(2);
 
@@ -565,6 +645,13 @@ int main(void)
 		while (1)
 			usleep(1000000);
 	}
+	if (Align_DAC_NCO_To_SYSREF() != XST_SUCCESS)
+	{
+		xil_printf("RF output remains blocked because DAC NCO SYSREF alignment is not ready.\r\n");
+		while (1)
+			usleep(1000000);
+	}
+	Publish_DAC_NCO_Sync_Ready();
 	Report_Custom_DAC_Status("after custom config");
 	Report_Custom_DAC_Clock_Status("after custom config");
 

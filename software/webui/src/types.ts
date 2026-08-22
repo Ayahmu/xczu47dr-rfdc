@@ -372,6 +372,51 @@ export interface RunEvent {
   message: string
 }
 
+export interface SyncBoardResult {
+  board_id: string
+  hmc_done: boolean
+  sync_done: boolean
+  dac_mts_ready: boolean
+  nco_sync_ready: boolean
+  dac_mts_tile_mask: number
+  message: string
+}
+
+export interface SyncResult {
+  epoch: number
+  boards: SyncBoardResult[]
+  ok: boolean
+  message: string
+}
+
+export type MaxLengthTestState = 'PENDING' | 'UPLOADING' | 'PLAYING' | 'COMPLETED' | 'FAILED' | 'ABORTED'
+export interface MaxLengthTestRecord {
+  id: string
+  name: string
+  board_id: string
+  state: MaxLengthTestState
+  progress: number
+  bytes_per_channel: number
+  physical_bytes: number
+  datagrams: number
+  pattern: 'lowfreq-sine' | 'cw-marker'
+  sine_freq_hz: number
+  sine_amplitude: number
+  beats_per_datagram: number
+  auto_trigger: boolean
+  dry_run: boolean
+  upload_elapsed_s: number
+  upload_mbps: number
+  theoretical_duration_s: number
+  play_elapsed_s: number
+  read_counter: number
+  bad_instr_count: number
+  underflow_mask: number
+  error: string
+  created_at: string
+  updated_at: string
+}
+
 export interface DiscoveryResource {
   id: number
   kind: 'jtag' | 'serial'

@@ -439,6 +439,37 @@ Available in `run_impl.tcl`:
 - **Area_Explore**: Explore area optimization
 - **Congestion_SpreadLogic_high**: Reduce routing congestion
 
+### Fast Hardware Builds
+
+The build defaults favor iteration speed without giving up timing closure:
+
+- `ILA_DEPTH=1024` is the default capture depth for the three ILA cores. Set
+  `ILA_DEPTH=2048` or `ILA_DEPTH=4096` when deeper debug captures are needed.
+- `IMPL_MODE=auto` runs the timing-driven balanced profile first and
+  automatically falls back to `ExtraNetDelay_high + AggressiveExplore` only
+  when timing does not close. `IMPL_MODE=fast` remains available for quick
+  placement/routing checks where a timing-clean bitstream is not required.
+  Pin production builds with `IMPL_MODE=balanced` or
+  `IMPL_MODE=aggressive` when a fixed strategy is preferred.
+- `run_impl.tcl` reuses RFDC/DDR4 OOC checkpoints already produced during
+  synthesis instead of synthesizing them a second time.
+- The DDR-to-DAC asynchronous playback FIFOs use 1024-deep BRAM storage with
+  proportional 256/512/768 watermarks. Long waveforms remain in external DDR;
+  this only reduces the streaming cushion and avoids deep BRAM cascade routes.
+
+Example:
+```bash
+ILA_DEPTH=1024 IMPL_MODE=auto TARGET=custom_xczu47dr_slave make hardware
+```
+
+For RTL or constraint-only iterations after one successful full build:
+```bash
+TARGET=custom_xczu47dr_slave make hardware-fast
+```
+
+Use the full `make hardware` target after changing an IP-generation Tcl file,
+the RFDC/DDR configuration, or the selected FPGA part.
+
 ## Advanced Features
 
 ### Incremental Compilation

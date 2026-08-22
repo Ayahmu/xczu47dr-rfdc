@@ -153,6 +153,27 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: NCO RTS bridge gates SYSREF and commits enabled channels across four tiles",
         )
 
+    def test_sync_role_switch_generates_master_and_slave_paths(self):
+        self.run_sim(
+            "tb_sync_role_switch",
+            [
+                ROOT / "hardware/vivado/src/sync_role_control.v",
+                ROOT / "tests/tb_sync_role_switch.sv",
+            ],
+            "PASS: IS_MASTER roles generate and receive the two-pulse sync sequence",
+        )
+
+    def test_sync_trigger_link_cdc_and_post_sync_trigger(self):
+        self.run_sim(
+            "tb_sync_trigger_link",
+            [
+                ROOT / "hardware/vivado/src/sync_role_control.v",
+                ROOT / "hardware/vivado/src/sync_trigger_link.v",
+                ROOT / "tests/tb_sync_trigger_link.sv",
+            ],
+            "PASS: sync epoch CDC, two-pulse HMC link, and post-sync trigger link",
+        )
+
     def test_axilite_arbiter_locks_complete_transactions(self):
         self.run_sim(
             "tb_axilite_arbiter_2to1",

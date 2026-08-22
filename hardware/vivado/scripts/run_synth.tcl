@@ -42,7 +42,7 @@ if {![target_config_exists $target]} {
 }
 
 set proj_name [target_config_get $target project_basename]
-set proj_dir "${vivado_dir}/work"
+set proj_dir [expr {[info exists ::env(VIVADO_WORK_DIR)] ? $::env(VIVADO_WORK_DIR) : "${vivado_dir}/work"}]
 set proj_file "${proj_dir}/${proj_name}.xpr"
 
 puts "INFO: Opening project ${proj_file}"
@@ -51,7 +51,7 @@ open_project ${proj_file}
 # Reuse the last successful synthesis checkpoint when available.  The
 # checkpoint is kept outside the run directory because reset_run removes the
 # generated files belonging to synth_1.
-set incremental_dir "${vivado_dir}/work/incremental"
+set incremental_dir "${proj_dir}/incremental"
 file mkdir ${incremental_dir}
 set synth_incremental_checkpoint "${incremental_dir}/${proj_name}_synth.dcp"
 set synth_run [get_runs -quiet synth_1]
@@ -146,7 +146,7 @@ write_checkpoint -force ${synth_incremental_checkpoint}
 puts "INFO: Saved synthesis incremental checkpoint: ${synth_incremental_checkpoint}"
 
 # Generate reports
-set report_dir "${vivado_dir}/work/${proj_name}.runs/synth_1/reports"
+set report_dir "${proj_dir}/${proj_name}.runs/synth_1/reports"
 file mkdir ${report_dir}
 
 puts "INFO: Generating synthesis reports..."

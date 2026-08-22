@@ -24,7 +24,7 @@ def _reg12(registers: dict[int, int], low_addr: int, high_addr: int) -> int:
 
 
 class Hmc7044ConfigTests(unittest.TestCase):
-    def test_single_board_target_selects_external_10mhz_reference(self):
+    def test_master_and_slave_targets_use_external_10mhz_reference(self):
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
 
@@ -50,14 +50,26 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertNotEqual((regs[0x0003] >> 3) & 0x3, 0x3)
         self.assertTrue(regs[0x0003] & 0x07 == 0x07)
 
-    def test_single_board_measurement_target_does_not_require_dac_mts(self):
+    def test_two_board_sync_requires_mts_and_software_sync_gate(self):
         firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
+        top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         rfctrl2 = RFCTRL2_RTL.read_text(encoding="utf-8", errors="ignore")
         host = HOST_SOFTWARE.read_text(encoding="utf-8", errors="ignore")
 
-        self.assertNotIn("XRFdc_MultiConverter_Sync", firmware)
-        self.assertNotIn("dac_mts", rfctrl2.lower())
-        self.assertNotIn("dac_mts", host.lower())
+        self.assertIn("XRFdc_MultiConverter_Sync", firmware)
+        self.assertIn("SysRef_Enable = 1", firmware)
+        self.assertIn("Align_DAC_NCO_To_SYSREF", firmware)
+        self.assertIn("FW_STATUS_NCO_SYNC_READY", firmware)
+        self.assertIn("Publish_DAC_NCO_Sync_Ready", firmware)
+        self.assertIn("HMC_SYNC_DONE_MASK", firmware)
+        self.assertIn("rfctrl2_sync_epoch_pulse", top)
+        self.assertIn(".sync_done", top)
+        self.assertIn("firmware_nco_sync_ready", top)
+        self.assertIn("rfdc_nco_runtime_required", top)
+        self.assertIn("dac_mts", rfctrl2.lower())
+        self.assertIn("dac_mts", host.lower())
+        self.assertIn("RF2_NET_STATUS_HMC_DONE", host)
+        self.assertIn("rfctrl2_sync_epoch", host)
 
     def test_dac_refclk_registers_generate_exact_128_mhz_with_supported_divider(self):
         regs = _hmc7044_registers()

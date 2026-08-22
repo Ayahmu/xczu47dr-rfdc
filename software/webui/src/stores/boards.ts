@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/client'
-import type { BoardPreflight, BoardProfile, BoardRfdcConfig, BoardScanResponse, BoardStatus, DiscoveryResource, NetworkConfigSnapshot, NetworkInterfaceInfo, PhaseCalibrationRecord } from '../types'
+import type { BoardPreflight, BoardProfile, BoardRfdcConfig, BoardScanResponse, BoardStatus, DiscoveryResource, MaxLengthTestRecord, NetworkConfigSnapshot, NetworkInterfaceInfo, PhaseCalibrationRecord, SyncResult } from '../types'
 
 export const useBoardsStore = defineStore('boards', {
   state: () => ({
@@ -51,6 +51,16 @@ export const useBoardsStore = defineStore('boards', {
       await this.refreshStatus(boardId, false)
       return result
     },
+    async syncTwoBoards(masterBoardId: string, slaveBoardId: string) {
+      const result = await api<SyncResult>('/api/sync', { method: 'POST', body: { master_board_id: masterBoardId, slave_board_id: slaveBoardId } })
+      await this.fetchAll(true)
+      return result
+    },
+    maxLengthTests() { return api<MaxLengthTestRecord[]>('/api/max-length-tests') },
+    startMaxLength(boardId: string, payload: Record<string, unknown>) {
+      return api<MaxLengthTestRecord>('/api/boards/' + boardId + '/max-length-test', { method: 'POST', body: { ...payload, board_id: boardId } })
+    },
+    abortMaxLength(testId: string) { return api<MaxLengthTestRecord>('/api/max-length-tests/' + testId + '/abort', { method: 'POST' }) },
     rfdc(boardId: string, refresh = false) { return api<BoardRfdcConfig>('/api/boards/' + boardId + '/rfdc-config?refresh=' + refresh) },
     phaseCalibrations(boardId: string) { return api<PhaseCalibrationRecord[]>('/api/boards/' + boardId + '/phase-calibration') },
     savePhaseCalibration(boardId: string, payload: { frequency_hz: number; channel: number; phase_deg: number }) {

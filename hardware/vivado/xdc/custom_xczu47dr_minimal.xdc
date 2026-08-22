@@ -22,42 +22,13 @@ set_property IOSTANDARD LVCMOS25 [get_ports H7044_SDATA_0]
 set_property PACKAGE_PIN A5 [get_ports RST_88E1111]
 set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
 
-# int clk eq CLK_100M_P
-set_property PACKAGE_PIN D9 [get_ports FPGA_CLK1_P]
-set_property PACKAGE_PIN D8 [get_ports FPGA_CLK1_N]
-set_property IOSTANDARD LVDS_25 [get_ports FPGA_CLK1_P]
-set_property IOSTANDARD LVDS_25 [get_ports FPGA_CLK1_N]
-create_clock -name FPGA_CLK1 -period 10.000 [get_ports FPGA_CLK1_P]
-
 # XS18 TRIG_1 MMCX output.  Schematic pin table maps TRIG_1 to BANK87
 # package ball A6, with VCCO_87 tied to VCC_2V5.
 set_property PACKAGE_PIN D10 [get_ports TRIG_1]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
-#set_property PACKAGE_PIN A6 [get_ports H7044_SYNC_out]
-#set_property IOSTANDARD LVCMOS25 [get_ports H7044_SYNC_out]
-set_property PACKAGE_PIN C10 [get_ports PL_SYSREF_out]
-set_property IOSTANDARD LVCMOS25 [get_ports PL_SYSREF_out]
-set_property PACKAGE_PIN A6 [get_ports FPGA_CLK1_P_O]
-set_property IOSTANDARD LVCMOS25 [get_ports FPGA_CLK1_P_O]
 
-# Type-C differential SYNC output to the slave card.
-set_property PACKAGE_PIN AN8 [get_ports sync_1_tx_p]
-set_property PACKAGE_PIN AN7 [get_ports sync_1_tx_n]
-set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports sync_1_tx_p]
-set_property IOSTANDARD DIFF_HSTL_I_12 [get_ports sync_1_tx_n]
-set_property SLEW MEDIUM [get_ports sync_1_tx_p]
-set_property SLEW MEDIUM [get_ports sync_1_tx_n]
-
-# XS18/TRIG_2 is reserved by this single-board target.
-set_property PACKAGE_PIN D10 [get_ports TRIG_2]
-set_property IOSTANDARD LVCMOS25 [get_ports TRIG_2]
-
-# XS18/TRIG_3 is reserved by this single-board target.
-set_property PACKAGE_PIN C10 [get_ports TRIG_3]
-set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
-
-# TRIG_1 and TRIG_2 are asynchronous external observability/control outputs.
-set_false_path -to [get_ports {TRIG_1 TRIG_2}]
+# TRIG_1 is an asynchronous external observability/control output.
+set_false_path -to [get_ports TRIG_1]
 
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
@@ -107,6 +78,12 @@ set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get
 set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_ddr_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_dac_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/udp_trigger_dac_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_ddr_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_dac_sync_ff_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_epoch_pl_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_toggle_pl_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/u_rfctrl2_sync/ext_sync_meta_reg/D]
 
 # PL_SYSREF is sampled into the HMC DAC AXIS clock domain in Top.v.

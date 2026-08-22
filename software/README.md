@@ -248,6 +248,27 @@ Dry run without touching the board:
 python3 software/send_waveform_udp.py sine --dry-run --duration-s 1e-6 --ch1-freq-hz 80000000 --ch3-freq-hz 100000000
 ```
 
+## Two-Board Synchronization
+
+For the master/slave XCZU47DR build, upload the same waveform to both boards
+first, then run one synchronization command from the host:
+
+```bash
+python3 software/sync_two_boards.py \
+  --master-ip 192.168.1.128 \
+  --slave-ip 192.168.1.129 \
+  --udp-interface enp225s0f0 \
+  --udp-source-ip 192.168.1.10
+```
+
+The script waits for HMC7044 done on both boards, sends one `RFCTRL2
+SYNC_EPOCH` to the master, waits until both boards report the two-pulse HMC
+SYNC complete, and then waits for `dac_mts_ready` plus `nco_sync_ready` on both
+boards. Add `--apply-arm-trigger` to also send `RFDC_APPLY`, ARM both boards,
+and TRIGGER the master; the slave starts from the master `clk_dac2` edge.
+
+Use `--dry-run` to print the planned steps without sending UDP packets.
+
 ## Waveform Types
 
 Each enabled channel can be configured as one of `sine`, `xy`, `readout`, or

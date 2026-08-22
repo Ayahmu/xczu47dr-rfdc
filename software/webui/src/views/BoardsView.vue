@@ -13,7 +13,7 @@ const session = useSessionStore()
 const router = useRouter()
 const scanning = ref(false)
 const enabledBoards = computed(() => boards.boards.filter((item) => item.enabled))
-function detected(serial: string) { return Boolean(serial && boards.discoveries.some((item) => item.kind === 'jtag' && String(item.details.cable_serial || '') === serial)) }
+function detected(board: { device_uid: string; last_seen_at: string }) { return Boolean(board.device_uid && board.last_seen_at) }
 async function scanNetwork() {
   scanning.value = true
   try {
@@ -39,7 +39,7 @@ async function scanNetwork() {
         <dl>
           <div><dt>控制地址</dt><dd>{{ board.ip }}:{{ board.port }}</dd></div>
           <div><dt>服务器网卡</dt><dd>{{ board.udp_interface }}</dd></div>
-          <div><dt>设备发现</dt><dd><Cable :size="16" />{{ detected(board.jtag_cable_serial) ? '已发现' : '未发现' }}</dd></div>
+          <div><dt>设备发现</dt><dd><Cable :size="16" />{{ detected(board) ? '已发现' : '未发现' }}</dd></div>
           <div><dt>RFCTRL2</dt><dd><Network :size="16" />{{ boards.statusById(board.id)?.online ? '已连接' : '未响应' }}</dd></div>
           <div><dt>RFDC</dt><dd>{{ boards.statusById(board.id)?.rfdc_ready === true ? '已就绪' : boards.statusById(board.id)?.rfdc_ready === false ? '未就绪' : '无法确认' }}</dd></div>
           <div><dt>使用权</dt><dd><KeyRound :size="16" />{{ board.lease ? (board.lease.user_id === session.user?.id ? '由我持有' : board.lease.username) : '未申请' }}</dd></div>

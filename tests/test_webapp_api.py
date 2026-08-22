@@ -4,7 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from fastapi.testclient import TestClient
 
@@ -348,19 +348,126 @@ class WebAppApiTests(unittest.TestCase):
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         self.assertTrue(metadata["loop"])
 
-    def test_multi_board_request_is_rejected_before_execution(self):
+    def test_synchronized_two_board_dry_run_is_accepted(self):
         payload = {
             "jobs": [
                 {"board_id": "board-a", "waveform": manual_waveform_payload()},
-                {"board_id": "board-b", "waveform": ezq_waveform_payload()},
+                {"board_id": "board-b", "waveform": manual_waveform_payload()},
+            ],
+            "dry_run": True,
+            "execution_mode": "synchronized",
+        }
+        response = self.client.post("/api/runs", json=payload, headers=self.headers)
+        self.assertEqual(response.status_code, 202, response.text)
+        record = self.wait_done(response.json()["id"])
+        self.assertEqual(record["state"], "DONE")
+        self.assertEqual(record["execution_mode"], "synchronized")
+        self.assertEqual(record["board_ids"], ["board-a", "board-b"])
+
+    def test_synchronized_run_rejects_wrong_job_count(self):
+        payload = {
+            "jobs": [
+                {"board_id": "board-a", "waveform": manual_waveform_payload()},
+                {"board_id": "board-b", "waveform": manual_waveform_payload()},
+                {"board_id": "board-a", "waveform": manual_waveform_payload()},
             ],
             "dry_run": True,
             "execution_mode": "synchronized",
         }
         response = self.client.post("/api/runs", json=payload, headers=self.headers)
         self.assertEqual(response.status_code, 422, response.text)
-        self.assertIn("hardware qualification", response.text)
-        self.assertEqual(self.client.get("/api/runs").json(), [])
+
+    def test_sync_endpoint_requires_and_reports_both_boards(self):
+        for board_id in ("board-a", "board-b"):
+            leased = self.client.post(f"/api/boards/{board_id}/lease", headers=self.headers)
+            self.assertEqual(leased.status_code, 200, leased.text)
+        response = self.client.post(
+            "/api/sync",
+            json={"master_board_id": "board-a", "slave_board_id": "board-b"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertTrue(result["ok"])
+        self.assertEqual([item["board_id"] for item in result["boards"]], ["board-a", "board-b"])
+        self.assertTrue(all(item["dac_mts_ready"] and item["nco_sync_ready"] for item in result["boards"]))
+
+    def test_synchronized_live_one_shot_arms_both_and_triggers_master(self):
+        for board_id in ("board-a", "board-b"):
+            leased = self.client.post(f"/api/boards/{board_id}/lease", headers=self.headers)
+            self.assertEqual(leased.status_code, 200, leased.text)
+        payload = {
+            "jobs": [
+                {"board_id": "board-a", "waveform": manual_waveform_payload()},
+                {"board_id": "board-b", "waveform": manual_waveform_payload()},
+            ],
+            "dry_run": False,
+            "execution_mode": "synchronized",
+            "completion_mode": "one_shot",
+            "one_shot_duration_ms": 1,
+        }
+        created = self.client.post("/api/runs", json=payload, headers=self.headers)
+        self.assertEqual(created.status_code, 202, created.text)
+        record = self.wait_done(created.json()["id"])
+        self.assertEqual(record["state"], "DONE")
+        events = [event["message"] for event in self.client.get(f"/api/runs/{record['id']}/events").json()]
+        self.assertTrue(any("synchronizing HMC7044" in message for message in events))
+
+    def test_live_run_fault_mutes_every_board_in_the_run(self):
+        services = app.state.services
+        services.boards.mute = Mock()
+        payload = run_payload(dry_run=False)
+        from software.webapp.models import RunCreateRequest
+        request = RunCreateRequest.model_validate(payload)
+        record = services.runs.create(request)
+
+        services.runs._fault(record.id, "simulated failure")
+
+        self.assertEqual(
+            services.boards.mute.call_args_list,
+            [call("board-a")],
+        )
+
+    def test_max_length_dry_run_completes_with_metadata(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        created = self.client.post(
+            "/api/boards/board-a/max-length-test",
+            json={"name": "max dry", "board_id": "board-a", "bytes_per_channel": 4096, "dry_run": True},
+            headers=self.headers,
+        )
+        self.assertEqual(created.status_code, 202, created.text)
+        test_id = created.json()["id"]
+        deadline = time.monotonic() + 5
+        record = None
+        while time.monotonic() < deadline:
+            record = self.client.get(f"/api/max-length-tests/{test_id}").json()
+            if record["state"] == "COMPLETED":
+                break
+            time.sleep(0.02)
+        self.assertEqual(record["state"], "COMPLETED")
+        self.assertEqual(record["bytes_per_channel"], 4096)
+        self.assertEqual(record["physical_bytes"], 4096 * 8)
+        self.assertGreater(record["theoretical_duration_s"], 0)
+
+    def test_max_length_simulation_mode_completes_without_network(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        created = self.client.post(
+            "/api/boards/board-a/max-length-test",
+            json={"name": "max sim", "board_id": "board-a", "bytes_per_channel": 1024 * 1024, "dry_run": False},
+            headers=self.headers,
+        )
+        self.assertEqual(created.status_code, 202, created.text)
+        test_id = created.json()["id"]
+        deadline = time.monotonic() + 5
+        record = None
+        while time.monotonic() < deadline:
+            record = self.client.get(f"/api/max-length-tests/{test_id}").json()
+            if record["state"] == "COMPLETED":
+                break
+            time.sleep(0.02)
+        self.assertEqual(record["state"], "COMPLETED")
 
     def test_one_shot_finishes_after_mute_and_releases_board(self):
         payload = run_payload()

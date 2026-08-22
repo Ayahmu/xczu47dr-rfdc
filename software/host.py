@@ -218,6 +218,8 @@ RF2_STATUS_DAC_MTS_READY = 0x00000020
 RF2_STATUS_DAC_MTS_FAILED = 0x00000040
 RF2_STATUS_NCO_SYNC_READY = 0x00000080
 RF2_STATUS_DAC_MTS_REQUIRED = 0x00000100
+RF2_NET_STATUS_HMC_DONE = 0x00000020
+RF2_NET_STATUS_SYNC_DONE = 0x00000040
 
 RF2_STATUS_OK = 0x0000
 RF2_STATUS_BAD_VERSION = 0x0001
@@ -754,6 +756,8 @@ def parse_rfctrl2_network_response(response: dict) -> dict:
         "playback_prepared": False,
         "playback_running": False,
         "rfdc_config_valid_mask": 0,
+        "hmc_done": False,
+        "sync_done": False,
     })
     if not payload and int(result.get("status", RF2_STATUS_BAD_REQUEST)) != RF2_STATUS_OK:
         return result
@@ -803,6 +807,8 @@ def parse_rfctrl2_network_response(response: dict) -> dict:
         "playback_prepared": bool(playback_state & RF2_STATUS_PREPARED),
         "playback_running": bool(playback_state & RF2_STATUS_RUNNING),
         "rfdc_config_valid_mask": rfdc_config_valid_mask,
+        "hmc_done": bool(status_flags & RF2_NET_STATUS_HMC_DONE),
+        "sync_done": bool(status_flags & RF2_NET_STATUS_SYNC_DONE),
     })
     return result
 

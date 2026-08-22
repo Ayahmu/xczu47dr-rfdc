@@ -54,6 +54,7 @@ class RunStore:
                     request_json TEXT NOT NULL,
                     completion_mode TEXT NOT NULL DEFAULT 'upload',
                     playback_mode TEXT NOT NULL DEFAULT 'single',
+                    execution_mode TEXT NOT NULL DEFAULT 'single',
                     loaded INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS events (
@@ -67,6 +68,7 @@ class RunStore:
             )
             self._ensure_column(connection, "runs", "completion_mode", "TEXT NOT NULL DEFAULT 'upload'")
             self._ensure_column(connection, "runs", "playback_mode", "TEXT NOT NULL DEFAULT 'single'")
+            self._ensure_column(connection, "runs", "execution_mode", "TEXT NOT NULL DEFAULT 'single'")
             self._ensure_column(connection, "runs", "loaded", "INTEGER NOT NULL DEFAULT 0")
             # Dry runs only generate and validate host artifacts. Older versions
             # incorrectly marked them as if data had been uploaded to a board.
@@ -99,8 +101,8 @@ class RunStore:
                 """INSERT INTO runs(
                     id, name, state, dry_run, board_ids, start_mode, created_at,
                     updated_at, artifact_dir, progress, error, request_json,
-                    completion_mode, playback_mode, loaded
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    completion_mode, playback_mode, execution_mode, loaded
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
                     record.name,
@@ -116,6 +118,7 @@ class RunStore:
                     request.model_dump_json(),
                     request.completion_mode,
                     request.playback_mode,
+                    request.execution_mode,
                     0,
                 ),
             )
@@ -229,7 +232,7 @@ class RunStore:
             dry_run=bool(row["dry_run"]),
             board_ids=json.loads(row["board_ids"]),
             start_mode=row["start_mode"],
-            execution_mode="single",
+            execution_mode=row["execution_mode"] if "execution_mode" in row.keys() else "single",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             artifact_dir=row["artifact_dir"],

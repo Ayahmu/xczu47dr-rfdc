@@ -582,8 +582,14 @@ class RunCreateRequest(BaseModel):
         board_ids = [job.board_id for job in self.jobs]
         if len(board_ids) != len(set(board_ids)):
             raise ValueError("each board may appear only once in a run")
-        if self.execution_mode != "single" or len(self.jobs) != 1:
-            raise ValueError("multi-board synchronization is reserved until hardware qualification is complete")
+        if self.execution_mode == "single":
+            if len(self.jobs) != 1:
+                raise ValueError("single-board runs require exactly one board")
+        elif self.execution_mode == "synchronized":
+            if len(self.jobs) != 2:
+                raise ValueError("synchronized runs require exactly two boards")
+        else:
+            raise ValueError(f"unsupported execution_mode {self.execution_mode}")
         if self.playback_mode == "continuous_sine":
             waveform = self.jobs[0].waveform
             if not waveform.loop:
@@ -598,6 +604,76 @@ class RunCreateRequest(BaseModel):
     @property
     def board_ids(self) -> list[str]:
         return [job.board_id for job in self.jobs]
+
+
+class SyncBoardResult(BaseModel):
+    board_id: str
+    hmc_done: bool
+    sync_done: bool
+    dac_mts_ready: bool
+    nco_sync_ready: bool
+    dac_mts_tile_mask: int = 0
+    message: str = ""
+
+
+class SyncRequest(BaseModel):
+    master_board_id: str
+    slave_board_id: str
+
+
+class SyncResult(BaseModel):
+    epoch: int
+    boards: list[SyncBoardResult]
+    ok: bool
+    message: str = ""
+
+
+class MaxLengthTestState(str, Enum):
+    PENDING = "PENDING"
+    UPLOADING = "UPLOADING"
+    PLAYING = "PLAYING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    ABORTED = "ABORTED"
+
+
+class MaxLengthTestCreateRequest(BaseModel):
+    name: str = Field("通道极限长度测试", min_length=1, max_length=120)
+    board_id: str = Field(min_length=1, max_length=120)
+    bytes_per_channel: int = Field(0, ge=0)
+    pattern: Literal["lowfreq-sine", "cw-marker"] = "lowfreq-sine"
+    sine_freq_hz: float = Field(10.0, ge=0.0, le=1_000_000.0)
+    sine_amplitude: int = Field(4096, ge=0, le=32767)
+    beats_per_datagram: int = Field(0, ge=0)
+    auto_trigger: bool = True
+    dry_run: bool = False
+
+
+class MaxLengthTestRecord(BaseModel):
+    id: str
+    name: str
+    board_id: str
+    state: MaxLengthTestState
+    progress: float = Field(0.0, ge=0.0, le=1.0)
+    bytes_per_channel: int = 0
+    physical_bytes: int = 0
+    datagrams: int = 0
+    pattern: str = "lowfreq-sine"
+    sine_freq_hz: float = 10.0
+    sine_amplitude: int = 4096
+    beats_per_datagram: int = 0
+    auto_trigger: bool = True
+    dry_run: bool = False
+    upload_elapsed_s: float = 0.0
+    upload_mbps: float = 0.0
+    theoretical_duration_s: float = 0.0
+    play_elapsed_s: float = 0.0
+    read_counter: int = 0
+    bad_instr_count: int = 0
+    underflow_mask: int = 0
+    error: str = ""
+    created_at: str
+    updated_at: str
 
 
 class RunRecord(BaseModel):

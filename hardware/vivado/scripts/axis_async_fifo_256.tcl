@@ -82,15 +82,16 @@ set axis_async_fifo_256 [create_ip -name axis_data_fifo -vendor xilinx.com -libr
 
 # User Parameters
 set_property -dict [list \
-  CONFIG.FIFO_DEPTH {2048} \
+  CONFIG.FIFO_DEPTH {1024} \
+  CONFIG.FIFO_MEMORY_TYPE {block} \
   CONFIG.HAS_AFULL {0} \
   CONFIG.HAS_PROG_EMPTY {1} \
   CONFIG.HAS_PROG_FULL {1} \
   CONFIG.HAS_TLAST {1} \
   CONFIG.HAS_WR_DATA_COUNT {1} \
   CONFIG.IS_ACLK_ASYNC {1} \
-  CONFIG.PROG_EMPTY_THRESH {128} \
-  CONFIG.PROG_FULL_THRESH {1536} \
+  CONFIG.PROG_EMPTY_THRESH {64} \
+  CONFIG.PROG_FULL_THRESH {768} \
   CONFIG.TDATA_NUM_BYTES {32} \
 ] [get_ips axis_async_fifo_256]
 

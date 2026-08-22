@@ -250,7 +250,8 @@ class RfdcPlProtocolTests(unittest.TestCase):
             (0xC0A8FEFE << 32) | 0xC0A80A82,
             0x020000000042,
             (1 << 48) | (1234 << 32) | 12,
-            host.RF2_CAP_NETWORK_CONFIG | (host.RF2_STATUS_ARMED << 32),
+            host.RF2_CAP_NETWORK_CONFIG
+            | ((host.RF2_STATUS_ARMED | host.RF2_NET_STATUS_HMC_DONE | host.RF2_NET_STATUS_SYNC_DONE) << 32),
             0x020000000001,
             0xFFFFFF00,
             0xC0A80A01,
@@ -270,6 +271,8 @@ class RfdcPlProtocolTests(unittest.TestCase):
         self.assertEqual(decoded["build_profile"], "custom_xczu47dr")
         self.assertTrue(decoded["playback_armed"])
         self.assertEqual(decoded["rfdc_config_valid_mask"], 0x03)
+        self.assertTrue(decoded["hmc_done"])
+        self.assertTrue(decoded["sync_done"])
 
     def test_network_apply_rejects_invalid_identity(self):
         with self.assertRaises(ValueError):

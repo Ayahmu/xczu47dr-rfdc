@@ -29,7 +29,8 @@ begin
             H7044_SCLK => sclk,
             H7044_SDATA => sdata,
             SET_FINISH => finish,
-            USE_EXTERNAL_10MHZ => '1'
+            USE_EXTERNAL_10MHZ => '1',
+            IS_MASTER => '1'
         );
 
     stimulus : process

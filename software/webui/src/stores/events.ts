@@ -7,6 +7,10 @@ import type { BoardRfdcConfig, PerformancePointRecord, PerformanceTestRecord, Ru
 export const useEventsStore = defineStore('events', {
   state: () => ({ state: 'offline' as 'connected' | 'connecting' | 'offline', socket: null as WebSocket | null, timer: 0, serial: {} as Record<string, SerialLogLine[]> }),
   actions: {
+    clearSerial(boardId?: string) {
+      if (boardId) this.serial[boardId] = []
+      else this.serial = {}
+    },
     connect() {
       this.disconnect(); this.state = 'connecting'
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws'

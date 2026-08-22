@@ -15,11 +15,36 @@ from software.webapp.models import (
     PhaseCalibrationRecord,
     RfdcConfigApplyRequest,
 )
-from software.webapp.network import ensure_auto_link_ready, list_udp_interfaces, process_capability_report, udp_path_error
+from software.webapp.network import (
+    FPGA_LINKLOCAL_DEFAULT_IP,
+    auto_fpga_link_profile,
+    discovery_target_profile,
+    discovery_targets_for_interface,
+    ensure_auto_link_ready,
+    list_udp_interfaces,
+    process_capability_report,
+    udp_path_error,
+)
 from software.webapp.rfdc import RfdcConfigService, default_rfdc_config
 
 
 class NetworkInterfaceTests(unittest.TestCase):
+    def test_discovery_targets_include_dna_linklocal_default_ip(self):
+        targets = discovery_targets_for_interface("enp225s0f0")
+        self.assertIn("192.168.1.128", targets)
+        self.assertIn("192.168.254.254", targets)
+        self.assertIn(FPGA_LINKLOCAL_DEFAULT_IP, targets)
+        self.assertIn("169.254.255.255", targets)
+        self.assertIn("255.255.255.255", targets)
+        self.assertEqual(len(targets), len(set(targets)))
+
+    def test_fixed_interfaces_resolve_generic_build_to_master_and_slave_roles(self):
+        self.assertEqual(auto_fpga_link_profile("enp225s0f0")["inventory_name"], "XCZU47DR 081")
+        self.assertEqual(auto_fpga_link_profile("enp225s0f1")["inventory_name"], "XCZU47DR 082")
+        self.assertEqual(discovery_target_profile("enp225s0f0", "custom_xczu47dr"), "custom_xczu47dr_master")
+        self.assertEqual(discovery_target_profile("enp225s0f1", "custom_xczu47dr"), "custom_xczu47dr_slave")
+        self.assertEqual(discovery_target_profile("enp225s0f1", "custom_xczu47dr_bw"), "custom_xczu47dr_bw")
+
     def test_inventory_returns_dedicated_and_host_ethernet_interfaces(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -280,6 +305,58 @@ class NetworkInterfaceTests(unittest.TestCase):
         self.assertFalse(status.playback_prepared)
         self.assertFalse(status.playback_running)
 
+    def test_online_idle_status_clears_stale_fault_after_board_reboot(self):
+        board = BoardProfile(
+            id="board-a",
+            name="A",
+            ip="192.168.1.128",
+            mac="",
+            udp_interface="enp225s0f0",
+            udp_source_ip="192.168.1.10",
+            clock_source="onboard",
+        )
+        gateway = BoardGateway(boards=(board,))
+        gateway.boards
+        gateway._set_status(
+            board.id,
+            state=BoardState.FAULT,
+            online=False,
+            message="stale error from the previous playback run",
+        )
+        status_payload = struct.pack(
+            "<IIIIIIIIQQQQ",
+            host.RF2_CAP_PL_RFDC_CONFIG,
+            host.RF2_STATUS_DAC_MTS_REQUIRED,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            (0xF << 4) | 0x04,
+        )
+        controller = Mock()
+        controller.rfctrl2_status.return_value = {
+            "version": host.RFCTRL2_VERSION,
+            "status": host.RF2_STATUS_OK,
+            "payload": status_payload,
+        }
+
+        with patch("software.webapp.controller.udp_path_error", return_value=None), patch.object(
+            BoardGateway, "_controller", return_value=controller
+        ):
+            status = gateway.refresh(board.id)
+
+        self.assertTrue(status.online)
+        self.assertEqual(status.state, BoardState.IDLE)
+        self.assertFalse(status.playback_armed)
+        self.assertFalse(status.playback_prepared)
+        self.assertFalse(status.playback_running)
+        self.assertEqual(status.message, "RFCTRL2 online; RFDC tiles are not ready")
+
     def test_arm_timeout_requests_abort_mute_and_reports_debug_status(self):
         board = BoardProfile(
             id="board-a",
@@ -436,6 +513,64 @@ class NetworkInterfaceTests(unittest.TestCase):
             (0x03 << 32) | 0xFF,
             212,
             0x0000000300000001,
+        )
+        controller = Mock()
+        controller.rfctrl2_trigger.return_value = {"version": host.RFCTRL2_VERSION, "status": 0}
+        controller.rfctrl2_status.return_value = {
+            "version": host.RFCTRL2_VERSION,
+            "status": 0,
+            "payload": status_payload,
+        }
+        controller.rfctrl2_abort_mute.return_value = {"version": host.RFCTRL2_VERSION, "status": 0}
+
+        with patch.dict(os.environ, {"RFSOC_WEB_TRIGGER_RUNNING_TIMEOUT_S": "0.001"}), patch.object(
+            gateway, "refresh", return_value=prepared
+        ), patch.object(
+            BoardGateway, "_controller", return_value=controller
+        ):
+            gateway.manual_trigger(board.id, expect_sustained=False)
+
+        controller.rfctrl2_abort_mute.assert_not_called()
+        controller.close.assert_called_once()
+
+    def test_short_one_shot_trigger_accepts_ddr_progress_after_playback_finished(self):
+        board = BoardProfile(
+            id="board-a",
+            name="A",
+            ip="192.168.1.128",
+            mac="",
+            udp_interface="enp225s0f0",
+            udp_source_ip="192.168.1.10",
+            clock_source="onboard",
+        )
+        gateway = BoardGateway(boards=(board,))
+        _ = gateway.boards
+        prepared = BoardStatus(
+            board_id=board.id,
+            state=BoardState.ARMED,
+            online=True,
+            protocol_version=2,
+            rfdc_ready=True,
+            rfdc_capabilities=host.RF2_CAP_PL_RFDC_CONFIG,
+            rfdc_config_valid_mask=0x03,
+            playback_armed=True,
+            playback_prepared=True,
+            play_ddr_read_counter=52,
+        )
+        status_payload = struct.pack(
+            "<IIIIIIIIQQQQ",
+            host.RF2_CAP_PL_RFDC_CONFIG,
+            host.RF2_STATUS_RFDC_READY | host.RF2_STATUS_ARMED,
+            0x03,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            (0x00000000 << 32) | 0xFF,
+            212,
+            0,
         )
         controller = Mock()
         controller.rfctrl2_trigger.return_value = {"version": host.RFCTRL2_VERSION, "status": 0}

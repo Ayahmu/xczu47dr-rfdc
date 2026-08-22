@@ -10,6 +10,7 @@ import { useRunsStore } from '../stores/runs'
 import { useTestsStore } from '../stores/tests'
 import { useEventsStore } from '../stores/events'
 import { errorMessage } from '../api/client'
+import SerialMonitorDock from '../components/SerialMonitorDock.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,6 +33,7 @@ const workspacePath = computed(() => boardId.value ? '/boards/' + boardId.value 
 const groups = computed(() => [
   { label: '操作', items: [
     { label: '板卡工作区', path: workspacePath.value, icon: Gauge, prefix: '/boards' },
+    { label: '双板同步', path: '/sync', icon: Waves },
   ] },
   { label: '记录', items: [
     { label: '发波任务', path: '/records/runs', icon: FileClock },
@@ -89,7 +91,7 @@ onBeforeUnmount(() => events.disconnect())
           </router-link>
         </section>
       </nav>
-      <div class="sidebar-version"><BookOpen :size="15" /><span>单板运行模式</span></div>
+      <div class="sidebar-version"><BookOpen :size="15" /><span>双板同步可用</span></div>
     </aside>
     <div class="console-workspace">
       <header class="console-topbar">
@@ -106,6 +108,7 @@ onBeforeUnmount(() => events.disconnect())
         </div>
       </header>
       <main class="console-main"><router-view /></main>
+      <SerialMonitorDock />
     </div>
   </div>
 </template>

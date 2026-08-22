@@ -46,7 +46,7 @@ ELF_FILE="${PROJECT_ROOT}/${ELF_RELATIVE}"
 PSU_INIT_FILE="${PROJECT_ROOT}/${PSU_INIT_RELATIVE}"
 
 case "${TARGET}" in
-    custom_xczu47dr)
+    custom_xczu47dr|custom_xczu47dr_master|custom_xczu47dr_slave)
         BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR"
         ;;
     custom_xczu47dr_bw)

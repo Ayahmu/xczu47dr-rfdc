@@ -23,10 +23,13 @@ from .models import (
     BoardState,
     BoardStatus,
     NetworkConfigRequest,
+    RfdcConfigApplyRequest,
     RunCreateRequest,
     RunEvent,
     RunRecord,
     RunState,
+    SyncBoardResult,
+    SyncResult,
 )
 from .store import RunStore
 from .network import list_udp_interfaces, udp_path_error, udp_source_ip_for_address
@@ -291,10 +294,11 @@ class BoardGateway:
                 state = BoardState.RUNNING
             elif decoded["prepared"] or decoded["armed"]:
                 state = BoardState.ARMED
-            elif current.state == BoardState.OFFLINE:
-                state = BoardState.IDLE
             else:
-                state = current.state
+                # A successful RFCTRL2 STATUS response is authoritative for
+                # playback state. Do not retain an old FAULT/ARMED state after
+                # a board reboot has cleared the hardware executor.
+                state = BoardState.IDLE
             apply_status = board.network_apply_status
             apply_error = board.network_apply_error
             if network_configured:
@@ -488,10 +492,29 @@ class BoardGateway:
         )
 
     @staticmethod
-    def _trigger_progress_observed(decoded: dict | None) -> bool:
+    def _trigger_progress_observed(
+        decoded: dict | None,
+        baseline_ddr_read_counter: int = 0,
+        baseline_play_config_mask: int = 0,
+    ) -> bool:
         if not decoded:
             return False
-        return bool(decoded.get("running")) or int(decoded.get("play_executor_state", 0)) == 3
+        return (
+            bool(decoded.get("running"))
+            or int(decoded.get("play_executor_state", 0)) == 3
+            or int(decoded.get("play_ddr_read_counter", 0)) > int(baseline_ddr_read_counter)
+            or (
+                int(baseline_play_config_mask) != 0
+                and bool(decoded.get("armed"))
+                and not bool(decoded.get("prepared"))
+                and not bool(decoded.get("running"))
+                and int(decoded.get("play_config_channel_mask", 0)) == 0
+                and int(decoded.get("play_fifo_valid_mask", 0)) == 0
+                and not bool(decoded.get("play_active_valid"))
+                and not bool(decoded.get("play_pending_valid"))
+                and int(decoded.get("play_executor_state", 0)) == 0
+            )
+        )
 
     def manual_trigger(self, board_id: str, *, expect_sustained: bool = True) -> None:
         board = self.profile(board_id)
@@ -517,6 +540,7 @@ class BoardGateway:
             status = self.refresh(board_id)
             if not status.playback_prepared:
                 raise RuntimeError("RFCTRL2 TRIGGER requires the board to reach PREPARED first")
+            baseline_ddr_read_counter = status.play_ddr_read_counter
             controller = self._controller(board)
             try:
                 response = controller.rfctrl2_trigger(seq=self._next_sequence(), wait_response=True)
@@ -531,7 +555,11 @@ class BoardGateway:
                     self._require_ok(status_response, "STATUS after TRIGGER")
                     decoded = host.parse_rfctrl2_status_payload(status_response)
                     running_status = decoded
-                    trigger_seen = trigger_seen or self._trigger_progress_observed(decoded)
+                    trigger_seen = trigger_seen or self._trigger_progress_observed(
+                        decoded,
+                        baseline_ddr_read_counter,
+                        status.play_config_channel_mask,
+                    )
                     self._set_status(
                         board_id,
                         state=BoardState.RUNNING if decoded["running"] else BoardState.ARMED,
@@ -877,6 +905,8 @@ class BoardGateway:
                 "revision": board.network_revision,
                 "port": board.port,
                 "capabilities": host.RF2_CAP_NETWORK_CONFIG,
+                "hmc_done": True,
+                "sync_done": True,
             }
         with self._board_control_lock(board_id):
             addresses = [address or board.active_ip or board.ip]
@@ -902,8 +932,93 @@ class BoardGateway:
                 "revision": board.network_revision,
                 "port": board.port,
                 "capabilities": host.RF2_CAP_NETWORK_CONFIG,
+                "hmc_done": True,
+                "sync_done": True,
             }
         return self._network_get_at(board, address)
+
+    def _wait_network_flag(
+        self,
+        board_id: str,
+        key: str,
+        timeout_s: float,
+        poll_s: float,
+    ) -> dict:
+        deadline = time.monotonic() + timeout_s
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                response = self.network_get(board_id)
+                if response.get(key):
+                    return response
+                last_error = None
+            except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+                last_error = exc
+            time.sleep(poll_s)
+        detail = f" ({last_error})" if last_error is not None else ""
+        raise TimeoutError(f"board {board_id} did not report {key} within {timeout_s:g}s{detail}")
+
+    def _wait_mts_ready(
+        self,
+        board_id: str,
+        timeout_s: float,
+        poll_s: float,
+    ) -> BoardStatus:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            status = self.status(board_id, refresh=True)
+            if status.dac_mts_failed:
+                raise RuntimeError(
+                    f"board {board_id}: DAC MTS failed error=0x{status.dac_mts_error & 0xFFFF:04X}"
+                )
+            if status.dac_mts_ready and status.nco_sync_ready:
+                return status
+            time.sleep(poll_s)
+        raise TimeoutError(f"board {board_id} did not reach DAC MTS/NCO ready within {timeout_s:g}s")
+
+    def sync_two_boards(
+        self,
+        master_board_id: str,
+        slave_board_id: str,
+        epoch: int,
+        timeout_s: float = 60.0,
+        poll_s: float = 0.5,
+    ) -> SyncResult:
+        master = self.profile(master_board_id)
+        slave = self.profile(slave_board_id)
+        self._wait_network_flag(master_board_id, "hmc_done", timeout_s, poll_s)
+        self._wait_network_flag(slave_board_id, "hmc_done", timeout_s, poll_s)
+        if not self.simulation:
+            controller = self._controller(master, timeout_s=2.0)
+            try:
+                response = controller.rfctrl2_sync_epoch(
+                    int(epoch) & 0xFFFFFFFF, wait_response=True
+                )
+                self._require_ok(response, "SYNC_EPOCH")
+            finally:
+                controller.close()
+        self._wait_network_flag(master_board_id, "sync_done", timeout_s, poll_s)
+        self._wait_network_flag(slave_board_id, "sync_done", timeout_s, poll_s)
+        results: list[SyncBoardResult] = []
+        for board_id in (master_board_id, slave_board_id):
+            status = self._wait_mts_ready(board_id, timeout_s, poll_s)
+            results.append(
+                SyncBoardResult(
+                    board_id=board_id,
+                    hmc_done=True,
+                    sync_done=True,
+                    dac_mts_ready=status.dac_mts_ready,
+                    nco_sync_ready=status.nco_sync_ready,
+                    dac_mts_tile_mask=status.dac_mts_tile_mask & 0xF,
+                    message="ready",
+                )
+            )
+        return SyncResult(
+            epoch=int(epoch) & 0xFFFFFFFF,
+            boards=results,
+            ok=True,
+            message=f"synchronized {master.name} (master) and {slave.name} (slave)",
+        )
 
     def network_apply_profile(self, board: BoardProfile, request, address: str) -> dict:
         if self.simulation:
@@ -1053,11 +1168,19 @@ class BoardGateway:
 
 
 class RunCoordinator:
-    def __init__(self, store: RunStore, boards: BoardGateway, artifacts_root: Path, events: EventHub) -> None:
+    def __init__(
+        self,
+        store: RunStore,
+        boards: BoardGateway,
+        artifacts_root: Path,
+        events: EventHub,
+        rfdc=None,
+    ) -> None:
         self.store = store
         self.boards = boards
         self.artifacts_root = artifacts_root
         self.events = events
+        self.rfdc = rfdc
         self._group_lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
         self._active_by_board: dict[str, str] = {}
@@ -1071,8 +1194,12 @@ class RunCoordinator:
             thread.join(remaining)
 
     def create(self, request: RunCreateRequest, prepare=None) -> RunRecord:
-        if request.execution_mode != "single" or len(request.jobs) != 1:
-            raise ValueError("multi-board synchronization is reserved until hardware qualification is complete")
+        if request.execution_mode not in ("single", "synchronized"):
+            raise ValueError(f"unsupported execution_mode {request.execution_mode}")
+        if request.execution_mode == "synchronized" and len(request.jobs) != 2:
+            raise ValueError("synchronized runs require exactly two boards")
+        if request.execution_mode == "single" and len(request.jobs) != 1:
+            raise ValueError("single-board runs require exactly one board")
         for board_id in request.board_ids:
             self.boards.profile(board_id)
         run_id = uuid.uuid4().hex[:12]
@@ -1104,8 +1231,8 @@ class RunCoordinator:
         if not record.dry_run:
             request = self.store.get_request(run_id)
             try:
-                for board_id in record.board_ids:
-                    self.boards.arm(board_id, int(run_id, 16), self._channel_mask(request))
+                for job in request.jobs:
+                    self.boards.arm(job.board_id, int(run_id, 16), self._channel_mask_for_job(job))
             except Exception as exc:
                 self._fault(run_id, str(exc))
                 raise
@@ -1126,13 +1253,13 @@ class RunCoordinator:
         record = self._require_loaded(run_id)
         try:
             request = self.store.get_request(run_id)
-            channel_mask = self._channel_mask(request)
-            for board_id in record.board_ids:
+            for job in request.jobs:
+                channel_mask = self._channel_mask_for_job(job)
                 if record.dry_run:
-                    self.boards.mark_state(board_id, BoardState.ARMED, "dry-run loaded waveform armed")
+                    self.boards.mark_state(job.board_id, BoardState.ARMED, "dry-run loaded waveform armed")
                 else:
-                    self.boards.arm(board_id, int(run_id, 16), channel_mask)
-            self._event(run_id, "loaded waveform armed")
+                    self.boards.arm(job.board_id, int(run_id, 16), channel_mask)
+            self._event(run_id, "loaded waveform armed" if request.execution_mode == "single" else "synchronized loaded waveform armed")
             return record
         except Exception as exc:
             self._event(run_id, str(exc), "error")
@@ -1143,12 +1270,12 @@ class RunCoordinator:
         try:
             request = self.store.get_request(run_id)
             expect_sustained = request.playback_mode == "continuous_sine"
-            for board_id in record.board_ids:
+            for board_id in self._trigger_board_ids(request):
                 if record.dry_run:
                     self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run loaded waveform triggered")
                 else:
                     self.boards.manual_trigger(board_id, expect_sustained=expect_sustained)
-            self._event(run_id, "loaded waveform triggered")
+            self._event(run_id, "loaded waveform triggered" if request.execution_mode == "single" else "synchronized master triggered")
             return record
         except Exception as exc:
             self._event(run_id, str(exc), "error")
@@ -1176,16 +1303,16 @@ class RunCoordinator:
             raise ValueError(f"run {run_id} must be ARMED before it can start")
         try:
             if record.dry_run:
-                for board_id in record.board_ids:
-                    self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run single-board trigger")
+                for board_id in self._trigger_board_ids(self.store.get_request(run_id)):
+                    self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run trigger")
             else:
-                for board_id in record.board_ids:
+                for board_id in self._trigger_board_ids(self.store.get_request(run_id)):
                     self.boards.manual_trigger(board_id)
         except Exception as exc:
             self._fault(run_id, str(exc))
             raise
         record = self.store.update(run_id, RunState.RUNNING, 1.0)
-        self._event(run_id, "single-board trigger accepted")
+        self._event(run_id, "trigger accepted")
         self._publish_run(record)
         return record
 
@@ -1210,6 +1337,18 @@ class RunCoordinator:
             record = self.store.update(run_id, RunState.GENERATING, 0.05)
             self._event(run_id, "generating waveform artifacts")
             self._publish_run(record)
+            if request.execution_mode == "synchronized":
+                master_id = self._sync_master_id(request)
+                slave_id = next(job.board_id for job in request.jobs if job.board_id != master_id)
+                self._event(run_id, "synchronizing HMC7044 SYSREF and waiting for DAC MTS")
+                sync = self.boards.sync_two_boards(master_id, slave_id, int(run_id, 16))
+                self._event(run_id, f"two-board synchronization complete: {sync.message}")
+            # RFDC_APPLY resets the playback executor state. Apply the RFDC
+            # configuration before uploading waveform instructions so ARM can
+            # prepare the newly uploaded buffers.
+            for job in request.jobs:
+                if job.rfdc_config is not None:
+                    self._apply_job_rfdc(job)
             for index, job in enumerate(request.jobs, start=1):
                 board_id = job.board_id
                 board = self.boards.profile(board_id)
@@ -1246,19 +1385,23 @@ class RunCoordinator:
                 self.events.publish({"type": "run.done", "data": record.model_dump(mode="json")})
                 return
 
-            self._event(run_id, "single board waveform upload completed")
+            self._event(run_id, "single board waveform upload completed" if request.execution_mode == "single" else "synchronized waveform upload completed")
             if request.completion_mode == "one_shot":
                 continuous_sine = request.playback_mode == "continuous_sine"
                 # Keep the run in READY while the automatic pulse is active. The
                 # terminal DONE record is published only after mute and lock release.
                 record = self.store.complete_loaded(run_id, state=RunState.READY)
                 self._publish_run(record)
-                for board_id in record.board_ids:
+                for job in request.jobs:
+                    board_id = job.board_id
                     if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.ARMED, "dry-run one-shot armed")
+                    else:
+                        self.boards.arm(board_id, int(run_id, 16), self._channel_mask_for_job(job))
+                for board_id in self._trigger_board_ids(request):
+                    if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run one-shot triggered")
                     else:
-                        self.boards.arm(board_id, int(run_id, 16), self._channel_mask(request))
                         self.boards.manual_trigger(board_id, expect_sustained=continuous_sine)
                         status = self.boards.status(board_id, refresh=False)
                         self._event(run_id, f"{board_id}: {self._board_playback_summary(status)}")
@@ -1295,6 +1438,12 @@ class RunCoordinator:
 
     def _fault(self, run_id: str, message: str) -> None:
         record = self.store.update(run_id, RunState.FAULT, 1.0, message)
+        if not record.dry_run:
+            for board_id in record.board_ids:
+                try:
+                    self.boards.mute(board_id)
+                except Exception:
+                    pass
         try:
             for board_id in record.board_ids:
                 self.boards.mark_state(board_id, BoardState.FAULT, message)
@@ -1305,7 +1454,10 @@ class RunCoordinator:
         self._release_group(run_id)
 
     def _channel_mask(self, request: RunCreateRequest) -> int:
-        job = request.jobs[0]
+        return self._channel_mask_for_job(request.jobs[0])
+
+    @staticmethod
+    def _channel_mask_for_job(job) -> int:
         channels = job.waveform.manual_channels if job.waveform.mode == "manual" else job.waveform.ezq_channels
         mask = 0
         for channel in channels:
@@ -1315,6 +1467,43 @@ class RunCoordinator:
         if mask == 0:
             raise ValueError("at least one waveform channel must be enabled")
         return mask
+
+    def _sync_master_id(self, request: RunCreateRequest) -> str:
+        for job in request.jobs:
+            profile = self.boards.profile(job.board_id)
+            if profile.target_profile in ("custom_xczu47dr", "custom_xczu47dr_master"):
+                return job.board_id
+        raise ValueError("synchronized run requires one master board (custom_xczu47dr or custom_xczu47dr_master)")
+
+    def _trigger_board_ids(self, request: RunCreateRequest) -> list[str]:
+        if request.execution_mode == "synchronized":
+            return [self._sync_master_id(request)]
+        return list(request.board_ids)
+
+    def _apply_job_rfdc(self, job) -> None:
+        if job.rfdc_config is None:
+            return
+        channels = sorted(job.rfdc_config.channels, key=lambda item: item.channel)
+        channel_mask = self._channel_mask_for_job(job)
+        if self.rfdc is not None:
+            result = self.rfdc.apply(
+                job.board_id,
+                RfdcConfigApplyRequest(channels=job.rfdc_config.channels, channel_mask=channel_mask),
+            )
+            if result.apply_status not in ("applied", "partial") or result.error_mask != 0:
+                raise RuntimeError(
+                    f"{job.board_id}: RFDC_APPLY failed apply_status={result.apply_status} "
+                    f"error_mask=0x{result.error_mask & 0xFF:02X}"
+                )
+            return
+        result = self.boards.rfdc_apply(job.board_id, channels, job.rfdc_config.revision, channel_mask)
+        status = int(result.get("status", 1))
+        error_mask = int(result.get("error_mask", 0))
+        if status != host.RF2_STATUS_OK or error_mask != 0:
+            raise RuntimeError(
+                f"{job.board_id}: RFDC_APPLY failed status=0x{status:04X} "
+                f"error_mask=0x{error_mask & 0xFF:02X}"
+            )
 
     def _release_group(self, run_id: str) -> None:
         with self._group_lock:

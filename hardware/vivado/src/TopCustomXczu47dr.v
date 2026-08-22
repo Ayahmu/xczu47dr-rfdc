@@ -1,4 +1,6 @@
-module TopCustomXczu47dr (
+module TopCustomXczu47dr #(
+    parameter integer IS_MASTER = 1
+) (
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
     output H7044_SYNC_0,
@@ -8,8 +10,24 @@ module TopCustomXczu47dr (
 
     output RST_88E1111,
     output TRIG_1,
-    output TRIG_2,
-    output TRIG_3,
+
+`ifdef CUSTOM_XCZU47DR_SLAVE
+    // Slave-only physical pins.
+    output hmc7044_sync_test,
+    // The slave now uses the board's A connector as the SYNC input.
+    // Keep the internal Top.v signal named sync_3_tx for compatibility.
+    input  sync_1_tx_p,
+    input  sync_1_tx_n,
+    input  dac_trigger_start,
+`else
+    // Master-only physical pins.
+    output sync_1_tx_p,
+    output sync_1_tx_n,
+    output PL_SYSREF_out,
+    input  FPGA_CLK1_P,
+    input  FPGA_CLK1_N,
+    output FPGA_CLK1_P_O,
+`endif
 
     // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
     input  PL_CLK_P_0,
@@ -74,10 +92,75 @@ module TopCustomXczu47dr (
 
   assign RST_88E1111 = 1'b1;
 
-  Top top_i (
+  wire trig_2_unused;
+  wire trig_3_unused;
+
+`ifdef CUSTOM_XCZU47DR_SLAVE
+  wire sync_1_tx_p_unused;
+  wire sync_1_tx_n_unused;
+  wire pl_sysref_out_unused;
+  wire role_sync_3_tx_p = sync_1_tx_p;
+  wire role_sync_3_tx_n = sync_1_tx_n;
+  wire role_dac_trigger_start = dac_trigger_start;
+
+  assign hmc7044_sync_test = H7044_SYNC_0;
+`else
+  generate
+    if (IS_MASTER) begin : gen_master_fpga_clk
+      wire fpga_clk1_ibuf;
+      wire fpga_clk1_bufg;
+
+      IBUFDS #(
+          .DIFF_TERM("FALSE"),
+          .IBUF_LOW_PWR("FALSE")
+      ) FPGA_CLK1_IBUFDS_inst (
+          .I  (FPGA_CLK1_P),
+          .IB (FPGA_CLK1_N),
+          .O  (fpga_clk1_ibuf)
+      );
+
+      BUFGCE FPGA_CLK1_BUFG_inst (
+          .I  (fpga_clk1_ibuf),
+          .CE (1'b1),
+          .O  (fpga_clk1_bufg)
+      );
+
+      ODDRE1 #(
+          .IS_C_INVERTED(1'b0),
+          .SRVAL(1'b0)
+      ) FPGA_CLK1_P_ODDR_inst (
+          .Q  (FPGA_CLK1_P_O),
+          .C  (fpga_clk1_bufg),
+          .D1 (1'b1),
+          .D2 (1'b0),
+          .SR (1'b0)
+      );
+    end
+  endgenerate
+
+  wire role_sync_3_tx_p = 1'b0;
+  wire role_sync_3_tx_n = 1'b0;
+  wire role_dac_trigger_start = 1'b0;
+`endif
+
+  Top #(
+      .IS_MASTER(IS_MASTER)
+  ) top_i (
       .TRIG_1(TRIG_1),
-      .TRIG_2(TRIG_2),
-      .TRIG_3(TRIG_3),
+      .TRIG_2(trig_2_unused),
+      .TRIG_3(trig_3_unused),
+`ifdef CUSTOM_XCZU47DR_SLAVE
+      .sync_1_tx_p(sync_1_tx_p_unused),
+      .sync_1_tx_n(sync_1_tx_n_unused),
+      .PL_SYSREF_out(pl_sysref_out_unused),
+`else
+      .sync_1_tx_p(sync_1_tx_p),
+      .sync_1_tx_n(sync_1_tx_n),
+      .PL_SYSREF_out(PL_SYSREF_out),
+`endif
+      .sync_3_tx_p(role_sync_3_tx_p),
+      .sync_3_tx_n(role_sync_3_tx_n),
+      .dac_trigger_start(role_dac_trigger_start),
 
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),

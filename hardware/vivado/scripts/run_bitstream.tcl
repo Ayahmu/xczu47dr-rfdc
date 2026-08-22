@@ -15,9 +15,9 @@ if {![target_config_exists $target]} {
 
 set proj_name [target_config_get $target project_basename]
 set output_basename [target_config_get $target output_basename]
-set proj_dir "${vivado_dir}/work"
+set proj_dir [expr {[info exists ::env(VIVADO_WORK_DIR)] ? $::env(VIVADO_WORK_DIR) : "${vivado_dir}/work"}]
 set proj_file "${proj_dir}/${proj_name}.xpr"
-set output_dir "${vivado_dir}/output"
+set output_dir [expr {[info exists ::env(VIVADO_OUTPUT_DIR)] ? $::env(VIVADO_OUTPUT_DIR) : "${vivado_dir}/output"}]
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
@@ -59,7 +59,11 @@ set ltx_file "${impl_dir}/*.ltx"
 puts "INFO: Copying bitstream to output directory..."
 set bit_files [glob -nocomplain ${bit_file}]
 if {[llength $bit_files] > 0} {
-    file copy -force [lindex $bit_files 0] ${output_dir}/${output_basename}.bit
+    set bit_output "${output_dir}/${output_basename}.bit"
+    set bit_tmp "${bit_output}.tmp"
+    file delete -force ${bit_tmp}
+    file copy -force [lindex $bit_files 0] ${bit_tmp}
+    file rename -force ${bit_tmp} ${bit_output}
     puts "INFO: Bitstream copied to ${output_dir}/${output_basename}.bit"
 } else {
     puts "ERROR: Bitstream file not found!"
@@ -69,7 +73,11 @@ if {[llength $bit_files] > 0} {
 # Copy debug probe file if exists
 set ltx_files [glob -nocomplain ${ltx_file}]
 if {[llength $ltx_files] > 0} {
-    file copy -force [lindex $ltx_files 0] ${output_dir}/${output_basename}.ltx
+    set ltx_output "${output_dir}/${output_basename}.ltx"
+    set ltx_tmp "${ltx_output}.tmp"
+    file delete -force ${ltx_tmp}
+    file copy -force [lindex $ltx_files 0] ${ltx_tmp}
+    file rename -force ${ltx_tmp} ${ltx_output}
     puts "INFO: Debug probes copied to ${output_dir}/${output_basename}.ltx"
 }
 

@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import shutil
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from .controller import BoardGateway, EventHub, RunCoordinator
 from .hardware_services import DiscoveryService, ProgrammerService, SerialService, emit
 from .management import ManagementError, ManagementStore, PermissionError
+from .max_length import MaxLengthService, MaxLengthStore
 from .performance import PerformanceService, PerformanceStore
 from .rfdc import RfdcConfigService
 from .models import (
@@ -36,6 +38,9 @@ from .models import (
     BoardRfdcConfig,
     DiscoveryResource,
     LoginRequest,
+    MaxLengthTestCreateRequest,
+    MaxLengthTestRecord,
+    MaxLengthTestState,
     NetworkInterfaceInfo,
     NetworkConfigRequest,
     NetworkConfigSnapshot,
@@ -57,6 +62,8 @@ from .models import (
     SerialLogLine,
     SerialPortInfo,
     SessionResponse,
+    SyncRequest,
+    SyncResult,
     UserCreateRequest,
     UserRecord,
     UserRole,
@@ -67,6 +74,7 @@ from .network import (
     NetworkAutoConfigError,
     auto_fpga_link_profile,
     discovery_targets_for_interface,
+    discovery_target_profile,
     ensure_auto_link_ready,
     ip_pool_for_interface,
     list_udp_interfaces,
@@ -78,7 +86,16 @@ from .waveforms import preview_waveforms
 STATIC_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
 SESSION_COOKIE = "rfsoc_web_session"
 ARTIFACT_MAX_BYTES = int(os.environ.get("RFSOC_WEB_ARTIFACT_MAX_BYTES", str(1024 * 1024 * 1024)))
-TARGET_PROFILES = {"custom_xczu47dr", "custom_xczu47dr_bw"}
+TARGET_PROFILES = {
+    "custom_xczu47dr",
+    "custom_xczu47dr_master",
+    "custom_xczu47dr_slave",
+    "custom_xczu47dr_bw",
+}
+
+
+def _same_mac(left: str, right: str) -> bool:
+    return (left or "").replace(":", "").lower() == (right or "").replace(":", "").lower()
 
 
 def runtime_root() -> Path:
@@ -97,9 +114,16 @@ class AppServices:
             profile_provider=self.management.list_boards,
             network_state_updater=self.management.update_network_state,
         )
-        self.runs = RunCoordinator(self.store, self.boards, root / "runs", self.events)
         self.serial = SerialService(self.management, self.events)
         self.rfdc = RfdcConfigService(self.management, self.boards, self.serial, self.events)
+        self.max_length = MaxLengthService(
+            MaxLengthStore(root / "rfsoc_web.sqlite3"),
+            self.management,
+            self.boards,
+            self.rfdc,
+            self.events,
+        )
+        self.runs = RunCoordinator(self.store, self.boards, root / "runs", self.events, self.rfdc)
         self.performance = PerformanceService(
             PerformanceStore(root / "rfsoc_web.sqlite3"), self.management, self.runs, self.rfdc, self.events
         )
@@ -116,6 +140,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        app.state.services.max_length.shutdown()
         app.state.services.performance.shutdown()
         app.state.services.runs.shutdown()
         app.state.services.serial.stop()
@@ -366,10 +391,20 @@ def scan_boards(user: UserRecord = Depends(require_mutation_user)) -> BoardScanR
             if not device_uid:
                 results.append(BoardScanResult(interface=interface.name, target=target, ok=False, stage="discovery", message="FPGA 未上报 device_uid"))
                 continue
+            current_ip = str(response.get("current_ip") or "")
+            if not current_ip:
+                addr = response.get("addr")
+                current_ip = str(addr[0]) if isinstance(addr, tuple) and addr else target
+            current_mac = str(response.get("current_mac") or "")
             conflict = next(
                 (
                     board for board in discovered.values()
-                    if board.device_uid == device_uid and board.udp_interface != interface.name
+                    if board.udp_interface != interface.name
+                    and (
+                        _same_mac(board.active_mac or board.mac, current_mac)
+                        if current_mac
+                        else board.device_uid == device_uid
+                    )
                 ),
                 None,
             )
@@ -386,13 +421,12 @@ def scan_boards(user: UserRecord = Depends(require_mutation_user)) -> BoardScanR
                 )
                 interface_found = True
                 break
-            current_ip = str(response.get("current_ip") or "")
-            if not current_ip:
-                addr = response.get("addr")
-                current_ip = str(addr[0]) if isinstance(addr, tuple) and addr else target
-            current_mac = str(response.get("current_mac") or "")
-            build_profile = str(response.get("build_profile") or profile.get("target_profile") or "custom_xczu47dr")
-            desired_ip = services().management.allocated_ip_for_discovery(interface.name, device_uid)
+            build_profile = discovery_target_profile(
+                interface.name, str(response.get("build_profile") or "")
+            )
+            desired_ip = services().management.allocated_ip_for_discovery(
+                interface.name, device_uid, active_mac=current_mac
+            )
             desired_mac = current_mac or profile.get("target_mac") or "02:00:00:00:00:01"
             revision = int(response.get("revision") or 0)
             active_ip = current_ip
@@ -641,6 +675,31 @@ def board_statuses(refresh: bool = False, _user: UserRecord = Depends(require_us
     return services().boards.all_statuses(refresh=refresh)
 
 
+@app.post("/api/sync", response_model=SyncResult)
+def sync_two_boards(
+    request: SyncRequest,
+    user: UserRecord = Depends(require_mutation_user),
+) -> SyncResult:
+    try:
+        services().management.require_lease(user, request.master_board_id)
+        services().management.require_lease(user, request.slave_board_id)
+        result = services().boards.sync_two_boards(
+            request.master_board_id,
+            request.slave_board_id,
+            epoch=int(time.time()) & 0xFFFFFFFF,
+        )
+        services().management.add_audit(
+            "boards.sync",
+            f"{user.username} synchronized {request.master_board_id} (master) and {request.slave_board_id} (slave)",
+            user.id,
+            request.master_board_id,
+            {"epoch": result.epoch},
+        )
+        return result
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
 @app.get("/api/boards/{board_id}/status", response_model=BoardStatus)
 def board_status(board_id: str, refresh: bool = True, _user: UserRecord = Depends(require_user)) -> BoardStatus:
     try:
@@ -859,28 +918,48 @@ def preview(request: PreviewRequest, _user: UserRecord = Depends(require_user)) 
 def create_run(request: RunCreateRequest, user: UserRecord = Depends(require_mutation_user)) -> RunRecord:
     try:
         app_services = services()
-        job = request.jobs[0]
         prepare = None
         if not request.dry_run:
-            app_services.management.require_lease(user, job.board_id)
-            _require_live_board_ready(app_services, job.board_id)
-            if job.rfdc_config is not None:
-                if job.rfdc_config.board_id != job.board_id:
-                    raise ValueError("RFDC configuration board_id does not match the waveform board")
-                channel_mask = _enabled_channel_mask(job)
+            if request.execution_mode == "synchronized":
+                if len(request.jobs) != 2:
+                    raise ValueError("synchronized runs require exactly two boards")
+                masters = [
+                    item
+                    for item in request.jobs
+                    if app_services.boards.profile(item.board_id).target_profile
+                    in ("custom_xczu47dr", "custom_xczu47dr_master")
+                ]
+                if len(masters) != 1:
+                    raise ValueError("synchronized run requires exactly one master board")
+                for item in request.jobs:
+                    app_services.management.require_lease(user, item.board_id)
+                    _require_live_board_ready(app_services, item.board_id)
+            else:
+                job = request.jobs[0]
+                app_services.management.require_lease(user, job.board_id)
+                _require_live_board_ready(app_services, job.board_id)
+                if job.rfdc_config is not None:
+                    if job.rfdc_config.board_id != job.board_id:
+                        raise ValueError("RFDC configuration board_id does not match the waveform board")
+                    channel_mask = _enabled_channel_mask(job)
 
-                def prepare(_run_id: str) -> None:
-                    status = app_services.boards.status(job.board_id, refresh=True)
-                    if status.playback_armed or status.playback_prepared or status.playback_running:
-                        app_services.boards.mute(job.board_id)
-                    app_services.rfdc.apply(job.board_id, RfdcConfigApplyRequest(
-                        channels=job.rfdc_config.channels,
-                        channel_mask=channel_mask,
-                    ))
+                    def prepare(_run_id: str) -> None:
+                        status = app_services.boards.status(job.board_id, refresh=True)
+                        if status.playback_armed or status.playback_prepared or status.playback_running:
+                            app_services.boards.mute(job.board_id)
+                        app_services.rfdc.apply(job.board_id, RfdcConfigApplyRequest(
+                            channels=job.rfdc_config.channels,
+                            channel_mask=channel_mask,
+                        ))
 
         record = app_services.runs.create(request, prepare=prepare)
         app_services.management.set_run_owner(record.id, user)
-        app_services.management.add_audit("run.created", f"{user.username} created single-board run {record.name}", user.id, job.board_id)
+        app_services.management.add_audit(
+            "run.created",
+            f"{user.username} created {request.execution_mode} run {record.name}",
+            user.id,
+            record.board_ids[0],
+        )
         return record
     except Exception as exc:
         raise http_error(exc) from exc
@@ -917,7 +996,8 @@ def _check_run_control(record: RunRecord, user: UserRecord) -> None:
     if not services().management.can_manage_run(record.id, user):
         raise PermissionError("only the run owner may control this waveform")
     if not record.dry_run:
-        services().management.require_lease(user, record.board_ids[0])
+        for board_id in record.board_ids:
+            services().management.require_lease(user, board_id)
 
 
 @app.post("/api/runs/{run_id}/play", response_model=RunRecord)
@@ -1043,6 +1123,53 @@ def apply_rfdc_config(
 @app.get("/api/tests", response_model=list[PerformanceTestRecord])
 def list_performance_tests(_user: UserRecord = Depends(require_user)) -> list[PerformanceTestRecord]:
     return services().performance.store.list()
+
+
+@app.post("/api/boards/{board_id}/max-length-test", response_model=MaxLengthTestRecord, status_code=202)
+def create_max_length_test(
+    board_id: str,
+    request: MaxLengthTestCreateRequest,
+    user: UserRecord = Depends(require_mutation_user),
+) -> MaxLengthTestRecord:
+    try:
+        if request.board_id != board_id:
+            raise ValueError("request board_id does not match the URL board_id")
+        services().management.require_lease(user, board_id)
+        record = services().max_length.create(request)
+        services().max_length.start(record.id)
+        services().management.add_audit(
+            "max_length.started",
+            f"{user.username} started max-length test {record.name} on {board_id}",
+            user.id,
+            board_id,
+            {"test_id": record.id},
+        )
+        return record
+    except Exception as exc:
+        raise http_error(exc) from exc
+
+
+@app.get("/api/max-length-tests", response_model=list[MaxLengthTestRecord])
+def list_max_length_tests(_user: UserRecord = Depends(require_user)) -> list[MaxLengthTestRecord]:
+    return services().max_length.store.list()
+
+
+@app.get("/api/max-length-tests/{test_id}", response_model=MaxLengthTestRecord)
+def get_max_length_test(test_id: str, _user: UserRecord = Depends(require_user)) -> MaxLengthTestRecord:
+    try:
+        return services().max_length.store.get(test_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/max-length-tests/{test_id}/abort", response_model=MaxLengthTestRecord)
+def abort_max_length_test(test_id: str, user: UserRecord = Depends(require_mutation_user)) -> MaxLengthTestRecord:
+    try:
+        record = services().max_length.store.get(test_id)
+        services().management.require_lease(user, record.board_id)
+        return services().max_length.abort(test_id)
+    except Exception as exc:
+        raise http_error(exc) from exc
 
 
 @app.post("/api/tests", response_model=PerformanceTestRecord, status_code=201)
