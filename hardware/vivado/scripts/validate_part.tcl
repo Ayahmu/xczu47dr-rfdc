@@ -3,7 +3,7 @@
 set script_path [file dirname [file normalize [info script]]]
 source "${script_path}/target_config.tcl"
 
-set target custom_xczu47dr
+set target custom_xczu47dr_master
 if {[llength $argv] > 0} {
     set target [lindex $argv 0]
 }

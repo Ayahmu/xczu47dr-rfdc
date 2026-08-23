@@ -33,7 +33,7 @@ proc ooc_run_complete {run_name} {
     return 0
 }
 
-set target "custom_xczu47dr"
+set target "custom_xczu47dr_master"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }

@@ -174,15 +174,15 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: single-pulse XS20 SYNC and independent XS18->XS19 trigger link",
         )
 
-    def test_sync_trigger_link_self_test_bypasses_missing_sync(self):
+    def test_sync_trigger_link_bypass_accepts_missing_sync(self):
         self.run_sim(
-            "tb_sync_self_test",
+            "tb_sync_bypass",
             [
                 ROOT / "hardware/vivado/src/sync_role_control.v",
                 ROOT / "hardware/vivado/src/sync_trigger_link.v",
-                ROOT / "tests/tb_sync_self_test.sv",
+                ROOT / "tests/tb_sync_bypass.sv",
             ],
-            "PASS: self_test bypass accepts XS19 trigger without XS20 SYNC",
+            "PASS: bypass accepts XS19 trigger without XS20 SYNC",
         )
 
     def test_axilite_arbiter_locks_complete_transactions(self):

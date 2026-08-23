@@ -22,7 +22,7 @@ module sync_trigger_link #(
     input  wire trigger_in,
     input  wire dac_trigger_start,
     input  wire role_master,
-    input  wire self_sync,
+    input  wire sync_bypass,
     output wire hmc_sync,
     output wire sync_link_out,
     output wire trigger_link_out,
@@ -57,6 +57,8 @@ module sync_trigger_link #(
   reg [31:0] trigger_accepted_count_reg;
   reg [31:0] trigger_output_count_reg;
   reg sync_link_ready_reg;
+  reg sync_bypass_prev;
+  wire trigger_allowed = role_master || sync_bypass || sync_link_ready_reg;
 
   always @(posedge ddr_clk or negedge ddr_rst_n) begin
     if (!ddr_rst_n) begin
@@ -101,7 +103,7 @@ module sync_trigger_link #(
       trigger_in_pl_prev <= trigger_in_pl_sync[1];
       trigger_in_seen_reg <= trigger_in_pl_sync[1] && !trigger_in_pl_prev;
       trigger_accepted_reg <= trigger_in_pl_sync[1] && !trigger_in_pl_prev &&
-                              (self_sync || sync_link_ready_reg);
+                              trigger_allowed;
 
       if (trigger_toggle_pl_sync[1] != trigger_toggle_pl_seen) begin
         trigger_toggle_pl_seen <= trigger_toggle_pl_sync[1];
@@ -116,7 +118,7 @@ module sync_trigger_link #(
       if (trigger_in_pl_sync[1] && !trigger_in_pl_prev)
         trigger_input_count_reg <= trigger_input_count_reg + 1'b1;
       if (trigger_in_pl_sync[1] && !trigger_in_pl_prev &&
-          (self_sync || sync_link_ready_reg))
+          trigger_allowed)
         trigger_accepted_count_reg <= trigger_accepted_count_reg + 1'b1;
       if (trigger_stretched && !trigger_output_active_reg)
         trigger_output_count_reg <= trigger_output_count_reg + 1'b1;
@@ -139,7 +141,7 @@ module sync_trigger_link #(
       .sync_request(sync_request_pl),
       .sync_in     (sync_in),
       .role_master (role_master),
-      .self_sync   (self_sync),
+      .sync_bypass (sync_bypass),
       .hmc_sync    (master_hmc_sync),
       .slave_sync  (master_slave_sync),
       .sync_done   (sync_done)
@@ -150,23 +152,32 @@ module sync_trigger_link #(
       sync_seen_reg <= 1'b0;
       sync_link_ready_reg <= 1'b0;
       sync_in_prev <= 1'b0;
+      sync_bypass_prev <= 1'b0;
     end else begin
       sync_in_prev <= sync_in;
-      if (self_sync) begin
-        sync_seen_reg <= 1'b1;
+      sync_bypass_prev <= sync_bypass;
+      if (role_master) begin
+        // A master can always operate locally. sync_seen remains an event
+        // indicator: it records a sync pulse actually emitted on XS20.
+        sync_link_ready_reg <= 1'b1;
+        if (sync_done)
+          sync_seen_reg <= 1'b1;
+      end else if (sync_bypass != sync_bypass_prev) begin
+        // A mode change starts a fresh slave synchronization epoch. Bypass
+        // grants local operation but never pretends an XS20 pulse occurred.
+        sync_seen_reg <= 1'b0;
+        sync_link_ready_reg <= sync_bypass;
+      end else if (sync_bypass) begin
         sync_link_ready_reg <= 1'b1;
       end else if (sync_done && !role_master) begin
         sync_seen_reg <= 1'b1;
-      end else if (role_master && sync_done) begin
-        sync_seen_reg <= 1'b1;
-        sync_link_ready_reg <= 1'b1;
       end
       // The input must return low before a received SYNC is considered a
       // complete external synchronization event. This prevents its high
       // level from being interpreted as a Trigger.
       if (sync_seen_reg && !sync_in && !role_master)
         sync_link_ready_reg <= 1'b1;
-      if (!self_sync && !role_master && !sync_seen_reg && sync_in_prev && !sync_in)
+      if (!sync_bypass && !role_master && !sync_seen_reg && sync_in_prev && !sync_in)
         sync_link_ready_reg <= 1'b0;
     end
   end
@@ -175,10 +186,11 @@ module sync_trigger_link #(
   assign sync_link_out = master_slave_sync;
   assign trigger_link_out = trigger_stretched;
   // The legacy trigger input is retained for pin-level compatibility, but it
-  // obeys the same SYNC gate as XS19. self_test is the only explicit bypass.
+  // obeys the same SYNC gate as XS19. Master always runs locally; a slave
+  // needs real XS20 synchronization or the explicit runtime bypass.
   assign role_trigger_raw = (dac_trigger_start |
       (trigger_in_pl_sync[1] && !trigger_in_pl_prev)) &&
-      (self_sync || sync_link_ready_reg);
+      trigger_allowed;
   assign sync_seen = sync_seen_reg;
   assign sync_link_ready = sync_link_ready_reg;
   assign trigger_in_seen = trigger_in_seen_reg;

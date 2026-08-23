@@ -12,6 +12,11 @@ from typing import Any, Literal
 import numpy as np
 
 import host
+from dr47.waveforms import (
+    iq_duration_to_interleaved_sample_count as _driver_iq_duration_to_sample_count,
+    make_iq_gaussian_sine_interleaved as _driver_make_iq_gaussian_sine,
+    make_iq_sine_interleaved as _driver_make_iq_sine,
+)
 
 
 DEFAULT_CHANNEL_ADDRS = {
@@ -117,10 +122,7 @@ def iq_duration_to_sample_count(duration_s: float, sample_rate_hz: float) -> int
     count is rounded up to a whole 256-bit DAC word so UDP writes and DataMover
     BTT remain 32B aligned.
     """
-    complex_samples = max(1, int(round(float(duration_s) * float(sample_rate_hz))))
-    raw_int16_samples = complex_samples * 2
-    words = (raw_int16_samples + host.INT16_PER_DACWORD - 1) // host.INT16_PER_DACWORD
-    return words * host.INT16_PER_DACWORD
+    return _driver_iq_duration_to_sample_count(duration_s, sample_rate_hz)
 
 
 def waveform_length_bytes(samples: np.ndarray) -> int:
@@ -150,17 +152,8 @@ def make_iq_sine_tile_waveform(
     sample_count: int = host.NUM_SAMPLES,
     q_sign: int = -1,
 ) -> np.ndarray:
-    if int(q_sign) not in (-1, 1):
-        raise ValueError("q_sign must be +1 or -1")
-    complex_sample_count = int(sample_count) // 2
-    n = np.arange(complex_sample_count, dtype=np.float64)
-    angle = (2.0 * np.pi * float(freq_hz) * n / float(sample_rate_hz)) + float(phase_rad)
-    i_wave = np.cos(angle) * float(amplitude)
-    q_wave = int(q_sign) * np.sin(angle) * float(amplitude)
-    return pack_iq_tile_buffer(
-        np.round(np.clip(i_wave, -32767.0, 32767.0)).astype(np.int16),
-        np.round(np.clip(q_wave, -32767.0, 32767.0)).astype(np.int16),
-        sample_count=sample_count,
+    return _driver_make_iq_sine(
+        freq_hz, phase_rad, amplitude, sample_rate_hz, sample_count=sample_count, q_sign=q_sign
     )
 
 
@@ -184,34 +177,10 @@ def make_iq_gaussian_sine_tile_waveform(
     When ``hls_xy_drag`` is enabled, a DRAG-like quadrature derivative term is
     added to match the shape of the HLS ``rotPulseHD_xy`` generator.
     """
-    if int(q_sign) not in (-1, 1):
-        raise ValueError("q_sign must be +1 or -1")
-    if sample_count is None:
-        sample_count = iq_duration_to_sample_count(duration_s, sample_rate_hz)
-    complex_sample_count = int(sample_count) // 2
-    t = np.arange(complex_sample_count, dtype=np.float64) / float(sample_rate_hz)
-    duration = float(duration_s)
-    fwhm = float(fwhm_s) if fwhm_s is not None else duration / 2.0
-    sigma = max(fwhm / 2.3548200, 1.0 / float(sample_rate_hz))
-    center = duration / 2.0
-    envelope = np.exp(-0.5 * ((t - center) / sigma) ** 2)
-    if hls_xy_drag:
-        delta_hz = float(drag_delta_hz)
-        if abs(delta_hz) < 1.0:
-            raise ValueError("drag_delta_hz must be non-zero when hls_xy_drag is enabled")
-        envelope_dt = envelope * (-(t - center) / (sigma * sigma))
-        quadrature_envelope = float(drag_alpha) * envelope_dt / (2.0 * np.pi * delta_hz)
-    else:
-        quadrature_envelope = np.zeros_like(envelope)
-    angle = (2.0 * np.pi * float(freq_hz) * t) + float(phase_rad)
-    complex_envelope = envelope + (1j * quadrature_envelope)
-    complex_wave = complex_envelope * np.exp(1j * int(q_sign) * angle) * float(amplitude)
-    i_wave = np.real(complex_wave)
-    q_wave = np.imag(complex_wave)
-    return pack_iq_tile_buffer(
-        np.round(np.clip(i_wave, -32767.0, 32767.0)).astype(np.int16),
-        np.round(np.clip(q_wave, -32767.0, 32767.0)).astype(np.int16),
-        sample_count=int(sample_count),
+    return _driver_make_iq_gaussian_sine(
+        freq_hz, phase_rad, amplitude, sample_rate_hz, duration_s, sample_count=sample_count,
+        fwhm_s=fwhm_s, q_sign=q_sign, hls_xy_drag=hls_xy_drag,
+        drag_alpha=drag_alpha, drag_delta_hz=drag_delta_hz,
     )
 
 

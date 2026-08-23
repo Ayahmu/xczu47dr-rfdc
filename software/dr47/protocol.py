@@ -82,10 +82,14 @@ RF2_STATUS_PARTIAL = 0x000B
 RF2_SYNC_ROLE_SLAVE = 0
 RF2_SYNC_ROLE_MASTER = 1
 RF2_SYNC_MODE_EXTERNAL = 0
-RF2_SYNC_MODE_SELF_TEST = 1
+RF2_SYNC_MODE_BYPASS = 1
+# Wire-compatible spelling retained for early callers. New applications must
+# use RF2_SYNC_MODE_BYPASS and the public ``bypass`` mode string.
+RF2_SYNC_MODE_SELF_TEST = RF2_SYNC_MODE_BYPASS
 RF2_SYNC_STATUS_SEEN = 0x00000001
 RF2_SYNC_STATUS_READY = 0x00000002
-RF2_SYNC_STATUS_SELF_TEST = 0x00000004
+RF2_SYNC_STATUS_BYPASS = 0x00000004
+RF2_SYNC_STATUS_SELF_TEST = RF2_SYNC_STATUS_BYPASS
 RF2_SYNC_STATUS_ROLE_MASTER = 0x00000008
 RF2_SYNC_STATUS_INPUT_HIGH = 0x00000010
 RF2_SYNC_STATUS_OUTPUT_HIGH = 0x00000020
@@ -195,7 +199,7 @@ def pack_rfctrl2_set_sync_role(role: int, mode: int = RF2_SYNC_MODE_EXTERNAL, se
     if role_value not in {RF2_SYNC_ROLE_SLAVE, RF2_SYNC_ROLE_MASTER}:
         raise ParameterRangeError("sync role must be 0 (slave) or 1 (master)")
     if mode_value not in {RF2_SYNC_MODE_EXTERNAL, RF2_SYNC_MODE_SELF_TEST}:
-        raise ParameterRangeError("sync mode must be 0 (external) or 1 (self_test)")
+        raise ParameterRangeError("sync mode must be 0 (external) or 1 (bypass)")
     return pack_rfctrl2_packet(
         RF2_OP_SET_SYNC_ROLE,
         struct.pack("<II", role_value, mode_value),
@@ -382,7 +386,7 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["sync_status"] = struct.unpack_from("<I", payload, 72)[0]
         result["sync_seen"] = bool(result["sync_status"] & RF2_SYNC_STATUS_SEEN)
         result["sync_link_ready"] = bool(result["sync_status"] & RF2_SYNC_STATUS_READY)
-        result["sync_mode"] = "self_test" if result["sync_status"] & RF2_SYNC_STATUS_SELF_TEST else "external"
+        result["sync_mode"] = "bypass" if result["sync_status"] & RF2_SYNC_STATUS_BYPASS else "external"
         result["sync_role"] = "master" if result["sync_status"] & RF2_SYNC_STATUS_ROLE_MASTER else "slave"
     if len(payload) >= 88:
         result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)

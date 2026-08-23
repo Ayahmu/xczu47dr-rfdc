@@ -256,7 +256,8 @@ ACTIVE_EXAMPLE = "one_shot_1ghz_sine"
 不会直接播放本机波形。不要把每次 Trigger 前再发送一次 SYNC，当前同步周期中一条
 有效 XS20 上升沿即可。
 
-单板测试可将 XS18 接到 XS19，使用 `set_sync_mode("self_test")` 绕过 XS20。
+单板从卡测试可将 XS18 接到 XS19，使用 `bypass_sync()` 显式绕过 XS20
+门控；该操作不会把 `sync_seen` 伪造为真。
 这是 Trigger 物理回环测试，不是两板定时同步，不能用于正式同步实验。
 
 ## 9. 从头到尾：两板配置、同步和触发
@@ -344,7 +345,8 @@ with Dr47Device(MASTER_IP, udp_interface=INTERFACE, udp_source_ip=HOST_IP) as ma
 
 确认从卡使用的是 slave bitstream，角色为 `slave`，模式为 `external`，并检查
 XS20 连线方向和信号质量。只有实际观察到一次 XS20 上升沿后，从卡才会接受 XS19
-Trigger；`self_test` 只能用于单板 XS18 到 XS19 回环验证。
+Trigger；`bypass` 只跳过从卡的 XS20 门控，适用于单板 XS18 到 XS19
+回环验证，不等同于真实同步。
 
 ### 频率与预期不符
 

@@ -23,12 +23,18 @@ import numpy as np
 from .capabilities import PlaybackState
 from .device import Dr47Device, rfdc_nco_plan_for_target
 from .errors import DriverError
+from .waveforms import (
+    iq_duration_to_interleaved_sample_count,
+    make_iq_gaussian_sine_interleaved,
+    make_iq_sine_interleaved,
+    place_interleaved_iq_in_record,
+)
 
 
 WaveformKind = Literal["sine", "gaussian_sine"]
 PlaybackMode = Literal["one_shot", "continuous", "triggered"]
 SyncRole = Literal["master", "slave"]
-SyncMode = Literal["external", "self_test"]
+SyncMode = Literal["external", "bypass"]
 
 
 @dataclass
@@ -53,12 +59,18 @@ class HardwareWaveTestConfig:
     baseband_frequency_ghz: float = 0.0
     waveform: WaveformKind = "sine"
     amplitude: float = 0.5
-    gain: float = 0.2
+    phase_deg: float = 0.0
+    # These two fields deliberately mirror the web manual-channel request.
+    # The active pulse is placed in a zero-filled, 32-byte-aligned record.
+    record_duration_ns: float = 10_000.0
+    delay_ns: float = 0.0
+    gain: float = 1
     mode: PlaybackMode = "one_shot"
-    # XS20 is the dedicated SYNC port.  ``self_test`` is an explicit test
-    # bypass for a single board and does not generate a fake SYNC pulse.
+    # The selected bitstream fixes the XS20 electrical role. ``bypass`` is
+    # explicit local permission for a slave and never fabricates XS20 SYNC.
     sync_role: SyncRole = "slave"
-    sync_mode: SyncMode = "self_test"
+    sync_mode: SyncMode = "bypass"
+    configure_sync: bool = True
     # In triggered mode, emit_trigger() drives XS18.  With an XS18 -> XS19
     # cable this exercises the physical trigger input path on the same board.
     external_trigger_loopback: bool = True
@@ -74,13 +86,55 @@ class HardwareWaveTestConfig:
 # Four ready-to-run examples.  Select one by changing ACTIVE_EXAMPLE, or
 # replace TEST_CONFIG with a HardwareWaveTestConfig edited for your setup.
 EXAMPLES: dict[str, HardwareWaveTestConfig] = {
+    # Standalone slave verification: XS20 is intentionally unconnected, so
+    # this test requests bypass explicitly through the unified driver API.
+    "standalone_slave_continuous_1ghz_ch1": HardwareWaveTestConfig(
+        duration_ns=10_240.0,
+        record_duration_ns=10_240.0,
+        frequency_ghz=0.1,
+        baseband_frequency_ghz=0.0,
+        waveform="sine",
+        amplitude=0.125,
+        gain=0.2,
+        mode="continuous",
+        sync_role="slave",
+        sync_mode="bypass",
+        hold_s=10.0,
+    ),
     # 1. 100 ns, 1 GHz sine, one shot.
     "one_shot_1ghz_sine": HardwareWaveTestConfig(
         duration_ns=100.0, frequency_ghz=1.0, waveform="sine", mode="one_shot", hold_s=0.5
     ),
     # 2. 60 ns, 1.79 GHz Gaussian sine on XY CH1, one shot.
     "one_shot_1p79ghz_gaussian_xy": HardwareWaveTestConfig(
-        duration_ns=60.0, frequency_ghz=1.79, waveform="gaussian_sine", mode="one_shot", hold_s=0.5
+        duration_ns=60.0,
+        frequency_ghz=0.1,
+        baseband_frequency_ghz=0.0,
+        amplitude=1,
+        waveform="gaussian_sine",
+        mode="one_shot",
+        sync_role="slave",
+        sync_mode="external",
+        configure_sync=False,
+        hold_s=0.5,
+    ),
+    # Deliberately ungated standalone-slave negative example.  With XS20
+    # open it must be rejected at TRIGGER until bypass_sync() is requested.
+    "external_slave_500mhz_gaussian_xy": HardwareWaveTestConfig(
+        duration_ns=120.0,
+        frequency_ghz=0.5,
+        baseband_frequency_ghz=0.0,
+        amplitude=1,
+        waveform="gaussian_sine",
+        # Same default record duration as a new web manual waveform.  The
+        # 120 ns active pulse is followed by 9.88 us of DAC-code zeroes.
+        record_duration_ns=10_000.0,
+        delay_ns=0.0,
+        mode="one_shot",
+        sync_role="slave",
+        sync_mode="external",
+        configure_sync=False,
+        hold_s=0.5,
     ),
     # 3. Continuous 2 GHz sine wave.
     "continuous_2ghz_sine": HardwareWaveTestConfig(
@@ -94,7 +148,7 @@ EXAMPLES: dict[str, HardwareWaveTestConfig] = {
         waveform="gaussian_sine",
         mode="triggered",
         sync_role="slave",
-        sync_mode="self_test",
+        sync_mode="bypass",
         external_trigger_loopback=True,
         trigger_count=4,
         trigger_interval_s=0.5,
@@ -102,7 +156,9 @@ EXAMPLES: dict[str, HardwareWaveTestConfig] = {
     ),
 }
 
-ACTIVE_EXAMPLE = "one_shot_1ghz_sine"
+# Default to an explicit standalone slave bypass test. Change this name to
+# select another example.
+ACTIVE_EXAMPLE = "standalone_slave_continuous_1ghz_ch1"
 TEST_CONFIG = EXAMPLES[ACTIVE_EXAMPLE]
 
 
@@ -141,15 +197,20 @@ def make_iq_sine(
     sample_rate_ghz: float,
     amplitude: float,
 ) -> np.ndarray:
-    """Return an ``(N, 2)`` little-endian int16 I/Q sine envelope."""
+    """Return an ``(N, 2)`` compatibility view of an I/Q sine envelope."""
 
     count = _validate_waveform_inputs(duration_ns, frequency_ghz, sample_rate_ghz, amplitude)
-    sample_index = np.arange(count, dtype=np.float64)
-    # GHz * ns is cycles, so this expression avoids an implicit Hz conversion
-    # in the user-facing waveform helper.
-    phase = 2.0 * np.pi * float(frequency_ghz) * sample_index / float(sample_rate_ghz)
-    scale = min(32767.0, float(amplitude) * 32767.0)
-    return np.column_stack((np.cos(phase) * scale, np.sin(phase) * scale)).astype("<i2")
+    packed = make_iq_sine_interleaved(
+        float(frequency_ghz) * 1e9,
+        0.0,
+        round(float(amplitude) * 32767.0),
+        float(sample_rate_ghz) * 1e9,
+        sample_count=iq_duration_to_interleaved_sample_count(
+            float(duration_ns) * 1e-9, float(sample_rate_ghz) * 1e9
+        ),
+        q_sign=-1,
+    )
+    return packed.reshape(-1, 2)[:count]
 
 
 def make_gaussian_iq_sine(
@@ -157,40 +218,71 @@ def make_gaussian_iq_sine(
     frequency_ghz: float,
     sample_rate_ghz: float,
     amplitude: float,
-    sigma_fraction: float = 0.22,
+    sigma_fraction: float | None = None,
 ) -> np.ndarray:
-    """Return a Gaussian-windowed complex sine envelope as int16 IQ."""
+    """Return the web-manual XY Gaussian envelope as an ``(N, 2)`` view.
+
+    ``sigma_fraction`` is retained only as a source-compatible parameter.
+    Web manual XY uses FWHM = duration / 2, rather than this test helper's
+    historical sigma-fraction approximation.
+    """
 
     count = _validate_waveform_inputs(duration_ns, frequency_ghz, sample_rate_ghz, amplitude)
-    if not 0.0 < float(sigma_fraction):
-        raise ValueError("sigma_fraction must be positive")
-    sample_index = np.arange(count, dtype=np.float64)
-    center = (count - 1) / 2.0
-    sigma = max(0.5, float(sigma_fraction) * max(1, count))
-    envelope = np.exp(-0.5 * ((sample_index - center) / sigma) ** 2)
-    phase = 2.0 * np.pi * float(frequency_ghz) * sample_index / float(sample_rate_ghz)
-    scale = min(32767.0, float(amplitude) * 32767.0)
-    return np.column_stack((envelope * np.cos(phase) * scale, envelope * np.sin(phase) * scale)).astype("<i2")
+    if sigma_fraction is not None and not 0.0 < float(sigma_fraction):
+        raise ValueError("sigma_fraction must be positive when specified")
+    sample_rate_hz = float(sample_rate_ghz) * 1e9
+    packed = make_iq_gaussian_sine_interleaved(
+        float(frequency_ghz) * 1e9,
+        0.0,
+        round(float(amplitude) * 32767.0),
+        sample_rate_hz,
+        float(duration_ns) * 1e-9,
+        sample_count=iq_duration_to_interleaved_sample_count(float(duration_ns) * 1e-9, sample_rate_hz),
+        fwhm_s=float(duration_ns) * 0.5e-9,
+        q_sign=-1,
+        hls_xy_drag=False,
+    )
+    return packed.reshape(-1, 2)[:count]
 
 
 def make_iq_waveform(config: HardwareWaveTestConfig) -> np.ndarray:
-    """Generate the configured baseband IQ waveform."""
+    """Generate the exact zero-filled record used by web manual XY/sine.
 
+    The return value is an interleaved ``I0,Q0,...`` int16 stream, ready for
+    ``Dr47Device.upload_waveforms(..., wave_formats={1: "interleaved_iq"})``.
+    """
+
+    _validate_waveform_inputs(
+        config.duration_ns, config.baseband_frequency_ghz, config.sample_rate_ghz, config.amplitude
+    )
+    sample_rate_hz = float(config.sample_rate_ghz) * 1e9
+    duration_s = float(config.duration_ns) * 1e-9
+    active_count = iq_duration_to_interleaved_sample_count(duration_s, sample_rate_hz)
+    common = {
+        "frequency_hz": float(config.baseband_frequency_ghz) * 1e9,
+        "phase_rad": math.radians(float(config.phase_deg)),
+        "amplitude": round(float(config.amplitude) * 32767.0),
+        "sample_rate_hz": sample_rate_hz,
+        "sample_count": active_count,
+        "q_sign": -1,
+    }
     if config.waveform == "sine":
-        return make_iq_sine(
-            config.duration_ns,
-            config.baseband_frequency_ghz,
-            config.sample_rate_ghz,
-            config.amplitude,
+        active = make_iq_sine_interleaved(**common)
+    elif config.waveform == "gaussian_sine":
+        active = make_iq_gaussian_sine_interleaved(
+            **common,
+            duration_s=duration_s,
+            fwhm_s=duration_s / 2.0,
+            hls_xy_drag=False,
         )
-    if config.waveform == "gaussian_sine":
-        return make_gaussian_iq_sine(
-            config.duration_ns,
-            config.baseband_frequency_ghz,
-            config.sample_rate_ghz,
-            config.amplitude,
-        )
-    raise ValueError(f"unsupported waveform kind: {config.waveform!r}")
+    else:
+        raise ValueError(f"unsupported waveform kind: {config.waveform!r}")
+    return place_interleaved_iq_in_record(
+        active,
+        delay_s=float(config.delay_ns) * 1e-9,
+        record_duration_s=float(config.record_duration_ns) * 1e-9,
+        sample_rate_hz=sample_rate_hz,
+    )
 
 
 def make_trigger_sequence(sample_count: int) -> np.ndarray:
@@ -229,7 +321,8 @@ def run(config: HardwareWaveTestConfig = TEST_CONFIG) -> int:
     if config.mode not in {"one_shot", "continuous", "triggered"}:
         raise ValueError(f"unsupported playback mode: {config.mode!r}")
     iq = make_iq_waveform(config)
-    sample_count = int(iq.shape[0])
+    sample_count = int(iq.size // 2)
+    active_sample_count = sample_count_for_duration(config.duration_ns, config.sample_rate_ghz)
     plan = rfdc_nco_plan_for_target(config.frequency_ghz)
     nco_frequency_ghz = float(plan["nco_ghz"] if config.nco_frequency_ghz is None else config.nco_frequency_ghz)
     nyquist_zone = int(plan["nyquist_zone"] if config.nco_frequency_ghz is None else 1)
@@ -260,9 +353,21 @@ def run(config: HardwareWaveTestConfig = TEST_CONFIG) -> int:
             if cleared_status.state is not PlaybackState.IDLE:
                 raise DriverError(f"board did not return to IDLE after ABORT_MUTE: {cleared_status.state.value}")
 
-        device.set_sync_role(config.sync_role)
-        device.set_sync_mode(config.sync_mode)
-        print(f"SYNC configured: role={config.sync_role}, mode={config.sync_mode}")
+        if initial_status.capabilities.sync_role != config.sync_role:
+            raise DriverError(
+                f"programmed bitstream role is {initial_status.capabilities.sync_role!r}; "
+                f"test requires {config.sync_role!r}"
+            )
+        if config.configure_sync:
+            if config.sync_mode == "bypass":
+                device.bypass_sync()
+            else:
+                device.require_external_sync()
+            print(f"SYNC mode configured: role={config.sync_role}, mode={config.sync_mode}")
+        else:
+            print(
+                "SYNC mode configuration skipped: using the programmed PL mode"
+            )
 
         if config.sync_before_trigger:
             if config.sync_role != "master" or config.sync_mode != "external":
@@ -286,11 +391,19 @@ def run(config: HardwareWaveTestConfig = TEST_CONFIG) -> int:
         upload = device.upload_waveforms(
             {1: iq},
             channel_sequences=sequences,
-            wave_formats={1: "iq_matrix"},
+            wave_formats={1: "interleaved_iq"},
             auto_start=False,
             loop=config.mode == "continuous",
+            # This matches the web manual upload frame: a zero-delay command
+            # followed by PLAY/END, sent three times for a late-ready PL RX.
+            channel_delays={1: 0} if sequences is None else None,
+            instruction_repeats=3,
         )
-        print(f"waveform uploaded: {upload}")
+        print(
+            f"waveform uploaded: {upload}; active={active_sample_count} complex samples "
+            f"({config.duration_ns:g} ns), record={sample_count} complex samples "
+            f"({sample_count / config.sample_rate_ghz:g} ns), delay={config.delay_ns:g} ns"
+        )
         time.sleep(max(0.0, float(config.settle_s)))
         device.arm(channel_mask=0x01)
         print(f"ARM accepted: {device.status(refresh=False)}")

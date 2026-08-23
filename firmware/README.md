@@ -39,9 +39,9 @@ source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
 ### Build Commands
 
-The default firmware target is `TARGET=custom_xczu47dr`, which builds the
-normal eight-output RFDC playback application. Use `TARGET=custom_xczu47dr_bw`
-only for the standalone DDR bandwidth pressure application.
+The formal firmware targets are `TARGET=custom_xczu47dr_master` and
+`TARGET=custom_xczu47dr_slave`; they compile one shared firmware source against
+their respective XSAs. `TARGET=custom_xczu47dr_bw` remains separate.
 
 ```bash
 # Create application from XSA, first time
@@ -76,11 +76,12 @@ DRY_RUN=1 ./build.sh program
 
 ## Build Outputs
 
-Default `TARGET=custom_xczu47dr` outputs:
+Master/slave outputs use the corresponding role name, for example
+`TARGET=custom_xczu47dr_slave` creates:
 
-- **ELF file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
-- **Map file**: `workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf.map`
-- **PS init script**: `workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl`
+- **ELF file**: `workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf`
+- **Map file**: `workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf.map`
+- **PS init script**: `workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl`
 
 `TARGET=custom_xczu47dr_bw` outputs:
 
@@ -112,11 +113,11 @@ Default `TARGET=custom_xczu47dr` outputs:
 
 ## Custom XCZU47DR Firmware Notes
 
-`TARGET=custom_xczu47dr` builds with `BOARD_CUSTOM_XCZU47DR` and uses `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`, `hardware/vivado/output/custom_xczu47dr_rfdc.bit`, and `workspace/custom_xczu47dr`. The custom build produces a target-specific Vitis workspace and ELF for the eight-output DAC bring-up path.
+`TARGET=custom_xczu47dr_master` and `TARGET=custom_xczu47dr_slave` both build with `BOARD_CUSTOM_XCZU47DR`, sharing the same source tree. They respectively use `hardware/vivado/output/custom_xczu47dr_master.xsa` or `custom_xczu47dr_slave.xsa`, and their isolated role-specific Vitis workspace.
 
 The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
 
-For the custom target, a shared 250 MHz reference enters HMC7044 through XS17. The PL sequencer sets PLL1 R1=25 and N1=10 (10 MHz PFD, 100 MHz VCXO) and programs the 3.072 GHz PLL2 path, whose DAC outputs are 128 MHz. Firmware does not drive any CLK104/LMK/LMX clock path, prints these clock values, polls the HMC7044 done bit from AXI GPIO channel 2, and aborts if the sequencer does not complete. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
+For the current mainline custom targets, XS17 is a 10 MHz reference. The PL sequencer programs the 128 MHz DAC reference; firmware polls only the HMC7044 done bit, then continues RFDC/MTS/NCO startup independently of XS20 synchronization. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
 
 The custom RFDC path uses CH1-CH8 -> DAC00/DAC02/DAC10/DAC12/DAC20/DAC22/DAC30/DAC32, with 6.4 GS/s DAC sampling, 16x interpolation, 400 MS/s complex I/Q input, and a 50 MHz RFDC fabric stream. Firmware starts enabled RFDC tiles, PLLs, and calibration and checks startup return values. After startup it does not configure NCO, NCO phase, Nyquist zone, or DAC VOP and it does not poll a DDR mailbox. Those runtime values are validated, applied, and read back entirely by the PL `RFCTRL2` UDP engine. UART output is boot diagnostics only and is not an apply acknowledgment. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
 

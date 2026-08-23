@@ -17,8 +17,8 @@
 | 项目 | 记录值 |
 | --- | --- |
 | 板卡编号 | 待填写 |
-| bitstream | `hardware/vivado/output/custom_xczu47dr_rfdc.bit` 或记录实际路径 |
-| firmware ELF | `firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf` 或记录实际路径 |
+| bitstream | `hardware/vivado/output/custom_xczu47dr_master.bit` 或 `custom_xczu47dr_slave.bit`，记录实际路径和 SHA256 |
+| firmware ELF | 对应 role 的 `firmware/workspace/custom_xczu47dr_<role>/rfdc_app/Debug/rfdc_app.elf` |
 | 主机脚本 | `software/send_waveform_udp.py` |
 | DDR 布局 | `interleaved_512b` |
 | 使能通道 | CH1-CH8 或记录实际通道 |
@@ -501,4 +501,3 @@
 2. 再完成单板多通道 Sequence、极限长度、Trigger 延迟和链路延迟 breakdown。
 3. 在单板稳定后进行多板卡同步测试。
 4. 对不达标项目进行校正、补偿或滤波后复测。
-

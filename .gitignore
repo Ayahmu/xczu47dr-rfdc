@@ -12,6 +12,7 @@ hardware/vivado/hardware/
 hardware/vivado/work*/
 hardware/vivado/reports*/
 hardware/vivado/output/
+hardware/vivado/output-*/
 hardware/vivado/bitstream_recovery/
 hardware/vivado/myproj/
 hardware/vivado/xsim.dir/

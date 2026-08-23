@@ -9,7 +9,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 
-set target "custom_xczu47dr"
+set target "custom_xczu47dr_master"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }

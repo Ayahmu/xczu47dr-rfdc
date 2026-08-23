@@ -5,7 +5,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 
-set target "custom_xczu47dr"
+set target "custom_xczu47dr_master"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -23,7 +23,7 @@ set target_board_part [target_config_get $target board_part]
 set target_top_module [target_config_get $target top_module]
 set target_generics [target_config_get $target generics]
 set is_bandwidth_target [expr {$target eq "custom_xczu47dr_bw"}]
-set is_master_target [expr {$target ne "custom_xczu47dr_slave" && !$is_bandwidth_target}]
+set is_master_target [expr {$target eq "custom_xczu47dr_master"}]
 
 puts "INFO: Creating Vivado project..."
 puts "INFO: Target: ${target}"

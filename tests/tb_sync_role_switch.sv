@@ -6,7 +6,6 @@ module tb_sync_role_switch;
   reg master_request = 1'b0;
   reg master_role = 1'b1;
   reg slave_role = 1'b0;
-  reg self_test = 1'b0;
   wire master_hmc_sync;
   wire master_slave_sync;
   wire slave_hmc_sync;
@@ -24,7 +23,7 @@ module tb_sync_role_switch;
       .rst_n(rst_n),
       .sync_request(master_request),
       .sync_in(1'b0),
-      .role_master(master_role), .self_sync(self_test),
+      .role_master(master_role), .sync_bypass(1'b0),
       .hmc_sync(master_hmc_sync),
       .slave_sync(master_slave_sync),
       .sync_done(master_sync_done)
@@ -39,7 +38,7 @@ module tb_sync_role_switch;
       .rst_n(rst_n),
       .sync_request(1'b0),
       .sync_in(master_slave_sync),
-      .role_master(slave_role), .self_sync(self_test),
+      .role_master(slave_role), .sync_bypass(1'b0),
       .hmc_sync(slave_hmc_sync),
       .slave_sync(),
       .sync_done(slave_sync_done)

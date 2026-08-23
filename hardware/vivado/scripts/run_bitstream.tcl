@@ -5,7 +5,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 
-set target "custom_xczu47dr"
+set target "custom_xczu47dr_master"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -99,6 +99,13 @@ if {[llength $ltx_files] > 0} {
     file copy -force [lindex $ltx_files 0] ${ltx_tmp}
     file rename -force ${ltx_tmp} ${ltx_output}
     puts "INFO: Debug probes copied to ${output_dir}/${output_basename}.ltx"
+} else {
+    # Never leave an older role/build's probes next to a fresh bitstream.
+    set ltx_output "${output_dir}/${output_basename}.ltx"
+    if {[file exists ${ltx_output}]} {
+        file delete -force ${ltx_output}
+        puts "INFO: Removed stale debug probes: ${ltx_output}"
+    }
 }
 
 set timing_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_postroute_physopted.rpt"

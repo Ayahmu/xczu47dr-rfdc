@@ -487,14 +487,15 @@ RFDC NCO 范围为 `-3.2 .. +3.2 GHz`。当前项目 DAC 采样率为 `6.4 GSPS`
 XS20 断开
 ```
 
-该测试必须使用 `self_test`，它是明确的测试旁路：跳过“必须先收到 XS20”
+该测试必须使用 `bypass`，它是明确的运行时旁路：跳过“必须先收到 XS20”
 门控，但不生成、不模拟，也不证明外部同步。不要将此模式用于跨板同步或时序
 对齐实验。
 
 #### `set_sync_role(role) -> int`
 
-`role` 必须为 `"master"` 或 `"slave"`，设置 XS20 同步方向。角色/模式
-变更必须在未 ARM、未 PREPARED、未 RUNNING 时完成；否则设备会拒绝请求。
+`role` 必须为 `"master"` 或 `"slave"`。该方法只验证所烧写 bitstream 的
+固定角色，不能在运行时改变 XS20 电气方向；请求另一角色会抛出
+`SynchronizationError`，必须改烧对应的主卡或从卡 bitstream。
 成功返回 `0`。
 
 #### `set_sync_mode(mode) -> int`
@@ -503,7 +504,7 @@ XS20 断开
 
 - `"external"`：正式外部同步。slave 在真实 XS20 单 SYNC 上升沿之前屏蔽
   XS19 Trigger；
-- `"self_test"`：明确的单板测试旁路。它允许无 XS20 的 XS18 -> XS19
+- `"bypass"`：明确的单板运行旁路。它允许无 XS20 的 XS18 -> XS19
   物理回环，但不等同于同步完成。
 
 成功返回 `0`。
@@ -511,7 +512,7 @@ XS20 断开
 #### `sync(epoch=1) -> int`
 
 仅 `external` 模式的主卡可调用。该 API 在 XS20 上输出**一次** SYNC 脉冲并
-携带 epoch，成功返回 `0`。从卡调用或 self-test 模式调用会抛出
+携带 epoch，成功返回 `0`。从卡调用或 bypass 模式调用会抛出
 `SynchronizationError`。它不是播放 Trigger：在已经完成该 epoch 后，随后
 多次 Trigger 不需要再次调用它。
 
@@ -519,7 +520,7 @@ XS20 断开
 
 在 XS18 输出一个 Trigger 脉冲，成功返回 `0`。它只发外部 Trigger，不直接
 启动本机播放；通常在从板已 ARM 且 XS20 SYNC 完成后由主板调用。单板回环时
-使用 `self_test`，把 XS18 与 XS19 物理短接后调用此 API。
+使用 `bypass`，把 XS18 与 XS19 物理短接后调用此 API。
 
 #### `trigger() -> int` 与 `emit_trigger() -> int`
 
@@ -538,8 +539,8 @@ with Dr47Device(
     udp_interface="enp225s0f1",
     udp_source_ip="169.254.250.11",
 ) as device:
-    device.set_sync_role("slave")
-    device.set_sync_mode("external")
+    device.set_sync_role("slave")  # 验证已烧写 slave bitstream
+    device.require_external_sync()
     # Upload a trigger-waiting waveform/sequence and configure CH1 first.
     device.arm(channel_mask=0x01)
 
@@ -560,8 +561,8 @@ with Dr47Device(
     udp_interface="enp225s0f1",
     udp_source_ip="169.254.250.11",
 ) as device:
-    device.set_sync_role("slave")
-    device.set_sync_mode("self_test")  # Explicit XS20 gate bypass.
+    device.set_sync_role("slave")  # 验证已烧写 slave bitstream
+    device.bypass_sync()  # Explicit XS20 gate bypass.
     # Upload a trigger-waiting waveform/sequence and configure CH1 first.
     device.arm(channel_mask=0x01)
     device.emit_trigger()                  # XS18 -> physical cable -> XS19
@@ -934,7 +935,7 @@ def main() -> None:
         assert slave.capabilities.device_uid == slave_uid
 
         # 8. 配置同步角色和正式外部模式。
-        #    self_test 只用于单板回环测试，跨板联调必须使用 external。
+        #    bypass 只用于单板本地运行，跨板联调必须使用 external。
         master.set_sync_mode("external")
         slave.set_sync_mode("external")
         master.set_sync_role("master")
@@ -1052,7 +1053,7 @@ except DriverError as exc:
 - 当前驱动主要控制 DAC/RFDC 播放；DAQ、ADC 输入、demod 和 pump 接口会明确
   抛出 `UnsupportedCapabilityError`，不会伪造成功。
 - `trigger()` 是本机软件 Trigger；`emit_trigger()` 是 XS18 外部 Trigger 输出。
-- `set_sync_mode("self_test")` 只用于明确的测试回环，不等同于跨板同步。
+- `bypass_sync()` 只用于明确的本地运行旁路，不等同于跨板同步。
 - 多块板卡共用一条主机 10G 上联时，控制包和同步包正常，但同时上传大波形
   会竞争该 10G 链路；应降低并发或增加上联带宽。
 - 交换机必须允许同一 VLAN 内的广播才能完成首次自动发现；正式 IP 配置后，

@@ -1,531 +1,107 @@
-# Vivado FPGA Project
+# Vivado RFDC Build
 
-This directory contains the Vivado project for implementing the XCZU47DR RFDC design on the Zynq UltraScale+ RFSoC FPGA.
+This directory holds the Vivado sources for the custom XCZU47DR RFDC design. Design inputs are in `src/`, `xdc/`, `bd/`, `ip/`, and `scripts/`. Vivado projects, generated IP products, `.Xil`, reports, and build outputs are generated locally and ignored by Git.
 
-## Overview
+## Production Targets
 
-The Vivado project integrates:
-- Chisel-generated Verilog modules
-- Xilinx IP cores (RFDC, AXI interconnect, etc.)
-- Block Design for PS-PL integration
-- Constraint files for timing and pinout
-- Build automation scripts
+| Make target | Fixed role | XS20 | Trigger policy |
+|---|---|---|---|
+| `custom_xczu47dr_master` | master | output | Local software and XS19 triggers are always accepted; driver `sync()` emits XS20 synchronization. |
+| `custom_xczu47dr_slave` | slave | input | In `external` mode, playback requires a real XS20 event. In explicit driver `bypass` mode, local software and XS19 triggers are allowed. |
 
-The production control path includes a dedicated `rfdc_runtime_config_pl` FSM.
-It receives fixed CH1-CH8 `RFDC_APPLY` fields from the RFCTRL2 parser, checks
-tile and playback state, writes the RFDC through 16-bit AXI-Lite transactions,
-verifies Nyquist/NCO/phase/VOP register readback, and returns actual values over
-UDP. A transaction-locking two-master arbiter shares the RFDC AXI-Lite slave
-with the PS startup path. Production disables legacy RFDC MMIO write, RMW,
-batch, and placeholder NCO commands.
+The role is a synthesis-time definition (`CUSTOM_XCZU47DR_MASTER` or `CUSTOM_XCZU47DR_SLAVE`), not a run-time selection. A slave cannot be changed into a master by software. `sync_seen` reports only an actual XS20 event; it is never set merely because bypass is enabled.
 
-## Directory Structure
+The mainline clock plan uses a 10 MHz XS17 reference, HMC7044 programming in the PL sequencer, and a 128 MHz DAC reference. Connect synchronization as **master A <-> slave A**. XS18 is trigger output and XS19 is trigger input.
 
-```
-vivado/
-├── build.sh              # Complete build automation script
-├── scripts/              # Vivado TCL scripts
-│   ├── create_project.tcl    # Project creation
-│   ├── run_synth.tcl         # Synthesis
-│   ├── run_impl.tcl          # Implementation
-│   ├── run_bitstream.tcl     # Bitstream generation
-│   └── export_xsa.tcl        # XSA export
-├── bd/                   # Block Design TCL scripts
-│   └── design_1.tcl      # Main block design
-├── src/                  # Additional RTL sources
-├── xdc/                  # Constraint files
-│   └── custom_xczu47dr_minimal.xdc  # Custom XCZU47DR bring-up constraints
-├── work*/                # Vivado project workspace (auto-generated, ignored)
-├── reports*/             # Preflight and implementation reports (ignored)
-└── output/               # Build outputs (auto-generated, ignored)
-    ├── custom_xczu47dr_rfdc.bit   # FPGA bitstream
-    ├── custom_xczu47dr_rfdc.ltx   # Debug probes
-    └── custom_xczu47dr_rfdc.xsa   # Hardware platform
-```
+`custom_xczu47dr_bw` remains an independent bandwidth-pressure target. There is no production `custom_xczu47dr_selftest` target.
 
-Only design inputs belong in Git: `src/`, `xdc/`, `bd/`, `scripts/`, and
-the checked-in XCI metadata under `ip/`.  Vivado creates `work`, alternate
-`work-*` directories, `reports*`, `output`, `.Xil`, generated IP products, and
-project/log files.  These paths are ignored repository-wide, so a new local
-build directory does not require editing `.gitignore`.  Build outputs remain
-on disk for programming until removed explicitly; Git simply does not track
-them.
+## Build
 
-## Prerequisites
-
-### Required Software
-
-- **Xilinx Vivado**: Version 2024.2
-  ```bash
-  # Source Vivado environment
-  source /tools/Xilinx/Vivado/2024.2/settings64.sh
-  
-  # Verify installation
-  vivado -version
-  ```
-
-### Target Hardware
-
-- **Device**: xczu47dr-ffvg1517-2-i
-- **Board**: Custom XCZU47DR board
-- **Speed Grade**: -2
-
-### Disk Space Requirements
-
-- **Project workspace**: ~5 GB
-- **Build outputs**: ~500 MB
-- **Total recommended**: 10 GB free space
-
-## Quick Start
-
-### Complete Build
-
-Run the complete build process (Chisel -> Synthesis -> Implementation -> Bitstream/XSA):
+Source the required toolchain, then run commands from the repository root:
 
 ```bash
-./build.sh
-```
-
-**Estimated time**: 30-60 minutes
-
-### Build with Options
-
-```bash
-# Clean build (remove all previous outputs)
-./build.sh --clean
-
-# Skip Chisel generation (use existing Verilog)
-./build.sh --skip-chisel
-
-# Only create project (no synthesis)
-./build.sh --skip-synth --skip-impl --skip-bitstream
-
-# Show help
-./build.sh --help
-```
-
-## Step-by-Step Build
-
-### Step 1: Generate Chisel Verilog
-
-```bash
-cd ../chisel
-./build.sh all
-cd ../vivado
-```
-
-**Output**: Verilog files in `../chisel/generated/` (auto-generated, ignored)
-
-### Step 2: Create Vivado Project
-
-```bash
-vivado -mode batch -source scripts/create_project.tcl
-```
-
-**What it does**:
-- Creates new Vivado project
-- Sets device and board properties
-- Adds Chisel-generated Verilog
-- Adds RTL sources from `src/`
-- Adds constraint files from `xdc/`
-- Creates Block Design from `bd/design_1.tcl`
-- Generates HDL wrapper
-
-**Output**: `work/custom_xczu47dr_rfdc.xpr`
-
-### Step 3: Run Synthesis
-
-```bash
-vivado -mode batch -source scripts/run_synth.tcl
-```
-
-**What it does**:
-- Elaborates design
-- Optimizes logic
-- Maps to FPGA primitives
-- Generates resource utilization report
-- Generates timing report
-
-**Output**: 
-- Synthesized design in `work/custom_xczu47dr_rfdc.runs/synth_1/`
-- Reports in `work/custom_xczu47dr_rfdc.runs/synth_1/reports/`
-
-**Typical synthesis time**: 10-15 minutes
-
-### Step 4: Run Implementation
-
-```bash
-vivado -mode batch -source scripts/run_impl.tcl
-```
-
-**What it does**:
-- Places logic on FPGA
-- Routes connections
-- Optimizes timing
-- Generates detailed reports
-
-**Output**:
-- Implemented design in `work/custom_xczu47dr_rfdc.runs/impl_1/`
-- Reports in `work/custom_xczu47dr_rfdc.runs/impl_1/reports/`
-
-**Typical implementation time**: 15-30 minutes
-
-### Step 5: Generate Bitstream
-
-```bash
-vivado -mode batch -source scripts/run_bitstream.tcl
-```
-
-**What it does**:
-- Generates FPGA configuration bitstream
-- Copies bitstream to `output/`
-- Copies debug probes (if ILA/VIO used)
-
-**Output**: `output/custom_xczu47dr_rfdc.bit` (~30 MB)
-
-**Typical bitstream time**: 5-10 minutes
-
-### Step 6: Export XSA
-
-```bash
-vivado -mode batch -source scripts/export_xsa.tcl
-```
-
-**What it does**:
-- Exports hardware platform with bitstream
-- Includes PS configuration
-- Includes address map
-
-**Output**: `output/custom_xczu47dr_rfdc.xsa` (~12 MB)
-
-This XSA file is used by Vitis to build ARM firmware.
-
-## Build Outputs
-
-After successful build:
-
-```
-output/
-├── custom_xczu47dr_rfdc.bit      # FPGA bitstream (~30 MB)
-├── custom_xczu47dr_rfdc.ltx      # Debug probes (if ILA/VIO used)
-└── custom_xczu47dr_rfdc.xsa      # Hardware platform (~12 MB)
-```
-
-### Bitstream (.bit)
-- Binary configuration file for FPGA
-- Used to program the device
-- Contains complete FPGA configuration
-
-### Debug Probes (.ltx)
-- Logic analyzer probe definitions
-- Used with Vivado Hardware Manager
-- Only generated if ILA/VIO cores are used
-
-### XSA (.xsa)
-- Hardware platform archive
-- Contains hardware specification
-- Used by Vitis for firmware development
-- Includes PS configuration and address map
-
-## Design Architecture
-
-### Block Design Components
-
-The main block design (`bd/design_1.tcl`) includes:
-
-#### Processing System (PS)
-- **Zynq UltraScale+ MPSoC**
-  - 4x ARM Cortex-A53 @ 1.2 GHz
-  - 2x ARM Cortex-R5 @ 500 MHz
-  - Mali-400 GPU
-  - DDR4 memory controller
-
-#### Programmable Logic (PL)
-- **RF Data Converter (RFDC)**
-  - 8x ADC channels @ 4 GSPS
-  - 8x DAC channels @ 6.4 GSPS
-  - Digital up/down conversion
-  
-- **AXI Interconnect**
-  - High-performance PS-PL bridge
-  - Multiple master/slave ports
-  - Automatic width/clock conversion
-
-- **AXI DMA**
-  - Scatter-gather DMA
-  - Memory-mapped to stream
-  - Stream to memory-mapped
-
-- **GPIO Controllers**
-  - AXI GPIO IP
-  - Custom Chisel GPIO modules
-  - Interrupt support
-
-- **Custom Chisel Modules**
-  - LED controller
-  - Additional GPIO
-  - Custom logic
-
-### Memory Map
-
-| Component | Base Address | Size | Description |
-|-----------|--------------|------|-------------|
-| RFDC | 0xA0000000 | 64KB | RF Data Converter control |
-| M_AXI_GPIO | 0xA0010000 | 64KB | GPIO control registers |
-| AXI_DMA | 0xA0020000 | 64KB | DMA control registers |
-| DDR4 | 0x00000000 | 2GB | Low DDR memory |
-| DDR4 High | 0x800000000 | 2GB | High DDR memory |
-
-### Clock Domains
-
-| Clock | Frequency | Source | Usage |
-|-------|-----------|--------|-------|
-| pl_clk0 | 100 MHz | PS | AXI control interfaces |
-| pl_clk1 | 250 MHz | PS | High-speed data path |
-| rfdc_clk | 245.76 MHz | RFDC | RF data converter |
-
-## Reports and Analysis
-
-### Synthesis Reports
-
-Located in `work/custom_xczu47dr_rfdc.runs/synth_1/reports/`:
-
-- **post_synth_util.rpt**: Resource utilization
-  - LUT, FF, BRAM, DSP usage
-  - Percentage of available resources
-
-- **post_synth_timing.rpt**: Timing summary
-  - Worst Negative Slack (WNS)
-  - Total Negative Slack (TNS)
-  - Clock domain analysis
-
-### Implementation Reports
-
-Located in `work/custom_xczu47dr_rfdc.runs/impl_1/reports/`:
-
-- **post_impl_util.rpt**: Final resource utilization
-- **post_impl_timing.rpt**: Final timing analysis
-- **post_impl_power.rpt**: Power consumption estimate
-- **post_impl_drc.rpt**: Design Rule Check results
-
-### Typical Resource Utilization
-
-| Resource | Used | Available | Utilization |
-|----------|------|-----------|-------------|
-| LUT | ~50,000 | 425,152 | ~12% |
-| FF | ~80,000 | 850,304 | ~9% |
-| BRAM | ~100 | 1,080 | ~9% |
-| DSP | ~50 | 1,248 | ~4% |
-| BUFG | ~10 | 544 | ~2% |
-
-### Timing Performance
-
-- **Target Clock**: 250 MHz (4.0 ns period)
-- **Typical WNS**: +0.5 to +1.0 ns
-- **Typical TNS**: 0 ns (no violations)
-
-## GUI Development
-
-For interactive development, open the project in Vivado GUI:
-
-```bash
-vivado work/custom_xczu47dr_rfdc.xpr &
-```
-
-### Common GUI Tasks
-
-#### View Block Design
-1. Open project
-2. Click "Open Block Design" in Flow Navigator
-3. Edit design graphically
-
-#### Run Synthesis
-1. Click "Run Synthesis" in Flow Navigator
-2. Wait for completion
-3. View reports
-
-#### Analyze Timing
-1. Open synthesized/implemented design
-2. Reports → Timing → Report Timing Summary
-3. Analyze critical paths
-
-#### Debug with ILA
-1. Add ILA cores to design
-2. Connect signals to debug
-3. Generate bitstream
-4. Open Hardware Manager
-5. Program device and capture waveforms
-
-## Constraint Files
-
-Vivado constraints are selected per target by `scripts/target_config.tcl` and loaded by `scripts/create_project.tcl`.
-
-- `TARGET=custom_xczu47dr` uses `xdc/custom_xczu47dr_minimal.xdc`.
-
-Key conventions:
-
-- Use `-quiet` on constraints that refer to generated BD pins or clocks, so project creation remains robust across regenerated Vivado metadata.
-- Keep board-specific pin and clock constraints in the target's configured XDC file; do not create parallel `timing.xdc` or `pinout.xdc` files unless `target_config.tcl` and this section are updated together.
-- Validate constraint changes with `make hardware` or the step targets `make synth` and `make impl`.
-
-## Troubleshooting
-
-### Vivado Not Found
-
-```bash
-# Source Vivado settings
 source /tools/Xilinx/Vivado/2024.2/settings64.sh
+source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
-# Add to ~/.bashrc for permanent setup
-echo 'source /tools/Xilinx/Vivado/2024.2/settings64.sh' >> ~/.bashrc
+make bitstream TARGET=custom_xczu47dr_master
+make bitstream TARGET=custom_xczu47dr_slave
+make bitstream-dual
 ```
 
-### Synthesis Fails
+For a complete single-role build, including the role-specific XSA:
 
-**Check synthesis log**:
 ```bash
-cat work/custom_xczu47dr_rfdc.runs/synth_1/runme.log
+make hardware TARGET=custom_xczu47dr_slave
 ```
 
-**Common issues**:
-- Missing source files → Check `create_project.tcl`
-- Syntax errors in Verilog → Check Chisel generation
-- Unsupported constructs → Review Verilog code
+The common Make variables may be overridden for an isolated build:
 
-### Timing Violations
-
-**View timing report**:
 ```bash
-cat work/custom_xczu47dr_rfdc.runs/impl_1/reports/post_impl_timing.rpt
+make bitstream TARGET=custom_xczu47dr_master \
+  VIVADO_WORK_DIR=/path/to/work \
+  VIVADO_OUTPUT_DIR=/path/to/output
 ```
 
-**Solutions**:
-- Add pipeline stages in critical paths
-- Adjust clock constraints
-- Use faster speed grade
-- Optimize logic in RTL
+## Dual Build Isolation
 
-### Resource Overflow
+`make bitstream-dual` runs two GNU Make children with `-j2`. Each owns all mutable Vivado state, so concurrent builds never share a `.xpr`, `.runs`, `.Xil`, cache, generated sources, or report directory:
 
-**View utilization report**:
+```text
+work-dual/master/      reports-dual/master/
+work-dual/slave/       reports-dual/slave/
+```
+
+Both publish role-specific outputs after bitstream generation:
+
+```text
+output/custom_xczu47dr_master.bit
+output/custom_xczu47dr_master.ltx
+output/custom_xczu47dr_master.xsa
+output/custom_xczu47dr_slave.bit
+output/custom_xczu47dr_slave.ltx
+output/custom_xczu47dr_slave.xsa
+```
+
+The dual command reports the size and SHA256 of each `.bit`. Remove only its isolated projects with:
+
 ```bash
-cat work/custom_xczu47dr_rfdc.runs/impl_1/reports/post_impl_util.rpt
+make bitstream-dual-clean
 ```
 
-**Solutions**:
-- Reduce design complexity
-- Share resources
-- Use different optimization strategy
-- Consider larger device
+## Build Stages
 
-### Block Design Issues
+For diagnosis, the individual stages are available and use the selected `TARGET`, `VIVADO_WORK_DIR`, `VIVADO_OUTPUT_DIR`, and `VIVADO_REPORT_DIR`:
 
-**Regenerate Block Design**:
 ```bash
-vivado -mode batch -source bd/design_1.tcl
+make vivado-project TARGET=custom_xczu47dr_slave
+make preflight TARGET=custom_xczu47dr_slave
+make synth TARGET=custom_xczu47dr_slave
+make impl TARGET=custom_xczu47dr_slave
+make bitstream TARGET=custom_xczu47dr_slave
+make xsa TARGET=custom_xczu47dr_slave
 ```
 
-**Common issues**:
-- IP version mismatch → Upgrade IP
-- Connection errors → Check address map
-- Validation errors → Review IP configuration
+`make xsa-master` and `make xsa-slave` export from existing corresponding dual-build projects.
 
-## Optimization Strategies
+## Firmware Pairing and Board Verification
 
-### Synthesis Strategies
+Build one shared firmware source tree against the XSA matching the selected role. The firmware waits for the HMC7044 PL sequencer but intentionally does not wait for XS20 before initializing RFDC, DAC MTS, and NCO SYSREF.
 
-Available in `run_synth.tcl`:
-- **Default**: Balanced optimization
-- **Flow_PerfOptimized_high**: Maximum performance
-- **Flow_AreaOptimized_high**: Minimum area
-- **Flow_RuntimeOptimized**: Fast compilation
+For the standalone slave test, use XS17 = 10 MHz, leave XS20 unconnected, and connect XS18 to XS19. Program slave bitstream and matching ELF, then run:
 
-### Implementation Strategies
-
-Available in `run_impl.tcl`:
-- **Default**: Balanced optimization
-- **Performance_Explore**: Explore timing optimization
-- **Area_Explore**: Explore area optimization
-- **Congestion_SpreadLogic_high**: Reduce routing congestion
-
-### Fast Hardware Builds
-
-The build defaults favor iteration speed without giving up timing closure:
-
-- `ILA_DEPTH=1024` is the default capture depth for the three ILA cores. Set
-  `ILA_DEPTH=2048` or `ILA_DEPTH=4096` when deeper debug captures are needed.
-- `IMPL_MODE=auto` runs the timing-driven balanced profile first and
-  automatically falls back to `ExtraNetDelay_high + AggressiveExplore` only
-  when timing does not close. `IMPL_MODE=fast` remains available for quick
-  placement/routing checks where a timing-clean bitstream is not required.
-  Pin production builds with `IMPL_MODE=balanced` or
-  `IMPL_MODE=aggressive` when a fixed strategy is preferred.
-- `run_impl.tcl` reuses RFDC/DDR4 OOC checkpoints already produced during
-  synthesis instead of synthesizing them a second time.
-- The DDR-to-DAC asynchronous playback FIFOs use 1024-deep BRAM storage with
-  proportional 256/512/768 watermarks. Long waveforms remain in external DDR;
-  this only reduces the streaming cushion and avoids deep BRAM cascade routes.
-
-Example:
 ```bash
-ILA_DEPTH=1024 IMPL_MODE=auto TARGET=custom_xczu47dr_slave make hardware
+PYTHONPATH=software python -m dr47.hardware_sync_mode_test
 ```
 
-For RTL or constraint-only iterations after one successful full build:
-```bash
-TARGET=custom_xczu47dr_slave make hardware-fast
+The test verifies that external mode rejects trigger-gated playback, explicit `bypass_sync()` enables software and XS19 triggers, and restoring external mode closes the gate. It proves digital control state only; analog RF output requires independent instrument measurement.
+
+## Reports
+
+Within a chosen project directory, report paths follow Vivado's normal form:
+
+```text
+<work>/<project>.runs/synth_1/reports/
+<work>/<project>.runs/impl_1/reports/
 ```
 
-Use the full `make hardware` target after changing an IP-generation Tcl file,
-the RFDC/DDR configuration, or the selected FPGA part.
-
-## Advanced Features
-
-### Incremental Compilation
-
-Speed up builds by reusing previous results:
-```tcl
-set_property INCREMENTAL_CHECKPOINT previous_run.dcp [get_runs impl_1]
-```
-
-### Out-of-Context Synthesis
-
-Synthesize modules independently:
-```tcl
-create_run ooc_synth -flow {Vivado Synthesis 2024} -strategy "Flow_PerfOptimized_high"
-```
-
-### Partial Reconfiguration
-
-Enable dynamic FPGA reconfiguration:
-```tcl
-set_property HD.RECONFIGURABLE true [get_cells reconfig_module]
-```
-
-## Next Steps
-
-After successful hardware build:
-
-1. **Verify Outputs**
-   ```bash
-   ls -lh output/
-   ```
-
-2. **Build Firmware**
-   ```bash
-   cd ../../firmware
-   ./build.sh
-   ```
-
-3. **Program FPGA**
-   ```bash
-   cd ../../firmware
-   ./build.sh program
-   ```
-
-## References
-
-- [Vivado Design Suite User Guide](https://www.xilinx.com/support/documentation/sw_manuals/xilinx2024_2/ug892-vivado-design-flows-overview.pdf)
-- [Zynq UltraScale+ RFSoC Data Converter (PG269)](https://docs.amd.com/r/en-US/pg269-rf-data-converter)
-- [Zynq UltraScale+ Technical Reference](https://www.xilinx.com/support/documentation/user_guides/ug1085-zynq-ultrascale-trm.pdf)
-- [Vivado TCL Commands](https://www.xilinx.com/support/documentation/sw_manuals/xilinx2024_2/ug835-vivado-tcl-commands.pdf)
+Check the implementation timing summary for WNS/TNS and WHS/THS. Existing methodology DRC warnings must be evaluated by their rule and affected cells; they are not automatically timing failures.

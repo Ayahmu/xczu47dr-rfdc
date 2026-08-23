@@ -4,9 +4,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${TARGET:-custom_xczu47dr}"
-WORK_DIR="${SCRIPT_DIR}/work"
-OUTPUT_DIR="${SCRIPT_DIR}/output"
+TARGET="${TARGET:-custom_xczu47dr_master}"
+WORK_DIR="${VIVADO_WORK_DIR:-${SCRIPT_DIR}/work}"
+OUTPUT_DIR="${VIVADO_OUTPUT_DIR:-${SCRIPT_DIR}/output}"
+REPORT_DIR="${VIVADO_REPORT_DIR:-${SCRIPT_DIR}/reports}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -152,7 +153,8 @@ else
                "${WORK_DIR}/${PROJECT_NAME}.ip_user_files" \
                "${WORK_DIR}/${PROJECT_NAME}.sim"
     fi
-    vivado -mode batch -source scripts/create_project.tcl -tclargs "${TARGET}" -notrace
+    VIVADO_WORK_DIR="${WORK_DIR}" VIVADO_OUTPUT_DIR="${OUTPUT_DIR}" VIVADO_REPORT_DIR="${REPORT_DIR}" \
+        vivado -mode batch -source scripts/create_project.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Project creation failed"
         exit 1
@@ -163,7 +165,8 @@ fi
 # Step 3: Run Synthesis
 if [ "$SKIP_SYNTH" = false ]; then
     print_step "Step 3/5: Running synthesis..."
-    vivado -mode batch -source scripts/run_synth.tcl -tclargs "${TARGET}" -notrace
+    VIVADO_WORK_DIR="${WORK_DIR}" VIVADO_OUTPUT_DIR="${OUTPUT_DIR}" VIVADO_REPORT_DIR="${REPORT_DIR}" \
+        vivado -mode batch -source scripts/run_synth.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Synthesis failed"
         exit 1
@@ -176,7 +179,8 @@ fi
 # Step 4: Run Implementation
 if [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" = false ]; then
     print_step "Step 4/5: Running implementation..."
-    vivado -mode batch -source scripts/run_impl.tcl -tclargs "${TARGET}" -notrace
+    VIVADO_WORK_DIR="${WORK_DIR}" VIVADO_OUTPUT_DIR="${OUTPUT_DIR}" VIVADO_REPORT_DIR="${REPORT_DIR}" \
+        vivado -mode batch -source scripts/run_impl_manual.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Implementation failed"
         exit 1
@@ -189,13 +193,15 @@ fi
 # Step 5: Generate Bitstream and Export XSA
 if [ "$SKIP_BITSTREAM" = false ] && [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" = false ]; then
     print_step "Step 5/5: Generating bitstream and exporting XSA..."
-    vivado -mode batch -source scripts/run_bitstream.tcl -tclargs "${TARGET}" -notrace
+    VIVADO_WORK_DIR="${WORK_DIR}" VIVADO_OUTPUT_DIR="${OUTPUT_DIR}" VIVADO_REPORT_DIR="${REPORT_DIR}" \
+        vivado -mode batch -source scripts/run_bitstream.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "Bitstream generation failed"
         exit 1
     fi
 
-    vivado -mode batch -source scripts/export_xsa.tcl -tclargs "${TARGET}" -notrace
+    VIVADO_WORK_DIR="${WORK_DIR}" VIVADO_OUTPUT_DIR="${OUTPUT_DIR}" VIVADO_REPORT_DIR="${REPORT_DIR}" \
+        vivado -mode batch -source scripts/export_xsa.tcl -tclargs "${TARGET}" -notrace
     if [ $? -ne 0 ]; then
         print_error "XSA export failed"
         exit 1
@@ -215,14 +221,14 @@ print_info "Work directory: ${WORK_DIR}"
 print_info "Output directory: ${OUTPUT_DIR}"
 echo ""
 
-if [ -f "${OUTPUT_DIR}/${PROJECT_NAME}.bit" ]; then
-    BIT_SIZE=$(du -h "${OUTPUT_DIR}/${PROJECT_NAME}.bit" | cut -f1)
-    print_info "Bitstream: ${OUTPUT_DIR}/${PROJECT_NAME}.bit (${BIT_SIZE})"
+if [ -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" ]; then
+    BIT_SIZE=$(du -h "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" | cut -f1)
+    print_info "Bitstream: ${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit (${BIT_SIZE})"
 fi
 
-if [ -f "${OUTPUT_DIR}/${PROJECT_NAME}.xsa" ]; then
-    XSA_SIZE=$(du -h "${OUTPUT_DIR}/${PROJECT_NAME}.xsa" | cut -f1)
-    print_info "XSA: ${OUTPUT_DIR}/${PROJECT_NAME}.xsa (${XSA_SIZE})"
+if [ -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa" ]; then
+    XSA_SIZE=$(du -h "${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa" | cut -f1)
+    print_info "XSA: ${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa (${XSA_SIZE})"
 fi
 
 echo ""

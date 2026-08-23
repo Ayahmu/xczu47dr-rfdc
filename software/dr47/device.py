@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Literal
@@ -43,7 +44,7 @@ from .protocol import (
     RF2_STATUS_UNSUPPORTED,
     RF2_STATUS_RANGE,
     RF2_SYNC_MODE_EXTERNAL,
-    RF2_SYNC_MODE_SELF_TEST,
+    RF2_SYNC_MODE_BYPASS,
     RF2_SYNC_ROLE_MASTER,
     RF2_SYNC_ROLE_SLAVE,
     pack_rfctrl2_abort_mute,
@@ -377,46 +378,68 @@ class Dr47Device:
         return response
 
     def set_sync_role(self, role: str) -> int:
-        """Select the XS20 synchronization direction at runtime."""
+        """Validate the role fixed into this bitstream; it cannot be changed."""
 
         value = str(role).strip().lower()
         if value not in {"master", "slave"}:
             raise ValueError("sync role must be 'master' or 'slave'")
-        role_code = RF2_SYNC_ROLE_MASTER if value == "master" else RF2_SYNC_ROLE_SLAVE
-        mode_code = RF2_SYNC_MODE_SELF_TEST if self._sync_mode == "self_test" else RF2_SYNC_MODE_EXTERNAL
+        fixed_role = self.status(refresh=False).capabilities.sync_role
+        if fixed_role not in {"master", "slave"}:
+            fixed_role = self.status(refresh=True).capabilities.sync_role
+        if value != fixed_role:
+            raise SynchronizationError(
+                f"bitstream role is fixed as {fixed_role!r}; requested {value!r} requires the other bitstream"
+            )
+        role_code = RF2_SYNC_ROLE_MASTER if fixed_role == "master" else RF2_SYNC_ROLE_SLAVE
+        mode_code = RF2_SYNC_MODE_BYPASS if self._sync_mode == "bypass" else RF2_SYNC_MODE_EXTERNAL
         self._require_connected()
         response = self.rfctrl2_set_sync_role(role_code, mode_code, wait_response=True)
         self._check_response(response, "SET_SYNC_ROLE")
-        self._sync_role = value
-        self._capabilities = replace(self._capabilities, sync_role=value)
+        self._sync_role = fixed_role
+        self._capabilities = replace(self._capabilities, sync_role=fixed_role)
         return 0
 
     def set_sync_mode(self, mode: str) -> int:
-        """Select strict external synchronization or the explicit test bypass."""
+        """Select strict external synchronization or explicit local bypass."""
 
         value = str(mode).strip().lower()
-        if value not in {"external", "self_test"}:
-            raise ValueError("sync mode must be 'external' or 'self_test'")
-        mode_code = RF2_SYNC_MODE_SELF_TEST if value == "self_test" else RF2_SYNC_MODE_EXTERNAL
+        if value == "self_test":
+            warnings.warn("sync mode 'self_test' is deprecated; use 'bypass'", DeprecationWarning, stacklevel=2)
+            value = "bypass"
+        if value not in {"external", "bypass"}:
+            raise ValueError("sync mode must be 'external' or 'bypass'")
+        capability_bits = self.status(refresh=False).capabilities.capability_bits
+        required_capabilities = RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO
+        if (capability_bits & required_capabilities) != required_capabilities:
+            raise UnsupportedCapabilityError(
+                "SET_SYNC_ROLE requires RFCTRL2 SYNC and Trigger capabilities; "
+                f"board capabilities=0x{capability_bits:08X}"
+            )
+        mode_code = RF2_SYNC_MODE_BYPASS if value == "bypass" else RF2_SYNC_MODE_EXTERNAL
         role_code = RF2_SYNC_ROLE_MASTER if self._sync_role == "master" else RF2_SYNC_ROLE_SLAVE
         self._require_connected()
         response = self.rfctrl2_set_sync_role(role_code, mode_code, wait_response=True)
         self._check_response(response, "SET_SYNC_ROLE")
         self._sync_mode = value
-        self._capabilities = replace(
-            self._capabilities,
-            sync_mode=value,
-            sync_seen=(value == "self_test"),
-            sync_link_ready=(value == "self_test"),
-        )
+        self.status(refresh=True)
         return 0
+
+    def bypass_sync(self) -> int:
+        """Allow a slave to run locally when no XS20 SYNC source is present."""
+
+        return self.set_sync_mode("bypass")
+
+    def require_external_sync(self) -> int:
+        """Return a slave to XS20-gated playback mode."""
+
+        return self.set_sync_mode("external")
 
     def sync(self, epoch: int = 1) -> int:
         """Emit one external SYNC pulse when this board is the master."""
 
         self._require_connected()
-        if self._sync_mode == "self_test":
-            raise SynchronizationError("sync() is disabled in self_test mode")
+        if self._sync_mode == "bypass":
+            raise SynchronizationError("sync() is disabled in bypass mode")
         if self._sync_role != "master":
             raise SynchronizationError("sync() requires sync_role='master'")
         response = self.rfctrl2_sync_epoch(int(epoch), wait_response=True)
@@ -650,6 +673,8 @@ class Dr47Device:
         loop: bool = False,
         packet_pause_s: float = 1e-5,
         packet_burst: int = 8,
+        channel_delays: Mapping[int, int] | None = None,
+        instruction_repeats: int = 1,
     ) -> dict[str, Any]:
         """Upload one or more channels and queue WAVEINS0 playback commands."""
         if layout != DDR_LAYOUT_INTERLEAVED_512B:
@@ -681,6 +706,11 @@ class Dr47Device:
             if packet_pause and packet_count % burst == 0:
                 time.sleep(packet_pause)
         commands: list[list[int]] = []
+        delays = {} if channel_delays is None else {int(channel): int(delay) for channel, delay in channel_delays.items()}
+        if any(channel not in normalized for channel in delays):
+            raise ParameterRangeError("channel_delays contains a channel with no uploaded waveform")
+        if any(delay < 0 for delay in delays.values()):
+            raise ParameterRangeError("channel delay must be non-negative")
         wait_for_trigger = False
         loop_from_sequence = False
         if channel_sequences:
@@ -695,12 +725,20 @@ class Dr47Device:
                 loop_from_sequence = loop_from_sequence or bool(meta["loop"])
         if not commands:
             for channel, wave in sorted(normalized.items()):
+                # The web uploader emits a DELAY before every PLAY, including
+                # a zero-delay row. Keep that available for packet parity.
+                if channel_delays is not None:
+                    commands.append([1, channel, delays.get(channel, 0), 0])
                 commands.append([2, channel, waveform_length_bytes(wave), base_addr, PLAY_FLAG_INTERLEAVED])
         effective_loop = bool(loop or loop_from_sequence)
         commands.append([3, 0 if wait_for_trigger or not auto_start else 15, 0, 0, PLAY_FLAG_LOOP if effective_loop else 0])
         instruction_packet = pack_udp_instruction_packet(commands)
-        self.transport.send(instruction_packet)
-        packet_count += 1
+        repeats = max(1, int(instruction_repeats))
+        for repeat_index in range(repeats):
+            self.transport.send(instruction_packet)
+            packet_count += 1
+            if repeat_index + 1 < repeats:
+                time.sleep(0.002)
         self._uploaded_channels.update(normalized)
         return {
             "packet_count": packet_count,
@@ -709,6 +747,7 @@ class Dr47Device:
             "wait_for_trigger": wait_for_trigger,
             "loop": effective_loop,
             "commands": commands,
+            "instruction_repeats": repeats,
         }
 
     def download_qc_wave_seq(self, channel_type: str, channel: int, wave, seq, slot: int | None = None, **kwargs: Any) -> int:

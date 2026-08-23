@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIRMWARE_DIR="${SCRIPT_DIR}"
 PROJECT_ROOT="$(dirname "${FIRMWARE_DIR}")"
-TARGET="${TARGET:-custom_xczu47dr}"
+TARGET="${TARGET:-custom_xczu47dr_master}"
 SRC_DIR="${FIRMWARE_DIR}/src"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -40,13 +40,14 @@ if [ -z "${WORKSPACE_RELATIVE}" ] || [ -z "${TARGET_OUTPUT_BASENAME}" ] || [ -z 
 fi
 WORKSPACE_DIR="${PROJECT_ROOT}/${WORKSPACE_RELATIVE}"
 APP_SRC_DIR="${WORKSPACE_DIR}/${APP_NAME}/src"
-XSA_FILE="${PROJECT_ROOT}/hardware/vivado/output/${TARGET_OUTPUT_BASENAME}.xsa"
-BIT_FILE="${PROJECT_ROOT}/hardware/vivado/output/${TARGET_OUTPUT_BASENAME}.bit"
+VIVADO_OUTPUT_DIR="${VIVADO_OUTPUT_DIR:-${PROJECT_ROOT}/hardware/vivado/output}"
+XSA_FILE="${VIVADO_OUTPUT_DIR}/${TARGET_OUTPUT_BASENAME}.xsa"
+BIT_FILE="${VIVADO_OUTPUT_DIR}/${TARGET_OUTPUT_BASENAME}.bit"
 ELF_FILE="${PROJECT_ROOT}/${ELF_RELATIVE}"
 PSU_INIT_FILE="${PROJECT_ROOT}/${PSU_INIT_RELATIVE}"
 
 case "${TARGET}" in
-    custom_xczu47dr|custom_xczu47dr_master|custom_xczu47dr_slave)
+    custom_xczu47dr_master|custom_xczu47dr_slave)
         BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR"
         ;;
     custom_xczu47dr_bw)
@@ -87,6 +88,7 @@ sync_app_sources() {
     else
         cp -a "${SRC_DIR}/." "${APP_SRC_DIR}/"
     fi
+
 }
 
 build_app() {
@@ -183,6 +185,21 @@ case "$1" in
         run_xsct "${SCRIPT_DIR}/scripts/program.tcl" "${BIT_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
         ;;
 
+    download)
+        if [ "${DRY_RUN}" = "1" ]; then
+            run_dry_run
+            print_target_paths
+        else
+            build_app
+            if [ ! -f "${ELF_FILE}" ]; then
+                print_error "ELF file not found: ${ELF_FILE}"
+                exit 1
+            fi
+        fi
+        print_info "Downloading ELF only; the FPGA bitstream will not be reprogrammed"
+        DOWNLOAD_ELF_ONLY=1 run_xsct "${SCRIPT_DIR}/scripts/program.tcl" "${BIT_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
+        ;;
+
     clean)
         print_warn "Cleaning workspace..."
         rm -rf "${WORKSPACE_DIR}"
@@ -190,13 +207,14 @@ case "$1" in
         ;;
 
     *)
-        echo "Usage: $0 {create|build|rebuild|program|clean}"
+        echo "Usage: $0 {create|build|rebuild|program|download|clean}"
         echo ""
         echo "Commands:"
         echo "  create   - Create Vitis application from XSA"
         echo "  build    - Build application (incremental)"
         echo "  rebuild  - Clean and rebuild from scratch"
         echo "  program  - Program FPGA and download ELF via JTAG"
+        echo "  download - Download ELF only; preserve the programmed FPGA bitstream"
         echo "  clean    - Remove workspace"
         echo ""
         echo "Set DRY_RUN=1 to print resolved target paths and XSCT commands without requiring artifacts."

@@ -123,10 +123,9 @@ module Top #(
 
 
   wire        hmc7044_set_finish;
-  // Both master and slave lock the HMC7044 to the shared 250 MHz reference
-  // on XS17 (CLKIN1). HMC7044 R1=25 creates a 10 MHz PLL1 PFD; only the
-  // SYNC/trigger roles differ.
-  wire        hmc_use_external_250mhz = 1'b1;
+  // Temporary XS17 profile: a 10 MHz reference drives CLKIN1. HMC7044 R1=1
+  // creates a 10 MHz PLL1 PFD; only the SYNC/trigger roles differ.
+  wire        hmc_use_external_xs17 = 1'b1;
 
   hmc7044 hmc7044_i (
       .clk(pl_clk),
@@ -135,7 +134,7 @@ module Top #(
       .H7044_SCLK(H7044_SCLK_0),
       .H7044_SDATA(H7044_SDATA_0),
       .SET_FINISH(hmc7044_set_finish),
-      .USE_EXTERNAL_250MHZ(hmc_use_external_250mhz),
+      .USE_EXTERNAL_XS17(hmc_use_external_xs17),
       .IS_MASTER(IS_MASTER ? 1'b1 : 1'b0)
   );
 
@@ -162,15 +161,13 @@ module Top #(
   wire rfctrl2_sync_epoch_pulse;
   wire rfctrl2_trigger_pulse;
   wire rfctrl2_set_sync_role_pulse;
-  wire [31:0] rfctrl2_sync_role;
   wire [31:0] rfctrl2_sync_mode;
   wire rfctrl2_emit_trigger_pulse;
-  reg sync_role_master_ddr;
-  reg sync_self_test_ddr;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_role_master_pl_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_self_test_pl_sync;
-  wire sync_role_master_pl = sync_role_master_pl_sync[1];
-  wire sync_self_test_pl = sync_self_test_pl_sync[1];
+  wire sync_role_master_ddr = IS_MASTER ? 1'b1 : 1'b0;
+  reg sync_bypass_ddr;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_bypass_pl_sync;
+  wire sync_role_master_pl = IS_MASTER ? 1'b1 : 1'b0;
+  wire sync_bypass_pl = sync_bypass_pl_sync[1];
 
   IOBUF sync_xs20_iobuf (
       .I  (sync_xs20_out),
@@ -181,12 +178,16 @@ module Top #(
   assign trigger_xs18_out = trigger_link_out;
   assign TRIG_1 = trigger_xs18_out;
 
-  // Keep the VIO request as a local debug source. Physical synchronization is
-  // carried only by the single-ended XS20 IOBUF above.
+  // VIO is generated only for the master project. It is a local debug source;
+  // physical synchronization is carried only by the XS20 IOBUF.
+`ifdef CUSTOM_XCZU47DR_MASTER
   vio_0 vio_sync_i (
       .clk       (pl_clk),
       .probe_out0(vio_sync_request)
   );
+`else
+  assign vio_sync_request = 1'b0;
+`endif
 
   sync_trigger_link #(
       .IS_MASTER(IS_MASTER),
@@ -204,7 +205,7 @@ module Top #(
       .trigger_in         (TRIG_2),
       .dac_trigger_start  (dac_trigger_start),
       .role_master        (sync_role_master_pl),
-      .self_sync          (sync_self_test_pl),
+      .sync_bypass       (sync_bypass_pl),
       .hmc_sync           (sync_hmc),
       .sync_link_out      (sync_link_out),
       .trigger_link_out   (trigger_link_out),
@@ -221,7 +222,7 @@ module Top #(
   );
 
   assign sync_xs20_out = sync_link_out;
-  assign sync_xs20_oe = sync_role_master_pl && !sync_self_test_pl;
+  assign sync_xs20_oe = sync_role_master_pl;
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_seen_ddr_sync;
@@ -323,21 +324,17 @@ module Top #(
 
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if (!ddr4_ui_aresetn) begin
-      sync_role_master_ddr <= IS_MASTER ? 1'b1 : 1'b0;
-      sync_self_test_ddr <= 1'b0;
+      sync_bypass_ddr <= 1'b0;
     end else if (rfctrl2_set_sync_role_pulse) begin
-      sync_role_master_ddr <= (rfctrl2_sync_role == 32'd1);
-      sync_self_test_ddr <= (rfctrl2_sync_mode == 32'd1);
+      sync_bypass_ddr <= (rfctrl2_sync_mode == 32'd1);
     end
   end
 
   always @(posedge pl_clk or negedge pl_aresetn) begin
     if (!pl_aresetn) begin
-      sync_role_master_pl_sync <= {2{IS_MASTER ? 1'b1 : 1'b0}};
-      sync_self_test_pl_sync <= 2'b00;
+      sync_bypass_pl_sync <= 2'b00;
     end else begin
-      sync_role_master_pl_sync <= {sync_role_master_pl_sync[0], sync_role_master_ddr};
-      sync_self_test_pl_sync <= {sync_self_test_pl_sync[0], sync_self_test_ddr};
+      sync_bypass_pl_sync <= {sync_bypass_pl_sync[0], sync_bypass_ddr};
     end
   end
   wire         control_trigger_pulse;
@@ -769,7 +766,7 @@ module Top #(
       .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
       .rfctrl2_epoch       (rfctrl2_epoch),
       .rfctrl2_set_sync_role_pulse(rfctrl2_set_sync_role_pulse),
-      .rfctrl2_sync_role   (rfctrl2_sync_role),
+      .rfctrl2_sync_role   (),
       .rfctrl2_sync_mode   (rfctrl2_sync_mode),
       .rfctrl2_emit_trigger_pulse(rfctrl2_emit_trigger_pulse),
       .rfctrl2_start_valid (rfctrl2_start_valid),
@@ -804,7 +801,7 @@ module Top #(
       .playback_prepared   (rfctrl2_prepared_ddr),
       .playback_running    (pc_started_ddr),
       .sync_role_master    (sync_role_master_ddr),
-      .sync_self_test      (sync_self_test_ddr),
+      .sync_bypass         (sync_bypass_ddr),
       .sync_seen           (sync_seen_ddr),
       .sync_link_ready     (sync_link_ready_ddr),
       .trigger_input_count (trigger_input_count_ddr),
@@ -1124,23 +1121,40 @@ module Top #(
   // ========== trigger CDC ==========
   // XS18/XS19 carry the independent playback Trigger. The sync_trigger_link
   // module gates both the dedicated input and the legacy fallback behind the
-  // external XS20 SYNC state (or the explicit self_test bypass).
+  // external XS20 SYNC state (or the explicit runtime bypass).
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_ddr_sync_ff;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_sync_ff;
+  // XS19 is asynchronous to the DAC fabric. Transfer its accepted event with
+  // a toggle rather than a one-cycle level: a short input pulse can be seen
+  // and counted in pl_clk yet still be missed by an unrelated DAC clock.
+  reg role_trigger_toggle_pl;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_toggle_sync_ff;
+  reg role_trigger_dac_toggle_seen;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn)
       role_trigger_ddr_sync_ff <= 3'b000;
     else
       role_trigger_ddr_sync_ff <= {role_trigger_ddr_sync_ff[1:0], role_trigger_raw};
   end
+  always @(posedge pl_clk or negedge pl_aresetn) begin
+    if(!pl_aresetn)
+      role_trigger_toggle_pl <= 1'b0;
+    else if(role_trigger_raw)
+      role_trigger_toggle_pl <= ~role_trigger_toggle_pl;
+  end
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
-    if(!clk104_aresetn)
-      role_trigger_dac_sync_ff <= 3'b000;
-    else
-      role_trigger_dac_sync_ff <= {role_trigger_dac_sync_ff[1:0], role_trigger_raw};
+    if(!clk104_aresetn) begin
+      role_trigger_dac_toggle_sync_ff <= 3'b000;
+      role_trigger_dac_toggle_seen <= 1'b0;
+    end else begin
+      role_trigger_dac_toggle_sync_ff <= {
+          role_trigger_dac_toggle_sync_ff[1:0], role_trigger_toggle_pl
+      };
+      role_trigger_dac_toggle_seen <= role_trigger_dac_toggle_sync_ff[2];
+    end
   end
   wire role_trigger_ddr_sync = role_trigger_ddr_sync_ff[2];
-  wire role_trigger_dac_sync = role_trigger_dac_sync_ff[2];
+  wire role_trigger_dac_pulse =
+      role_trigger_dac_toggle_sync_ff[2] != role_trigger_dac_toggle_seen;
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1163,8 +1177,7 @@ module Top #(
     end
   end
   wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] |
-                              udp_trigger_dac_sync_ff[2] |
-                              role_trigger_dac_sync;
+                              udp_trigger_dac_sync_ff[2];
 
 
   // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========
@@ -1269,7 +1282,7 @@ module Top #(
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
     // ARM only prepares/prefills playback. A real trigger releases output.
-    .trigger(ps_trigger_ddr_sync | rfctrl2_trigger_pulse),
+    .trigger(ps_trigger_ddr_sync | (rfctrl2_trigger_pulse && sync_link_ready_ddr)),
     .abort_clear(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
 
     .s_axis_instr_tdata(instr_tdata),
@@ -1387,8 +1400,7 @@ module Top #(
   wire rfctrl2_play_trigger;
   wire rfctrl2_play_prepare;
   wire rfctrl2_play_abort;
-  wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger |
-      ((!sync_role_master_pl) ? role_trigger_dac_sync : 1'b0);
+  wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger | role_trigger_dac_pulse;
   wire unused_single_board_inputs = mclk_10m_p | mclk_10m_n | EXT_TRIGGER_P | EXT_TRIGGER_N |
       rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1417,7 +1429,7 @@ module Top #(
     .ddr_clk                 (ddr4_ui_clk),
     .ddr_rst_n               (ddr4_ui_aresetn),
     .rfctrl2_arm_pulse       (rfctrl2_arm_pulse),
-    .rfctrl2_trigger_pulse   (rfctrl2_trigger_pulse),
+    .rfctrl2_trigger_pulse   (rfctrl2_trigger_pulse && sync_link_ready_ddr),
     .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
     .dac_clk                 (dac_axis_clk),
     .dac_rst_n               (dac_rst_n),

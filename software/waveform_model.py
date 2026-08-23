@@ -34,8 +34,10 @@ IlaSubprocessRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 CONNECTION_TEST_PAYLOAD = b"RFSOC_GUI_TEST"
 SOFTWARE_DIR = Path(__file__).resolve().parent
 ILA_CAPTURE_REPORT_SCRIPT = SOFTWARE_DIR / "ila_capture_report.py"
-DEFAULT_ILA_BIT_PATH = Path("hardware/vivado/output/custom_xczu47dr_rfdc.bit")
-DEFAULT_ILA_LTX_PATH = Path("hardware/vivado/output/custom_xczu47dr_rfdc.ltx")
+# The ILA helper defaults to the formal master artifact. Pass explicit paths
+# when inspecting the slave build; the two designs have distinct probe files.
+DEFAULT_ILA_BIT_PATH = Path("hardware/vivado/output/custom_xczu47dr_master.bit")
+DEFAULT_ILA_LTX_PATH = Path("hardware/vivado/output/custom_xczu47dr_master.ltx")
 DEFAULT_ILA_REPORT_DIR = Path("software/ila_reports")
 DEFAULT_GUI_SETTINGS_PATH = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))

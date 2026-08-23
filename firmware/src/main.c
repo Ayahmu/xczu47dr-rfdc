@@ -90,9 +90,6 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
 #define HMC7044_POLL_COUNT 50
 #define HMC7044_POLL_INTERVAL_US 100000
-#define HMC_SYNC_DONE_MASK (1U << 30)
-#define HMC_SYNC_WAIT_COUNT 600
-#define HMC_SYNC_WAIT_INTERVAL_US 100000
 #define DAC_MTS_TILE_MASK 0x0FU
 #define FW_STATUS_MTS_REQUIRED (1U << 1)
 #define FW_STATUS_MTS_READY (1U << 2)
@@ -561,23 +558,9 @@ int main(void)
 		return XST_FAILURE;
 	}
 
-	u32 hmcSyncStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
-	xil_printf("HMC SYNC gate initial status: 0x%08lx (mask 0x%08lx)\r\n",
-		   (unsigned long)hmcSyncStatus, (unsigned long)HMC_SYNC_DONE_MASK);
-	u32 syncWait = 0U;
-	while ((hmcSyncStatus & HMC_SYNC_DONE_MASK) == 0U)
-	{
-		usleep(HMC_SYNC_WAIT_INTERVAL_US);
-		hmcSyncStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
-		syncWait++;
-		if ((syncWait % 10U) == 0U)
-		{
-			xil_printf("HMC SYNC gate waiting: 0x%08lx (elapsed %lu s)\r\n",
-				   (unsigned long)hmcSyncStatus,
-				   (unsigned long)(syncWait * HMC_SYNC_WAIT_INTERVAL_US / 1000000U));
-		}
-	}
-	xil_printf("HMC SYNC gate status: 0x%08lx\r\n", (unsigned long)hmcSyncStatus);
+	u32 syncStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
+	xil_printf("XS20 SYNC startup status: 0x%08lx; RFDC initialization does not wait for external SYNC.\r\n",
+		   (unsigned long)syncStatus);
 
 	sleep(2);
 

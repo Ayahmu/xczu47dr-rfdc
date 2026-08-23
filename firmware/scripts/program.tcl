@@ -13,7 +13,11 @@ set bit_file [file normalize [lindex $argv 0]]
 set elf_file [file normalize [lindex $argv 1]]
 set script_dir [file dirname [file normalize [info script]]]
 set firmware_dir [file normalize [file join $script_dir ".."]]
-set target custom_xczu47dr
+set target custom_xczu47dr_master
+set download_elf_only 0
+if {[info exists ::env(DOWNLOAD_ELF_ONLY)] && $::env(DOWNLOAD_ELF_ONLY) eq "1"} {
+    set download_elf_only 1
+}
 if {[info exists ::env(TARGET)]} {
     set target $::env(TARGET)
 }
@@ -138,7 +142,7 @@ proc recover_psu_target {target} {
 }
 
 if {![info exists ::env(DRY_RUN)] || $::env(DRY_RUN) ne "1"} {
-if {![file exists $bit_file]} {
+if {!$download_elf_only && ![file exists $bit_file]} {
     puts "ERROR: bitstream not found: $bit_file"
     exit 1
 }
@@ -146,7 +150,7 @@ if {![file exists $elf_file]} {
     puts "ERROR: ELF not found: $elf_file"
     exit 1
 }
-if {![file exists $psu_init_file]} {
+if {!$download_elf_only && ![file exists $psu_init_file]} {
     puts "ERROR: psu_init.tcl not found: $psu_init_file"
     puts "Run firmware platform creation first: make firmware-create or make firmware"
     exit 1
@@ -154,11 +158,19 @@ if {![file exists $psu_init_file]} {
 }
 
 puts "=========================================="
-puts "Programming FPGA"
+if {$download_elf_only} {
+    puts "Downloading ELF only (preserving FPGA bitstream)"
+} else {
+    puts "Programming FPGA"
+}
 puts "=========================================="
-puts "BIT: ${bit_file}"
+if {!$download_elf_only} {
+    puts "BIT: ${bit_file}"
+}
 puts "ELF: ${elf_file}"
-puts "PS init: ${psu_init_file}"
+if {!$download_elf_only} {
+    puts "PS init: ${psu_init_file}"
+}
 puts ""
 
 if {[info exists ::env(DRY_RUN)] && $::env(DRY_RUN) eq "1"} {
@@ -196,30 +208,32 @@ if {$requested_serial ne "" && [string first "jtag_cable_serial ${requested_seri
 puts "Available targets for selected cable ${requested_serial}:"
 targets
 
-recover_psu_target $target
+if {!$download_elf_only} {
+    recover_psu_target $target
 
-puts "Resetting system..."
-select_board_target $target psu
-if {[catch {rst -system} reset_error]} {
-    puts "WARNING: rst -system failed on selected PS target: ${reset_error}"
-    puts "WARNING: Continuing with psu_init/fpga/dow; some XSCT target names such as PS TAP do not support system reset."
+    puts "Resetting system..."
+    select_board_target $target psu
+    if {[catch {rst -system} reset_error]} {
+        puts "WARNING: rst -system failed on selected PS target: ${reset_error}"
+        puts "WARNING: Continuing with psu_init/fpga/dow; some XSCT target names such as PS TAP do not support system reset."
+    }
+    after 3000
+
+    puts "Initializing PS..."
+    source $psu_init_file
+
+    select_board_target $target psu
+    psu_init
+
+    puts "Programming FPGA..."
+    select_board_target $target fpga
+    fpga ${bit_file}
+
+    puts "Configuring PS-PL isolation and resets..."
+    select_board_target $target psu
+    psu_ps_pl_isolation_removal
+    psu_ps_pl_reset_config
 }
-after 3000
-
-puts "Initializing PS..."
-source $psu_init_file
-
-select_board_target $target psu
-psu_init
-
-puts "Programming FPGA..."
-select_board_target $target fpga
-fpga ${bit_file}
-
-puts "Configuring PS-PL isolation and resets..."
-select_board_target $target psu
-psu_ps_pl_isolation_removal
-psu_ps_pl_reset_config
 
 puts "Downloading ELF to A53 #0..."
 select_board_target $target a53

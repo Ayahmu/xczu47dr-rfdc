@@ -1,317 +1,116 @@
 # Hardware Design
 
-This directory contains the complete hardware design for the XCZU47DR RFDC project, including Chisel HDL sources and Vivado FPGA implementation.
+This directory contains the Chisel sources, Vivado design, constraints, and hardware build scripts for the custom XCZU47DR RFDC board.
 
-## Directory Structure
+## Supported RFDC Designs
 
-```
-hardware/
-├── chisel/              # Chisel hardware description language sources
-│   ├── build.sc         # Mill build configuration
-│   ├── build.sh         # Chisel build script
-│   ├── .mill-version    # Mill version specification
-│   ├── common/          # Common Chisel modules
-│   ├── led/             # LED controller module
-│   ├── gpio/            # GPIO controller module
-│   ├── axidma/          # AXI DMA module
-│   ├── memory/          # Memory controller module
-│   └── generated/       # Generated Verilog output (auto-generated)
-│
-└── vivado/              # Vivado FPGA project
-    ├── build.sh         # Complete build automation script
-    ├── scripts/         # Vivado TCL scripts
-    │   ├── create_project.tcl   # Project creation
-    │   ├── run_synth.tcl        # Synthesis
-    │   ├── run_impl.tcl         # Implementation
-    │   ├── run_bitstream.tcl    # Bitstream generation
-    │   └── export_xsa.tcl       # XSA export for firmware
-    ├── bd/              # Block Design TCL scripts
-    ├── src/             # Additional RTL sources
-    ├── xdc/             # Constraint files
-    ├── work/            # Vivado project workspace (auto-generated)
-    └── output/          # Build outputs (bitstream, XSA)
-```
+The production RFDC designs are intentionally limited to two bitstreams:
 
-## Prerequisites
+| Target | XS20 direction | Local playback policy |
+|---|---|---|
+| `custom_xczu47dr_master` | SYNC output | Software and XS19 triggers are always allowed. `sync()` emits a synchronization pulse. |
+| `custom_xczu47dr_slave` | SYNC input | External mode requires a real XS20 synchronization event. The driver can explicitly call `bypass_sync()` for local bring-up. |
 
-### Chisel Build Requirements
+The normal clock plan is XS17 = **10 MHz** external reference and HMC7044 DAC reference = **128 MHz**. The board-to-board synchronization connection is **master A <-> slave A**. XS18 is the trigger output and XS19 is the trigger input.
 
-- **Mill Build Tool**: Version specified in `.mill-version`
-  ```bash
-  # Install Mill (if not already installed)
-  curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.6/0.11.6 > mill
-  chmod +x mill
-  sudo mv mill /usr/local/bin/
-  ```
+`custom_xczu47dr_bw` is a separate DDR bandwidth test target, not an RFDC playback personality. There is no production `selftest` RFDC target.
 
-- **Java JDK**: Version 8 or higher
-  ```bash
-  java -version
-  ```
+## Build Prerequisites
 
-### Vivado Requirements
-
-- **Xilinx Vivado**: Version 2024.2
-  ```bash
-  # Source Vivado environment
-  source /tools/Xilinx/Vivado/2024.2/settings64.sh
-  ```
-
-- **Target Device**: Zynq UltraScale+ RFSoC xczu47dr-ffvg1517-2-i
-- **Board**: Custom XCZU47DR board
-
-## Quick Start
-
-### Complete Build (Chisel + Vivado)
-
-Build everything from scratch:
+- Vivado 2024.2, with `settings64.sh` sourced.
+- Java and Mill if Chisel sources need regeneration.
+- Sufficient local disk space for two concurrent Vivado projects.
 
 ```bash
-cd hardware/vivado
-./build.sh
-```
-
-This will:
-1. Generate Verilog from Chisel sources
-2. Create Vivado project
-3. Run synthesis
-4. Run implementation
-5. Generate bitstream
-6. Export XSA for firmware development
-
-**Build time**: Approximately 30-60 minutes depending on your machine.
-
-### Build Options
-
-```bash
-# Clean build (remove all previous outputs)
-./build.sh --clean
-
-# Skip Chisel generation (use existing Verilog)
-./build.sh --skip-chisel
-
-# Only create project (no synthesis/implementation)
-./build.sh --skip-synth --skip-impl --skip-bitstream
-
-# Show all options
-./build.sh --help
-```
-
-## Step-by-Step Build
-
-### 1. Generate Chisel Verilog
-
-```bash
-cd hardware/chisel
-
-# Generate all modules
-./build.sh all
-
-# Or generate specific modules
-./build.sh led
-./build.sh gpio
-
-# Clean Chisel build artifacts
-./build.sh clean
-```
-
-**Output**: Verilog files in `chisel/generated/`
-
-### 2. Create Vivado Project
-
-```bash
-cd hardware/vivado
-vivado -mode batch -source scripts/create_project.tcl
-```
-
-**Output**: Vivado project in `vivado/work/custom_xczu47dr_rfdc.xpr`
-
-### 3. Run Synthesis
-
-```bash
-vivado -mode batch -source scripts/run_synth.tcl
-```
-
-**Output**: Synthesis reports in `work/custom_xczu47dr_rfdc.runs/synth_1/reports/`
-
-### 4. Run Implementation
-
-```bash
-vivado -mode batch -source scripts/run_impl.tcl
-```
-
-**Output**: Implementation reports in `work/custom_xczu47dr_rfdc.runs/impl_1/reports/`
-
-### 5. Generate Bitstream
-
-```bash
-vivado -mode batch -source scripts/run_bitstream.tcl
-```
-
-**Output**: `output/custom_xczu47dr_rfdc.bit`
-
-### 6. Export XSA
-
-```bash
-vivado -mode batch -source scripts/export_xsa.tcl
-```
-
-**Output**: `output/custom_xczu47dr_rfdc.xsa` (used by firmware build)
-
-## Hardware Architecture
-
-### Block Design Components
-
-- **Zynq UltraScale+ MPSoC**: ARM Cortex-A53 + Cortex-R5 + Mali GPU
-- **RF Data Converter (RFDC)**: High-speed ADC/DAC for RF signal processing
-- **AXI Interconnect**: High-performance bus for PS-PL communication
-- **AXI DMA**: Direct memory access for efficient data transfer
-- **GPIO**: General purpose I/O for control signals
-- **Custom Chisel Modules**: LED controller, GPIO extensions, etc.
-
-### Memory Map
-
-| Component | Base Address | Size |
-|-----------|--------------|------|
-| M_AXI_GPIO | 0xA0010000 | 64KB |
-| RFDC | 0xA0000000 | 64KB |
-| DDR4 | 0x800000000 | 4GB |
-
-## Chisel Modules
-
-### LED Controller (`led/`)
-- Simple LED blinker for testing
-- Configurable blink frequency
-- AXI-Lite interface
-
-### GPIO Controller (`gpio/`)
-- Extended GPIO functionality
-- Interrupt support
-- AXI-Lite interface
-
-### AXI DMA (`axidma/`)
-- High-performance data transfer
-- Scatter-gather support
-- AXI-Stream interface
-
-## Build Outputs
-
-After a successful build, you will find:
-
-```
-vivado/output/
-├── custom_xczu47dr_rfdc.bit      # FPGA bitstream (~30MB)
-├── custom_xczu47dr_rfdc.ltx      # Debug probes (if ILA/VIO used)
-└── custom_xczu47dr_rfdc.xsa      # Hardware platform for Vitis (~12MB)
-```
-
-## Troubleshooting
-
-### Chisel Build Issues
-
-**Problem**: Mill not found
-```bash
-# Solution: Install Mill
-curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.6/0.11.6 > mill
-chmod +x mill
-sudo mv mill /usr/local/bin/
-```
-
-**Problem**: Java version mismatch
-```bash
-# Solution: Check Java version
-java -version
-# Should be Java 8 or higher
-```
-
-### Vivado Build Issues
-
-**Problem**: Vivado not found
-```bash
-# Solution: Source Vivado settings
 source /tools/Xilinx/Vivado/2024.2/settings64.sh
+source /tools/Xilinx/Vitis/2024.2/settings64.sh
 ```
 
-**Problem**: Synthesis/Implementation fails
-```bash
-# Solution: Check reports for errors
-cat vivado/work/custom_xczu47dr_rfdc.runs/synth_1/reports/post_synth_timing.rpt
-cat vivado/work/custom_xczu47dr_rfdc.runs/impl_1/reports/post_impl_timing.rpt
-```
+## Normal Build Workflow
 
-**Problem**: Timing not met
-- Review timing reports
-- Adjust clock constraints in XDC files
-- Consider adding pipeline stages in critical paths
-
-**Problem**: Resource utilization too high
-- Check utilization reports
-- Optimize Chisel/RTL code
-- Consider using different optimization strategies
-
-## Development Workflow
-
-### Iterative Development
-
-1. **Modify Chisel sources** in `chisel/`
-2. **Regenerate Verilog**: `cd chisel && ./build.sh all`
-3. **Update Vivado project**: `cd vivado && ./build.sh --skip-synth --skip-impl`
-4. **Run synthesis**: `vivado -mode batch -source scripts/run_synth.tcl`
-5. **Check timing/utilization** in reports
-6. **Iterate** until design meets requirements
-
-### GUI Development
-
-For interactive development, open the project in Vivado GUI:
+Run commands from the repository root.
 
 ```bash
-cd hardware/vivado
-vivado work/custom_xczu47dr_rfdc.xpr
+# Build one role and its XSA.
+make hardware TARGET=custom_xczu47dr_master
+make hardware TARGET=custom_xczu47dr_slave
+
+# Build both FPGA bitstreams concurrently.
+make bitstream-dual
+
+# Build an ELF against the selected role-specific XSA.
+make firmware TARGET=custom_xczu47dr_slave
 ```
 
-## Performance Metrics
+`make bitstream-dual` first performs the shared Chisel generation, then runs two Vivado builds concurrently. Their mutable state is isolated:
 
-Typical resource utilization (post-implementation):
+```text
+hardware/vivado/work-dual/master/
+hardware/vivado/work-dual/slave/
+hardware/vivado/reports-dual/master/
+hardware/vivado/reports-dual/slave/
+```
 
-| Resource | Used | Available | Utilization |
-|----------|------|-----------|-------------|
-| LUT | ~50K | 425K | ~12% |
-| FF | ~80K | 850K | ~9% |
-| BRAM | ~100 | 1080 | ~9% |
-| DSP | ~50 | 1248 | ~4% |
+The resulting files are:
 
-Timing (typical):
+```text
+hardware/vivado/output/custom_xczu47dr_master.bit
+hardware/vivado/output/custom_xczu47dr_master.ltx
+hardware/vivado/output/custom_xczu47dr_master.xsa
+hardware/vivado/output/custom_xczu47dr_slave.bit
+hardware/vivado/output/custom_xczu47dr_slave.ltx
+hardware/vivado/output/custom_xczu47dr_slave.xsa
+```
 
-- **Clock**: 250 MHz (4ns period)
-- **Worst Negative Slack (WNS)**: > 0.5ns
-- **Total Negative Slack (TNS)**: 0ns
+The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove a regular single-target build. Generated Vivado state and outputs are ignored by Git.
 
-## Next Steps
+## Firmware and Programming
 
-After hardware build completes:
+The firmware source is shared by master and slave. Build it with the XSA that matches the bitstream role being programmed. Firmware waits only for the HMC7044 PL sequencer, then initializes RFDC, DAC MTS, and NCO SYSREF; it does not wait for XS20 synchronization.
 
-1. **Firmware Development**: Use `output/custom_xczu47dr_rfdc.xsa` to build ARM firmware
-   ```bash
-   cd ../../firmware
-   ./build.sh
-   ```
+```bash
+JTAG_CABLE_SERIAL=<serial> TARGET=custom_xczu47dr_slave make program
+```
 
-2. **Program FPGA**: Use Vivado Hardware Manager or XSCT
-   ```bash
-   cd ../../firmware
-   xsct scripts/program.tcl
-   ```
+Do not program a master ELF/XSA with a slave bitstream, or vice versa.
 
-3. **Software Development**: Run host control software
-   ```bash
-   cd ../../software
-   python host.py
-   ```
+## Driver-Level Synchronization Policy
 
-## References
+The FPGA role is fixed at synthesis time. The driver cannot turn a slave bitstream into a master or change XS20's electrical direction.
 
-- [Chisel Documentation](https://www.chisel-lang.org/)
-- [Mill Build Tool](https://mill-build.com/)
-- [Vivado Design Suite User Guide](https://www.xilinx.com/support/documentation/sw_manuals/xilinx2024_2/ug892-vivado-design-flows-overview.pdf)
-- [Zynq UltraScale+ RFSoC Data Converter (PG269)](https://docs.amd.com/r/en-US/pg269-rf-data-converter)
-- [Zynq UltraScale+ Device Technical Reference Manual](https://www.xilinx.com/support/documentation/user_guides/ug1085-zynq-ultrascale-trm.pdf)
+For a slave with no XS20 source, `bypass_sync()` is deliberately explicit:
+
+```python
+from dr47 import Dr47Device
+
+with Dr47Device(ip="169.254.32.1", udp_interface="enp225s0f1") as device:
+    device.bypass_sync()            # Allows local software/XS19 triggers.
+    # Upload, arm, then issue a software trigger or feed XS19.
+    device.require_external_sync()  # Closes the gate again.
+```
+
+`sync_seen` always means a real XS20 event. Bypass does not manufacture a synchronization event. A mode change is rejected while playback is prepared, armed, or running. The legacy `self_test` driver string is only a deprecated compatibility alias for `bypass`; new code must use `bypass`.
+
+## Verification
+
+Useful static checks:
+
+```bash
+make -n bitstream-master bitstream-slave bitstream-dual xsa-master xsa-slave
+PYTHONPATH=software python3 -m unittest tests.test_dr47_driver tests.test_rtl_sim -q
+git diff --check
+```
+
+For the one-board slave setup: XS17 = 10 MHz, XS20 unconnected, and XS18 physically connected to XS19, run:
+
+```bash
+PYTHONPATH=software python -m dr47.hardware_sync_mode_test
+```
+
+For a master role test, program the master artifacts and run:
+
+```bash
+PYTHONPATH=software python -m dr47.hardware_master_local_test
+```
+
+These tests validate control and trigger state, not analog RF quality. RF frequency, amplitude, and spectral claims require oscilloscope or spectrum analyzer evidence.

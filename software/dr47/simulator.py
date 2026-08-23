@@ -27,13 +27,13 @@ from .protocol import (
     RF2_OP_SET_SYNC_ROLE,
     RF2_OP_EMIT_TRIGGER,
     RF2_SYNC_MODE_EXTERNAL,
-    RF2_SYNC_MODE_SELF_TEST,
+    RF2_SYNC_MODE_BYPASS,
     RF2_SYNC_ROLE_MASTER,
     RF2_SYNC_ROLE_SLAVE,
     RF2_SYNC_STATUS_READY,
     RF2_SYNC_STATUS_ROLE_MASTER,
     RF2_SYNC_STATUS_SEEN,
-    RF2_SYNC_STATUS_SELF_TEST,
+    RF2_SYNC_STATUS_BYPASS,
     RF2_STATUS_DAC_MTS_READY,
     RF2_STATUS_DAC_MTS_REQUIRED,
     RF2_STATUS_NCO_SYNC_READY,
@@ -50,7 +50,10 @@ from .protocol import (
 class SimulatedDr47Device(Dr47Device):
     """A deterministic simulator with the same public API as ``Dr47Device``."""
 
-    def __init__(self, *args, device_uid: str = "sim-xczu47dr", **kwargs) -> None:
+    def __init__(self, *args, device_uid: str = "sim-xczu47dr", sync_role: str = "master", **kwargs) -> None:
+        if sync_role not in {"master", "slave"}:
+            raise ValueError("sync_role must be 'master' or 'slave'")
+        kwargs["sync_role"] = sync_role
         kwargs["transport"] = object()
         super().__init__(*args, **kwargs)
         self.device_uid = str(device_uid)
@@ -66,7 +69,7 @@ class SimulatedDr47Device(Dr47Device):
         self._trigger_accepted_count = 0
         self._trigger_output_count = 0
         self._sim_sync_seen = False
-        self._sim_sync_ready = False
+        self._sim_sync_ready = sync_role == "master"
 
     def _make_status_payload(self) -> bytes:
         capabilities = (RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
@@ -90,8 +93,8 @@ class SimulatedDr47Device(Dr47Device):
             sync_status |= RF2_SYNC_STATUS_SEEN
         if self._sim_sync_ready:
             sync_status |= RF2_SYNC_STATUS_READY
-        if self._sync_mode == "self_test":
-            sync_status |= RF2_SYNC_STATUS_SELF_TEST
+        if self._sync_mode == "bypass":
+            sync_status |= RF2_SYNC_STATUS_BYPASS
         if self._sync_role == "master":
             sync_status |= RF2_SYNC_STATUS_ROLE_MASTER
         return base + struct.pack(
@@ -167,10 +170,12 @@ class SimulatedDr47Device(Dr47Device):
 
     def rfctrl2_set_sync_role(self, role: int, mode: int = RF2_SYNC_MODE_EXTERNAL,
                               seq: int | None = None, wait_response: bool = True):
-        self._sync_role = "master" if int(role) == RF2_SYNC_ROLE_MASTER else "slave"
-        self._sync_mode = "self_test" if int(mode) == RF2_SYNC_MODE_SELF_TEST else "external"
-        self._sim_sync_seen = self._sync_mode == "self_test"
-        self._sim_sync_ready = self._sync_mode == "self_test"
+        requested_role = "master" if int(role) == RF2_SYNC_ROLE_MASTER else "slave"
+        if requested_role != self._sync_role or self.playback_armed or self.playback_prepared or self.playback_running:
+            return self._response(RF2_OP_SET_SYNC_ROLE, seq=seq or 1, status=3)
+        self._sync_mode = "bypass" if int(mode) == RF2_SYNC_MODE_BYPASS else "external"
+        self._sim_sync_seen = False
+        self._sim_sync_ready = self._sync_role == "master" or self._sync_mode == "bypass"
         return self._response(RF2_OP_SET_SYNC_ROLE, self._make_status_payload(), seq or 1)
 
     def rfctrl2_sync_epoch(self, epoch: int, seq: int | None = None, wait_response: bool = True):
@@ -182,12 +187,13 @@ class SimulatedDr47Device(Dr47Device):
 
     def rfctrl2_emit_trigger(self, seq: int | None = None, wait_response: bool = True):
         self._trigger_output_count = (self._trigger_output_count + 1) & 0xFFFFFFFF
-        # The simulator models the documented XS18 -> XS19 loopback in
-        # self_test mode so trigger-gated examples behave like hardware.
-        if self.playback_armed and (self._sync_mode == "self_test" or self._sim_sync_ready):
+        # Model the documented XS18 -> XS19 loopback and its synchronization
+        # gate. A master is always locally ready.
+        if self.playback_armed:
             self._trigger_input_count = (self._trigger_input_count + 1) & 0xFFFFFFFF
-            self._trigger_accepted_count = (self._trigger_accepted_count + 1) & 0xFFFFFFFF
-            self.playback_running = True
+            if self._sim_sync_ready:
+                self._trigger_accepted_count = (self._trigger_accepted_count + 1) & 0xFFFFFFFF
+                self.playback_running = True
         return self._response(RF2_OP_EMIT_TRIGGER, self._make_status_payload(), seq or 1)
 
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
@@ -229,7 +235,7 @@ class SimulatedDr47Device(Dr47Device):
         return self._response(RF2_OP_ARM, self._make_status_payload(), seq or 1)
 
     def rfctrl2_trigger(self, seq: int | None = None, wait_response: bool = True):
-        if not self.playback_armed:
+        if not self.playback_armed or not self._sim_sync_ready:
             return self._response(RF2_OP_TRIGGER, seq=seq or 1, status=6)
         self.playback_running = True
         return self._response(RF2_OP_TRIGGER, self._make_status_payload(), seq or 1)

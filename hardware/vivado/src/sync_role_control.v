@@ -2,8 +2,8 @@
 
 // Single-pulse board synchronization sequencer.
 //
-// role_master is deliberately a runtime signal. IS_MASTER remains the reset
-// default so small legacy simulations can still use the original parameter.
+// role_master is fixed by the selected master/slave bitstream. IS_MASTER only
+// supplies the matching reset state for this reusable sequencer.
 module sync_role_control #(
     parameter integer IS_MASTER = 1,
     parameter integer WAIT_CYCLES = 100000,
@@ -14,7 +14,7 @@ module sync_role_control #(
     input  wire sync_request,
     input  wire sync_in,
     input  wire role_master,
-    input  wire self_sync,
+    input  wire sync_bypass,
     output wire hmc_sync,
     output wire slave_sync,
     output wire sync_done
@@ -34,7 +34,6 @@ module sync_role_control #(
   reg sync_in_sync;
   reg sync_in_prev;
   reg role_master_d;
-  reg self_sync_d;
   reg sync_pulse;
   reg sync_done_pulse;
   reg [2:0] state;
@@ -42,7 +41,6 @@ module sync_role_control #(
 
   wire role_master_selected = role_master;
   wire role_changed = (role_master_selected != role_master_d);
-  wire self_sync_rise = self_sync && !self_sync_d;
   wire sync_request_rise = sync_req_sync && !sync_req_prev;
   wire sync_input_rise = sync_in_sync && !sync_in_prev;
 
@@ -55,7 +53,6 @@ module sync_role_control #(
       sync_in_sync <= 1'b0;
       sync_in_prev <= 1'b0;
       role_master_d <= IS_MASTER ? 1'b1 : 1'b0;
-      self_sync_d <= 1'b0;
     end else begin
       sync_req_meta <= sync_request;
       sync_req_sync <= sync_req_meta;
@@ -64,7 +61,6 @@ module sync_role_control #(
       sync_in_sync <= sync_in_meta;
       sync_in_prev <= sync_in_sync;
       role_master_d <= role_master_selected;
-      self_sync_d <= self_sync;
     end
   end
 
@@ -87,7 +83,7 @@ module sync_role_control #(
         sync_pulse <= 1'b0;
         count <= 32'd0;
         state <= ST_DONE;
-        if (self_sync_rise || sync_input_rise)
+        if (sync_input_rise)
           sync_done_pulse <= 1'b1;
       end else begin
         case (state)

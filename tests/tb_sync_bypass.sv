@@ -1,12 +1,12 @@
 `timescale 1ns/1ps
 
-module tb_sync_self_test;
+module tb_sync_bypass;
   reg ddr_clk = 1'b0;
   reg pl_clk = 1'b0;
   reg ddr_rst_n = 1'b0;
   reg pl_rst_n = 1'b0;
   reg trigger_in = 1'b0;
-  reg self_sync = 1'b0;
+  reg sync_bypass = 1'b0;
   wire role_trigger;
   wire sync_ready;
   wire sync_seen;
@@ -21,7 +21,7 @@ module tb_sync_self_test;
       .sync_request_ddr(1'b0), .trigger_request_ddr(1'b0),
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
       .trigger_in(trigger_in), .dac_trigger_start(1'b0),
-      .role_master(1'b0), .self_sync(self_sync),
+      .role_master(1'b0), .sync_bypass(sync_bypass),
       .hmc_sync(), .sync_link_out(), .trigger_link_out(),
       .role_trigger_raw(role_trigger), .sync_done(),
       .sync_seen(sync_seen), .sync_link_ready(sync_ready),
@@ -37,22 +37,20 @@ module tb_sync_self_test;
     ddr_rst_n = 1'b1;
     pl_rst_n = 1'b1;
     repeat (3) @(posedge pl_clk);
-    self_sync = 1'b1;
-    @(posedge pl_clk);
-    self_sync = 1'b0;
+    sync_bypass = 1'b1;
     repeat (3) @(posedge pl_clk);
-    if (!sync_seen || !sync_ready) begin
-      $display("FAIL: self_test did not open external trigger gate");
+    if (sync_seen || !sync_ready) begin
+      $display("FAIL: bypass did not open the trigger gate without fabricating XS20 SYNC");
       $finish;
     end
     @(negedge pl_clk); trigger_in = 1'b1;
     @(negedge pl_clk); trigger_in = 1'b0;
     repeat (5) @(posedge pl_clk);
     if (accepted != 1) begin
-      $display("FAIL: self_test accepted trigger count=%0d expected 1", accepted);
+      $display("FAIL: bypass accepted trigger count=%0d expected 1", accepted);
       $finish;
     end
-    $display("PASS: self_test bypass accepts XS19 trigger without XS20 SYNC");
+    $display("PASS: bypass accepts XS19 trigger without XS20 SYNC");
     $finish;
   end
 endmodule

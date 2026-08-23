@@ -2,9 +2,11 @@ import socket
 import struct
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
+import host
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "software"))
@@ -17,6 +19,8 @@ from dr47 import (  # noqa: E402
     SimulatedDr47Device,
     TriggerSeqGenerate,
     UnsupportedCapabilityError,
+    SynchronizationError,
+    DeviceStatusError,
     UDP_RFCTRL2_MAGIC,
     UDP_RFRESP2_MAGIC,
     RF2_OP_STATUS,
@@ -29,12 +33,16 @@ from dr47 import (  # noqa: E402
 )
 from dr47.hardware_wave_test import (  # noqa: E402
     EXAMPLES,
+    HardwareWaveTestConfig,
     make_gaussian_iq_sine,
+    make_iq_waveform,
     make_iq_sine,
     make_trigger_sequence,
     sample_count_for_duration,
 )
 from dr47.transport import UdpTransport  # noqa: E402
+import waveform_model  # noqa: E402
+import waveform_tools  # noqa: E402
 
 
 class _RetrySocket:
@@ -90,6 +98,16 @@ class _BroadcastSocket:
         if self.packets:
             return self.packets.pop(0)
         raise socket.timeout()
+
+
+class _CaptureTransport:
+    """Minimal write-only transport for exact upload packet comparison."""
+
+    def __init__(self):
+        self.sent: list[bytes] = []
+
+    def send(self, packet: bytes) -> None:
+        self.sent.append(bytes(packet))
 
     def close(self):
         pass
@@ -168,11 +186,10 @@ class DriverTests(unittest.TestCase):
         with self.assertRaises(UnsupportedCapabilityError):
             device.get_daq_data(1)
 
-    def test_simulator_self_test_models_xs18_to_xs19_loopback(self):
-        device = SimulatedDr47Device(batch_mode=True)
+    def test_simulator_bypass_models_xs18_to_xs19_loopback(self):
+        device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
         device.connect()
-        device.set_sync_role("slave")
-        device.set_sync_mode("self_test")
+        device.bypass_sync()
         device.set_xy_nco_frequency(1, 1.0)
         device.apply_rfdc_config(channel_mask=0x01)
         device.set_qc_on_off("xy", 1, "on")
@@ -188,6 +205,59 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(status.capabilities.trigger_accepted_count, 1)
         self.assertEqual(status.capabilities.trigger_output_count, 1)
         self.assertEqual(status.state, status.capabilities.playback_state)
+
+    def test_slave_external_rejects_triggers_until_explicit_bypass(self):
+        device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
+        device.connect()
+        device.set_xy_nco_frequency(1, 1.0)
+        device.apply_rfdc_config(channel_mask=0x01)
+        device.set_qc_on_off("xy", 1, "on")
+        device.upload_waveforms({1: np.array([1200, 0, 1200, 0], dtype=np.int16)}, wave_formats={1: "interleaved_iq"})
+        device.arm(channel_mask=0x01)
+        with self.assertRaises(DeviceStatusError):
+            device.trigger()
+        device.emit_trigger()
+        status = device.status(refresh=False)
+        self.assertFalse(status.capabilities.sync_seen)
+        self.assertFalse(status.capabilities.sync_link_ready)
+        self.assertEqual(status.capabilities.trigger_input_count, 1)
+        self.assertEqual(status.capabilities.trigger_accepted_count, 0)
+        self.assertEqual(status.state.value, "armed")
+        device.abort_mute()
+
+        device.bypass_sync()
+        status = device.status(refresh=False)
+        self.assertEqual(status.capabilities.sync_mode, "bypass")
+        self.assertFalse(status.capabilities.sync_seen)
+        self.assertTrue(status.capabilities.sync_link_ready)
+
+    def test_master_runs_locally_before_sync_and_role_cannot_change(self):
+        device = SimulatedDr47Device(batch_mode=True, sync_role="master")
+        device.connect()
+        with self.assertRaises(SynchronizationError):
+            device.set_sync_role("slave")
+        device.set_xy_nco_frequency(1, 1.0)
+        device.apply_rfdc_config(channel_mask=0x01)
+        device.set_qc_on_off("xy", 1, "on")
+        device.upload_waveforms({1: np.array([1200, 0, 1200, 0], dtype=np.int16)}, wave_formats={1: "interleaved_iq"})
+        device.arm(channel_mask=0x01)
+        device.trigger()
+        self.assertEqual(device.status(refresh=False).state.value, "running")
+        device.abort_mute()
+        device.arm(channel_mask=0x01)
+        device.emit_trigger()
+        status = device.status(refresh=False)
+        self.assertEqual(status.state.value, "running")
+        self.assertEqual(status.capabilities.trigger_accepted_count, 1)
+
+    def test_self_test_alias_warns_and_selects_bypass(self):
+        device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
+        device.connect()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            device.set_sync_mode("self_test")
+        self.assertEqual(device.status(refresh=False).capabilities.sync_mode, "bypass")
+        self.assertTrue(any(item.category is DeprecationWarning for item in caught))
 
     def test_negative_nco_preserves_explicit_nyquist_zone(self):
         device = SimulatedDr47Device(batch_mode=True)
@@ -228,11 +298,106 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(sequence.dtype, np.dtype("<u2"))
         self.assertEqual(sequence[1, 3] >> 11, 8)
         self.assertEqual(set(EXAMPLES), {
+            "standalone_slave_continuous_1ghz_ch1",
             "one_shot_1ghz_sine",
             "one_shot_1p79ghz_gaussian_xy",
+            "external_slave_500mhz_gaussian_xy",
             "continuous_2ghz_sine",
             "triggered_1p5ghz_gaussian_xy",
         })
+
+    def test_hardware_wave_test_uses_web_manual_xy_record_contract(self):
+        config = HardwareWaveTestConfig(
+            duration_ns=120.0,
+            record_duration_ns=1_000.0,
+            delay_ns=80.0,
+            sample_rate_ghz=0.4,
+            baseband_frequency_ghz=0.0,
+            amplitude=1.0,
+            waveform="gaussian_sine",
+        )
+        record = make_iq_waveform(config)
+        # 1 us at 400 MS/s is 400 complex samples, already 8-sample aligned.
+        self.assertEqual(record.shape, (800,))
+        start = 80 * 0.4 * 2
+        end = start + 120 * 0.4 * 2
+        self.assertTrue(np.all(record[:int(start)] == 0))
+        self.assertTrue(np.any(record[int(start):int(end)] != 0))
+        self.assertTrue(np.all(record[int(end):] == 0))
+        # The web manual waveform uses negative-Q complex convention.
+        self.assertEqual(int(record[int(start) + 1]), 0)
+        self.assertEqual(int(record[int(start) + 3]), 0)
+
+    def test_hardware_wave_test_record_is_byte_identical_to_web_manual_xy(self):
+        config = HardwareWaveTestConfig(
+            duration_ns=120.0,
+            record_duration_ns=1_000.0,
+            delay_ns=80.0,
+            sample_rate_ghz=0.4,
+            baseband_frequency_ghz=0.0,
+            amplitude=1.0,
+            phase_deg=0.0,
+            waveform="gaussian_sine",
+        )
+        web_config = waveform_model.ChannelWaveformConfig(
+            waveform_type="xy",
+            domain="iq",
+            freq_hz=0.0,
+            phase_rad=0.0,
+            amplitude=32767,
+            delay_s=80e-9,
+            duration_s=120e-9,
+            record_duration_s=1e-6,
+        )
+        web_record = waveform_model._make_channel_waveform(web_config, 400e6, 16, "CH1")
+        driver_record = make_iq_waveform(config)
+        self.assertEqual(driver_record.dtype, web_record.dtype)
+        self.assertEqual(driver_record.tobytes(), web_record.tobytes())
+        self.assertEqual(
+            host.pack_interleaved_512b_waveforms({1: web_record})[0],
+            pack_interleaved_512b_waveforms({1: driver_record})[0],
+        )
+
+    def test_hardware_wave_test_upload_packets_match_web_manual_xy(self):
+        """The normal driver upload must be wire-identical to web upload."""
+
+        config = HardwareWaveTestConfig(
+            duration_ns=120.0,
+            record_duration_ns=1_000.0,
+            delay_ns=80.0,
+            sample_rate_ghz=0.4,
+            baseband_frequency_ghz=0.0,
+            amplitude=1.0,
+            phase_deg=0.0,
+            waveform="gaussian_sine",
+        )
+        record = make_iq_waveform(config)
+        transport = _CaptureTransport()
+        device = Dr47Device(transport=transport)
+        upload = device.upload_waveforms(
+            {1: record},
+            wave_formats={1: "interleaved_iq"},
+            auto_start=False,
+            loop=False,
+            channel_delays={1: 0},
+            instruction_repeats=3,
+            packet_pause_s=0.0,
+        )
+
+        web_commands = waveform_tools.build_play_commands(
+            loop=False,
+            auto_start=False,
+            channel_addrs={1: 0},
+            channel_lengths={1: int(record.nbytes)},
+            channel_delays={1: 0},
+            enabled_channels=[1],
+            layout=host.DDR_LAYOUT_INTERLEAVED_512B,
+        )
+        expected_ddr = list(host.iter_interleaved_udp_waveform_packets({1: record}, host.DDR_BASE))
+        expected_instruction = host.pack_udp_instruction_packet(web_commands)
+        self.assertEqual(upload["commands"], web_commands)
+        self.assertEqual(upload["instruction_repeats"], 3)
+        self.assertEqual(transport.sent, expected_ddr + [expected_instruction] * 3)
 
     def test_sequence_generator_emits_trigger_delay_loop_and_stop(self):
         generator = SequenceGenerator("XY", time_data=[0.0], event_data=[np.array([1, 2], dtype=np.int32)], period=1e-6, repeat=1)

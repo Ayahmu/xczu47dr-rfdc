@@ -21,7 +21,7 @@ xczu47dr-rfdc/
 
 ## Top-Level Workflow
 
-Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The default target is `custom_xczu47dr`, which builds the normal eight-output RFDC playback path. Use `TARGET=custom_xczu47dr_bw` only when you explicitly want the standalone DDR bandwidth pressure design.
+Source the Xilinx tools first so `vivado` and `xsct` are on `PATH`, then use the root `Makefile` as the primary interface. The formal RFDC targets are `custom_xczu47dr_master` and `custom_xczu47dr_slave`; the default is master. `TARGET=custom_xczu47dr_bw` remains the separate DDR bandwidth-pressure design.
 
 For the two-board synchronization build, run `make bitstream-dual`. This builds
 the master and slave Vivado projects in parallel using isolated trees under
@@ -33,8 +33,12 @@ connection for the current hardware revision is **master A <-> slave A**. Use
 `make bitstream-dual-clean` to remove only the isolated dual-build trees.
 
 ```bash
-# Full normal RFDC playback hardware and firmware build
-make all
+# Build one formal role and its role-specific XSA/firmware workspace.
+make all TARGET=custom_xczu47dr_master
+make all TARGET=custom_xczu47dr_slave
+
+# Build both 10 MHz XS17 bitstreams concurrently in isolated Vivado work trees.
+make bitstream-dual
 
 # Build only FPGA artifacts: Chisel RTL, Vivado project, synth, impl, bitstream, XSA
 make hardware
@@ -104,10 +108,10 @@ link, then waits for DAC MTS and NCO SYSREF ready before playback. XS18 is the
 Trigger output and XS19 is the Trigger input; Type-C is not a synchronization
 path.
 
-For a single-board Trigger loopback test, connect `XS18 -> XS19` with an
-SMA/SMP cable and select `sync_mode="self_test"` in
-`software/dr47/hardware_wave_test.py`. This explicit test bypass does not
-claim that the board has synchronized.
+For a single-board slave Trigger loopback test, connect `XS18 -> XS19` with
+an SMA/SMP cable and call `bypass_sync()` through
+`software/dr47/hardware_wave_test.py`. This explicit local permission does
+not claim that the board has synchronized: `sync_seen` remains false.
 
 For normal use, build the frontend once and run the backend from the repository
 root:
@@ -146,24 +150,21 @@ template. Vue component state, REST endpoints, and a WebSocket event stream are
 used so that state changes from an ARM/start/abort request are visible to every
 open browser.
 
-## Future Two-Board Sync Build And Cabling
+## Master/Slave Sync Build And Cabling
 
-This section documents hardware development for the future synchronization
-mode. The current browser console does not expose multi-board start controls;
-single-board playback does not need these cables or synchronization roles.
-
-Build both boards with the same normal target. Ethernet identity is assigned
-at runtime by the PL network configuration protocol; board names, cable
-serials, server interfaces, and formal IP/MAC values belong to the web
-console database, not to separate hardware targets:
+The browser console does not currently orchestrate a multi-board experiment,
+but the driver and bitstreams implement the two formal roles. Ethernet identity
+is assigned at runtime by the PL network configuration protocol; it is not
+encoded by role or JTAG cable serial.
 
 | Build target | Purpose |
 | --- | --- |
-| `custom_xczu47dr` | Normal single-board RFDC playback |
+| `custom_xczu47dr_master` | XS20 SYNC output; local software and XS19 Trigger allowed before `sync()` |
+| `custom_xczu47dr_slave` | XS20 SYNC input; external mode gates local and XS19 Trigger until SYNC or explicit `bypass_sync()` |
 | `custom_xczu47dr_bw` | Standalone DDR bandwidth stress target |
 
 ```bash
-make hardware
+make bitstream-dual
 ```
 
 Board inventory is not hard-coded. The web console prepares candidate server
@@ -173,15 +174,11 @@ returns a unique `device_uid`. Current playback qualification is single-board:
 and prefills the PL path; `TRIGGER` is the only command that opens the output
 gate.
 
-Default normal RFDC playback handoff artifacts:
+Role-specific artifacts are named `custom_xczu47dr_master.*` and
+`custom_xczu47dr_slave.*`; Vitis workspaces are likewise separate only because
+their XSAs are separate. The firmware source is one shared implementation.
 
-- Bitstream: `hardware/vivado/output/custom_xczu47dr_rfdc.bit`
-- Debug probes: `hardware/vivado/output/custom_xczu47dr_rfdc.ltx`
-- Hardware handoff: `hardware/vivado/output/custom_xczu47dr_rfdc.xsa`
-- Firmware ELF: `firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf`
-- PS init script: `firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl`
-
-`make run` and `make program` program the custom board over JTAG with the `.bit`, run PS initialization from `psu_init.tcl`, download the ELF to `Cortex-A53 #0`, and start execution. When multiple boards are attached, set `JTAG_CABLE_SERIAL=<serial>` to select the cable, for example `JTAG_CABLE_SERIAL=210512180082 make program`; the normal `TARGET=custom_xczu47dr` path defaults to serial `210512180081`, while the bandwidth target should be selected explicitly when more than one cable is connected. Use UART at 115200 baud to inspect firmware output.
+`make program TARGET=custom_xczu47dr_slave` programs the selected role. When multiple boards are attached, set `JTAG_CABLE_SERIAL=<serial>`, for example `JTAG_CABLE_SERIAL=210512180082 TARGET=custom_xczu47dr_slave make program`. Use UART at 115200 baud to inspect firmware output.
 
 ## Custom XCZU47DR Bring-Up Scope
 
@@ -195,7 +192,7 @@ Each DAC is targeted at `Fs = 6.4 GS/s` with `16x` interpolation, so the RFDC in
 
 Runtime NCO, NCO phase, Nyquist zone, and DAC VOP configuration uses a pure-PL closed loop: FastAPI sends structured `RFCTRL2 RFDC_APPLY` UDP packets, the PL validates all selected channels, performs 16-bit RFDC AXI-Lite writes, reads the critical registers back, and returns a structured `RFRESP2` UDP response. DDR mailbox polling, PS runtime register writes, and UART `RFDC_APPLY` confirmation are not part of this path. The PS only starts RFDC tiles, PLLs, and calibration during boot; UART remains an optional diagnostic console.
 
-The custom PL includes an HMC7044 sequencer. A shared 250 MHz reference enters XS17; HMC7044 divides it with PLL1 R1=25/N1=10 to a 10 MHz PFD, then generates the 128 MHz DAC reference used by the 6.4 GS/s, 16x RFDC configuration. Firmware waits for the sequencer done bit before RFDC startup. The RTL currently drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The host DC-CW path now writes explicit interleaved `I=C,Q=0` samples; tone frequency is set by the firmware NCO, not by the host sample rate. The custom firmware no longer initializes PS Ethernet or lwIP.
+The current mainline HMC7044 plan accepts a 10 MHz XS17 reference and generates the 128 MHz DAC reference used by the 6.4 GS/s, 16x RFDC configuration. Firmware waits only for HMC7044 programming to finish, then initializes RFDC/MTS/NCO without waiting for XS20. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The custom firmware no longer initializes PS Ethernet or lwIP.
 
 Vivado project creation and synthesis have passed for `TARGET=custom_xczu47dr` with top module `TopCustomXczu47dr` and part `xczu47dr-ffvg1517-2-i`; implementation/bitstream generation is the final gate for the current 256-bit native playback revision. The custom DDR4 controller uses a `Custom` board interface with `CONFIG.C0.DDR4_InputClockPeriod {3334}` to match the existing 300 MHz `c0_sys` port. The reference project exposes two separate 64-bit DDR4 controllers, while this bring-up flow still uses the existing single-DDR4 BD path. Full DDR4 topology, memory part, data width, and pin constraints still need schematic/BOM confirmation before production hardware-readiness claims.
 

@@ -19,10 +19,28 @@ PYTHONPATH=software python -m dr47.hardware_wave_test
 
 The test configuration uses `frequency_ghz` (or an explicit
 `nco_frequency_ghz`), `baseband_frequency_ghz`, `sample_rate_ghz` and
-`duration_ns`.  Four examples are included in
-`EXAMPLES`: 100 ns/1 GHz one-shot sine, 60 ns/1.79 GHz one-shot Gaussian XY,
-continuous 2 GHz sine, and 120 ns/1.5 GHz trigger-gated Gaussian XY.  Select
-one with `ACTIVE_EXAMPLE` or edit `TEST_CONFIG` directly.
+`duration_ns`. The default is `standalone_slave_continuous_1ghz_ch1`: it
+expects the formal slave bitstream, XS17=10 MHz, XS20 unconnected, and an
+XS18 -> XS19 loopback. It explicitly calls `bypass_sync()`, so it exercises
+the runtime permission path without claiming that an XS20 SYNC was seen.
+Additional examples cover one-shot, continuous, external-gated, and
+trigger-gated playback. Select one with `ACTIVE_EXAMPLE` or edit
+`TEST_CONFIG` directly.
+
+For the complete formal-slave acceptance sequence (external rejection,
+explicit bypass, software Trigger, XS18 -> XS19 loopback, and external-mode
+restore), use the separate assertion-based test after programming the slave
+bitstream and matching firmware:
+
+```bash
+PYTHONPATH=software python -m dr47.hardware_sync_mode_test
+```
+
+`record_duration_ns` and `delay_ns` have the same meaning as the web manual
+waveform request. The finite pulse is placed at `delay_ns` inside an aligned,
+zero-filled playback record. Keep padding after a Gaussian pulse; setting the
+record length equal to the active pulse intentionally puts its final sample at
+the playback-frame boundary and can produce a discontinuity at repetition.
 
 At the public API boundary, NCO frequencies are GHz:
 
@@ -58,8 +76,7 @@ For a single-board physical loopback test, wire `XS18 -> XS19`, select the
 explicit test bypass, and emit the Trigger through the real output connector:
 
 ```python
-device.set_sync_role("slave")
-device.set_sync_mode("self_test")  # No XS20 signal; not a timing sync.
+device.bypass_sync()  # Explicit standalone permission; XS20 remains unseen.
 device.arm(channel_mask=0x01)
 device.emit_trigger()                  # XS18 -> cable -> XS19
 ```

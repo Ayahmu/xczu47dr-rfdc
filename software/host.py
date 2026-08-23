@@ -244,7 +244,9 @@ RF2_NET_STATUS_HMC_DONE = 0x00000020
 RF2_NET_STATUS_SYNC_DONE = 0x00000040
 RF2_SYNC_STATUS_SEEN = 0x00000001
 RF2_SYNC_STATUS_READY = 0x00000002
-RF2_SYNC_STATUS_SELF_TEST = 0x00000004
+RF2_SYNC_STATUS_BYPASS = 0x00000004
+# Compatibility name for old scripts. New callers should use bypass.
+RF2_SYNC_STATUS_SELF_TEST = RF2_SYNC_STATUS_BYPASS
 RF2_SYNC_STATUS_ROLE_MASTER = 0x00000008
 
 RF2_STATUS_OK = 0x0000
@@ -952,7 +954,7 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         result["sync_status"] = struct.unpack_from("<I", payload, 72)[0]
         result["sync_seen"] = bool(result["sync_status"] & RF2_SYNC_STATUS_SEEN)
         result["sync_link_ready"] = bool(result["sync_status"] & RF2_SYNC_STATUS_READY)
-        result["sync_mode"] = "self_test" if result["sync_status"] & RF2_SYNC_STATUS_SELF_TEST else "external"
+        result["sync_mode"] = "bypass" if result["sync_status"] & RF2_SYNC_STATUS_BYPASS else "external"
         result["sync_role"] = "master" if result["sync_status"] & RF2_SYNC_STATUS_ROLE_MASTER else "slave"
     if len(payload) >= 88:
         result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)

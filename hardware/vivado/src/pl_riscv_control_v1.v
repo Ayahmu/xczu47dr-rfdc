@@ -63,7 +63,7 @@ module pl_riscv_control_v1 #(
     input  wire         playback_prepared,
     input  wire         playback_running,
     input  wire         sync_role_master,
-    input  wire         sync_self_test,
+    input  wire         sync_bypass,
     input  wire         sync_seen,
     input  wire         sync_link_ready,
     input  wire [31:0]  trigger_input_count,
@@ -545,7 +545,7 @@ module pl_riscv_control_v1 #(
             nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
             1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
         };
-        resp_words[12] <= {32'd0, 27'd0, sync_role_master, sync_self_test,
+        resp_words[12] <= {32'd0, 27'd0, sync_role_master, sync_bypass,
                             sync_link_ready, sync_seen};
         resp_words[13] <= {trigger_accepted_count, trigger_input_count};
         resp_words[14] <= {32'd0, trigger_output_count};
@@ -1134,6 +1134,7 @@ module pl_riscv_control_v1 #(
             DEC_RF2_SET_SYNC_ROLE: begin
               if ((cmd_payload_bytes != 32'd8) ||
                   (payload_words[4] > 32'd1) || (payload_words[5] > 32'd1) ||
+                  (payload_words[4][0] != sync_role_master) ||
                   playback_armed || playback_prepared || playback_running) begin
                 dbg_status <= 32'hBAD2_000F;
                 queue_resp0(RF2_OP_SET_SYNC_ROLE, 16'h0003, cmd_seq);
@@ -1162,7 +1163,7 @@ module pl_riscv_control_v1 #(
               queue_resp1(RF2_OP_START_AT, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
             end
             DEC_RF2_TRIGGER: begin
-              if (!playback_prepared) begin
+              if (!playback_prepared || !sync_link_ready) begin
                 dbg_status <= 32'hBAD2_0009;
                 queue_resp0(RF2_OP_TRIGGER, 16'h0006, cmd_seq);
               end else begin

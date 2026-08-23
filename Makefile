@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-TARGET ?= custom_xczu47dr
-ALLOWED_TARGETS := custom_xczu47dr custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_bw
+TARGET ?= custom_xczu47dr_master
+ALLOWED_TARGETS := custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_bw
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -66,7 +66,7 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -90,6 +90,8 @@ help:
 	@echo "  make bitstream-slave  Build the slave bitstream in an isolated Vivado tree"
 	@echo "  make bitstream-dual   Build master and slave bitstreams in parallel"
 	@echo "  make xsa              Export XSA"
+	@echo "  make xsa-master       Export XSA from the isolated master project"
+	@echo "  make xsa-slave        Export XSA from the isolated slave project"
 	@echo "  make firmware-create  Create Vitis platform/application"
 	@echo "  make firmware-build   Build firmware ELF"
 	@echo ""
@@ -117,7 +119,7 @@ help:
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
 	@echo "  TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
 	@echo "  TARGET=custom_xczu47dr_slave builds the slave synchronization bitstream"
-	@echo "  Default TARGET=custom_xczu47dr is the master-compatible RFDC playback path"
+	@echo "  Default TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
 	@echo "  Use TARGET=custom_xczu47dr_bw only for the standalone DDR bandwidth pressure path"
 	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
@@ -171,6 +173,14 @@ bitstream-master:
 bitstream-slave:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
 	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_slave.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
+
+xsa-master:
+	@test -f "$(VIVADO_DIR)/work-dual/master/custom_xczu47dr_master_rfdc.xpr" || { echo "ERROR: isolated master project is missing; run make bitstream-master first"; exit 1; }
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_master
+
+xsa-slave:
+	@test -f "$(VIVADO_DIR)/work-dual/slave/custom_xczu47dr_slave_rfdc.xpr" || { echo "ERROR: isolated slave project is missing; run make bitstream-slave first"; exit 1; }
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_slave
 
 bitstream-dual: chisel
 	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-master bitstream-slave

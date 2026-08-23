@@ -49,6 +49,137 @@ INT16_PER_BEAT = INT16_PER_DACWORD
 DDR_INTERLEAVED_CHANNELS = 8
 
 
+def iq_duration_to_interleaved_sample_count(duration_s: float, sample_rate_hz: float) -> int:
+    """Return an aligned raw-int16 count for a finite complex-IQ record.
+
+    This is the record sizing contract used by the web manual-channel path:
+    the requested duration is rounded to a whole complex sample and then up to
+    one 256-bit DAC word (16 int16 lanes / 8 I/Q samples).
+    """
+
+    if float(duration_s) <= 0.0:
+        raise ParameterRangeError("duration_s must be positive")
+    if float(sample_rate_hz) <= 0.0:
+        raise ParameterRangeError("sample_rate_hz must be positive")
+    complex_samples = max(1, int(round(float(duration_s) * float(sample_rate_hz))))
+    return ((complex_samples * 2 + INT16_PER_DACWORD - 1) // INT16_PER_DACWORD) * INT16_PER_DACWORD
+
+
+def _pack_iq_interleaved(i_wave: np.ndarray, q_wave: np.ndarray, sample_count: int) -> np.ndarray:
+    if int(sample_count) % INT16_PER_DACWORD:
+        raise ParameterRangeError("sample_count must be a whole 256-bit DAC word")
+    complex_samples = int(sample_count) // 2
+    i_data = _normalize_int16(i_wave, complex_samples)
+    q_data = _normalize_int16(q_wave, complex_samples)
+    packed = np.empty(int(sample_count), dtype=np.int16)
+    packed[0::2] = i_data
+    packed[1::2] = q_data
+    return packed
+
+
+def make_iq_sine_interleaved(
+    frequency_hz: float,
+    phase_rad: float,
+    amplitude: int,
+    sample_rate_hz: float,
+    *,
+    sample_count: int,
+    q_sign: int = -1,
+) -> np.ndarray:
+    """Build the web manual-path IQ sine format: ``I0,Q0,...`` int16."""
+
+    if int(q_sign) not in (-1, 1):
+        raise ParameterRangeError("q_sign must be +1 or -1")
+    if abs(float(frequency_hz)) > float(sample_rate_hz) / 2.0:
+        raise ParameterRangeError("IQ frequency exceeds the complex-sample Nyquist limit")
+    count = int(sample_count) // 2
+    sample_index = np.arange(count, dtype=np.float64)
+    angle = (2.0 * np.pi * float(frequency_hz) * sample_index / float(sample_rate_hz)) + float(phase_rad)
+    scale = float(amplitude)
+    return _pack_iq_interleaved(
+        np.round(np.clip(np.cos(angle) * scale, -32767.0, 32767.0)).astype(np.int16),
+        np.round(np.clip(int(q_sign) * np.sin(angle) * scale, -32767.0, 32767.0)).astype(np.int16),
+        int(sample_count),
+    )
+
+
+def make_iq_gaussian_sine_interleaved(
+    frequency_hz: float,
+    phase_rad: float,
+    amplitude: int,
+    sample_rate_hz: float,
+    duration_s: float,
+    *,
+    sample_count: int | None = None,
+    fwhm_s: float | None = None,
+    q_sign: int = -1,
+    hls_xy_drag: bool = False,
+    drag_alpha: float = 0.5,
+    drag_delta_hz: float = -200e6,
+) -> np.ndarray:
+    """Build the web manual-path XY Gaussian IQ waveform exactly.
+
+    The web's manual ``xy`` control uses ``FWHM=duration/2`` and has its
+    HLS-DRAG option disabled.  The optional DRAG arguments are retained for
+    callers that intentionally need the legacy ``iq-gaussian-sine`` variant.
+    """
+
+    if int(q_sign) not in (-1, 1):
+        raise ParameterRangeError("q_sign must be +1 or -1")
+    if abs(float(frequency_hz)) > float(sample_rate_hz) / 2.0:
+        raise ParameterRangeError("IQ frequency exceeds the complex-sample Nyquist limit")
+    if sample_count is None:
+        sample_count = iq_duration_to_interleaved_sample_count(duration_s, sample_rate_hz)
+    if int(sample_count) % INT16_PER_DACWORD:
+        raise ParameterRangeError("sample_count must be a whole 256-bit DAC word")
+    if hls_xy_drag and abs(float(drag_delta_hz)) < 1.0:
+        raise ParameterRangeError("drag_delta_hz must be non-zero when HLS DRAG is enabled")
+
+    count = int(sample_count) // 2
+    time_s = np.arange(count, dtype=np.float64) / float(sample_rate_hz)
+    duration = float(duration_s)
+    fwhm = float(fwhm_s) if fwhm_s is not None else duration / 2.0
+    sigma = max(fwhm / 2.3548200, 1.0 / float(sample_rate_hz))
+    envelope = np.exp(-0.5 * ((time_s - duration / 2.0) / sigma) ** 2)
+    if hls_xy_drag:
+        envelope_dt = envelope * (-(time_s - duration / 2.0) / (sigma * sigma))
+        quadrature = float(drag_alpha) * envelope_dt / (2.0 * np.pi * float(drag_delta_hz))
+    else:
+        quadrature = np.zeros_like(envelope)
+    angle = (2.0 * np.pi * float(frequency_hz) * time_s) + float(phase_rad)
+    wave = (envelope + 1j * quadrature) * np.exp(1j * int(q_sign) * angle) * float(amplitude)
+    return _pack_iq_interleaved(
+        np.round(np.clip(np.real(wave), -32767.0, 32767.0)).astype(np.int16),
+        np.round(np.clip(np.imag(wave), -32767.0, 32767.0)).astype(np.int16),
+        int(sample_count),
+    )
+
+
+def place_interleaved_iq_in_record(
+    active_wave: np.ndarray | list,
+    *,
+    delay_s: float,
+    record_duration_s: float,
+    sample_rate_hz: float,
+) -> np.ndarray:
+    """Place an active IQ waveform in an aligned, zero-filled web record."""
+
+    active = np.asarray(active_wave, dtype=np.int16).reshape(-1)
+    if active.size % 2:
+        raise WaveformFormatError("active IQ waveform must contain whole I/Q samples")
+    record_count = iq_duration_to_interleaved_sample_count(record_duration_s, sample_rate_hz)
+    start = max(0, int(round(float(delay_s) * float(sample_rate_hz)))) * 2
+    end = start + int(active.size)
+    if end > record_count:
+        raise ParameterRangeError(
+            f"pulse end {(end / 2.0 / float(sample_rate_hz)) * 1e9:g} ns exceeds "
+            f"record {(record_count / 2.0 / float(sample_rate_hz)) * 1e9:g} ns"
+        )
+    record = np.zeros(record_count, dtype=np.int16)
+    record[start:end] = active
+    return record
+
+
 def waveform_bytes(wave: np.ndarray | list) -> bytes:
     return np.ascontiguousarray(wave, dtype="<i2").tobytes()
 

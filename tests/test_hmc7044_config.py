@@ -24,26 +24,26 @@ def _reg12(registers: dict[int, int], low_addr: int, high_addr: int) -> int:
 
 
 class Hmc7044ConfigTests(unittest.TestCase):
-    def test_master_and_slave_targets_use_external_250mhz_reference(self):
+    def test_targets_use_the_temporary_external_10mhz_xs17_profile(self):
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
 
-        self.assertRegex(top, r"hmc_use_external_250mhz\s*=\s*1'b1")
-        self.assertIn("clock_policy external_250mhz_xs17", target_config)
+        self.assertRegex(top, r"hmc_use_external_xs17\s*=\s*1'b1")
+        self.assertIn("clock_policy external_10mhz_xs17", target_config)
 
-    def test_external_250mhz_register_branch_uses_clkin1_and_divide_by_25(self):
+    def test_external_10mhz_register_branch_uses_clkin1_and_divide_by_one(self):
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
 
         expected_writes = (
             'x"0003" & x"2F"',
             'x"0005" & x"5A"',
-            'x"0021" & x"19"',
+            'x"0021" & x"01"',
             'x"0026" & x"0A"',
         )
         for write in expected_writes:
             self.assertIn(write, text)
 
-    def test_external_250mhz_selects_high_vco_core_for_3072_ghz(self):
+    def test_external_10mhz_selects_high_vco_core_for_3072_ghz(self):
         regs = _hmc7044_registers()
 
         self.assertEqual(regs[0x0003], 0x2F)
@@ -51,23 +51,23 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertNotEqual((regs[0x0003] >> 3) & 0x3, 0x3)
         self.assertTrue(regs[0x0003] & 0x07 == 0x07)
 
-    def test_external_250mhz_r1_divider_creates_10mhz_pll1_pfd(self):
+    def test_external_10mhz_r1_divider_creates_10mhz_pll1_pfd(self):
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
         self.assertRegex(
             text,
-            r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then\s*'
-            r'config_reg\s*<=\s*x"0021"\s*&\s*x"19"',
+            r'if\s+USE_EXTERNAL_XS17\s*=\s*\'1\'\s+then\s*'
+            r'config_reg\s*<=\s*x"0021"\s*&\s*x"01"',
         )
         self.assertRegex(
             text,
-            r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then[\s\S]*?'
+            r'if\s+USE_EXTERNAL_XS17\s*=\s*\'1\'\s+then[\s\S]*?'
             r'config_reg\s*<=\s*x"0026"\s*&\s*x"0A"',
         )
 
-        r1 = 0x19
+        r1 = 0x01
         n1 = 0x0A
-        self.assertEqual(250_000_000 / r1, 10_000_000)
-        self.assertEqual((250_000_000 / r1) * n1, VCXO_HZ)
+        self.assertEqual(10_000_000 / r1, 10_000_000)
+        self.assertEqual((10_000_000 / r1) * n1, VCXO_HZ)
 
     def test_two_board_sync_requires_mts_and_software_sync_gate(self):
         firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
