@@ -50,6 +50,16 @@ puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
+# PARENT_RTL_SYNTH is needed only while creating the top-level synthesis
+# checkpoint.  Implementation must elaborate/link the real xxv_ethernet XCI
+# and reference DCP, never the lightweight RTL model.
+set impl_defines [get_property verilog_define [current_fileset]]
+set impl_defines [lsearch -all -inline -not -exact ${impl_defines} PARENT_RTL_SYNTH]
+set_property verilog_define ${impl_defines} [current_fileset]
+foreach f [get_files -quiet -all *xxv_ethernet_parent_stub.v] {
+    set_property USED_IN_IMPLEMENTATION false ${f}
+}
+
 # Reuse the last successful routed design as the implementation reference.
 # Keep this checkpoint outside impl_1 because reset_run removes the run
 # directory contents before the next launch.

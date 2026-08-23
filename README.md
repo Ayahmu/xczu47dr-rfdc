@@ -99,8 +99,15 @@ records for a later hardware-qualified multi-board release.
 
 The host-side software sync step for the master/slave builds is implemented in
 `software/sync_two_boards.py`: it waits for HMC7044 done, sends one
-`RFCTRL2 SYNC_EPOCH` to the master, waits for the two-pulse HMC SYNC on both
-boards, then waits for DAC MTS and NCO SYSREF ready before playback.
+`RFCTRL2 SYNC_EPOCH` to the master, emits one pulse on the dedicated XS20 SYNC
+link, then waits for DAC MTS and NCO SYSREF ready before playback. XS18 is the
+Trigger output and XS19 is the Trigger input; Type-C is not a synchronization
+path.
+
+For a single-board Trigger loopback test, connect `XS18 -> XS19` with an
+SMA/SMP cable and select `sync_mode="self_test"` in
+`software/dr47/hardware_wave_test.py`. This explicit test bypass does not
+claim that the board has synchronized.
 
 For normal use, build the frontend once and run the backend from the repository
 root:

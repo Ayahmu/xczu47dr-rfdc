@@ -67,6 +67,39 @@ if {[llength ${synth_run}] > 0 && [file exists ${synth_incremental_checkpoint}]}
 
 puts "INFO: Skipping XXV Ethernet OOC synthesis; using reference DCP"
 
+# The parent synthesis must consume the XXV OOC checkpoint.  In particular,
+# do not replace the MAC with a synthesizable RTL stand-in: that lets Vivado
+# optimize the instance away and produces an implementation with ordinary
+# OBUFs rather than the required GT channel.  The managed XCI child run is
+# populated from the bitstream-capable reference DCP by
+# prepare_reference_xxv_ooc_run below.
+set xxv_synth_xci [get_files -quiet -all *xxv_ethernet.xci]
+if {[llength ${xxv_synth_xci}] > 0} {
+    set_property USED_IN_SYNTHESIS true ${xxv_synth_xci}
+    puts "INFO: XXV Ethernet XCI enabled for parent synthesis through its OOC checkpoint"
+}
+set xxv_parent_stub [get_files -quiet -all *xxv_ethernet_parent_stub.v]
+if {[llength ${xxv_parent_stub}] > 0} {
+    # The parent RTL compiler still needs the module declaration.  This is a
+    # normal black box, not the old behavioral Ethernet model: synthesis
+    # preserves top_i/udp_10g_i/DUT and implementation replaces that cell
+    # with the bitstream-capable reference OOC checkpoint.
+    set_property IS_ENABLED true ${xxv_parent_stub}
+    set_property USED_IN_SYNTHESIS true ${xxv_parent_stub}
+}
+set xxv_parent_blackbox [get_files -quiet -all *xxv_ethernet_parent_blackbox.v]
+if {[llength ${xxv_parent_blackbox}] > 0} {
+    set_property IS_ENABLED true ${xxv_parent_blackbox}
+    set_property USED_IN_SYNTHESIS true ${xxv_parent_blackbox}
+}
+set parent_synth_defines [get_property verilog_define [current_fileset]]
+set parent_synth_defines [lsearch -all -inline -not -exact ${parent_synth_defines} PARENT_RTL_SYNTH]
+if {[lsearch -exact ${parent_synth_defines} PARENT_XXV_BLACKBOX] < 0} {
+    lappend parent_synth_defines PARENT_XXV_BLACKBOX
+}
+set_property verilog_define ${parent_synth_defines} [current_fileset]
+puts "INFO: Disabled PARENT_RTL_SYNTH; preserving dedicated XXV black box for reference-DCP binding"
+
 #restore_reference_xxv_dcp ${vivado_dir} ${target}
 
 set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]

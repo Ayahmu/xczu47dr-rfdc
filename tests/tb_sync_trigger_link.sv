@@ -7,7 +7,8 @@ module tb_sync_trigger_link;
   reg pl_rst_n = 1'b0;
   reg sync_request_ddr = 1'b0;
   reg trigger_request_ddr = 1'b0;
-  wire master_link;
+  wire master_sync_link;
+  wire master_trigger_link;
   wire slave_hmc_sync;
   wire master_hmc_sync;
   wire master_done;
@@ -30,10 +31,14 @@ module tb_sync_trigger_link;
       .sync_request_ddr(sync_request_ddr),
       .trigger_request_ddr(trigger_request_ddr),
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
+      .trigger_in(1'b0), .role_master(1'b1), .self_sync(1'b0),
       .dac_trigger_start(1'b0),
-      .hmc_sync(master_hmc_sync), .sync_link_out(master_link),
+      .hmc_sync(master_hmc_sync), .sync_link_out(master_sync_link),
+      .trigger_link_out(master_trigger_link),
       .role_trigger_raw(), .sync_done(master_done),
-      .sync_seen(master_seen), .sync_link_ready()
+      .sync_seen(master_seen), .sync_link_ready(), .trigger_in_seen(),
+      .trigger_accepted(), .trigger_output_active(),
+      .trigger_input_count(), .trigger_accepted_count(), .trigger_output_count()
   );
 
   sync_trigger_link #(
@@ -44,11 +49,14 @@ module tb_sync_trigger_link;
       .ddr_clk(ddr_clk), .ddr_rst_n(ddr_rst_n),
       .pl_clk(pl_clk), .pl_rst_n(pl_rst_n),
       .sync_request_ddr(1'b0), .trigger_request_ddr(1'b0),
-      .sync_request_vio_pl(1'b0), .sync_in(master_link),
+      .sync_request_vio_pl(1'b0), .sync_in(master_sync_link),
+      .trigger_in(master_trigger_link), .role_master(1'b0), .self_sync(1'b0),
       .dac_trigger_start(1'b0),
-      .hmc_sync(slave_hmc_sync), .sync_link_out(),
+      .hmc_sync(slave_hmc_sync), .sync_link_out(), .trigger_link_out(),
       .role_trigger_raw(slave_trigger), .sync_done(slave_done),
-      .sync_seen(slave_seen), .sync_link_ready(slave_ready)
+      .sync_seen(slave_seen), .sync_link_ready(slave_ready), .trigger_in_seen(),
+      .trigger_accepted(), .trigger_output_active(),
+      .trigger_input_count(), .trigger_accepted_count(), .trigger_output_count()
   );
 
   integer master_hmc_rises = 0;
@@ -91,8 +99,8 @@ module tb_sync_trigger_link;
     sync_request_ddr = 1'b0;
     repeat (45) @(posedge pl_clk);
 
-    if (master_hmc_rises != 2 || slave_hmc_rises != 2) begin
-      $display("FAIL: HMC rises master=%0d slave=%0d expected 2/2",
+    if (master_hmc_rises != 1 || slave_hmc_rises != 1) begin
+      $display("FAIL: HMC rises master=%0d slave=%0d expected 1/1",
                master_hmc_rises, slave_hmc_rises);
       $finish;
     end
@@ -116,7 +124,7 @@ module tb_sync_trigger_link;
     trigger_request_ddr = 1'b0;
     repeat (12) @(posedge pl_clk);
 
-    if (master_hmc_rises != 2 || slave_hmc_rises != 2) begin
+    if (master_hmc_rises != 1 || slave_hmc_rises != 1) begin
       $display("FAIL: playback trigger changed HMC rises master=%0d slave=%0d",
                master_hmc_rises, slave_hmc_rises);
       $finish;
@@ -126,7 +134,7 @@ module tb_sync_trigger_link;
                slave_trigger_rises);
       $finish;
     end
-    $display("PASS: sync epoch CDC, two-pulse HMC link, and post-sync trigger link");
+    $display("PASS: single-pulse XS20 SYNC and independent XS18->XS19 trigger link");
     $finish;
   end
 endmodule

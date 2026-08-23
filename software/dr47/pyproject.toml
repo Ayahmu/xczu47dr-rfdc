@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "47dr-driver"
+version = "0.1.0"
+description = "Direct UDP driver for the XCZU47DR (47DR) RFDC playback board"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.23"]
+
+[project.scripts]
+dr47-network = "dr47.cli:main"
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.6"]
+
+[tool.setuptools]
+packages = ["dr47"]
+
+[tool.setuptools.package-dir]
+dr47 = "."

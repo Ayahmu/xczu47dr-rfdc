@@ -1,14 +1,14 @@
 `timescale 1ns/1ps
 
-// Software-triggered board synchronization and post-sync playback trigger.
-// The DDR-domain request/trigger inputs are intentionally kept separate from
-// the PL-domain sync sequencer so both CDC paths can be verified in isolation.
+// Independent SYNC and external Trigger links.
+//
+// sync_link_out is the only signal driven on XS20. trigger_link_out is the
+// only signal driven on XS18. sync_in is sampled from XS20 and trigger_in is
+// sampled from XS19. No Type-C signal is used by this module.
 module sync_trigger_link #(
     parameter integer IS_MASTER = 1,
     parameter integer WAIT_CYCLES = 100000,
     parameter integer HIGH_CYCLES = 100,
-    // Keep the post-sync playback trigger high long enough to tolerate the
-    // Type-C differential input and the slave clock phase at the DAC CDC.
     parameter integer TRIGGER_HIGH_CYCLES = 64
 ) (
     input  wire ddr_clk,
@@ -19,13 +19,23 @@ module sync_trigger_link #(
     input  wire trigger_request_ddr,
     input  wire sync_request_vio_pl,
     input  wire sync_in,
+    input  wire trigger_in,
     input  wire dac_trigger_start,
+    input  wire role_master,
+    input  wire self_sync,
     output wire hmc_sync,
     output wire sync_link_out,
+    output wire trigger_link_out,
     output wire role_trigger_raw,
     output wire sync_done,
     output wire sync_seen,
-    output wire sync_link_ready
+    output wire sync_link_ready,
+    output wire trigger_in_seen,
+    output wire trigger_accepted,
+    output wire trigger_output_active,
+    output wire [31:0] trigger_input_count,
+    output wire [31:0] trigger_accepted_count,
+    output wire [31:0] trigger_output_count
 );
   reg [4:0] sync_epoch_stretch_cnt;
   reg sync_epoch_stretch;
@@ -37,6 +47,16 @@ module sync_trigger_link #(
       (TRIGGER_HIGH_CYCLES <= 1) ? 1 : $clog2(TRIGGER_HIGH_CYCLES + 1);
   reg [TRIGGER_CNT_WIDTH-1:0] trigger_stretch_cnt;
   reg trigger_stretched;
+
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] trigger_in_pl_sync;
+  reg trigger_in_pl_prev;
+  reg trigger_in_seen_reg;
+  reg trigger_accepted_reg;
+  reg trigger_output_active_reg;
+  reg [31:0] trigger_input_count_reg;
+  reg [31:0] trigger_accepted_count_reg;
+  reg [31:0] trigger_output_count_reg;
+  reg sync_link_ready_reg;
 
   always @(posedge ddr_clk or negedge ddr_rst_n) begin
     if (!ddr_rst_n) begin
@@ -50,7 +70,7 @@ module sync_trigger_link #(
         trigger_link_toggle_ddr <= ~trigger_link_toggle_ddr;
       if (sync_epoch_stretch_cnt != 5'd0) begin
         sync_epoch_stretch <= 1'b1;
-        sync_epoch_stretch_cnt <= sync_epoch_stretch_cnt - 5'd1;
+        sync_epoch_stretch_cnt <= sync_epoch_stretch_cnt - 1'b1;
       end else begin
         sync_epoch_stretch <= 1'b0;
       end
@@ -62,13 +82,27 @@ module sync_trigger_link #(
       sync_epoch_pl_sync <= 2'b00;
       trigger_toggle_pl_sync <= 2'b00;
       trigger_toggle_pl_seen <= 1'b0;
-        trigger_stretch_cnt <= {TRIGGER_CNT_WIDTH{1'b0}};
+      trigger_stretch_cnt <= {TRIGGER_CNT_WIDTH{1'b0}};
       trigger_stretched <= 1'b0;
+      trigger_in_pl_sync <= 2'b00;
+      trigger_in_pl_prev <= 1'b0;
+      trigger_in_seen_reg <= 1'b0;
+      trigger_accepted_reg <= 1'b0;
+      trigger_output_active_reg <= 1'b0;
+      trigger_input_count_reg <= 32'd0;
+      trigger_accepted_count_reg <= 32'd0;
+      trigger_output_count_reg <= 32'd0;
     end else begin
       sync_epoch_pl_sync <= {sync_epoch_pl_sync[0], sync_epoch_stretch};
       trigger_toggle_pl_sync <= {
           trigger_toggle_pl_sync[0], trigger_link_toggle_ddr
       };
+      trigger_in_pl_sync <= {trigger_in_pl_sync[0], trigger_in};
+      trigger_in_pl_prev <= trigger_in_pl_sync[1];
+      trigger_in_seen_reg <= trigger_in_pl_sync[1] && !trigger_in_pl_prev;
+      trigger_accepted_reg <= trigger_in_pl_sync[1] && !trigger_in_pl_prev &&
+                              (self_sync || sync_link_ready_reg);
+
       if (trigger_toggle_pl_sync[1] != trigger_toggle_pl_seen) begin
         trigger_toggle_pl_seen <= trigger_toggle_pl_sync[1];
         trigger_stretch_cnt <= TRIGGER_HIGH_CYCLES;
@@ -77,7 +111,15 @@ module sync_trigger_link #(
       end
       trigger_stretched <=
           (trigger_toggle_pl_sync[1] != trigger_toggle_pl_seen) ||
-          (trigger_stretch_cnt != 4'd0);
+          (trigger_stretch_cnt != {TRIGGER_CNT_WIDTH{1'b0}});
+      trigger_output_active_reg <= trigger_stretched;
+      if (trigger_in_pl_sync[1] && !trigger_in_pl_prev)
+        trigger_input_count_reg <= trigger_input_count_reg + 1'b1;
+      if (trigger_in_pl_sync[1] && !trigger_in_pl_prev &&
+          (self_sync || sync_link_ready_reg))
+        trigger_accepted_count_reg <= trigger_accepted_count_reg + 1'b1;
+      if (trigger_stretched && !trigger_output_active_reg)
+        trigger_output_count_reg <= trigger_output_count_reg + 1'b1;
     end
   end
 
@@ -85,8 +127,7 @@ module sync_trigger_link #(
   wire master_hmc_sync;
   wire master_slave_sync;
   reg sync_seen_reg;
-  reg slave_hmc_sync_hold;
-  reg sync_link_ready_reg;
+  reg sync_in_prev;
 
   sync_role_control #(
       .IS_MASTER(IS_MASTER),
@@ -97,6 +138,8 @@ module sync_trigger_link #(
       .rst_n       (pl_rst_n),
       .sync_request(sync_request_pl),
       .sync_in     (sync_in),
+      .role_master (role_master),
+      .self_sync   (self_sync),
       .hmc_sync    (master_hmc_sync),
       .slave_sync  (master_slave_sync),
       .sync_done   (sync_done)
@@ -106,33 +149,42 @@ module sync_trigger_link #(
     if (!pl_rst_n) begin
       sync_seen_reg <= 1'b0;
       sync_link_ready_reg <= 1'b0;
+      sync_in_prev <= 1'b0;
     end else begin
-      if (sync_done)
+      sync_in_prev <= sync_in;
+      if (self_sync) begin
         sync_seen_reg <= 1'b1;
-      // Do not expose the tail of the second HMC pulse as a playback trigger.
-      if (sync_seen_reg && !sync_in)
         sync_link_ready_reg <= 1'b1;
+      end else if (sync_done && !role_master) begin
+        sync_seen_reg <= 1'b1;
+      end else if (role_master && sync_done) begin
+        sync_seen_reg <= 1'b1;
+        sync_link_ready_reg <= 1'b1;
+      end
+      // The input must return low before a received SYNC is considered a
+      // complete external synchronization event. This prevents its high
+      // level from being interpreted as a Trigger.
+      if (sync_seen_reg && !sync_in && !role_master)
+        sync_link_ready_reg <= 1'b1;
+      if (!self_sync && !role_master && !sync_seen_reg && sync_in_prev && !sync_in)
+        sync_link_ready_reg <= 1'b0;
     end
   end
 
-  // Preserve the complete second received HMC pulse after sync_done. Once the
-  // pulse is low, later AN8/AN7 pulses are reserved for playback triggering.
-  always @(posedge pl_clk or negedge pl_rst_n) begin
-    if (!pl_rst_n)
-      slave_hmc_sync_hold <= 1'b0;
-    else if (IS_MASTER)
-      slave_hmc_sync_hold <= 1'b0;
-    else if (!sync_seen_reg || slave_hmc_sync_hold)
-      slave_hmc_sync_hold <= sync_in;
-    else
-      slave_hmc_sync_hold <= 1'b0;
-  end
-
-  assign hmc_sync = IS_MASTER ? master_hmc_sync : slave_hmc_sync_hold;
-  assign sync_link_out = IS_MASTER ?
-      (master_slave_sync | trigger_stretched) : 1'b0;
-  assign role_trigger_raw = IS_MASTER ? 1'b0 :
-      (dac_trigger_start | (sync_link_ready_reg && sync_in));
+  assign hmc_sync = master_hmc_sync;
+  assign sync_link_out = master_slave_sync;
+  assign trigger_link_out = trigger_stretched;
+  // The legacy trigger input is retained for pin-level compatibility, but it
+  // obeys the same SYNC gate as XS19. self_test is the only explicit bypass.
+  assign role_trigger_raw = (dac_trigger_start |
+      (trigger_in_pl_sync[1] && !trigger_in_pl_prev)) &&
+      (self_sync || sync_link_ready_reg);
   assign sync_seen = sync_seen_reg;
   assign sync_link_ready = sync_link_ready_reg;
+  assign trigger_in_seen = trigger_in_seen_reg;
+  assign trigger_accepted = trigger_accepted_reg;
+  assign trigger_output_active = trigger_output_active_reg;
+  assign trigger_input_count = trigger_input_count_reg;
+  assign trigger_accepted_count = trigger_accepted_count_reg;
+  assign trigger_output_count = trigger_output_count_reg;
 endmodule

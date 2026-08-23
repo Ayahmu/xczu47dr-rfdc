@@ -35,12 +35,21 @@ vivado/
 ├── src/                  # Additional RTL sources
 ├── xdc/                  # Constraint files
 │   └── custom_xczu47dr_minimal.xdc  # Custom XCZU47DR bring-up constraints
-├── work/                 # Vivado project workspace (auto-generated, ignored)
+├── work*/                # Vivado project workspace (auto-generated, ignored)
+├── reports*/             # Preflight and implementation reports (ignored)
 └── output/               # Build outputs (auto-generated, ignored)
     ├── custom_xczu47dr_rfdc.bit   # FPGA bitstream
     ├── custom_xczu47dr_rfdc.ltx   # Debug probes
     └── custom_xczu47dr_rfdc.xsa   # Hardware platform
 ```
+
+Only design inputs belong in Git: `src/`, `xdc/`, `bd/`, `scripts/`, and
+the checked-in XCI metadata under `ip/`.  Vivado creates `work`, alternate
+`work-*` directories, `reports*`, `output`, `.Xil`, generated IP products, and
+project/log files.  These paths are ignored repository-wide, so a new local
+build directory does not require editing `.gitignore`.  Build outputs remain
+on disk for programming until removed explicitly; Git simply does not track
+them.
 
 ## Prerequisites
 

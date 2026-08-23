@@ -131,22 +131,7 @@ if {$is_master_target} {
         puts "ERROR: VIO IP XCI not found after create_ip"
         exit 1
     }
-    add_files -norecurse ${vio_ip_file}
     generate_target all ${vio_ip_file}
-    set vio_synth_file "${vio_ip_dir}/vio_0/synth/vio_0.v"
-    if {[file exists ${vio_synth_file}]} {
-        add_files -norecurse ${vio_synth_file}
-    } else {
-        puts "ERROR: VIO synthesis wrapper not found: ${vio_synth_file}"
-        exit 1
-    }
-    set vio_hdl_files [glob -nocomplain ${vio_ip_dir}/vio_0/hdl/*.v]
-    if {[llength ${vio_hdl_files}] > 0} {
-        add_files -norecurse ${vio_hdl_files}
-    } else {
-        puts "ERROR: VIO support HDL not found under ${vio_ip_dir}/vio_0/hdl"
-        exit 1
-    }
     set_property include_dirs [list \
         "${vio_ip_dir}/vio_0/hdl" \
         "${vio_ip_dir}/vio_0/hdl/verilog" \
@@ -272,6 +257,48 @@ if {!$is_bandwidth_target && [file exists ${xxv_xci}]} {
     # synthesis flow.  A BlockSrcs fileset lets Vivado create the singular
     # xxv_ethernet_synth_1 child run from that immutable IP metadata.
     generate_target all ${xxv_ip}
+
+    # Keep a generated black-box declaration in the parent sourceset as well.
+    # The reference DCP supplies the implementation netlist, but Vivado's
+    # parent RTL compile does not always import the module declaration from a
+    # BlockSrcs/OOC fileset after a clean project creation.  This declaration
+    # is harmless for implementation and makes parent synthesis deterministic.
+    set xxv_stub_candidates [list \
+        [file normalize "${generated_ip_dir}/xxv_ethernet_1/xxv_ethernet_bmstub.v"] \
+        [file normalize "${proj_dir}/work/ip/xxv_ethernet_1/xxv_ethernet_bmstub.v"]]
+    set xxv_stub_file ""
+    foreach candidate ${xxv_stub_candidates} {
+        if {[file exists ${candidate}]} {
+            set xxv_stub_file ${candidate}
+            break
+        }
+    }
+    if {$xxv_stub_file ne ""} {
+        # BLOCK_STUB is interpreted specially when an XCI with an OOC run is
+        # present and can make Vivado omit the declaration from parent RTL
+        # compile order.  Make a normal black-box copy for the parent run;
+        # the original generated bmstub remains owned by the IP fileset.
+        # Keep the parent copy outside Vivado's generated-IP tree; files under
+        # that tree are auto-disabled when the XCI is imported.
+        set xxv_parent_stub [file normalize "${proj_dir}/xxv_ethernet_parent_stub.v"]
+        set xxv_in [open ${xxv_stub_file} r]
+        set xxv_stub_text [read ${xxv_in}]
+        close ${xxv_in}
+        regsub -all {\(\*\s*BLOCK_STUB\s*=\s*"true"\s*\*\)} ${xxv_stub_text} {} xxv_stub_text
+        set xxv_out [open ${xxv_parent_stub} w]
+        puts -nonewline ${xxv_out} ${xxv_stub_text}
+        close ${xxv_out}
+        add_files -fileset sources_1 -norecurse ${xxv_parent_stub}
+        set xxv_parent_obj [get_files -quiet -all ${xxv_parent_stub}]
+        if {[llength ${xxv_parent_obj}] > 0} {
+            set_property IS_ENABLED true ${xxv_parent_obj}
+            set_property USED_IN_SYNTHESIS true ${xxv_parent_obj}
+            set_property USED_IN_IMPLEMENTATION true ${xxv_parent_obj}
+        }
+        puts "INFO: Added XXV Ethernet parent black-box declaration: ${xxv_parent_stub}"
+    } else {
+        puts "WARN: Generated XXV Ethernet black-box declaration not found"
+    }
 } else {
     puts "WARN: Reference XXV Ethernet IP not found: ${xxv_xci}"
 }

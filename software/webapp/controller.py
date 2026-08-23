@@ -14,7 +14,10 @@ SOFTWARE_DIR = Path(__file__).resolve().parents[1]
 if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
-import host  # noqa: E402
+import dr47 as driver  # noqa: E402
+# Keep the local name used throughout this mature module while sourcing all
+# protocol/constants/control objects from the distributable package.
+host = driver
 import waveform_model as gui_model  # noqa: E402
 
 from .models import (
@@ -369,7 +372,7 @@ class BoardGateway:
                 active_ip=board.active_ip or board.ip,
                 message=str(exc),
             )
-        except (RuntimeError, ValueError, TimeoutError) as exc:
+        except (RuntimeError, ValueError, TimeoutError, driver.DriverError) as exc:
             return self._set_status(
                 board_id,
                 state=BoardState.FAULT,
@@ -1097,13 +1100,17 @@ class BoardGateway:
 
     @staticmethod
     def _controller(board: BoardProfile, timeout_s: float = 1.0, address: str | None = None):
-        return host.RFSocController(
+        # All live board I/O goes through the distributable driver package.
+        # ``host`` remains imported above only for legacy status constants and
+        # waveform-model compatibility; it is no longer a second protocol
+        # implementation in this gateway.
+        return driver.Dr47Device(
             address or board.active_ip or board.ip,
             port=board.port,
             timeout_s=timeout_s,
-            transport="udp",
             udp_interface=board.udp_interface,
             udp_source_ip=udp_source_ip_for_address(board, address),
+            retries=2,
         )
 
     @staticmethod

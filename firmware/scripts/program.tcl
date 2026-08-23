@@ -28,12 +28,10 @@ if {$argc == 3} {
 }
 
 proc board_target_filter {target role} {
-    if {[info exists ::env(JTAG_CABLE_SERIAL)]} {
-        set serial $::env(JTAG_CABLE_SERIAL)
-    } else {
-        set serial ""
-    }
-
+    # jtag_cable_serial is a property of the level-0 JTAG cable target.  It is
+    # not a reliable property on the nested PSU/TAP/A53 debug targets, and
+    # applying it here makes otherwise valid debug targets disappear.
+    # Cable selection is handled explicitly by select_board_cable.
     switch -- $role {
         psu { set role_filter {name =~ "PSU"} }
         fpga { set role_filter {name =~ "PS TAP"} }
@@ -42,11 +40,26 @@ proc board_target_filter {target role} {
         dap { set role_filter {name =~ "DAP*"} }
         default { error "Unknown target role: $role" }
     }
+    return $role_filter
+}
 
-    if {$serial eq ""} {
-        return $role_filter
+proc board_cable_filter {target} {
+    if {[info exists ::env(JTAG_CABLE_SERIAL)] && $::env(JTAG_CABLE_SERIAL) ne ""} {
+        # level==0 is important: without it a serial match also returns every
+        # nested target carrying the inherited cable property.
+        return "jtag_cable_serial == \"$::env(JTAG_CABLE_SERIAL)\" && level == 0"
     }
-    return "jtag_cable_serial == \"$serial\" && $role_filter"
+    return {level == 0}
+}
+
+proc select_board_cable {target} {
+    set filter [board_cable_filter $target]
+    if {[catch {set matches [jtag targets -filter $filter]} err] || [string trim $matches] eq ""} {
+        error "No JTAG cable matched ${filter}: ${err}"
+    }
+    if {[catch {jtag targets -set -filter $filter} err]} {
+        error "Could not select JTAG cable using ${filter}: ${err}"
+    }
 }
 
 proc board_role_filter {role} {
@@ -61,6 +74,9 @@ proc board_role_filter {role} {
 }
 
 proc board_target_available {target role} {
+    if {[catch {select_board_cable $target}]} {
+        return 0
+    }
     set filter [board_target_filter $target $role]
     if {[catch {set matches [targets -filter $filter]}]} {
         return 0
@@ -69,6 +85,7 @@ proc board_target_available {target role} {
 }
 
 proc select_board_target {target role} {
+    select_board_cable $target
     set filter [board_target_filter $target $role]
     if {[catch {set matches [targets -filter $filter]} err] || [string trim $matches] eq ""} {
         set serial "default"
@@ -150,7 +167,12 @@ if {[info exists ::env(DRY_RUN)] && $::env(DRY_RUN) eq "1"} {
 }
 
 puts "Connecting to target..."
-connect
+if {[info exists ::env(HW_SERVER_URL)] && $::env(HW_SERVER_URL) ne ""} {
+    puts "Using hw_server ${::env(HW_SERVER_URL)}"
+    connect -url $::env(HW_SERVER_URL)
+} else {
+    connect
+}
 
 puts "Opening JTAG cables..."
 if {[catch {jtag targets -open} jtag_error]} {

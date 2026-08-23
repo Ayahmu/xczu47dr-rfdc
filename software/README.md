@@ -1,5 +1,19 @@
 # Software - RFSoC Waveform Sender
 
+## Direct Driver Wheel
+
+The distributable `47dr-driver` package lives in
+[`dr47/`](dr47/). Build it with `make driver-wheel` or
+install it from that directory. The web backend uses the same package for live
+RFCTRL2/UDP board operations; see [`docs/dr47.md`](../docs/dr47.md)
+for the API and ez-Q migration notes.
+
+For a direct real-board smoke test, edit `dr47/hardware_wave_test.py` and its
+`TEST_CONFIG`, then run `PYTHONPATH=software python -m dr47.hardware_wave_test`.
+The high-level test and `Dr47Device` frequency arguments use GHz; pulse
+durations use ns.  The file includes one-shot 1 GHz, one-shot 1.79 GHz
+Gaussian XY, continuous 2 GHz, and trigger-gated 1.5 GHz Gaussian examples.
+
 ## Browser Console
 
 Use the browser console as the primary operating interface. It replaces the
@@ -262,8 +276,9 @@ python3 software/sync_two_boards.py \
 ```
 
 The script waits for HMC7044 done on both boards, sends one `RFCTRL2
-SYNC_EPOCH` to the master, waits until both boards report the two-pulse HMC
-SYNC complete, and then waits for `dac_mts_ready` plus `nco_sync_ready` on both
+SYNC_EPOCH` to the master, emits one pulse on XS20, waits until both boards
+report the single-pulse SYNC complete, and then waits for `dac_mts_ready` plus
+`nco_sync_ready` on both
 boards. Add `--apply-arm-trigger` to also send `RFDC_APPLY`, ARM both boards,
 and TRIGGER the master; the slave starts from the master `clk_dac2` edge.
 

@@ -19,6 +19,9 @@ proc target_config_load {target} {
 
     switch -- $target {
         custom_xczu47dr {
+            # Vitis exports psu_init.tcl below hw_platform/export/.../hw.
+            # Keep this path aligned with create_app.tcl and the generated
+            # workspace used by firmware/build.sh.
             return [dict create \
                 target custom_xczu47dr \
                 project_basename custom_xczu47dr_rfdc \
@@ -31,7 +34,7 @@ proc target_config_load {target} {
                 firmware_workspace firmware/workspace/custom_xczu47dr \
                 firmware_app rfdc_app \
                 firmware_elf firmware/workspace/custom_xczu47dr/rfdc_app/Debug/rfdc_app.elf \
-                psu_init firmware/workspace/custom_xczu47dr/hw_platform/hw/psu_init.tcl \
+                psu_init firmware/workspace/custom_xczu47dr/hw_platform/export/hw_platform/hw/psu_init.tcl \
                 clock_policy external_250mhz_xs17 \
                 generics {IS_MASTER=1}]
         }
@@ -48,7 +51,7 @@ proc target_config_load {target} {
                 firmware_workspace firmware/workspace/custom_xczu47dr_master \
                 firmware_app rfdc_app \
                 firmware_elf firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf \
-                psu_init firmware/workspace/custom_xczu47dr_master/hw_platform/hw/psu_init.tcl \
+                psu_init firmware/workspace/custom_xczu47dr_master/hw_platform/export/hw_platform/hw/psu_init.tcl \
                 clock_policy external_250mhz_xs17 \
                 generics {IS_MASTER=1}]
         }
@@ -65,7 +68,7 @@ proc target_config_load {target} {
                 firmware_workspace firmware/workspace/custom_xczu47dr_slave \
                 firmware_app rfdc_app \
                 firmware_elf firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf \
-                psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/hw/psu_init.tcl \
+                psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl \
                 clock_policy external_250mhz_xs17 \
                 generics {IS_MASTER=0}]
         }

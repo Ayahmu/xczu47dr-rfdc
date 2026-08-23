@@ -23,6 +23,14 @@ puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
+# Keep the parent-only XXV model out of implementation/bitstream generation.
+set bit_defines [get_property verilog_define [current_fileset]]
+set bit_defines [lsearch -all -inline -not -exact ${bit_defines} PARENT_RTL_SYNTH]
+set_property verilog_define ${bit_defines} [current_fileset]
+foreach f [get_files -quiet -all *xxv_ethernet_parent_stub.v] {
+    set_property USED_IN_IMPLEMENTATION false ${f}
+}
+
 # Do not reset or regenerate XXV Ethernet during bitstream generation.
 # The generated Design_Linking checkpoint cannot produce a bitstream in this environment.
 # Restore the known-good reference checkpoint instead.
@@ -32,8 +40,17 @@ restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 file mkdir ${output_dir}
 
 set impl_dir "${proj_dir}/${proj_name}.runs/impl_1"
+set manual_bit_file "${impl_dir}/${proj_name}.bit"
 set existing_bit_files [glob -nocomplain ${impl_dir}/*.bit]
-if {[llength $existing_bit_files] == 0} {
+set manual_bitstream 0
+if {[file exists ${manual_bit_file}]} {
+    # run_impl_manual.tcl writes a checked routed design and bitstream
+    # directly because the project-managed impl_1 run cannot bind the
+    # protected XXV Ethernet DCP to the parent black-box cell.
+    set existing_bit_files [list ${manual_bit_file}]
+    set manual_bitstream 1
+    puts "INFO: Reusing manually implemented bitstream: ${manual_bit_file}"
+} elseif {[llength $existing_bit_files] == 0} {
     puts "INFO: Generating bitstream..."
     launch_runs impl_1 -to_step write_bitstream -jobs 8
     wait_on_run impl_1
@@ -42,15 +59,17 @@ if {[llength $existing_bit_files] == 0} {
 }
 
 # Check bitstream generation status
-set bit_status [get_property STATUS [get_runs impl_1]]
-set bit_progress [get_property PROGRESS [get_runs impl_1]]
+if {!${manual_bitstream}} {
+    set bit_status [get_property STATUS [get_runs impl_1]]
+    set bit_progress [get_property PROGRESS [get_runs impl_1]]
 
-puts "INFO: Bitstream status: ${bit_status}"
-puts "INFO: Bitstream progress: ${bit_progress}"
+    puts "INFO: Bitstream status: ${bit_status}"
+    puts "INFO: Bitstream progress: ${bit_progress}"
 
-if {${bit_progress} != "100%"} {
-    puts "ERROR: Bitstream generation failed!"
-    exit 1
+    if {${bit_progress} != "100%"} {
+        puts "ERROR: Bitstream generation failed!"
+        exit 1
+    }
 }
 
 # Copy bitstream and debug files to output directory

@@ -1,0 +1,121 @@
+# Run the project-generated implementation Tcl while explicitly restoring the
+# one protected IP checkpoint Vivado does not associate automatically.
+#
+# The generated Tcl links the DDR, RFDC, PS, SmartConnect, and ILA OOC
+# checkpoints. Only xxv_ethernet needs this additional cell-level restore.
+
+set script_path [file dirname [file normalize [info script]]]
+set vivado_dir [file dirname $script_path]
+source "${script_path}/target_config.tcl"
+source "${script_path}/reference_xxv_dcp.tcl"
+
+set target "custom_xczu47dr"
+if {$argc > 0} {
+    set target [lindex $argv 0]
+}
+if {![target_config_exists $target]} {
+    target_config_error $target
+}
+
+set proj_name [target_config_get $target project_basename]
+set proj_dir [expr {[info exists ::env(VIVADO_WORK_DIR)] ? $::env(VIVADO_WORK_DIR) : "${vivado_dir}/work"}]
+set proj_file "${proj_dir}/${proj_name}.xpr"
+set impl_dir "${proj_dir}/${proj_name}.runs/impl_1"
+set generated_tcl "${impl_dir}/TopCustomXczu47dr.tcl"
+set xxv_dcp "${proj_dir}/work/ip/xxv_ethernet_1/xxv_ethernet.dcp"
+
+if {![file exists ${proj_file}]} {
+    error "Missing Vivado project: ${proj_file}. Run make vivado-project first."
+}
+open_project ${proj_file}
+restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+
+# Synthesis creates only synth_1/TopCustomXczu47dr.tcl.  Generate the
+# implementation run script explicitly before patching its link_design step;
+# this keeps the full project-managed implementation flow while allowing the
+# protected XXV checkpoint to be bound to its parent cell.
+if {![file exists ${generated_tcl}]} {
+    puts "INFO: Generating implementation Tcl for explicit XXV DCP binding"
+    reset_run impl_1
+    launch_runs impl_1 -scripts_only
+}
+if {![file exists ${generated_tcl}]} {
+    error "Vivado did not generate implementation Tcl: ${generated_tcl}"
+}
+close_project
+if {[info exists ::env(XXV_REFERENCE_DCP)] && $::env(XXV_REFERENCE_DCP) ne ""} {
+    set xxv_dcp [file normalize $::env(XXV_REFERENCE_DCP)]
+}
+if {![file exists ${xxv_dcp}]} {
+    error "Missing XXV Ethernet reference DCP: ${xxv_dcp}"
+}
+
+set in [open ${generated_tcl} r]
+set generated_script [read ${in}]
+close ${in}
+
+set link_marker "OPTRACE \"link_design\" END { }"
+set injection [format {
+  set xxv_dut [get_cells -quiet top_i/udp_10g_i/DUT]
+  if {[llength ${xxv_dut}] != 1} {
+    error "Expected one XXV Ethernet cell top_i/udp_10g_i/DUT, found [llength ${xxv_dut}]"
+  }
+  puts "INFO: Binding XXV Ethernet reference DCP: %s"
+  read_checkpoint -cell ${xxv_dut} {%s}
+  set xxv_dut [get_cells -quiet top_i/udp_10g_i/DUT]
+  if {[get_property IS_BLACKBOX ${xxv_dut}]} {
+    error "XXV Ethernet remains a black box after DCP binding"
+  }
+  puts "INFO: XXV Ethernet DCP binding complete"
+} ${xxv_dcp} ${xxv_dcp}]
+set marker_at [string first ${link_marker} ${generated_script}]
+if {${marker_at} < 0} {
+    error "Could not find link_design insertion point in ${generated_tcl}"
+}
+# Tcl's string replace treats an empty range as a no-op. Assemble the text
+# explicitly so the DCP-binding block is inserted immediately before the
+# generated link-design end marker.
+set patched_script "[string range ${generated_script} 0 [expr {${marker_at} - 1}]]${injection}[string range ${generated_script} ${marker_at} end]"
+
+puts "INFO: Running complete Vivado implementation flow with explicit XXV DCP binding"
+set original_dir [pwd]
+cd ${impl_dir}
+set rc [catch {uplevel #0 ${patched_script}} result options]
+cd ${original_dir}
+if {${rc} != 0} {
+    return -options ${options} ${result}
+}
+
+open_project ${proj_file}
+set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
+if {![file exists ${implemented_dcp}]} {
+    set implemented_dcp "${impl_dir}/TopCustomXczu47dr_routed.dcp"
+}
+if {![file exists ${implemented_dcp}]} {
+    error "No routed implementation checkpoint found in ${impl_dir}"
+}
+puts "INFO: Verifying implemented checkpoint ${implemented_dcp}"
+open_checkpoint ${implemented_dcp}
+set setup_paths [get_timing_paths -quiet -delay_type max -slack_lesser_than 0 -max_paths 1]
+set hold_paths [get_timing_paths -quiet -delay_type min -slack_lesser_than 0 -max_paths 1]
+if {[llength ${setup_paths}] > 0 || [llength ${hold_paths}] > 0} {
+    error "Implementation completed with timing violations; refusing to write bitstream"
+}
+set route_status [report_route_status -return_string]
+if {[regexp {Number of Unrouted Nets\s*:\s*([1-9][0-9]*)} ${route_status}]} {
+    error "Implementation contains unrouted nets; refusing to write bitstream"
+}
+set drc_results [get_drc_violations -quiet -filter {SEVERITY == Error}]
+set critical_drc_results [get_drc_violations -quiet -filter {SEVERITY == {Critical Warning}}]
+if {[llength ${drc_results}] > 0 || [llength ${critical_drc_results}] > 0} {
+    error "Implementation contains [llength ${drc_results}] DRC errors and [llength ${critical_drc_results}] critical DRC warnings; refusing to write bitstream"
+}
+set xxv_gt_cells [get_cells -hier -quiet -filter {REF_NAME =~ GTYE4_CHANNEL* && NAME =~ *udp_10g_i/DUT*}]
+if {[llength ${xxv_gt_cells}] != 1} {
+    error "Expected one implemented XXV Ethernet GTYE4 channel, found [llength ${xxv_gt_cells}]"
+}
+set bit_file "${impl_dir}/${proj_name}.bit"
+puts "INFO: Writing bitstream ${bit_file}"
+write_bitstream -force ${bit_file}
+puts "INFO: Implementation and bitstream complete"
+close_project

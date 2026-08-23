@@ -2,7 +2,7 @@
 """One-command master/slave synchronization for two XCZU47DR boards.
 
 Flow: wait until both boards report HMC7044 done, send one RFCTRL2 SYNC_EPOCH
-to the master, wait until both boards report the two-pulse HMC SYNC completed,
+to the master, wait until both boards report the single-pulse XS20 SYNC completed,
 then wait until both boards publish DAC MTS and NCO SYSREF ready. With
 --apply-arm-trigger the same script also performs RFDC_APPLY, ARM on both
 boards, and TRIGGER on the master; upload the waveform to both boards first
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         _wait_network_state(
             slave, "slave", "sync_done", args.sync_timeout_s, args.poll_interval_s, "HMC SYNC complete"
         )
-        print("[sync] both boards observed the two-pulse HMC SYNC")
+        print("[sync] both boards observed the single-pulse XS20 SYNC")
 
         master_mts = _wait_mts_ready(master, "master", args.mts_timeout_s, args.poll_interval_s)
         slave_mts = _wait_mts_ready(slave, "slave", args.mts_timeout_s, args.poll_interval_s)

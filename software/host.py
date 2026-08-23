@@ -13,6 +13,24 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# The legacy module keeps its historical constants and ``RFSocController``
+# surface for old scripts.  New code should use the standalone wheel package;
+# these aliases make the migration incremental without importing web code.
+try:
+    from dr47 import (  # type: ignore
+        Dr47Device,
+        MagicMock,
+        SequenceGenerator,
+        SimulatedDr47Device,
+        connect,
+    )
+except ImportError:  # pragma: no cover - package is present in normal installs
+    Dr47Device = None
+    MagicMock = None
+    SequenceGenerator = None
+    SimulatedDr47Device = None
+    connect = None
+
 
 # ============================================================
 # 1. 硬件参数
@@ -196,12 +214,16 @@ RF2_OP_RFDC_GET_CONFIG = 0x0000000B
 RF2_OP_NETWORK_GET = 0x0000000C
 RF2_OP_NETWORK_APPLY = 0x0000000D
 RF2_OP_NETWORK_RESTART = 0x0000000E
+RF2_OP_SET_SYNC_ROLE = 0x0000000F
+RF2_OP_EMIT_TRIGGER = 0x00000010
 
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
 RF2_CAP_NETWORK_CONFIG = 0x00040000
 RF2_CAP_DAC_MTS = 0x00080000
 RF2_CAP_NCO_SYNC = 0x00100000
+RF2_CAP_SYNC_IO = 0x00200000
+RF2_CAP_TRIGGER_IO = 0x00400000
 RF2_BUILD_PROFILE_UNKNOWN = 0
 RF2_BUILD_PROFILE_NORMAL = 1
 RF2_BUILD_PROFILE_BANDWIDTH = 3
@@ -220,6 +242,10 @@ RF2_STATUS_NCO_SYNC_READY = 0x00000080
 RF2_STATUS_DAC_MTS_REQUIRED = 0x00000100
 RF2_NET_STATUS_HMC_DONE = 0x00000020
 RF2_NET_STATUS_SYNC_DONE = 0x00000040
+RF2_SYNC_STATUS_SEEN = 0x00000001
+RF2_SYNC_STATUS_READY = 0x00000002
+RF2_SYNC_STATUS_SELF_TEST = 0x00000004
+RF2_SYNC_STATUS_ROLE_MASTER = 0x00000008
 
 RF2_STATUS_OK = 0x0000
 RF2_STATUS_BAD_VERSION = 0x0001
@@ -884,6 +910,14 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         "dac_mts_error": 0,
         "nco_sync_ready": False,
         "nco_sync_epoch": 0,
+        "sync_status": 0,
+        "sync_role": "slave",
+        "sync_mode": "external",
+        "sync_seen": False,
+        "sync_link_ready": False,
+        "trigger_input_count": 0,
+        "trigger_accepted_count": 0,
+        "trigger_output_count": 0,
     })
     if len(payload) >= 32:
         (
@@ -914,6 +948,16 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         result["dac_mts_required"] = bool(mts_flags & 0x4)
         result["dac_mts_tile_mask"] = (mts_flags >> 4) & 0xF
         result["dac_mts_error"] = (mts_flags >> 16) & 0xFFFF
+    if len(payload) >= 80:
+        result["sync_status"] = struct.unpack_from("<I", payload, 72)[0]
+        result["sync_seen"] = bool(result["sync_status"] & RF2_SYNC_STATUS_SEEN)
+        result["sync_link_ready"] = bool(result["sync_status"] & RF2_SYNC_STATUS_READY)
+        result["sync_mode"] = "self_test" if result["sync_status"] & RF2_SYNC_STATUS_SELF_TEST else "external"
+        result["sync_role"] = "master" if result["sync_status"] & RF2_SYNC_STATUS_ROLE_MASTER else "slave"
+    if len(payload) >= 88:
+        result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)
+    if len(payload) >= 96:
+        result["trigger_output_count"] = struct.unpack_from("<I", payload, 88)[0]
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)

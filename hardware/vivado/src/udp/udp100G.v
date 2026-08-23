@@ -3,6 +3,57 @@
 `resetall
 `timescale 1ns / 1ps
 //`default_nettype none
+
+// Vivado's project manager can auto-disable an external XXV black-box stub
+// when the XCI is present.  Keeping the parent-synthesis declaration in this
+// source file makes it part of the guaranteed compile order.  The module name
+// intentionally remains xxv_ethernet so the synthesized cell can be replaced
+// by the reference XXV OOC checkpoint during implementation.
+`ifdef PARENT_RTL_SYNTH
+module xxv_ethernet (
+    input wire gt_rxp_in_0, input wire gt_rxn_in_0,
+    output wire gt_txp_out_0, output wire gt_txn_out_0,
+    input wire gt_refclk_p, input wire gt_refclk_n,
+    output wire tx_clk_out_0, input wire rx_core_clk_0,
+    output wire rx_clk_out_0, input wire s_axi_aclk_0,
+    input wire s_axi_aresetn_0, input wire [31:0] s_axi_awaddr_0,
+    input wire s_axi_awvalid_0, output wire s_axi_awready_0,
+    input wire [31:0] s_axi_wdata_0, input wire [3:0] s_axi_wstrb_0,
+    input wire s_axi_wvalid_0, output wire s_axi_wready_0,
+    output wire [1:0] s_axi_bresp_0, output wire s_axi_bvalid_0,
+    input wire s_axi_bready_0, input wire [31:0] s_axi_araddr_0,
+    input wire s_axi_arvalid_0, output wire s_axi_arready_0,
+    output wire [31:0] s_axi_rdata_0, output wire [1:0] s_axi_rresp_0,
+    output wire s_axi_rvalid_0, input wire s_axi_rready_0,
+    input wire pm_tick_0, input wire rx_reset_0, output wire user_rx_reset_0,
+    output wire rx_axis_tvalid_0, output wire [63:0] rx_axis_tdata_0,
+    output wire rx_axis_tlast_0, output wire [7:0] rx_axis_tkeep_0,
+    output wire rx_axis_tuser_0, output wire stat_rx_block_lock_0,
+    input wire tx_reset_0, output wire user_tx_reset_0,
+    output wire tx_axis_tready_0, input wire tx_axis_tvalid_0,
+    input wire [63:0] tx_axis_tdata_0, input wire tx_axis_tlast_0,
+    input wire [7:0] tx_axis_tkeep_0, input wire tx_axis_tuser_0,
+    input wire [55:0] tx_preamblein_0, input wire ctl_tx_send_lfi_0,
+    input wire ctl_tx_send_rfi_0, input wire ctl_tx_send_idle_0,
+    input wire gtwiz_reset_tx_datapath_0, input wire gtwiz_reset_rx_datapath_0,
+    input wire [2:0] txoutclksel_in_0, input wire [2:0] rxoutclksel_in_0,
+    input wire qpllreset_in_0, output wire gt_refclk_out,
+    input wire sys_reset, input wire dclk
+);
+assign gt_txp_out_0 = 1'b0; assign gt_txn_out_0 = 1'b0;
+assign tx_clk_out_0 = rx_core_clk_0; assign rx_clk_out_0 = rx_core_clk_0;
+assign s_axi_awready_0 = 1'b0; assign s_axi_wready_0 = 1'b0;
+assign s_axi_bresp_0 = 2'b0; assign s_axi_bvalid_0 = 1'b0;
+assign s_axi_arready_0 = 1'b0; assign s_axi_rdata_0 = 32'b0;
+assign s_axi_rresp_0 = 2'b0; assign s_axi_rvalid_0 = 1'b0;
+assign user_rx_reset_0 = 1'b1; assign user_tx_reset_0 = 1'b1;
+assign tx_axis_tready_0 = 1'b0;
+assign rx_axis_tvalid_0 = 1'b0; assign rx_axis_tdata_0 = 64'b0;
+assign rx_axis_tlast_0 = 1'b0; assign rx_axis_tkeep_0 = 8'b0;
+assign rx_axis_tuser_0 = 1'b0; assign stat_rx_block_lock_0 = 1'b0;
+assign gt_refclk_out = gt_refclk_p;
+endmodule
+`endif
  
 module udp_10G
 (  
@@ -53,16 +104,16 @@ module udp_10G
     wire 			user_tx_reset_0 ;
 
     wire 			rx_axis_tvalid_0;
-    wire [511:0] 	rx_axis_tdata_0 ;
-    wire [0:0] 		rx_axis_tuser_0 ;
-    wire [63:0] 	rx_axis_tkeep_0 ;
+    wire [63:0] 	rx_axis_tdata_0 ;
+    wire 	rx_axis_tuser_0 ;
+    wire [7:0] 	rx_axis_tkeep_0 ;
     wire 			rx_axis_tlast_0 ;
 
     wire 			tx_axis_tready_0;
     wire 			tx_axis_tvalid_0;
-    wire [511:0] 	tx_axis_tdata_0 ;
-    wire [63:0] 	tx_axis_tkeep_0 ;
-    wire [0:0] 		tx_axis_tuser_0 ;
+    wire [63:0] 	tx_axis_tdata_0 ;
+    wire [7:0] 	tx_axis_tkeep_0 ;
+    wire 	tx_axis_tuser_0 ;
     wire  			tx_axis_tlast_0 ;
 
     wire 			udp_rx_axis_tvalid;
@@ -135,7 +186,16 @@ wire            stat_rx_block_lock;
  .s_axi_rready 		(s_axi_rready)
 );
  
+// The parent synthesis flow uses a uniquely named black box so Vivado does
+// not auto-disable it as a duplicate of the managed XXV XCI.  Implementation
+// replaces this preserved cell with the reference XXV Ethernet DCP.
+wire gt_refclk_out;
+
+`ifdef PARENT_XXV_BLACKBOX
+xxv_ethernet_parent_blackbox DUT
+`else
 xxv_ethernet DUT
+`endif
 (
     .gt_rxp_in_0 	(gt_rxp_in ),
     .gt_rxn_in_0 	(gt_rxn_in ),
@@ -150,7 +210,9 @@ xxv_ethernet DUT
  
     .s_axi_aclk_0 		(clk_100Mhz),
     .s_axi_aresetn_0 	(~rst),
-    .s_axi_awaddr_0 	(s_axi_awaddr),
+    // The XXV IP has a 32-bit AXI-Lite address port; this controller only
+    // addresses its 2 KiB register window.
+    .s_axi_awaddr_0 	({21'b0, s_axi_awaddr}),
     .s_axi_awvalid_0 	(s_axi_awvalid),
     .s_axi_awready_0 	(s_axi_awready),
     .s_axi_wdata_0 		(s_axi_wdata),
@@ -160,7 +222,7 @@ xxv_ethernet DUT
     .s_axi_bresp_0 		(s_axi_bresp),
     .s_axi_bvalid_0 	(s_axi_bvalid),
     .s_axi_bready_0 	(s_axi_bready),
-    .s_axi_araddr_0 	(s_axi_araddr),
+    .s_axi_araddr_0 	({21'b0, s_axi_araddr}),
     .s_axi_arvalid_0 	(s_axi_arvalid),
     .s_axi_arready_0 	(s_axi_arready),
     .s_axi_rdata_0 		(s_axi_rdata),

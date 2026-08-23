@@ -14,7 +14,9 @@ SOFTWARE_DIR = Path(__file__).resolve().parents[1]
 if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
-import host  # noqa: E402
+import dr47 as driver  # noqa: E402
+# Compatibility local name for the constants/packet helpers used below.
+host = driver
 import waveform_tools  # noqa: E402
 
 from .models import (  # noqa: E402
@@ -256,13 +258,13 @@ class MaxLengthService:
             )
 
             board = self.management.board(record.board_id)
-            controller = host.RFSocController(
+            controller = driver.Dr47Device(
                 board.ip,
                 port=board.port,
                 timeout_s=10.0,
-                transport="udp",
                 udp_interface=board.udp_interface,
                 udp_source_ip=board.udp_source_ip,
+                retries=2,
             )
             try:
                 self.store.update(test_id, state=MaxLengthTestState.UPLOADING, progress=0.0, bytes_per_channel=bytes_per_channel, physical_bytes=physical_bytes)
@@ -280,7 +282,7 @@ class MaxLengthService:
                 ):
                     if stop.is_set():
                         raise RuntimeError("max-length test aborted during upload")
-                    controller.sock.sendto(datagram, (controller.ip, controller.port))
+                    controller.transport.send(datagram)
                     datagram_count += 1
                     sent_bytes += len(datagram) - 24
                     if sent_bytes - last_progress >= 256 * 1024 * 1024 or sent_bytes == physical_bytes:
@@ -392,7 +394,7 @@ class MaxLengthService:
         if int(response.get("status", 1)) != host.RF2_STATUS_OK:
             raise RuntimeError(f"RFCTRL2 {operation} failed with status 0x{int(response.get('status', 1)):04X}")
 
-    def _wait_prepared(self, controller: host.RFSocController, stop: threading.Event, timeout_s: float = 30.0) -> bool:
+    def _wait_prepared(self, controller: driver.Dr47Device, stop: threading.Event, timeout_s: float = 30.0) -> bool:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if stop.is_set():

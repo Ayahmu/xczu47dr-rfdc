@@ -53,16 +53,11 @@ module Top #(
     output vout32_v_n,
     output vout32_v_p,
     output TRIG_1,
-    output TRIG_2,
-    output TRIG_3,
+    input  TRIG_2,
+    inout  TRIG_3,
 
-    // Master-only sync output and slave-only sync inputs.  Both are kept in
-    // the common RTL interface so the XDC selects the physical role.
-    output sync_1_tx_p,
-    output sync_1_tx_n,
-    output PL_SYSREF_out,
-    input  sync_3_tx_p,
-    input  sync_3_tx_n,
+    // Legacy Type-C synchronization is deliberately not part of this board
+    // interface. XS20/TRIG_3 is the sole external SYNC connection.
     input  dac_trigger_start,
 
     input           c0_sys_clk_n,
@@ -147,35 +142,51 @@ module Top #(
   assign RESET_H7044_H_0 = 1'b0;
 
   wire vio_sync_request;
-  wire hmc7044_sync_typec;
+  wire sync_xs20_in;
+  wire sync_xs20_out;
+  wire sync_xs20_oe;
+  wire trigger_xs18_out;
+  wire trigger_link_out;
   wire sync_hmc;
   wire sync_link_out;
   wire sync_link_ready;
   wire role_trigger_raw;
   wire sync_done_pl;
   wire sync_seen;
+  wire trigger_in_seen;
+  wire trigger_accepted;
+  wire trigger_output_active;
+  wire [31:0] trigger_input_count;
+  wire [31:0] trigger_accepted_count;
+  wire [31:0] trigger_output_count;
   wire rfctrl2_sync_epoch_pulse;
   wire rfctrl2_trigger_pulse;
+  wire rfctrl2_set_sync_role_pulse;
+  wire [31:0] rfctrl2_sync_role;
+  wire [31:0] rfctrl2_sync_mode;
+  wire rfctrl2_emit_trigger_pulse;
+  reg sync_role_master_ddr;
+  reg sync_self_test_ddr;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_role_master_pl_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_self_test_pl_sync;
+  wire sync_role_master_pl = sync_role_master_pl_sync[1];
+  wire sync_self_test_pl = sync_self_test_pl_sync[1];
 
-  generate
-    if (IS_MASTER) begin : gen_master_sync_input
-      vio_0 vio_sync_i (
-          .clk       (pl_clk),
-          .probe_out0(vio_sync_request)
-      );
-      assign hmc7044_sync_typec = 1'b0;
-    end else begin : gen_slave_sync_input
-      assign vio_sync_request = 1'b0;
-      IBUFDS #(
-          .DIFF_TERM("FALSE"),
-          .IBUF_LOW_PWR("FALSE")
-      ) sync_3_tx_ibufds (
-          .I  (sync_3_tx_p),
-          .IB (sync_3_tx_n),
-          .O  (hmc7044_sync_typec)
-      );
-    end
-  endgenerate
+  IOBUF sync_xs20_iobuf (
+      .I  (sync_xs20_out),
+      .T  (~sync_xs20_oe),
+      .O  (sync_xs20_in),
+      .IO (TRIG_3)
+  );
+  assign trigger_xs18_out = trigger_link_out;
+  assign TRIG_1 = trigger_xs18_out;
+
+  // Keep the VIO request as a local debug source. Physical synchronization is
+  // carried only by the single-ended XS20 IOBUF above.
+  vio_0 vio_sync_i (
+      .clk       (pl_clk),
+      .probe_out0(vio_sync_request)
+  );
 
   sync_trigger_link #(
       .IS_MASTER(IS_MASTER),
@@ -187,39 +198,45 @@ module Top #(
       .pl_clk              (pl_clk),
       .pl_rst_n            (pl_aresetn),
       .sync_request_ddr   (rfctrl2_sync_epoch_pulse),
-      .trigger_request_ddr(rfctrl2_trigger_pulse),
+      .trigger_request_ddr(rfctrl2_emit_trigger_pulse),
       .sync_request_vio_pl(vio_sync_request),
-      .sync_in            (hmc7044_sync_typec),
+      .sync_in            (sync_xs20_in),
+      .trigger_in         (TRIG_2),
       .dac_trigger_start  (dac_trigger_start),
+      .role_master        (sync_role_master_pl),
+      .self_sync          (sync_self_test_pl),
       .hmc_sync           (sync_hmc),
       .sync_link_out      (sync_link_out),
+      .trigger_link_out   (trigger_link_out),
       .role_trigger_raw   (role_trigger_raw),
       .sync_done          (sync_done_pl),
       .sync_seen          (sync_seen),
-      .sync_link_ready    (sync_link_ready)
+      .sync_link_ready    (sync_link_ready),
+      .trigger_in_seen    (trigger_in_seen),
+      .trigger_accepted   (trigger_accepted),
+      .trigger_output_active(trigger_output_active),
+      .trigger_input_count(trigger_input_count),
+      .trigger_accepted_count(trigger_accepted_count),
+      .trigger_output_count(trigger_output_count)
   );
+
+  assign sync_xs20_out = sync_link_out;
+  assign sync_xs20_oe = sync_role_master_pl && !sync_self_test_pl;
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_seen_ddr_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_ready_ddr_sync;
+  reg [31:0] trigger_input_count_ddr_meta;
+  reg [31:0] trigger_input_count_ddr;
+  reg [31:0] trigger_accepted_count_ddr_meta;
+  reg [31:0] trigger_accepted_count_ddr;
+  reg [31:0] trigger_output_count_ddr_meta;
+  reg [31:0] trigger_output_count_ddr;
   wire hmc_done_ddr = hmc_done_ddr_sync[1];
   wire sync_seen_ddr = sync_seen_ddr_sync[1];
+  wire sync_link_ready_ddr = sync_ready_ddr_sync[1];
 
   assign H7044_SYNC_0 = sync_hmc;
-
-  generate
-    if (IS_MASTER) begin : gen_master_sync_output
-      OBUFDS sync_1_tx_obufds (
-          .I (sync_link_out),
-          .O (sync_1_tx_p),
-          .OB(sync_1_tx_n)
-      );
-      assign PL_SYSREF_out = clk_dac2;
-    end else begin : gen_slave_sync_output
-      assign sync_1_tx_p = 1'b0;
-      assign sync_1_tx_n = 1'b1;
-      assign PL_SYSREF_out = 1'b0;
-    end
-  endgenerate
 
   // ========== PS 指令 AXIS（128-bit） ==========
   wire [127:0] ps_instr_tdata;
@@ -303,6 +320,26 @@ module Top #(
   reg          rfctrl2_pending_ddr;
   reg          pc_started_meta;
   reg          pc_started_ddr;
+
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      sync_role_master_ddr <= IS_MASTER ? 1'b1 : 1'b0;
+      sync_self_test_ddr <= 1'b0;
+    end else if (rfctrl2_set_sync_role_pulse) begin
+      sync_role_master_ddr <= (rfctrl2_sync_role == 32'd1);
+      sync_self_test_ddr <= (rfctrl2_sync_mode == 32'd1);
+    end
+  end
+
+  always @(posedge pl_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn) begin
+      sync_role_master_pl_sync <= {2{IS_MASTER ? 1'b1 : 1'b0}};
+      sync_self_test_pl_sync <= 2'b00;
+    end else begin
+      sync_role_master_pl_sync <= {sync_role_master_pl_sync[0], sync_role_master_ddr};
+      sync_self_test_pl_sync <= {sync_self_test_pl_sync[0], sync_self_test_ddr};
+    end
+  end
   wire         control_trigger_pulse;
   wire [31:0]  rv_dbg_status;
   wire [31:0]  rv_dbg_last_seq;
@@ -731,6 +768,10 @@ module Top #(
       .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse),
       .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
       .rfctrl2_epoch       (rfctrl2_epoch),
+      .rfctrl2_set_sync_role_pulse(rfctrl2_set_sync_role_pulse),
+      .rfctrl2_sync_role   (rfctrl2_sync_role),
+      .rfctrl2_sync_mode   (rfctrl2_sync_mode),
+      .rfctrl2_emit_trigger_pulse(rfctrl2_emit_trigger_pulse),
       .rfctrl2_start_valid (rfctrl2_start_valid),
       .rfctrl2_start_tick  (rfctrl2_start_tick),
       .rfdc_apply_start    (rfdc_apply_start),
@@ -762,6 +803,13 @@ module Top #(
       .playback_armed      (rfctrl2_armed_ddr | rfctrl2_pending_ddr),
       .playback_prepared   (rfctrl2_prepared_ddr),
       .playback_running    (pc_started_ddr),
+      .sync_role_master    (sync_role_master_ddr),
+      .sync_self_test      (sync_self_test_ddr),
+      .sync_seen           (sync_seen_ddr),
+      .sync_link_ready     (sync_link_ready_ddr),
+      .trigger_input_count (trigger_input_count_ddr),
+      .trigger_accepted_count(trigger_accepted_count_ddr),
+      .trigger_output_count(trigger_output_count_ddr),
       .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
       .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
       .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
@@ -1024,11 +1072,27 @@ module Top #(
       firmware_status_ddr <= 32'd0;
       hmc_done_ddr_sync <= 2'b00;
       sync_seen_ddr_sync <= 2'b00;
+      sync_ready_ddr_sync <= 2'b00;
+      trigger_input_count_ddr_meta <= 32'd0;
+      trigger_input_count_ddr <= 32'd0;
+      trigger_accepted_count_ddr_meta <= 32'd0;
+      trigger_accepted_count_ddr <= 32'd0;
+      trigger_output_count_ddr_meta <= 32'd0;
+      trigger_output_count_ddr <= 32'd0;
     end else begin
       firmware_status_meta <= gpio_out_reg;
       firmware_status_ddr <= firmware_status_meta;
       hmc_done_ddr_sync <= {hmc_done_ddr_sync[0], hmc7044_set_finish};
       sync_seen_ddr_sync <= {sync_seen_ddr_sync[0], sync_seen};
+      sync_ready_ddr_sync <= {sync_ready_ddr_sync[0], sync_link_ready};
+      // Counters are monotonic snapshots. Two DDR-domain samples avoid
+      // exposing the PL-domain bus directly to RFCTRL2 STATUS.
+      trigger_input_count_ddr_meta <= trigger_input_count;
+      trigger_input_count_ddr <= trigger_input_count_ddr_meta;
+      trigger_accepted_count_ddr_meta <= trigger_accepted_count;
+      trigger_accepted_count_ddr <= trigger_accepted_count_ddr_meta;
+      trigger_output_count_ddr_meta <= trigger_output_count;
+      trigger_output_count_ddr <= trigger_output_count_ddr_meta;
     end
   end
 
@@ -1058,9 +1122,9 @@ module Top #(
     end
   end
   // ========== trigger CDC ==========
-  // After the initial HMC sequence, AN8/AN7 carries the master playback
-  // trigger. The sync_trigger_link module blocks the second SYNC pulse tail
-  // from entering this playback path and keeps the legacy input as fallback.
+  // XS18/XS19 carry the independent playback Trigger. The sync_trigger_link
+  // module gates both the dedicated input and the legacy fallback behind the
+  // external XS20 SYNC state (or the explicit self_test bypass).
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_ddr_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1320,13 +1384,11 @@ module Top #(
   end
   wire dac_rst_n = dac_rstff[2];
 
-  assign TRIG_2 = 1'b0;
-  assign TRIG_3 = 1'b0;
-
   wire rfctrl2_play_trigger;
   wire rfctrl2_play_prepare;
   wire rfctrl2_play_abort;
-  wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger | (IS_MASTER ? 1'b0 : role_trigger_dac_sync);
+  wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger |
+      ((!sync_role_master_pl) ? role_trigger_dac_sync : 1'b0);
   wire unused_single_board_inputs = mclk_10m_p | mclk_10m_n | EXT_TRIGGER_P | EXT_TRIGGER_N |
       rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1776,7 +1838,8 @@ module Top #(
 
   wire trig_1_dac_valid = (trig_1_dac_valid_count != 16'd0);
   wire trig_1_dac_valid_pulse = dac_any_valid_gated & ~dac_any_valid_gated_d;
-  assign TRIG_1 = trig_1_dac_valid;
+  // TRIG_1 is the dedicated XS18 Trigger output. The old DAC-valid debug
+  // pulse remains available internally as trig_1_dac_valid.
 
   axis_async_fifo_256 fifo_ch1_inst (
     .s_axis_aresetn(wave_fifo_aresetn),

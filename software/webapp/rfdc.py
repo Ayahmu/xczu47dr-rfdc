@@ -11,7 +11,7 @@ if str(SOFTWARE_DIR) not in sys.path:
 from .management import ManagementError, ManagementStore
 from .models import BoardRfdcConfig, BoardStatus, RfdcChannelConfig, RfdcConfigApplyRequest
 
-import host
+import dr47 as host
 
 
 RFDC_STATUS_MESSAGES = {
@@ -33,11 +33,13 @@ def default_rfdc_config(board_id: str) -> BoardRfdcConfig:
     targets = {1: 4.5e9, 2: 4.5e9, 3: 4.5e9, 4: 4.5e9, 5: 0.0, 6: 0.0, 7: 5.8e9, 8: 6.2e9}
     channels: list[RfdcChannelConfig] = []
     for channel in range(1, 9):
-        plan = host.rfdc_nco_plan_for_target(targets[channel])
+        # The web model stores wire/protocol values in Hz for compatibility,
+        # while the public dr47 planning helper intentionally takes GHz.
+        plan = host.rfdc_nco_plan_for_target(targets[channel] / host.GHZ_TO_HZ)
         channels.append(RfdcChannelConfig(
             channel=channel,
             target_rf_hz=targets[channel],
-            nco_hz=float(plan["nco_hz"]),
+            nco_hz=float(plan["nco_ghz"]) * host.GHZ_TO_HZ,
             nyquist_zone=int(plan["nyquist_zone"]),
         ))
     return BoardRfdcConfig(board_id=board_id, channels=channels)

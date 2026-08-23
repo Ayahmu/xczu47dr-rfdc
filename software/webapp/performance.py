@@ -30,7 +30,7 @@ from .models import (
     WaveformRequest,
 )
 
-import host
+import dr47 as host
 
 
 def utc_now() -> str:
@@ -384,8 +384,8 @@ class PerformanceService:
                     setattr(item, field, float(channel_params[field]))
             if "target_rf_hz" in channel_params:
                 item.target_rf_hz = float(channel_params["target_rf_hz"])
-                plan = host.rfdc_nco_plan_for_target(item.target_rf_hz)
-                item.nco_hz = float(plan["nco_hz"])
+                plan = host.rfdc_nco_plan_for_target(item.target_rf_hz / host.GHZ_TO_HZ)
+                item.nco_hz = float(plan["nco_ghz"]) * host.GHZ_TO_HZ
                 item.nyquist_zone = int(plan["nyquist_zone"])
             if "nco_hz" in channel_params:
                 item.nco_hz = float(channel_params["nco_hz"])

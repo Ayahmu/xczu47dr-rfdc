@@ -393,11 +393,11 @@ module tb_pl_riscv_control_v1;
     resp_count = 6'd0;
     send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h000000100000008A, 1'b0, 1'b1, 32'hA0000004);
-    wait_for_response_count(12);
-    check_condition(resp_count == 6'd12, "RFCTRL2 STATUS should emit a 12-word RFRESP2 packet");
+    wait_for_response_count(15);
+    check_condition(resp_count == 6'd15, "RFCTRL2 STATUS should emit a 15-word RFRESP2 packet");
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 STATUS magic mismatch");
     check_condition(resp_words[1] == 64'h0000000200000002, "RFRESP2 STATUS header mismatch");
-    check_condition(resp_words[2] == 64'h000000480000008A, "RFRESP2 STATUS sequence mismatch");
+    check_condition(resp_words[2] == 64'h000000600000008A, "RFRESP2 STATUS sequence mismatch");
     check_condition(resp_words[7] == 64'h0000000200000003, "RFRESP2 STATUS playback config/fifo-valid debug mismatch");
     check_condition(resp_words[8] == 64'h000000050000000F, "RFRESP2 STATUS executor/fifo-ready debug mismatch");
     check_condition(resp_words[9] == 64'h0000001200000034, "RFRESP2 STATUS counters debug mismatch");
@@ -425,8 +425,8 @@ module tb_pl_riscv_control_v1;
     resp_count = 6'd0;
     send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h0000001000000094, 1'b0, 1'b1, 32'hA0000004);
-    wait_for_response_count(12);
-    check_condition(resp_words[3] == 64'h000001B1001F0000, "RFRESP2 STATUS must advertise PREPARED and synchronization readiness");
+    wait_for_response_count(15);
+    check_condition(resp_words[3] == 64'h000001B1007F0000, "RFRESP2 STATUS must advertise PREPARED and synchronization readiness");
 
     // RFCTRL2 RFDC_APPLY: 4 header words plus a fixed 200-byte payload.
     request_nco[0] = -64'sd1900000000;

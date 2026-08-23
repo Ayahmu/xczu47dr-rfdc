@@ -4,6 +4,9 @@ module tb_sync_role_switch;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
   reg master_request = 1'b0;
+  reg master_role = 1'b1;
+  reg slave_role = 1'b0;
+  reg self_test = 1'b0;
   wire master_hmc_sync;
   wire master_slave_sync;
   wire slave_hmc_sync;
@@ -21,6 +24,7 @@ module tb_sync_role_switch;
       .rst_n(rst_n),
       .sync_request(master_request),
       .sync_in(1'b0),
+      .role_master(master_role), .self_sync(self_test),
       .hmc_sync(master_hmc_sync),
       .slave_sync(master_slave_sync),
       .sync_done(master_sync_done)
@@ -35,6 +39,7 @@ module tb_sync_role_switch;
       .rst_n(rst_n),
       .sync_request(1'b0),
       .sync_in(master_slave_sync),
+      .role_master(slave_role), .self_sync(self_test),
       .hmc_sync(slave_hmc_sync),
       .slave_sync(),
       .sync_done(slave_sync_done)
@@ -73,12 +78,12 @@ module tb_sync_role_switch;
     master_request = 1'b0;
 
     repeat (35) @(posedge clk);
-    if (master_rises != 2) begin
-      $display("FAIL: master generated %0d sync pulses, expected 2", master_rises);
+    if (master_rises != 1) begin
+      $display("FAIL: master generated %0d sync pulses, expected 1", master_rises);
       $finish;
     end
-    if (slave_rises != 2) begin
-      $display("FAIL: slave observed %0d sync pulses, expected 2", slave_rises);
+    if (slave_rises != 1) begin
+      $display("FAIL: slave observed %0d sync pulses, expected 1", slave_rises);
       $finish;
     end
     if (master_done_pulses != 1) begin
@@ -90,7 +95,7 @@ module tb_sync_role_switch;
       $finish;
     end
 
-    $display("PASS: IS_MASTER roles generate and receive the two-pulse sync sequence");
+    $display("PASS: runtime roles generate and receive a single-pulse sync sequence");
     $finish;
   end
 endmodule

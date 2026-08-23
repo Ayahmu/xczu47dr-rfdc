@@ -11,7 +11,7 @@ SOFTWARE_DIR = Path(__file__).resolve().parents[1]
 if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
-import host  # noqa: E402
+import dr47 as host  # noqa: E402
 import waveform_model as gui_model  # noqa: E402
 
 from .models import BoardOverride, BoardRfdcConfig, EzqChannel, PreviewResponse, PreviewSeries, WaveformRequest

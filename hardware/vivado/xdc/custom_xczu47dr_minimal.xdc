@@ -22,13 +22,20 @@ set_property IOSTANDARD LVCMOS25 [get_ports H7044_SDATA_0]
 set_property PACKAGE_PIN A5 [get_ports RST_88E1111]
 set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
 
-# XS18 TRIG_1 MMCX output.  Schematic pin table maps TRIG_1 to BANK87
-# package ball A6, with VCCO_87 tied to VCC_2V5.
-set_property PACKAGE_PIN D10 [get_ports TRIG_1]
+# XS18 TRIG_1 MMCX output. XS19 is the dedicated input and XS20 is the
+# bidirectional standalone SYNC connector.
+set_property PACKAGE_PIN A6 [get_ports TRIG_1]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
+set_property PACKAGE_PIN D10 [get_ports TRIG_2]
+set_property IOSTANDARD LVCMOS25 [get_ports TRIG_2]
+set_property PACKAGE_PIN C10 [get_ports TRIG_3]
+set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
 
 # TRIG_1 is an asynchronous external observability/control output.
 set_false_path -to [get_ports TRIG_1]
+set_false_path -from [get_ports TRIG_2]
+set_false_path -from [get_ports TRIG_3]
+set_false_path -to [get_ports TRIG_3]
 
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
@@ -56,6 +63,11 @@ set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_P]
 set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_N]
 
 # 10G SFP+ link copied from the known-good reference implementation report.
+# These ports terminate in GT primitives inside the XXV Ethernet DCP.  The
+# parent synthesis must not insert fabric I/O buffers around the preserved
+# black box, otherwise the GT cannot bind to the package pins at link_design.
+set_property IO_BUFFER_TYPE NONE [get_ports {sfp_rxp sfp_rxn sfp_txp sfp_txn sfp_refclkp sfp_refclkn}]
+set_property CLOCK_BUFFER_TYPE NONE [get_ports {sfp_rxp sfp_rxn sfp_txp sfp_txn sfp_refclkp sfp_refclkn}]
 set_property PACKAGE_PIN N38 [get_ports sfp_rxp]
 set_property PACKAGE_PIN N39 [get_ports sfp_rxn]
 set_property PACKAGE_PIN P35 [get_ports sfp_txp]
@@ -84,6 +96,10 @@ set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_epoch_
 set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_toggle_pl_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_ddr_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/trigger_input_count_ddr_meta_reg[*]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/trigger_accepted_count_ddr_meta_reg[*]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/trigger_output_count_ddr_meta_reg[*]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/u_rfctrl2_sync/ext_sync_meta_reg/D]
 
 # PL_SYSREF is sampled into the HMC DAC AXIS clock domain in Top.v.

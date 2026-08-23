@@ -26,6 +26,10 @@ module pl_riscv_control_v1 #(
     output reg          rfctrl2_abort_mute_pulse,
     output reg          rfctrl2_sync_epoch_pulse,
     output reg  [63:0]  rfctrl2_epoch,
+    output reg          rfctrl2_set_sync_role_pulse,
+    output reg  [31:0]  rfctrl2_sync_role,
+    output reg  [31:0]  rfctrl2_sync_mode,
+    output reg          rfctrl2_emit_trigger_pulse,
     output reg          rfctrl2_start_valid,
     output reg  [63:0]  rfctrl2_start_tick,
 
@@ -58,6 +62,13 @@ module pl_riscv_control_v1 #(
     input  wire         playback_armed,
     input  wire         playback_prepared,
     input  wire         playback_running,
+    input  wire         sync_role_master,
+    input  wire         sync_self_test,
+    input  wire         sync_seen,
+    input  wire         sync_link_ready,
+    input  wire [31:0]  trigger_input_count,
+    input  wire [31:0]  trigger_accepted_count,
+    input  wire [31:0]  trigger_output_count,
     input  wire [511:0] rfdc_actual_nco_hz,
     input  wire [15:0]  rfdc_actual_nyquist_zone,
     input  wire [255:0] rfdc_actual_phase_mdeg,
@@ -166,13 +177,15 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_RFDC_GET_CONFIG   = 32'h0000000B;
   // Structured RFDC apply, RFDC readback, and runtime network identity
   // configuration are all advertised through HELLO/STATUS.
-  localparam [31:0] RF2_CAPABILITIES         = 32'h001F0000;
+  localparam [31:0] RF2_CAPABILITIES         = 32'h007F0000;
   localparam [31:0] RF2_RFDC_REQUEST_BYTES   = 32'd200;
   localparam [31:0] RF2_NETWORK_APPLY_BYTES  = 32'd32;
   localparam [31:0] RF2_NETWORK_RESPONSE_BYTES = 32'd80;
   localparam [31:0] RF2_OP_NETWORK_GET       = 32'h0000000C;
   localparam [31:0] RF2_OP_NETWORK_APPLY     = 32'h0000000D;
   localparam [31:0] RF2_OP_NETWORK_RESTART   = 32'h0000000E;
+  localparam [31:0] RF2_OP_SET_SYNC_ROLE     = 32'h0000000F;
+  localparam [31:0] RF2_OP_EMIT_TRIGGER      = 32'h00000010;
 
   localparam [31:0] RV1_VERSION = 32'd1;
   localparam [31:0] RF2_VERSION = 32'd2;
@@ -227,6 +240,8 @@ module pl_riscv_control_v1 #(
   localparam [4:0] DEC_RV1_RFDC_CH_ENABLE = 5'd20;
   localparam [4:0] DEC_RV1_RFDC_SET_NCO  = 5'd21;
   localparam [4:0] DEC_RV1_STATUS_READ   = 5'd22;
+  localparam [4:0] DEC_RF2_SET_SYNC_ROLE = 5'd23;
+  localparam [4:0] DEC_RF2_EMIT_TRIGGER  = 5'd24;
   localparam integer RX_COUNT_WIDTH = $clog2(MAX_PAYLOAD_WORDS + 1);
   localparam [31:0] MAX_PAYLOAD_WORDS_U32 = MAX_PAYLOAD_WORDS;
   localparam [RX_COUNT_WIDTH-1:0] MAX_PAYLOAD_WORDS_COUNT = MAX_PAYLOAD_WORDS;
@@ -370,6 +385,8 @@ module pl_riscv_control_v1 #(
           RF2_OP_START_AT: decode_kind = DEC_RF2_START_AT;
           RF2_OP_TRIGGER: decode_kind = DEC_RF2_TRIGGER;
           RF2_OP_ABORT_MUTE: decode_kind = DEC_RF2_ABORT_MUTE;
+          RF2_OP_SET_SYNC_ROLE: decode_kind = DEC_RF2_SET_SYNC_ROLE;
+          RF2_OP_EMIT_TRIGGER: decode_kind = DEC_RF2_EMIT_TRIGGER;
           default: decode_kind = DEC_UNSUPPORTED;
         endcase
       end else if (is_v1) begin
@@ -462,7 +479,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd72, 64'd0, 64'd0);
+      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd96, 64'd0, 64'd0);
     end
   endtask
 
@@ -528,9 +545,13 @@ module pl_riscv_control_v1 #(
             nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
             1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
         };
-        resp_count <= 6'd12;
+        resp_words[12] <= {32'd0, 27'd0, sync_role_master, sync_self_test,
+                            sync_link_ready, sync_seen};
+        resp_words[13] <= {trigger_accepted_count, trigger_input_count};
+        resp_words[14] <= {32'd0, trigger_output_count};
+        resp_count <= 6'd15;
         resp_index <= 6'd0;
-        rvresp_word_count <= 16'd12;
+        rvresp_word_count <= 16'd15;
         rvresp_tdata <= resp_request_magic;
         rvresp_tvalid <= 1'b1;
         rvresp_tlast <= 1'b0;
@@ -711,6 +732,10 @@ module pl_riscv_control_v1 #(
       rfctrl2_trigger_pulse <= 1'b0;
       rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
+      rfctrl2_set_sync_role_pulse <= 1'b0;
+      rfctrl2_sync_role <= 32'd0;
+      rfctrl2_sync_mode <= 32'd0;
+      rfctrl2_emit_trigger_pulse <= 1'b0;
       rfctrl2_start_valid <= 1'b0;
       rfctrl2_epoch <= 64'd0;
       rfctrl2_start_valid <= 1'b0;
@@ -815,6 +840,8 @@ module pl_riscv_control_v1 #(
       rfctrl2_trigger_pulse <= 1'b0;
       rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
+      rfctrl2_set_sync_role_pulse <= 1'b0;
+      rfctrl2_emit_trigger_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
       network_apply_start <= 1'b0;
       network_restart_start <= 1'b0;
@@ -1103,6 +1130,30 @@ module pl_riscv_control_v1 #(
               rfctrl2_sync_epoch_pulse <= 1'b1;
               dbg_status <= 32'h2000_0007;
               queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
+            end
+            DEC_RF2_SET_SYNC_ROLE: begin
+              if ((cmd_payload_bytes != 32'd8) ||
+                  (payload_words[4] > 32'd1) || (payload_words[5] > 32'd1) ||
+                  playback_armed || playback_prepared || playback_running) begin
+                dbg_status <= 32'hBAD2_000F;
+                queue_resp0(RF2_OP_SET_SYNC_ROLE, 16'h0003, cmd_seq);
+              end else begin
+                rfctrl2_sync_role <= payload_words[4];
+                rfctrl2_sync_mode <= payload_words[5];
+                rfctrl2_set_sync_role_pulse <= 1'b1;
+                dbg_status <= 32'h2000_000F;
+                queue_resp0(RF2_OP_SET_SYNC_ROLE, 16'h0000, cmd_seq);
+              end
+            end
+            DEC_RF2_EMIT_TRIGGER: begin
+              if (cmd_payload_bytes != 32'd0) begin
+                dbg_status <= 32'hBAD2_0010;
+                queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0003, cmd_seq);
+              end else begin
+                rfctrl2_emit_trigger_pulse <= 1'b1;
+                dbg_status <= 32'h2000_0010;
+                queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0000, cmd_seq);
+              end
             end
             DEC_RF2_START_AT: begin
               rfctrl2_start_tick <= {payload_words[5], payload_words[4]};
