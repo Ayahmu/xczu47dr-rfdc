@@ -65,8 +65,10 @@ IP ?= 10.87.5.241
 PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
+RELEASE_NAME ?= 10mhz-$(shell date +%Y%m%d)
+RELEASE_DIR ?= $(ROOT)/releases/$(RELEASE_NAME)
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts release-dual host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -78,6 +80,7 @@ help:
 	@echo "  make hardware-fast    Reuse the current Vivado project for RTL/constraint iterations"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
 	@echo "  make artifacts        Verify expected .bit/.ltx/.xsa/.elf artifacts exist"
+	@echo "  make release-dual     Package checked-in master/slave release artifacts"
 	@echo ""
 	@echo "Step targets:"
 	@echo "  make chisel           Generate Chisel Verilog"
@@ -123,6 +126,7 @@ help:
 	@echo "  Use TARGET=custom_xczu47dr_bw only for the standalone DDR bandwidth pressure path"
 	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
+	@echo "  RELEASE_DIR=$(RELEASE_DIR)"
 
 all: hardware firmware artifacts
 
@@ -226,6 +230,37 @@ artifacts:
 	@test -f "$(XSA)" || { echo "ERROR: missing XSA: $(XSA)"; exit 1; }
 	@test -f "$(ELF)" || { echo "ERROR: missing ELF: $(ELF)"; exit 1; }
 	@du -h "$(BIT)" "$(LTX)" "$(XSA)" "$(ELF)"
+
+# Package already-built, role-matched artifacts for clone-and-program use.
+# This target deliberately does not invoke Vivado or Vitis; run the build
+# targets first, then commit the resulting release directory.
+release-dual:
+	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" || { echo "ERROR: missing master bitstream; run make bitstream-master"; exit 1; }
+	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit" || { echo "ERROR: missing slave bitstream; run make bitstream-slave"; exit 1; }
+	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.xsa" || { echo "ERROR: missing master XSA; run make xsa-master"; exit 1; }
+	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.xsa" || { echo "ERROR: missing slave XSA; run make xsa-slave"; exit 1; }
+	@test -s "$(ROOT)/firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf" || { echo "ERROR: missing master ELF; run make firmware TARGET=custom_xczu47dr_master"; exit 1; }
+	@test -s "$(ROOT)/firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf" || { echo "ERROR: missing slave ELF; run make firmware TARGET=custom_xczu47dr_slave"; exit 1; }
+	@mkdir -p "$(RELEASE_DIR)"
+	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(RELEASE_DIR)/"
+	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit" "$(RELEASE_DIR)/"
+	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.xsa" "$(RELEASE_DIR)/"
+	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.xsa" "$(RELEASE_DIR)/"
+	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf" "$(RELEASE_DIR)/custom_xczu47dr_master.elf"
+	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf" "$(RELEASE_DIR)/custom_xczu47dr_slave.elf"
+	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_master/hw_platform/export/hw_platform/hw/psu_init.tcl" "$(RELEASE_DIR)/custom_xczu47dr_master_psu_init.tcl"
+	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl" "$(RELEASE_DIR)/custom_xczu47dr_slave_psu_init.tcl"
+	@{ \
+		echo "# XCZU47DR 10 MHz Hardware Release"; \
+		echo; \
+		echo "- Source commit: $$(git rev-parse HEAD)"; \
+		echo "- XS17 reference: 10 MHz"; \
+		echo "- HMC7044 DAC reference: 128 MHz"; \
+		echo "- Roles: master XS20 output; slave XS20 input"; \
+		echo "- Program only files with the same role prefix."; \
+	} > "$(RELEASE_DIR)/MANIFEST.md"
+	@(cd "$(RELEASE_DIR)" && sha256sum *.bit *.xsa *.elf *.tcl > SHA256SUMS)
+	@echo "Release packaged at $(RELEASE_DIR)"
 
 run program:
 ifeq ($(EXPLICIT_PROGRAM_ARTIFACTS),1)

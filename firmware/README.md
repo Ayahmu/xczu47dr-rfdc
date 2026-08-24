@@ -27,6 +27,10 @@ firmware/
 
 - Xilinx Vitis 2024.2
 - Hardware XSA and bitstream from Vivado build
+
+For clone users, a checked-in release bundle under `releases/` already contains
+the role-matched XSA, bitstream, ELF, and `psu_init.tcl`; no Vivado synthesis or
+implementation is required to program that release. See `releases/README.md`.
 - ARM cross-compiler (aarch64-none-elf-gcc)
 
 ## Quick Start

@@ -32,6 +32,13 @@ generated bitstreams and LTX files are written as
 connection for the current hardware revision is **master A <-> slave A**. Use
 `make bitstream-dual-clean` to remove only the isolated dual-build trees.
 
+Generated artifacts intended for other developers are published as a checked-in
+release bundle. After building both roles, their XSAs, firmware ELFs, and PS init
+scripts, run `make release-dual RELEASE_NAME=10mhz-YYYYMMDD`; see
+[`releases/README.md`](releases/README.md). This avoids requiring a clone user to
+rerun Vivado synthesis and implementation. Vivado workspaces and ordinary output
+directories remain ignored.
+
 ```bash
 # Build one formal role and its role-specific XSA/firmware workspace.
 make all TARGET=custom_xczu47dr_master

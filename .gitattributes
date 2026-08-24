@@ -1,3 +1,3 @@
-*.bit binary
-*.ltx binary
-*.elf binary
+# Vivado generates these release scripts with intentional trailing whitespace.
+# Preserve their bytes because SHA256SUMS verifies the exact programmed bundle.
+/releases/**/*.tcl whitespace=-trailing-space,-blank-at-eof

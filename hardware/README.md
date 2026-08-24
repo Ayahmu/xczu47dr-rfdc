@@ -51,7 +51,7 @@ hardware/vivado/reports-dual/master/
 hardware/vivado/reports-dual/slave/
 ```
 
-The resulting files are:
+The resulting local files are:
 
 ```text
 hardware/vivado/output/custom_xczu47dr_master.bit
@@ -62,7 +62,7 @@ hardware/vivado/output/custom_xczu47dr_slave.ltx
 hardware/vivado/output/custom_xczu47dr_slave.xsa
 ```
 
-The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove a regular single-target build. Generated Vivado state and outputs are ignored by Git.
+The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove a regular single-target build. Generated Vivado state and outputs are ignored by Git. To publish a clone-and-program bundle, build the matching firmware for both roles and run `make release-dual RELEASE_NAME=10mhz-YYYYMMDD`; see [`releases/README.md`](../releases/README.md).
 
 ## Firmware and Programming
 
