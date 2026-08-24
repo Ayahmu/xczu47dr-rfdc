@@ -216,4 +216,29 @@ def TriggerSeqGenerate(*args, **kwargs):
     return SequenceGenerator(*args, **kwargs).TriggerSeqGenerate()
 
 
-__all__ = ["PulseWave", "SequenceGenerator", "TriggerSeqGenerate"]
+def make_trigger_sequence(sample_count: int) -> np.ndarray:
+    """Return a looping XY sequence that waits for one Trigger per record.
+
+    The returned rows are in the same four-word little-endian representation
+    accepted by :meth:`Dr47Device.download_qc_wave_seq`.  It is deliberately
+    part of the driver rather than a board-level test helper, so production
+    applications and the three hardware tests use exactly the same sequence
+    contract.
+    """
+
+    count = int(sample_count)
+    if not 1 <= count <= 0xFFFF:
+        raise ValueError("sample_count must be in 1..65535")
+    return np.asarray(
+        [
+            [0, count, 0, 0x0800],  # LS: infinite top-level loop
+            [0, count, 0, 0x4000],  # TR: wait for the next Trigger edge
+            [0, count, 0, 0x0000],  # DI: play the uploaded waveform
+            [0, count, 0, 0x1000],  # LE: repeat from the loop start
+            [0, count, 0, 0x8000],  # ST: stop marker required by ez-Q rows
+        ],
+        dtype="<u2",
+    )
+
+
+__all__ = ["PulseWave", "SequenceGenerator", "TriggerSeqGenerate", "make_trigger_sequence"]

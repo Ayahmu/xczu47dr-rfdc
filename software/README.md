@@ -8,8 +8,28 @@ install it from that directory. The web backend uses the same package for live
 RFCTRL2/UDP board operations; see [`docs/dr47.md`](../docs/dr47.md)
 for the API and ez-Q migration notes.
 
-For a direct real-board smoke test, edit `dr47/hardware_wave_test.py` and its
-`TEST_CONFIG`, then run `PYTHONPATH=software python -m dr47.hardware_wave_test`.
+The maintained real-board entry points are:
+
+```bash
+# Master and slave: XS20 SYNC plus XS18 -> XS19 Trigger.
+PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
+
+# Standalone master: local UDP Trigger without calling sync().
+PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
+
+# Standalone slave: explicit sync bypass and local UDP Trigger.
+PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
+```
+
+Each entry point first broadcasts `NETWORK_GET`, identifies boards by the
+bitstream-reported master/slave role (and optional UID), applies the target IP
+declared at the top of that Python file, verifies the UID at the new address,
+and only then starts waveform control. Network settings are source constants;
+these scripts intentionally define no network command-line arguments.
+
+The shared waveform helpers live in `dr47.waveforms`; the shared
+Trigger-wait sequence helper is `dr47.make_trigger_sequence`.  See
+`dr47/TESTING.md` for wiring, expected states, and hardware-test limits.
 The high-level test and `Dr47Device` frequency arguments use GHz; pulse
 durations use ns.  The file includes one-shot 1 GHz, one-shot 1.79 GHz
 Gaussian XY, continuous 2 GHz, and trigger-gated 1.5 GHz Gaussian examples.
