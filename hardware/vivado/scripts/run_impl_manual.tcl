@@ -8,6 +8,7 @@ set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
+source "${script_path}/build_options.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -55,7 +56,7 @@ set generated_script [read ${in}]
 close ${in}
 
 set link_marker "OPTRACE \"link_design\" END { }"
-set injection [format {
+set link_injection [format {
   set xxv_dut [get_cells -quiet top_i/udp_10g_i/DUT]
   if {[llength ${xxv_dut}] != 1} {
     error "Expected one XXV Ethernet cell top_i/udp_10g_i/DUT, found [llength ${xxv_dut}]"
@@ -75,45 +76,99 @@ if {${marker_at} < 0} {
 # Tcl's string replace treats an empty range as a no-op. Assemble the text
 # explicitly so the DCP-binding block is inserted immediately before the
 # generated link-design end marker.
-set patched_script "[string range ${generated_script} 0 [expr {${marker_at} - 1}]]${injection}[string range ${generated_script} ${marker_at} end]"
+set base_script "[string range ${generated_script} 0 [expr {${marker_at} - 1}]]${link_injection}[string range ${generated_script} ${marker_at} end]"
 
-puts "INFO: Running complete Vivado implementation flow with explicit XXV DCP binding"
-set original_dir [pwd]
-cd ${impl_dir}
-set rc [catch {uplevel #0 ${patched_script}} result options]
-cd ${original_dir}
-if {${rc} != 0} {
-    return -options ${options} ${result}
+proc profile_script {base_script profile} {
+    if {$profile eq "default"} {
+        return ${base_script}
+    }
+    if {$profile ne "aggressive"} {
+        error "Unsupported manual implementation profile: ${profile}"
+    }
+    set script ${base_script}
+    set script [string map {"  place_design \n" "  place_design -directive ExtraNetDelay_high\n"} ${script}]
+    set script [string map {"  phys_opt_design \n" "  phys_opt_design -directive AggressiveExplore\n"} ${script}]
+    set script [string map {"  route_design \n" "  route_design -directive AggressiveExplore\n"} ${script}]
+    return ${script}
 }
 
-open_project ${proj_file}
-set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
-if {![file exists ${implemented_dcp}]} {
-    set implemented_dcp "${impl_dir}/TopCustomXczu47dr_routed.dcp"
+proc verify_implementation {impl_dir proj_name} {
+    set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
+    if {![file exists ${implemented_dcp}]} {
+        set implemented_dcp "${impl_dir}/TopCustomXczu47dr_routed.dcp"
+    }
+    if {![file exists ${implemented_dcp}]} {
+        error "No routed implementation checkpoint found in ${impl_dir}"
+    }
+    puts "INFO: Verifying implemented checkpoint ${implemented_dcp}"
+    open_checkpoint ${implemented_dcp}
+    set setup_paths [get_timing_paths -quiet -delay_type max -slack_lesser_than 0 -max_paths 1]
+    set hold_paths [get_timing_paths -quiet -delay_type min -slack_lesser_than 0 -max_paths 1]
+    if {[llength ${setup_paths}] > 0 || [llength ${hold_paths}] > 0} {
+        puts "WARNING: Implementation has timing violations"
+        close_design
+        return 0
+    }
+    set route_status [report_route_status -return_string]
+    if {[regexp {Number of Unrouted Nets\s*:\s*([1-9][0-9]*)} ${route_status}]} {
+        error "Implementation contains unrouted nets; refusing to write bitstream"
+    }
+    set drc_results [get_drc_violations -quiet -filter {SEVERITY == Error}]
+    set critical_drc_results [get_drc_violations -quiet -filter {SEVERITY == {Critical Warning}}]
+    if {[llength ${drc_results}] > 0 || [llength ${critical_drc_results}] > 0} {
+        error "Implementation contains [llength ${drc_results}] DRC errors and [llength ${critical_drc_results}] critical DRC warnings; refusing to write bitstream"
+    }
+    set xxv_gt_cells [get_cells -hier -quiet -filter {REF_NAME =~ GTYE4_CHANNEL* && NAME =~ *udp_10g_i/DUT*}]
+    if {[llength ${xxv_gt_cells}] != 1} {
+        error "Expected one implemented XXV Ethernet GTYE4 channel, found [llength ${xxv_gt_cells}]"
+    }
+    return 1
 }
-if {![file exists ${implemented_dcp}]} {
-    error "No routed implementation checkpoint found in ${impl_dir}"
+
+set impl_mode [build_option_get IMPL_MODE auto]
+switch -- ${impl_mode} {
+    auto {
+        set impl_profiles {default aggressive}
+    }
+    default - fast {
+        set impl_profiles {default}
+    }
+    aggressive {
+        set impl_profiles {aggressive}
+    }
+    default {
+        error "Unsupported IMPL_MODE=${impl_mode}; use auto, default, fast, or aggressive"
+    }
 }
-puts "INFO: Verifying implemented checkpoint ${implemented_dcp}"
-open_checkpoint ${implemented_dcp}
-set setup_paths [get_timing_paths -quiet -delay_type max -slack_lesser_than 0 -max_paths 1]
-set hold_paths [get_timing_paths -quiet -delay_type min -slack_lesser_than 0 -max_paths 1]
-if {[llength ${setup_paths}] > 0 || [llength ${hold_paths}] > 0} {
-    error "Implementation completed with timing violations; refusing to write bitstream"
+puts "INFO: Manual implementation profiles: [join ${impl_profiles} { -> }]"
+
+set implementation_ok 0
+foreach profile ${impl_profiles} {
+    puts "INFO: Running complete Vivado implementation flow with profile=${profile} and explicit XXV DCP binding"
+    set patched_script [profile_script ${base_script} ${profile}]
+    set original_dir [pwd]
+    cd ${impl_dir}
+    set rc [catch {uplevel #0 ${patched_script}} result options]
+    cd ${original_dir}
+    if {${rc} != 0} {
+        return -options ${options} ${result}
+    }
+    catch {close_project -quiet}
+    open_project ${proj_file}
+    if {[verify_implementation ${impl_dir} ${proj_name}]} {
+        set implementation_ok 1
+        set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
+        if {![file exists ${implemented_dcp}]} {
+            set implemented_dcp "${impl_dir}/TopCustomXczu47dr_routed.dcp"
+        }
+        break
+    }
+    catch {close_project -quiet}
 }
-set route_status [report_route_status -return_string]
-if {[regexp {Number of Unrouted Nets\s*:\s*([1-9][0-9]*)} ${route_status}]} {
-    error "Implementation contains unrouted nets; refusing to write bitstream"
+if {!${implementation_ok}} {
+    error "Implementation completed with timing violations after all profiles; refusing to write bitstream"
 }
-set drc_results [get_drc_violations -quiet -filter {SEVERITY == Error}]
-set critical_drc_results [get_drc_violations -quiet -filter {SEVERITY == {Critical Warning}}]
-if {[llength ${drc_results}] > 0 || [llength ${critical_drc_results}] > 0} {
-    error "Implementation contains [llength ${drc_results}] DRC errors and [llength ${critical_drc_results}] critical DRC warnings; refusing to write bitstream"
-}
-set xxv_gt_cells [get_cells -hier -quiet -filter {REF_NAME =~ GTYE4_CHANNEL* && NAME =~ *udp_10g_i/DUT*}]
-if {[llength ${xxv_gt_cells}] != 1} {
-    error "Expected one implemented XXV Ethernet GTYE4 channel, found [llength ${xxv_gt_cells}]"
-}
+
 set bit_file "${impl_dir}/${proj_name}.bit"
 puts "INFO: Writing bitstream ${bit_file}"
 write_bitstream -force ${bit_file}
