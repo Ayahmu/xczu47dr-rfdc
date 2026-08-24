@@ -32,7 +32,7 @@ proc target_config_load {target} {
                 firmware_app rfdc_app \
                 firmware_elf firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf \
                 psu_init firmware/workspace/custom_xczu47dr_master/hw_platform/export/hw_platform/hw/psu_init.tcl \
-                clock_policy external_10mhz_xs17 \
+                clock_policy external_250mhz_xs17 \
                 generics {IS_MASTER=1}]
         }
         custom_xczu47dr_slave {
@@ -49,7 +49,7 @@ proc target_config_load {target} {
                 firmware_app rfdc_app \
                 firmware_elf firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf \
                 psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl \
-                clock_policy external_10mhz_xs17 \
+                clock_policy external_250mhz_xs17 \
                 generics {IS_MASTER=0}]
         }
         custom_xczu47dr_bw {

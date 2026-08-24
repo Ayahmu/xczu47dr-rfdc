@@ -123,9 +123,9 @@ module Top #(
 
 
   wire        hmc7044_set_finish;
-  // Temporary XS17 profile: a 10 MHz reference drives CLKIN1. HMC7044 R1=1
-  // creates a 10 MHz PLL1 PFD; only the SYNC/trigger roles differ.
-  wire        hmc_use_external_xs17 = 1'b1;
+  // XS17 carries a 250 MHz reference. HMC7044 R1=25 creates the 10 MHz
+  // PLL1 PFD; only the SYNC/trigger roles differ.
+  wire        hmc_use_external_250mhz = 1'b1;
 
   hmc7044 hmc7044_i (
       .clk(pl_clk),
@@ -134,7 +134,7 @@ module Top #(
       .H7044_SCLK(H7044_SCLK_0),
       .H7044_SDATA(H7044_SDATA_0),
       .SET_FINISH(hmc7044_set_finish),
-      .USE_EXTERNAL_XS17(hmc_use_external_xs17),
+      .USE_EXTERNAL_250MHZ(hmc_use_external_250mhz),
       .IS_MASTER(IS_MASTER ? 1'b1 : 1'b0)
   );
 

@@ -29,7 +29,7 @@ begin
             H7044_SCLK => sclk,
             H7044_SDATA => sdata,
             SET_FINISH => finish,
-            USE_EXTERNAL_XS17 => '1',
+            USE_EXTERNAL_250MHZ => '1',
             IS_MASTER => '1'
         );
 

@@ -11,7 +11,7 @@ This directory holds the Vivado sources for the custom XCZU47DR RFDC design. Des
 
 The role is a synthesis-time definition (`CUSTOM_XCZU47DR_MASTER` or `CUSTOM_XCZU47DR_SLAVE`), not a run-time selection. A slave cannot be changed into a master by software. `sync_seen` reports only an actual XS20 event; it is never set merely because bypass is enabled.
 
-The mainline clock plan uses a 10 MHz XS17 reference, HMC7044 programming in the PL sequencer, and a 128 MHz DAC reference. Connect synchronization as **master A <-> slave A**. XS18 is trigger output and XS19 is trigger input.
+This `xs17-250mhz` branch uses a 250 MHz XS17 reference, HMC7044 R1=25 / N1=10, and a 128 MHz DAC reference. Connect synchronization as **master A <-> slave A**. XS18 is trigger output and XS19 is trigger input. It has been built and statically checked only; no physical 250 MHz source has yet been used for board validation.
 
 `custom_xczu47dr_bw` remains an independent bandwidth-pressure target. There is no production `custom_xczu47dr_selftest` target.
 
@@ -87,7 +87,7 @@ make xsa TARGET=custom_xczu47dr_slave
 
 Build one shared firmware source tree against the XSA matching the selected role. The firmware waits for the HMC7044 PL sequencer but intentionally does not wait for XS20 before initializing RFDC, DAC MTS, and NCO SYSREF.
 
-For the standalone slave test, use XS17 = 10 MHz, leave XS20 unconnected, and connect XS18 to XS19. Program slave bitstream and matching ELF, then run:
+For a future standalone slave test, use XS17 = 250 MHz, leave XS20 unconnected, and connect XS18 to XS19. Program slave bitstream and matching ELF, then run:
 
 ```bash
 PYTHONPATH=software python -m dr47.hardware_sync_mode_test

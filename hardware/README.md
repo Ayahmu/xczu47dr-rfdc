@@ -11,7 +11,7 @@ The production RFDC designs are intentionally limited to two bitstreams:
 | `custom_xczu47dr_master` | SYNC output | Software and XS19 triggers are always allowed. `sync()` emits a synchronization pulse. |
 | `custom_xczu47dr_slave` | SYNC input | External mode requires a real XS20 synchronization event. The driver can explicitly call `bypass_sync()` for local bring-up. |
 
-The normal clock plan is XS17 = **10 MHz** external reference and HMC7044 DAC reference = **128 MHz**. The board-to-board synchronization connection is **master A <-> slave A**. XS18 is the trigger output and XS19 is the trigger input.
+This `xs17-250mhz` branch uses XS17 = **250 MHz** external reference, HMC7044 R1=25 / N1=10, and HMC7044 DAC reference = **128 MHz**. The board-to-board synchronization connection is **master A <-> slave A**. XS18 is the trigger output and XS19 is the trigger input. The 250 MHz plan is build- and static-validation only until it is checked with a physical reference source.
 
 `custom_xczu47dr_bw` is a separate DDR bandwidth test target, not an RFDC playback personality. There is no production `selftest` RFDC target.
 
@@ -101,7 +101,7 @@ PYTHONPATH=software python3 -m unittest tests.test_dr47_driver tests.test_rtl_si
 git diff --check
 ```
 
-For the one-board slave setup: XS17 = 10 MHz, XS20 unconnected, and XS18 physically connected to XS19, run:
+For a future one-board slave test: XS17 = 250 MHz, XS20 unconnected, and XS18 physically connected to XS19, run:
 
 ```bash
 PYTHONPATH=software python -m dr47.hardware_sync_mode_test

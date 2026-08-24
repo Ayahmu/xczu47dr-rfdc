@@ -37,7 +37,7 @@ connection for the current hardware revision is **master A <-> slave A**. Use
 make all TARGET=custom_xczu47dr_master
 make all TARGET=custom_xczu47dr_slave
 
-# Build both 10 MHz XS17 bitstreams concurrently in isolated Vivado work trees.
+# Build both 250 MHz XS17 bitstreams concurrently in isolated Vivado work trees.
 make bitstream-dual
 
 # Build only FPGA artifacts: Chisel RTL, Vivado project, synth, impl, bitstream, XSA
@@ -192,7 +192,7 @@ Each DAC is targeted at `Fs = 6.4 GS/s` with `16x` interpolation, so the RFDC in
 
 Runtime NCO, NCO phase, Nyquist zone, and DAC VOP configuration uses a pure-PL closed loop: FastAPI sends structured `RFCTRL2 RFDC_APPLY` UDP packets, the PL validates all selected channels, performs 16-bit RFDC AXI-Lite writes, reads the critical registers back, and returns a structured `RFRESP2` UDP response. DDR mailbox polling, PS runtime register writes, and UART `RFDC_APPLY` confirmation are not part of this path. The PS only starts RFDC tiles, PLLs, and calibration during boot; UART remains an optional diagnostic console.
 
-The current mainline HMC7044 plan accepts a 10 MHz XS17 reference and generates the 128 MHz DAC reference used by the 6.4 GS/s, 16x RFDC configuration. Firmware waits only for HMC7044 programming to finish, then initializes RFDC/MTS/NCO without waiting for XS20. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The custom firmware no longer initializes PS Ethernet or lwIP.
+This `xs17-250mhz` branch accepts a 250 MHz XS17 reference and generates the 128 MHz DAC reference used by the 6.4 GS/s, 16x RFDC configuration. Firmware waits only for HMC7044 programming to finish, then initializes RFDC/MTS/NCO without waiting for XS20. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity against the schematic during hardware bring-up. The custom firmware no longer initializes PS Ethernet or lwIP. This branch is build- and static-validation only until a physical 250 MHz reference is connected and tested on the board.
 
 Vivado project creation and synthesis have passed for `TARGET=custom_xczu47dr` with top module `TopCustomXczu47dr` and part `xczu47dr-ffvg1517-2-i`; implementation/bitstream generation is the final gate for the current 256-bit native playback revision. The custom DDR4 controller uses a `Custom` board interface with `CONFIG.C0.DDR4_InputClockPeriod {3334}` to match the existing 300 MHz `c0_sys` port. The reference project exposes two separate 64-bit DDR4 controllers, while this bring-up flow still uses the existing single-DDR4 BD path. Full DDR4 topology, memory part, data width, and pin constraints still need schematic/BOM confirmation before production hardware-readiness claims.
 
