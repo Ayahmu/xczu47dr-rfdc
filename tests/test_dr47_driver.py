@@ -1,9 +1,20 @@
+"""47DR 驱动协议、模拟器和波形上传契约的本地单元测试。
+
+这些测试默认不访问真实板卡，也不需要 XS17/XS18/XS19/XS20 接线。它们使用
+``SimulatedDr47Device`` 和假 UDP socket 验证：RFCTRL2 字节布局、重试与广播
+收包、DNA 网络记录、主从同步门控、bypass 行为、NCO GHz 公共 API、波形记录
+对齐以及与网页上传格式的 wire contract。通过本文件不能证明 HMC7044、RFDC
+模拟 IP、FPGA 电气端口或最终 RF 频率/幅度已经在板上正常。
+"""
+
 import socket
 import struct
 import sys
 import unittest
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import host
@@ -18,6 +29,7 @@ from dr47 import (  # noqa: E402
     SequenceGenerator,
     SimulatedDr47Device,
     TriggerSeqGenerate,
+    make_trigger_sequence,
     UnsupportedCapabilityError,
     SynchronizationError,
     DeviceStatusError,
@@ -30,19 +42,15 @@ from dr47 import (  # noqa: E402
     rfdc_nco_plan_for_target,
     DiscoveredBoard,
     parse_ip_pool,
-)
-from dr47.hardware_wave_test import (  # noqa: E402
-    EXAMPLES,
-    HardwareWaveTestConfig,
-    make_gaussian_iq_sine,
-    make_iq_waveform,
-    make_iq_sine,
-    make_trigger_sequence,
-    sample_count_for_duration,
+    iq_duration_to_interleaved_sample_count,
+    make_iq_gaussian_sine_interleaved,
+    make_iq_sine_interleaved,
+    place_interleaved_iq_in_record,
 )
 from dr47.transport import UdpTransport  # noqa: E402
 import waveform_model  # noqa: E402
 import waveform_tools  # noqa: E402
+from dr47 import hardware_test_network  # noqa: E402
 
 
 class _RetrySocket:
@@ -114,7 +122,10 @@ class _CaptureTransport:
 
 
 class DriverTests(unittest.TestCase):
+    """按协议层、状态机层和波形层组织的驱动回归测试。"""
+
     def test_rfctrl2_bytes_match_little_endian_contract(self):
+        """检查 ARM 包的魔数、版本、序号和通道掩码字节布局。"""
         packet = pack_rfctrl2_arm(0xCAFE, 0x3F, 0x77)
         magic, hdr0, hdr1, run_id, channel_mask = struct.unpack("<QQQII", packet)
         self.assertEqual(magic, UDP_RFCTRL2_MAGIC)
@@ -124,6 +135,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual((run_id, channel_mask), (0xCAFE, 0x3F))
 
     def test_transport_retries_immutable_packet_and_filters_sequence(self):
+        """检查超时重试会复用同一请求包，并丢弃错误序号的响应。"""
         sock = _RetrySocket()
         transport = UdpTransport("192.168.1.128", sock=sock, timeout_s=0.01)
         packet = struct.pack("<QQQ", UDP_RFCTRL2_MAGIC, (RF2_OP_STATUS << 32) | RFCTRL2_VERSION, 7)
@@ -133,6 +145,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(sock.sent[0][0], sock.sent[1][0])
 
     def test_transport_collects_all_broadcast_responses(self):
+        """检查一次广播请求可以收集不同板卡的多个响应源地址。"""
         from dr47.protocol import UDP_RFRESP2_MAGIC
 
         sequence = 17
@@ -161,17 +174,129 @@ class DriverTests(unittest.TestCase):
         self.assertEqual([item["addr"][0] for item in responses], ["169.254.1.2", "169.254.2.3"])
 
     def test_ip_pool_parser_and_discovery_record(self):
+        """检查静态地址池展开，以及发现记录的字典字段。"""
         self.assertEqual(parse_ip_pool("10.50.0.101-10.50.0.103"), ["10.50.0.101", "10.50.0.102", "10.50.0.103"])
         board = DiscoveredBoard("uid", "169.254.1.2", "02:00:00:00:00:01")
         self.assertEqual(board.as_dict()["current_ip"], "169.254.1.2")
 
+    def test_network_duplicate_check_excludes_board_being_provisioned(self):
+        """同一板卡保留 DNA MAC、只改 IP 时不能被错误地判为 MAC 冲突。"""
+        from dr47.network import ProvisionError, _check_duplicate_assignments
+
+        target = DiscoveredBoard("target-uid", "169.254.32.1", "02:00:00:ad:15:91")
+        other = DiscoveredBoard("other-uid", "169.254.32.2", "02:00:00:ad:15:92")
+        _check_duplicate_assignments(
+            [target, other],
+            "169.254.100.102",
+            target.current_mac,
+            exclude_device_uid=target.device_uid,
+        )
+        with self.assertRaisesRegex(ProvisionError, "MAC .*other-uid"):
+            _check_duplicate_assignments(
+                [target, other],
+                "169.254.100.102",
+                other.current_mac,
+                exclude_device_uid=target.device_uid,
+            )
+        with self.assertRaisesRegex(ProvisionError, "IP .*other-uid"):
+            _check_duplicate_assignments(
+                [target, other],
+                other.current_ip,
+                target.current_mac,
+                exclude_device_uid=target.device_uid,
+            )
+
+    def test_hardware_test_network_discovers_roles_and_provisions_code_settings(self):
+        """检查板级测试按角色选板，并使用代码常量完成 IP 配置和验证。"""
+
+        master_board = DiscoveredBoard(
+            "master-uid", "169.254.1.2", "02:00:00:00:00:01",
+            interface="enp-test", source_ip="169.254.250.11",
+        )
+        slave_board = DiscoveredBoard(
+            "slave-uid", "169.254.2.3", "02:00:00:00:00:02",
+            interface="enp-test", source_ip="169.254.250.11",
+        )
+
+        def connected(board, **_kwargs):
+            device = MagicMock()
+            role = "master" if board.device_uid == "master-uid" else "slave"
+            device.status.return_value = SimpleNamespace(
+                capabilities=SimpleNamespace(sync_role=role)
+            )
+            return device
+
+        def provisioned(board, ip, mac=None, **_kwargs):
+            return SimpleNamespace(
+                device_uid=board.device_uid,
+                ip=ip,
+                mac=mac or board.current_mac,
+                port=1234,
+            )
+
+        assignments = [
+            hardware_test_network.BoardNetworkAssignment(
+                label="主卡", sync_role="master", ip="10.50.0.101"
+            ),
+            hardware_test_network.BoardNetworkAssignment(
+                label="从卡", sync_role="slave", ip="10.50.0.102"
+            ),
+        ]
+        with (
+            patch.object(
+                hardware_test_network,
+                "discover_boards",
+                return_value=[slave_board, master_board],
+            ) as discover,
+            patch.object(
+                hardware_test_network,
+                "connect_discovered",
+                side_effect=connected,
+            ),
+            patch.object(
+                hardware_test_network,
+                "provision_board",
+                side_effect=provisioned,
+            ) as provision,
+        ):
+            enrolled = hardware_test_network.discover_and_provision_boards(
+                assignments,
+                interface="enp-test",
+                discovery_source_ip="169.254.250.11",
+                discovery_source_cidr="169.254.250.11/16",
+                control_source_ip="10.50.0.10",
+            )
+
+        self.assertEqual(
+            [(item.sync_role, item.device_uid, item.ip) for item in enrolled],
+            [
+                ("master", "master-uid", "10.50.0.101"),
+                ("slave", "slave-uid", "10.50.0.102"),
+            ],
+        )
+        discover.assert_called_once_with(
+            interface="enp-test",
+            source_ip="169.254.250.11",
+            source_cidr="169.254.250.11/16",
+            broadcast_ip="169.254.255.255",
+            port=1234,
+            timeout_s=1.0,
+            rounds=3,
+        )
+        self.assertEqual(
+            [call.kwargs["verification_source_ip"] for call in provision.call_args_list],
+            ["10.50.0.10", "10.50.0.10"],
+        )
+
     def test_interleaved_layout_uses_ch1_to_ch8_lanes(self):
+        """检查多个物理通道写入 512-bit 交织 DDR 布局的正确 lane。"""
         image, samples = pack_interleaved_512b_waveforms({1: np.array([1, 2, 3, 4], dtype=np.int16), 2: np.array([5, 6, 7, 8], dtype=np.int16)})
         self.assertEqual(samples, 16)
         self.assertEqual(struct.unpack_from("<hhhh", image, 0), (1, 2, 3, 4))
         self.assertEqual(struct.unpack_from("<hhhh", image, 8), (5, 6, 7, 8))
 
     def test_simulator_state_machine_and_unsupported_capability(self):
+        """检查模拟器的基本上传、ARM、软件 Trigger、停止和能力拒绝路径。"""
         device = SimulatedDr47Device()
         device.connect()
         device.set_xy_nco_frequency(1, 0.1)
@@ -187,6 +312,7 @@ class DriverTests(unittest.TestCase):
             device.get_daq_data(1)
 
     def test_simulator_bypass_models_xs18_to_xs19_loopback(self):
+        """检查 simulator 中 bypass 会放开 XS18->XS19 的本地回环门控。"""
         device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
         device.connect()
         device.bypass_sync()
@@ -207,6 +333,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(status.state, status.capabilities.playback_state)
 
     def test_slave_external_rejects_triggers_until_explicit_bypass(self):
+        """检查从卡 external 模式先拒绝 Trigger，bypass 后才开放。"""
         device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
         device.connect()
         device.set_xy_nco_frequency(1, 1.0)
@@ -231,7 +358,34 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(status.capabilities.sync_seen)
         self.assertTrue(status.capabilities.sync_link_ready)
 
+    def test_slave_bypass_accepts_software_trigger_without_physical_io(self):
+        """检查从卡 bypass 后的 UDP Trigger 不伪造 XS20，也不计入 XS18/XS19。
+
+        这对应 ``hardware_slave_bypass_software_trigger_test.py`` 的核心路径：
+        模拟器只验证数字状态机，真实 RF 输出仍需上板和仪器确认。
+        """
+
+        device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
+        device.connect()
+        device.bypass_sync()
+        device.set_xy_nco_frequency(1, 0.1)
+        device.apply_rfdc_config(channel_mask=0x01)
+        device.set_qc_on_off("xy", 1, "on")
+        device.upload_waveforms(
+            {1: np.array([1200, 0, 1200, 0], dtype=np.int16)},
+            wave_formats={1: "interleaved_iq"},
+        )
+        device.arm(channel_mask=0x01)
+        before = device.status(refresh=False).capabilities
+        device.trigger()  # 仅发送本地 UDP 控制，不经过 XS18/XS19。
+        after = device.status(refresh=False)
+        self.assertEqual(after.state.value, "running")
+        self.assertFalse(after.capabilities.sync_seen)
+        self.assertEqual(after.capabilities.trigger_input_count, before.trigger_input_count)
+        self.assertEqual(after.capabilities.trigger_output_count, before.trigger_output_count)
+
     def test_master_runs_locally_before_sync_and_role_cannot_change(self):
+        """检查主卡无需 sync() 即可运行，且运行时不能篡改固化角色。"""
         device = SimulatedDr47Device(batch_mode=True, sync_role="master")
         device.connect()
         with self.assertRaises(SynchronizationError):
@@ -251,6 +405,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(status.capabilities.trigger_accepted_count, 1)
 
     def test_self_test_alias_warns_and_selects_bypass(self):
+        """检查历史 self_test 名称只作为弃用别名映射到 bypass。"""
         device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
         device.connect()
         with warnings.catch_warnings(record=True) as caught:
@@ -260,6 +415,7 @@ class DriverTests(unittest.TestCase):
         self.assertTrue(any(item.category is DeprecationWarning for item in caught))
 
     def test_negative_nco_preserves_explicit_nyquist_zone(self):
+        """检查设置负 NCO 时不会错误覆盖用户明确指定的 Nyquist zone。"""
         device = SimulatedDr47Device(batch_mode=True)
         device.connect()
         device.apply_rfdc_config(nyquist_zone={1: 1}, channel_mask=0x01)
@@ -267,6 +423,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(device._pending_zone[1], 1)
 
     def test_public_frequency_api_uses_ghz_and_converts_at_protocol_boundary(self):
+        """检查公共 API 用 GHz，只有到 RFCTRL2 边界才转换为整数 Hz。"""
         device = SimulatedDr47Device(batch_mode=True)
         device.connect()
         device.set_xy_nco_frequency(1, 1.79)
@@ -277,6 +434,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(RFDC_NCO_MAX_GHZ, 3.2)
 
     def test_public_target_plan_returns_ghz(self):
+        """检查射频目标规划返回 NCO GHz、Nyquist zone 和镜像方向。"""
         self.assertEqual(rfdc_nco_plan_for_target(1.79), {
             "target_rf_ghz": 1.79,
             "nco_ghz": 1.79,
@@ -287,36 +445,32 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(zone2["nco_ghz"], -1.9)
         self.assertEqual(zone2["nyquist_zone"], 2)
 
-    def test_wave_examples_use_ghz_ns_and_trigger_sequence(self):
-        self.assertEqual(sample_count_for_duration(100.0, 0.4), 40)
-        sine = make_iq_sine(100.0, 0.0, 0.4, 0.5)
-        gaussian = make_gaussian_iq_sine(60.0, 0.0, 0.4, 0.5)
-        self.assertEqual(sine.shape, (40, 2))
-        self.assertEqual(gaussian.shape, (24, 2))
-        self.assertLess(abs(int(gaussian[0, 0])), abs(int(gaussian[12, 0])))
+    def test_public_waveform_helpers_and_trigger_sequence(self):
+        """检查正式驱动的 IQ 波形、记录延迟和等待 Trigger 指令。"""
+        sample_rate_hz = 400e6
+        sine_count = iq_duration_to_interleaved_sample_count(100e-9, sample_rate_hz)
+        gaussian_count = iq_duration_to_interleaved_sample_count(60e-9, sample_rate_hz)
+        sine = make_iq_sine_interleaved(0.0, 0.0, 16384, sample_rate_hz, sample_count=sine_count)
+        gaussian = make_iq_gaussian_sine_interleaved(
+            0.0, 0.0, 16384, sample_rate_hz, 60e-9, sample_count=gaussian_count
+        )
+        self.assertEqual(sine.shape, (80,))
+        self.assertEqual(gaussian.shape, (48,))
+        self.assertLess(abs(int(gaussian[0])), abs(int(gaussian[24])))
         sequence = make_trigger_sequence(24)
         self.assertEqual(sequence.dtype, np.dtype("<u2"))
         self.assertEqual(sequence[1, 3] >> 11, 8)
-        self.assertEqual(set(EXAMPLES), {
-            "standalone_slave_continuous_1ghz_ch1",
-            "one_shot_1ghz_sine",
-            "one_shot_1p79ghz_gaussian_xy",
-            "external_slave_500mhz_gaussian_xy",
-            "continuous_2ghz_sine",
-            "triggered_1p5ghz_gaussian_xy",
-        })
 
-    def test_hardware_wave_test_uses_web_manual_xy_record_contract(self):
-        config = HardwareWaveTestConfig(
-            duration_ns=120.0,
-            record_duration_ns=1_000.0,
-            delay_ns=80.0,
-            sample_rate_ghz=0.4,
-            baseband_frequency_ghz=0.0,
-            amplitude=1.0,
-            waveform="gaussian_sine",
+    def test_waveform_record_uses_web_manual_xy_contract(self):
+        """检查正式波形工具遵守网页手动 XY 的零填充和延迟约定。"""
+        sample_rate_hz = 400e6
+        active = make_iq_gaussian_sine_interleaved(
+            0.0, 0.0, 32767, sample_rate_hz, 120e-9,
+            sample_count=iq_duration_to_interleaved_sample_count(120e-9, sample_rate_hz),
         )
-        record = make_iq_waveform(config)
+        record = place_interleaved_iq_in_record(
+            active, delay_s=80e-9, record_duration_s=1e-6, sample_rate_hz=sample_rate_hz
+        )
         # 1 us at 400 MS/s is 400 complex samples, already 8-sample aligned.
         self.assertEqual(record.shape, (800,))
         start = 80 * 0.4 * 2
@@ -328,17 +482,9 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(int(record[int(start) + 1]), 0)
         self.assertEqual(int(record[int(start) + 3]), 0)
 
-    def test_hardware_wave_test_record_is_byte_identical_to_web_manual_xy(self):
-        config = HardwareWaveTestConfig(
-            duration_ns=120.0,
-            record_duration_ns=1_000.0,
-            delay_ns=80.0,
-            sample_rate_ghz=0.4,
-            baseband_frequency_ghz=0.0,
-            amplitude=1.0,
-            phase_deg=0.0,
-            waveform="gaussian_sine",
-        )
+    def test_driver_record_is_byte_identical_to_web_manual_xy(self):
+        """检查同一波形在驱动工具和网页模型中逐字节一致。"""
+        sample_rate_hz = 400e6
         web_config = waveform_model.ChannelWaveformConfig(
             waveform_type="xy",
             domain="iq",
@@ -350,7 +496,14 @@ class DriverTests(unittest.TestCase):
             record_duration_s=1e-6,
         )
         web_record = waveform_model._make_channel_waveform(web_config, 400e6, 16, "CH1")
-        driver_record = make_iq_waveform(config)
+        active = make_iq_gaussian_sine_interleaved(
+            0.0, 0.0, 32767, sample_rate_hz, 120e-9,
+            sample_count=iq_duration_to_interleaved_sample_count(120e-9, sample_rate_hz),
+            fwhm_s=60e-9, q_sign=-1, hls_xy_drag=False,
+        )
+        driver_record = place_interleaved_iq_in_record(
+            active, delay_s=80e-9, record_duration_s=1e-6, sample_rate_hz=sample_rate_hz
+        )
         self.assertEqual(driver_record.dtype, web_record.dtype)
         self.assertEqual(driver_record.tobytes(), web_record.tobytes())
         self.assertEqual(
@@ -358,20 +511,18 @@ class DriverTests(unittest.TestCase):
             pack_interleaved_512b_waveforms({1: driver_record})[0],
         )
 
-    def test_hardware_wave_test_upload_packets_match_web_manual_xy(self):
+    def test_driver_upload_packets_match_web_manual_xy(self):
         """The normal driver upload must be wire-identical to web upload."""
 
-        config = HardwareWaveTestConfig(
-            duration_ns=120.0,
-            record_duration_ns=1_000.0,
-            delay_ns=80.0,
-            sample_rate_ghz=0.4,
-            baseband_frequency_ghz=0.0,
-            amplitude=1.0,
-            phase_deg=0.0,
-            waveform="gaussian_sine",
+        sample_rate_hz = 400e6
+        active = make_iq_gaussian_sine_interleaved(
+            0.0, 0.0, 32767, sample_rate_hz, 120e-9,
+            sample_count=iq_duration_to_interleaved_sample_count(120e-9, sample_rate_hz),
+            fwhm_s=60e-9, q_sign=-1, hls_xy_drag=False,
         )
-        record = make_iq_waveform(config)
+        record = place_interleaved_iq_in_record(
+            active, delay_s=80e-9, record_duration_s=1e-6, sample_rate_hz=sample_rate_hz
+        )
         transport = _CaptureTransport()
         device = Dr47Device(transport=transport)
         upload = device.upload_waveforms(
@@ -400,6 +551,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(transport.sent, expected_ddr + [expected_instruction] * 3)
 
     def test_sequence_generator_emits_trigger_delay_loop_and_stop(self):
+        """检查序列生成器包含 Trigger、延时、循环和停止指令。"""
         generator = SequenceGenerator("XY", time_data=[0.0], event_data=[np.array([1, 2], dtype=np.int32)], period=1e-6, repeat=1)
         wave, sequence = generator.TriggerSeqGenerate()
         self.assertEqual(wave.dtype, np.int32)

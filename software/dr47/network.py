@@ -187,8 +187,17 @@ def connect_discovered(board: DiscoveredBoard, *, timeout_s: float = 5.0, retrie
     return device
 
 
-def _check_duplicate_assignments(boards: Iterable[DiscoveredBoard], ip: str, mac: str) -> None:
+def _check_duplicate_assignments(
+    boards: Iterable[DiscoveredBoard],
+    ip: str,
+    mac: str,
+    *,
+    exclude_device_uid: str = "",
+) -> None:
+    """Reject identities used by another discovered board, never by itself."""
     for board in boards:
+        if board.device_uid == exclude_device_uid:
+            continue
         if board.current_ip == ip and board.current_mac.lower() != mac.lower():
             raise ProvisionError(f"IP {ip} is already used by discovered device {board.device_uid}")
         if board.current_mac.lower() == mac.lower() and board.current_ip != ip:
@@ -221,16 +230,31 @@ def provision_board(
     *,
     known_boards: Iterable[DiscoveredBoard] = (),
     reject_unverified_conflict: bool = False,
+    verification_source_ip: str | None = None,
 ) -> ProvisionedBoard:
     """Apply a static identity, restart the board, and verify the new IP."""
     target_ip = _validate_ipv4(ip, "ip")
     target_mask = _validate_ipv4(subnet_mask, "subnet_mask")
     target_gateway = _validate_ipv4(gateway, "gateway")
     target_mac = _validate_mac(mac or board.current_mac)
+    verified_source_ip = ""
+    if verification_source_ip is not None:
+        verified_source_ip = _validate_ipv4(
+            verification_source_ip,
+            "verification_source_ip",
+        )
     if not 1 <= int(port) <= 65535:
         raise ParameterRangeError("port must be in 1..65535")
-    _check_duplicate_assignments(known_boards, target_ip, target_mac)
-    conflict = _probe_ip_conflict(target_ip, board.interface)
+    _check_duplicate_assignments(
+        known_boards,
+        target_ip,
+        target_mac,
+        exclude_device_uid=board.device_uid,
+    )
+    # The board itself legitimately answers ARP when the requested address is
+    # already its current address.  Treat that as an idempotent re-apply, not
+    # as an address conflict.
+    conflict = False if target_ip == board.current_ip else _probe_ip_conflict(target_ip, board.interface)
     if conflict is True:
         raise ProvisionError(f"IP conflict detected for {target_ip}")
     if conflict is None and reject_unverified_conflict:
@@ -241,7 +265,7 @@ def provision_board(
         port=board.port,
         timeout_s=3.0,
         udp_interface=board.interface,
-        udp_source_ip=board.source_ip,
+        udp_source_ip=verified_source_ip,
         retries=2,
     )
     try:

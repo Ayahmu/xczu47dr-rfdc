@@ -269,6 +269,7 @@ result = provision_board(
     revision=None,
     known_boards=boards,
     reject_unverified_conflict=False,
+    verification_source_ip="10.50.0.10",
 )
 ```
 
@@ -283,9 +284,12 @@ result = provision_board(
 | `revision` | `int \| None` | 新 revision；为空时使用旧 revision 加一 |
 | `known_boards` | iterable | 用于检查本次发现结果中的 IP/MAC 冲突 |
 | `reject_unverified_conflict` | `bool` | `True` 时要求主机安装 `arping` 并完成冲突检查 |
+| `verification_source_ip` | `str \| None` | 新 IP 回读使用的主机源地址；为空时由 Linux 路由选择，板级测试会显式传入代码中的 `CONTROL_SOURCE_IP` |
 
 函数会在 `arping` 可用时执行主机侧 IP 冲突探测。默认情况下没有 `arping`
 只是不阻止配置；若需要严格安全策略，设置 `reject_unverified_conflict=True`。
+当目标 IP 与板卡当前 IP 相同时，函数按幂等配置处理，不会把板卡自己的 ARP
+响应误判为地址冲突。
 
 返回 `ProvisionedBoard`，其中 `verified=True` 表示新 IP 已返回预期的
 `device_uid`。配置失败会抛出 `ProvisionError`，并明确指出是
@@ -674,6 +678,36 @@ wave, sequence = TriggerSeqGenerate(
     repeat=1,
 )
 ```
+
+#### `make_trigger_sequence(sample_count) -> np.ndarray`
+
+生成当前 PL 播放器使用的“每次 Trigger 播放一次记录”循环序列。它返回形状为
+`(5, 4)`、dtype 为小端 `uint16` 的四字控制字，依次包含循环开始、等待 Trigger、
+播放记录、循环结束和停止标记。`sample_count` 是上传记录中的**复样点数**，范围
+为 `1..65535`，必须与实际波形长度一致。
+
+```python
+import numpy as np
+from dr47 import Dr47Device, make_trigger_sequence
+
+# 48 个复样点 = 96 个交错 int16（I0,Q0,I1,Q1,...）。
+iq = np.zeros(96, dtype="<i2")
+sequence = make_trigger_sequence(48)
+
+with Dr47Device(ip="10.50.0.101") as device:
+    device.upload_waveforms(
+        {1: iq},
+        channel_sequences={1: sequence},
+        wave_formats={1: "interleaved_iq"},
+        auto_start=False,
+    )
+    device.arm(channel_mask=0x01)
+    device.trigger()  # 每次调用播放一条记录
+```
+
+该 helper 是驱动公共 API，不依赖任何实板测试脚本；三类正式板级测试和上层应用
+可以共享它。若需要 ez-Q 的复杂延时、标记或有限循环，请使用
+`SequenceGenerator`，当前 PL 不支持的嵌套循环/条件跳转会明确抛出异常。
 
 #### `ezq_sequence_rows(sequence) -> np.ndarray`
 

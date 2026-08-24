@@ -6,35 +6,33 @@
 完整 API 参考（函数签名、参数、返回值、CLI 和双板卡端到端示例）：
 [`docs/dr47_api.md`](../../docs/dr47_api.md)。
 
+驱动测试总览（包括三类正式发波入口、接线、预期状态和仿真测试边界）：
+[`TESTING.md`](TESTING.md)。
+
 Direct UDP driver for the XCZU47DR RFDC playback bitstream.  The package has
 no web-server dependency and exposes `Dr47Device`, `SequenceGenerator`, and
 `SimulatedDr47Device` through the `dr47` import name.
 
-The direct-board smoke test keeps all network and waveform settings in
-`hardware_wave_test.py` under `TEST_CONFIG`:
+三类完整发波测试分别是：
 
 ```bash
-PYTHONPATH=software python -m dr47.hardware_wave_test
+# 正常主卡 -> 从卡：XS20 SYNC + XS18 -> XS19 Trigger
+PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
+# 主卡单卡：不调用 sync()，仅 UDP trigger() 本地发波
+PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
+# 从卡单卡：bypass_sync() 后仅 UDP trigger() 本地发波，XS20/XS18/XS19 均不参与
+PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
 ```
 
-The test configuration uses `frequency_ghz` (or an explicit
-`nco_frequency_ghz`), `baseband_frequency_ghz`, `sample_rate_ghz` and
-`duration_ns`. The default is `standalone_slave_continuous_1ghz_ch1`: it
-expects the formal slave bitstream, XS17=10 MHz, XS20 unconnected, and an
-XS18 -> XS19 loopback. It explicitly calls `bypass_sync()`, so it exercises
-the runtime permission path without claiming that an XS20 SYNC was seen.
-Additional examples cover one-shot, continuous, external-gated, and
-trigger-gated playback. Select one with `ACTIVE_EXAMPLE` or edit
-`TEST_CONFIG` directly.
+这三个脚本是唯一维护的正式板级测试入口。每个脚本顶部集中放置发现地址、目标
+IP、可选 `device_uid` 和可选 MAC，不使用网络命令行参数。`run()` 按照“广播发现
+-> 角色/UID 选择 -> IP 配置并验证 -> 连接 -> 波形配置 -> 下载 -> ARM -> Trigger
+-> 状态检查 -> 清理”顺序编排，并在 `finally` 中执行 `abort_mute()` 和 `close()`。
+共享的波形转换位于 `waveforms.py`，共享的 Trigger 序列位于 `sequence.py`，板级
+脚本不再充当驱动工具库。
 
-For the complete formal-slave acceptance sequence (external rejection,
-explicit bypass, software Trigger, XS18 -> XS19 loopback, and external-mode
-restore), use the separate assertion-based test after programming the slave
-bitstream and matching firmware:
-
-```bash
-PYTHONPATH=software python -m dr47.hardware_sync_mode_test
-```
+10 MHz 与 250 MHz 工程使用同一套 Python 驱动。运行脚本前必须确认 XS17 输入频率
+与已烧写 bitstream 的 HMC7044 时钟计划一致；驱动不会也不能在运行时改变该计划。
 
 `record_duration_ns` and `delay_ns` have the same meaning as the web manual
 waveform request. The finite pulse is placed at `delay_ns` inside an aligned,

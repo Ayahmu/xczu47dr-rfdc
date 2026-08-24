@@ -204,27 +204,29 @@ with Dr47Device(
 
 ## 7. 发射一个波形
 
-驱动中提供了可直接编辑的实板测试脚本：
+驱动只维护三个职责明确的实板测试脚本。三个脚本都会先广播发现板卡、读取主从
+角色、按代码顶部常量分配目标 IP 并验证，然后才连接和发波。先修改目标脚本顶部
+的 10G 网卡、发现源地址、目标 IP、可选 `device_uid`、可选 MAC 和控制源地址，再
+从仓库根目录运行；这些脚本不接收网络命令行参数：
 
 ```bash
-PYTHONPATH=software python -m dr47.hardware_wave_test
+# 两块板：主卡发 SYNC，本地发波，并通过 XS18 -> XS19 触发从卡。
+PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
+
+# 一块主卡：不调用 sync()，直接使用本地 UDP Trigger 发波。
+PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
+
+# 一块从卡：XS20 悬空，显式 bypass 后使用本地 UDP Trigger 发波。
+PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
 ```
 
-打开 `software/dr47/hardware_wave_test.py`，先修改 `HardwareWaveTestConfig` 的
-网络字段，再选择 `ACTIVE_EXAMPLE`：
+从卡脚本给出了 60 ns、1 GHz NCO、高斯包络和 100 ns 记录内延迟的完整示例。
+波形参数通过 `_make_gaussian_record()` 和 `_prepare_gaussian_waveform()` 的函数参数
+显式传入，不依赖隐藏的模块级波形配置。
 
-```python
-ACTIVE_EXAMPLE = "one_shot_1ghz_sine"
-```
-
-可选示例包括：
-
-| 示例 | 预期输出 | 使用场景 |
-| --- | --- | --- |
-| `one_shot_1ghz_sine` | CH1 约 100 ns、1 GHz 的单次 IQ 包络调制载波 | 基本输出检查 |
-| `one_shot_1p79ghz_gaussian_xy` | CH1 约 60 ns、1.79 GHz 高斯包络脉冲 | 脉冲与 NCO 检查 |
-| `continuous_2ghz_sine` | CH1 持续 2 GHz 输出，直到脚本停止/静音 | 连续波检查 |
-| `triggered_1p5ghz_gaussian_xy` | CH1 等待 Trigger 后每次播放一次 120 ns 脉冲 | Trigger 链路检查 |
+同一角色只有一块板时，`*_DEVICE_UID = ""` 可以自动选择；同一交换机后有多块
+主卡或多块从卡时必须填写 UID。目标 IP 位于不同网段时，应先给主机 10G 网卡配置
+该网段地址，并将脚本中的 `CONTROL_SOURCE_IP` 改为这个主机地址。
 
 频率规则很重要：上传到 DDR 的 IQ 基带采样率为 400 MS/s，因此基带频率必须在
 `-0.2` 到 `+0.2 GHz`；例如 1 GHz 或 1.79 GHz 的射频载波由 `NCO` 生成，上传的
@@ -268,8 +270,7 @@ ACTIVE_EXAMPLE = "one_shot_1ghz_sine"
 ```python
 import numpy as np
 
-from dr47 import Dr47Device
-from dr47.hardware_wave_test import make_trigger_sequence
+from dr47 import Dr47Device, make_trigger_sequence
 
 INTERFACE = "enp225s0f1"
 HOST_IP = "10.50.0.10"
