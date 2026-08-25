@@ -30,8 +30,9 @@ proc target_config_load {target} {
                 output_basename custom_xczu47dr_master \
                 firmware_workspace firmware/workspace/custom_xczu47dr_master \
                 firmware_app rfdc_app \
-                firmware_elf firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf \
-                psu_init firmware/workspace/custom_xczu47dr_master/hw_platform/export/hw_platform/hw/psu_init.tcl \
+                firmware_elf artifacts/custom_xczu47dr_master.elf \
+                psu_init artifacts/custom_xczu47dr_master_psu_init.tcl \
+                workspace_psu_init firmware/workspace/custom_xczu47dr_master/hw_platform/export/hw_platform/hw/psu_init.tcl \
                 clock_policy external_10mhz_xs17 \
                 generics {IS_MASTER=1}]
         }
@@ -47,8 +48,9 @@ proc target_config_load {target} {
                 output_basename custom_xczu47dr_slave \
                 firmware_workspace firmware/workspace/custom_xczu47dr_slave \
                 firmware_app rfdc_app \
-                firmware_elf firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf \
-                psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl \
+                firmware_elf artifacts/custom_xczu47dr_slave.elf \
+                psu_init artifacts/custom_xczu47dr_slave_psu_init.tcl \
+                workspace_psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl \
                 clock_policy external_10mhz_xs17 \
                 generics {IS_MASTER=0}]
         }
@@ -64,8 +66,9 @@ proc target_config_load {target} {
                 output_basename custom_xczu47dr_bandwidth \
                 firmware_workspace firmware/workspace/custom_xczu47dr_bandwidth \
                 firmware_app bandwidth_app \
-                firmware_elf firmware/workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf \
-                psu_init firmware/workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl \
+                firmware_elf artifacts/custom_xczu47dr_bandwidth.elf \
+                psu_init artifacts/custom_xczu47dr_bandwidth_psu_init.tcl \
+                workspace_psu_init firmware/workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl \
                 clock_policy ddr_bandwidth_interleaved_512b \
                 generics {}]
         }
@@ -83,7 +86,7 @@ proc target_config_get {target key} {
 proc target_config_print {target} {
     set cfg [target_config_load $target]
     puts "target: ${target}"
-    foreach key [list project_basename part part_query board_part xdc_files top_module output_basename firmware_workspace firmware_app firmware_elf psu_init clock_policy generics] {
+    foreach key [list project_basename part part_query board_part xdc_files top_module output_basename firmware_workspace firmware_app firmware_elf psu_init workspace_psu_init clock_policy generics] {
         puts "${key}: [dict get $cfg $key]"
     }
 }

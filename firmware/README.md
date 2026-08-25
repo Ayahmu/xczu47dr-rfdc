@@ -28,9 +28,9 @@ firmware/
 - Xilinx Vitis 2024.2
 - Hardware XSA and bitstream from Vivado build
 
-For clone users, a checked-in release bundle under `releases/` already contains
-the role-matched XSA, bitstream, ELF, and `psu_init.tcl`; no Vivado synthesis or
-implementation is required to program that release. See `releases/README.md`.
+For clone users, the checked-in `artifacts/` directory already contains the
+role-matched XSA, bitstream, ELF, and `psu_init.tcl`; no Vivado synthesis,
+implementation, or Vitis workspace creation is required for `make program`.
 - ARM cross-compiler (aarch64-none-elf-gcc)
 
 ## Quick Start
@@ -80,12 +80,14 @@ DRY_RUN=1 ./build.sh program
 
 ## Build Outputs
 
-Master/slave outputs use the corresponding role name, for example
-`TARGET=custom_xczu47dr_slave` creates:
+Master/slave programming outputs use the corresponding role name, for example
+`TARGET=custom_xczu47dr_slave` publishes:
 
-- **ELF file**: `workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf`
-- **Map file**: `workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf.map`
-- **PS init script**: `workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl`
+- **ELF file**: `../artifacts/custom_xczu47dr_slave.elf`
+- **PS init script**: `../artifacts/custom_xczu47dr_slave_psu_init.tcl`
+
+The Vitis workspace still contains the intermediate ELF and map file, but it is
+not the programming handoff and remains ignored by Git.
 
 `TARGET=custom_xczu47dr_bw` outputs:
 
@@ -117,7 +119,7 @@ Master/slave outputs use the corresponding role name, for example
 
 ## Custom XCZU47DR Firmware Notes
 
-`TARGET=custom_xczu47dr_master` and `TARGET=custom_xczu47dr_slave` both build with `BOARD_CUSTOM_XCZU47DR`, sharing the same source tree. They respectively use `hardware/vivado/output/custom_xczu47dr_master.xsa` or `custom_xczu47dr_slave.xsa`, and their isolated role-specific Vitis workspace.
+`TARGET=custom_xczu47dr_master` and `TARGET=custom_xczu47dr_slave` both build with `BOARD_CUSTOM_XCZU47DR`, sharing the same source tree. They respectively use `artifacts/custom_xczu47dr_master.xsa` or `artifacts/custom_xczu47dr_slave.xsa`, while their isolated role-specific Vitis workspace remains generated under `firmware/workspace/`.
 
 The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
 

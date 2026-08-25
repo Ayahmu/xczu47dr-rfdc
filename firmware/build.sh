@@ -34,17 +34,19 @@ TARGET_OUTPUT_BASENAME="$(printf '%s\n' "${TARGET_CONFIG}" | awk -F': ' '/^outpu
 APP_NAME="$(printf '%s\n' "${TARGET_CONFIG}" | awk -F': ' '/^firmware_app:/ {print $2}')"
 ELF_RELATIVE="$(printf '%s\n' "${TARGET_CONFIG}" | awk -F': ' '/^firmware_elf:/ {print $2}')"
 PSU_INIT_RELATIVE="$(printf '%s\n' "${TARGET_CONFIG}" | awk -F': ' '/^psu_init:/ {print $2}')"
-if [ -z "${WORKSPACE_RELATIVE}" ] || [ -z "${TARGET_OUTPUT_BASENAME}" ] || [ -z "${APP_NAME}" ] || [ -z "${ELF_RELATIVE}" ] || [ -z "${PSU_INIT_RELATIVE}" ]; then
+WORKSPACE_PSU_INIT_RELATIVE="$(printf '%s\n' "${TARGET_CONFIG}" | awk -F': ' '/^workspace_psu_init:/ {print $2}')"
+if [ -z "${WORKSPACE_RELATIVE}" ] || [ -z "${TARGET_OUTPUT_BASENAME}" ] || [ -z "${APP_NAME}" ] || [ -z "${ELF_RELATIVE}" ] || [ -z "${PSU_INIT_RELATIVE}" ] || [ -z "${WORKSPACE_PSU_INIT_RELATIVE}" ]; then
     print_error "Unable to resolve target paths for TARGET=${TARGET}"
     exit 1
 fi
 WORKSPACE_DIR="${PROJECT_ROOT}/${WORKSPACE_RELATIVE}"
 APP_SRC_DIR="${WORKSPACE_DIR}/${APP_NAME}/src"
-VIVADO_OUTPUT_DIR="${VIVADO_OUTPUT_DIR:-${PROJECT_ROOT}/hardware/vivado/output}"
-XSA_FILE="${VIVADO_OUTPUT_DIR}/${TARGET_OUTPUT_BASENAME}.xsa"
-BIT_FILE="${VIVADO_OUTPUT_DIR}/${TARGET_OUTPUT_BASENAME}.bit"
-ELF_FILE="${PROJECT_ROOT}/${ELF_RELATIVE}"
-PSU_INIT_FILE="${PROJECT_ROOT}/${PSU_INIT_RELATIVE}"
+ARTIFACT_DIR="${ARTIFACT_DIR:-${PROJECT_ROOT}/artifacts}"
+XSA_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.xsa"
+BIT_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.bit"
+ELF_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.elf"
+PSU_INIT_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}_psu_init.tcl"
+WORKSPACE_PSU_INIT_FILE="${PROJECT_ROOT}/${WORKSPACE_PSU_INIT_RELATIVE}"
 
 case "${TARGET}" in
     custom_xczu47dr_master|custom_xczu47dr_slave)
@@ -71,7 +73,27 @@ print_target_paths() {
     print_info "BOARD_DEFINE=-D${BOARD_DEFINE}"
     print_info "BIT=${BIT_FILE}"
     print_info "ELF=${ELF_FILE}"
-    print_info "PSU_INIT=${PSU_INIT_FILE}"
+	print_info "PSU_INIT=${PSU_INIT_FILE}"
+}
+
+install_artifact() {
+	local source_file="$1"
+	local destination_file="$2"
+	if [ ! -f "${source_file}" ]; then
+		print_error "Build artifact not found: ${source_file}"
+		exit 1
+	fi
+	mkdir -p "$(dirname "${destination_file}")"
+	local temporary_file="${destination_file}.tmp.$$"
+	cp "${source_file}" "${temporary_file}"
+	mv -f "${temporary_file}" "${destination_file}"
+}
+
+publish_firmware_artifacts() {
+	install_artifact "${WORKSPACE_DIR}/${APP_NAME}/Debug/${APP_NAME}.elf" "${ELF_FILE}"
+	install_artifact "${WORKSPACE_PSU_INIT_FILE}" "${PSU_INIT_FILE}"
+	print_info "Published ELF: ${ELF_FILE}"
+	print_info "Published PS init: ${PSU_INIT_FILE}"
 }
 
 sync_app_sources() {
@@ -98,10 +120,11 @@ build_app() {
         exit 1
     fi
     sync_app_sources
-    cd "${WORKSPACE_DIR}/${APP_NAME}/Debug"
-    make clean
-    make all
-    print_info "Build complete: ${WORKSPACE_DIR}/${APP_NAME}/Debug/${APP_NAME}.elf"
+	cd "${WORKSPACE_DIR}/${APP_NAME}/Debug"
+	make clean
+	make all
+	publish_firmware_artifacts
+	print_info "Build complete: ${ELF_FILE}"
 }
 
 run_xsct() {
@@ -154,6 +177,9 @@ case "$1" in
         fi
         print_info "Creating Vitis application for TARGET=${TARGET} with -D${BOARD_DEFINE}..."
         run_xsct "${SCRIPT_DIR}/scripts/create_app.tcl" "${XSA_FILE}" "${APP_NAME}" "${SRC_DIR}" "${WORKSPACE_DIR}" "${BOARD_DEFINE}"
+		if [ "${DRY_RUN}" != "1" ]; then
+			install_artifact "${WORKSPACE_PSU_INIT_FILE}" "${PSU_INIT_FILE}"
+		fi
         ;;
 
     build)
@@ -174,10 +200,9 @@ case "$1" in
         else
             check_bit
             check_psu_init
-            build_app
             if [ ! -f "${ELF_FILE}" ]; then
                 print_error "ELF file not found: ${ELF_FILE}"
-                print_info "Please build firmware first: $0 build"
+                print_info "Run '$0 create' and '$0 build' to rebuild firmware, or restore the checked-in artifacts directory."
                 exit 1
             fi
         fi
@@ -190,7 +215,7 @@ case "$1" in
             run_dry_run
             print_target_paths
         else
-            build_app
+            check_bit
             if [ ! -f "${ELF_FILE}" ]; then
                 print_error "ELF file not found: ${ELF_FILE}"
                 exit 1

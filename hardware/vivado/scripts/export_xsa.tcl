@@ -44,9 +44,15 @@ open_checkpoint ${implemented_dcp}
 
 puts "INFO: Exporting hardware platform (XSA)..."
 set xsa_file "${output_dir}/${output_basename}.xsa"
+set xsa_tmp "${xsa_file}.tmp"
+file delete -force ${xsa_tmp}
 
 # Export XSA with bitstream
-write_hw_platform -fixed -force -include_bit -file ${xsa_file}
+write_hw_platform -fixed -force -include_bit -file ${xsa_tmp}
+
+if {[file exists ${xsa_tmp}]} {
+    file rename -force ${xsa_tmp} ${xsa_file}
+}
 
 if {[file exists ${xsa_file}]} {
     set xsa_size [file size ${xsa_file}]

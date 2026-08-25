@@ -51,18 +51,18 @@ hardware/vivado/reports-dual/master/
 hardware/vivado/reports-dual/slave/
 ```
 
-The resulting local files are:
+The resulting checked-in handoff files are:
 
 ```text
-hardware/vivado/output/custom_xczu47dr_master.bit
-hardware/vivado/output/custom_xczu47dr_master.ltx
-hardware/vivado/output/custom_xczu47dr_master.xsa
-hardware/vivado/output/custom_xczu47dr_slave.bit
-hardware/vivado/output/custom_xczu47dr_slave.ltx
-hardware/vivado/output/custom_xczu47dr_slave.xsa
+artifacts/custom_xczu47dr_master.bit
+artifacts/custom_xczu47dr_master.ltx
+artifacts/custom_xczu47dr_master.xsa
+artifacts/custom_xczu47dr_slave.bit
+artifacts/custom_xczu47dr_slave.ltx
+artifacts/custom_xczu47dr_slave.xsa
 ```
 
-The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove a regular single-target build. Generated Vivado state and outputs are ignored by Git. To publish a clone-and-program bundle, build the matching firmware for both roles and run `make release-dual RELEASE_NAME=10mhz-YYYYMMDD`; see [`releases/README.md`](../releases/README.md).
+The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove artifacts. `make clean` also preserves artifacts. Use `make artifacts-clean TARGET=...` only when explicitly removing a role's programming files. Vivado state, reports, and Vitis workspaces remain ignored.
 
 ## Firmware and Programming
 
@@ -72,7 +72,9 @@ The firmware source is shared by master and slave. Build it with the XSA that ma
 JTAG_CABLE_SERIAL=<serial> TARGET=custom_xczu47dr_slave make program
 ```
 
-Do not program a master ELF/XSA with a slave bitstream, or vice versa.
+Do not program a master ELF/XSA with a slave bitstream, or vice versa. A clone
+can program directly with `make program`; the command does not create a Vitis
+workspace or rebuild firmware.
 
 ## Driver-Level Synchronization Policy
 

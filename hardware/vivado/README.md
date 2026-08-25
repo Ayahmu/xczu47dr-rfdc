@@ -1,6 +1,6 @@
 # Vivado RFDC Build
 
-This directory holds the Vivado sources for the custom XCZU47DR RFDC design. Design inputs are in `src/`, `xdc/`, `bd/`, `ip/`, and `scripts/`. Vivado projects, generated IP products, `.Xil`, reports, and build outputs are generated locally and ignored by Git.
+This directory holds the Vivado sources for the custom XCZU47DR RFDC design. Design inputs are in `src/`, `xdc/`, `bd/`, `ip/`, and `scripts/`. Vivado projects, generated IP products, `.Xil`, and reports are generated locally and ignored by Git; final programming artifacts are written to the checked-in root `artifacts/` directory.
 
 ## Production Targets
 
@@ -54,12 +54,12 @@ work-dual/slave/       reports-dual/slave/
 Both publish role-specific outputs after bitstream generation:
 
 ```text
-output/custom_xczu47dr_master.bit
-output/custom_xczu47dr_master.ltx
-output/custom_xczu47dr_master.xsa
-output/custom_xczu47dr_slave.bit
-output/custom_xczu47dr_slave.ltx
-output/custom_xczu47dr_slave.xsa
+../../artifacts/custom_xczu47dr_master.bit
+../../artifacts/custom_xczu47dr_master.ltx
+../../artifacts/custom_xczu47dr_master.xsa
+../../artifacts/custom_xczu47dr_slave.bit
+../../artifacts/custom_xczu47dr_slave.ltx
+../../artifacts/custom_xczu47dr_slave.xsa
 ```
 
 The dual command reports the size and SHA256 of each `.bit`. Remove only its isolated projects with:
