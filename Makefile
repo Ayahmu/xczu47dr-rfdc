@@ -253,7 +253,6 @@ artifacts-hash:
 		test -f "$(ARTIFACT_DIR)/$$file" && (cd "$(ARTIFACT_DIR)" && sha256sum "$$file") || true; \
 	done; } > "$$temporary_file"; \
 	mv -f "$$temporary_file" "$(ARTIFACT_DIR)/SHA256SUMS"
-
 artifacts-clean:
 	@echo "Removing checked-in artifacts under $(ARTIFACT_DIR)"
 	rm -f "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" \
