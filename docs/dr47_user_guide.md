@@ -204,20 +204,24 @@ with Dr47Device(
 
 ## 7. 发射一个波形
 
-驱动只维护三个职责明确的实板测试脚本。三个脚本都会先广播发现板卡、读取主从
+驱动只维护四个职责明确的实板测试脚本。四个脚本都会先广播发现板卡、读取主从
 角色、按代码顶部常量分配目标 IP 并验证，然后才连接和发波。先修改目标脚本顶部
 的 10G 网卡、发现源地址、目标 IP、可选 `device_uid`、可选 MAC 和控制源地址，再
 从仓库根目录运行；这些脚本不接收网络命令行参数：
 
 ```bash
 # 两块板：主卡发 SYNC，本地发波，并通过 XS18 -> XS19 触发从卡。
-PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_slave_wave_test
 
 # 一块主卡：不调用 sync()，直接使用本地 UDP Trigger 发波。
-PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
 
 # 一块从卡：XS20 悬空，显式 bypass 后使用本地 UDP Trigger 发波。
-PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
+
+# 一块从卡：external 模式等待真实 XS20 SYNC，再等待 XS19 外部 Trigger；
+# 将脚本顶部 TRIGGER_SOURCE 改成 xs18_loopback 可测试 XS18 -> XS19 回环。
+PYTHONPATH=software python -m dr47.examples.hardware_slave_external_trigger_test
 ```
 
 从卡脚本给出了 60 ns、1 GHz NCO、高斯包络和 100 ns 记录内延迟的完整示例。

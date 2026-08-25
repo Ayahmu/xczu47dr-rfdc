@@ -6,25 +6,27 @@
 完整 API 参考（函数签名、参数、返回值、CLI 和双板卡端到端示例）：
 [`docs/dr47_api.md`](../../docs/dr47_api.md)。
 
-驱动测试总览（包括三类正式发波入口、接线、预期状态和仿真测试边界）：
+驱动测试总览（包括四类正式发波入口、接线、预期状态和仿真测试边界）：
 [`TESTING.md`](TESTING.md)。
 
 Direct UDP driver for the XCZU47DR RFDC playback bitstream.  The package has
 no web-server dependency and exposes `Dr47Device`, `SequenceGenerator`, and
 `SimulatedDr47Device` through the `dr47` import name.
 
-三类完整发波测试分别是：
+正式板级测试统一放在 `examples/` 子包中：
 
 ```bash
 # 正常主卡 -> 从卡：XS20 SYNC + XS18 -> XS19 Trigger
-PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_slave_wave_test
 # 主卡单卡：不调用 sync()，仅 UDP trigger() 本地发波
-PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
 # 从卡单卡：bypass_sync() 后仅 UDP trigger() 本地发波，XS20/XS18/XS19 均不参与
-PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
+# 从卡 external：等待 XS20 SYNC 后等待 XS19 外部 Trigger 或执行 XS18->XS19 回环
+PYTHONPATH=software python -m dr47.examples.hardware_slave_external_trigger_test
 ```
 
-这三个脚本是唯一维护的正式板级测试入口。每个脚本顶部集中放置发现地址、目标
+这四个脚本是唯一维护的正式板级测试入口。每个脚本顶部集中放置发现地址、目标
 IP、可选 `device_uid` 和可选 MAC，不使用网络命令行参数。`run()` 按照“广播发现
 -> 角色/UID 选择 -> IP 配置并验证 -> 连接 -> 波形配置 -> 下载 -> ARM -> Trigger
 -> 状态检查 -> 清理”顺序编排，并在 `finally` 中执行 `abort_mute()` 和 `close()`。

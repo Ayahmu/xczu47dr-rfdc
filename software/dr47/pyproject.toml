@@ -17,7 +17,7 @@ dr47-network = "dr47.cli:main"
 plot = ["matplotlib>=3.6"]
 
 [tool.setuptools]
-packages = ["dr47"]
+packages = ["dr47", "dr47.examples"]
 
 [tool.setuptools.package-dir]
 dr47 = "."

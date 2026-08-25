@@ -103,16 +103,26 @@ PYTHONPATH=software python3 -m unittest tests.test_dr47_driver tests.test_rtl_si
 git diff --check
 ```
 
-For the one-board slave setup: XS17 = 10 MHz, XS20 unconnected, and XS18 physically connected to XS19, run:
+For the one-board slave bypass setup: XS17 = 10 MHz, XS20 unconnected, and
+XS18/XS19 do not need to be connected, run:
 
 ```bash
-PYTHONPATH=software python -m dr47.hardware_sync_mode_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
+```
+
+For the formal slave external mode, connect XS20 to a real SYNC source. To wait
+for an external Trigger on XS19, leave `TRIGGER_SOURCE = "external_input"`; to
+test a physical XS18 -> XS19 loopback, connect the cable and set
+`TRIGGER_SOURCE = "xs18_loopback"` in the example file:
+
+```bash
+PYTHONPATH=software python -m dr47.examples.hardware_slave_external_trigger_test
 ```
 
 For a master role test, program the master artifacts and run:
 
 ```bash
-PYTHONPATH=software python -m dr47.hardware_master_local_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
 ```
 
 These tests validate control and trigger state, not analog RF quality. RF frequency, amplitude, and spectral claims require oscilloscope or spectrum analyzer evidence.

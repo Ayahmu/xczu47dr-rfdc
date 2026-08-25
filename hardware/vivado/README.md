@@ -87,13 +87,19 @@ make xsa TARGET=custom_xczu47dr_slave
 
 Build one shared firmware source tree against the XSA matching the selected role. The firmware waits for the HMC7044 PL sequencer but intentionally does not wait for XS20 before initializing RFDC, DAC MTS, and NCO SYSREF.
 
-For the standalone slave test, use XS17 = 10 MHz, leave XS20 unconnected, and connect XS18 to XS19. Program slave bitstream and matching ELF, then run:
+For the standalone slave bypass test, use XS17 = 10 MHz and leave XS20
+unconnected. Program the slave bitstream and matching ELF, then run:
 
 ```bash
-PYTHONPATH=software python -m dr47.hardware_sync_mode_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
 ```
 
-The test verifies that external mode rejects trigger-gated playback, explicit `bypass_sync()` enables software and XS19 triggers, and restoring external mode closes the gate. It proves digital control state only; analog RF output requires independent instrument measurement.
+For the formal external path, connect XS20 to a real SYNC source and run
+`dr47.examples.hardware_slave_external_trigger_test`. Its default
+`TRIGGER_SOURCE = "external_input"` waits for XS19; changing it to
+`"xs18_loopback"` tests an XS18 -> XS19 cable loopback. These tests prove
+digital control state only; analog RF output requires independent instrument
+measurement.
 
 ## Reports
 

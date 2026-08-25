@@ -705,7 +705,7 @@ with Dr47Device(ip="10.50.0.101") as device:
     device.trigger()  # 每次调用播放一条记录
 ```
 
-该 helper 是驱动公共 API，不依赖任何实板测试脚本；三类正式板级测试和上层应用
+该 helper 是驱动公共 API，不依赖任何实板测试脚本；四类正式板级测试和上层应用
 可以共享它。若需要 ez-Q 的复杂延时、标记或有限循环，请使用
 `SequenceGenerator`，当前 PL 不支持的嵌套循环/条件跳转会明确抛出异常。
 

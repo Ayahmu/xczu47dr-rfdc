@@ -12,13 +12,13 @@ The maintained real-board entry points are:
 
 ```bash
 # Master and slave: XS20 SYNC plus XS18 -> XS19 Trigger.
-PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_slave_wave_test
 
 # Standalone master: local UDP Trigger without calling sync().
-PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
 
 # Standalone slave: explicit sync bypass and local UDP Trigger.
-PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
 ```
 
 Each entry point first broadcasts `NETWORK_GET`, identifies boards by the

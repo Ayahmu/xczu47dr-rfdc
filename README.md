@@ -115,9 +115,14 @@ Trigger output and XS19 is the Trigger input; Type-C is not a synchronization
 path.
 
 For a single-board slave Trigger loopback test, connect `XS18 -> XS19` with
-an SMA/SMP cable and call `bypass_sync()` through
-`software/dr47/hardware_wave_test.py`. This explicit local permission does
-not claim that the board has synchronized: `sync_seen` remains false.
+an SMA/SMP cable and run
+`dr47.examples.hardware_slave_bypass_software_trigger_test`. This explicit
+local permission does not claim that the board has synchronized:
+`sync_seen` remains false. To test the formal external path instead, use
+`dr47.examples.hardware_slave_external_trigger_test` after connecting XS20 to
+a real SYNC source; set its `TRIGGER_SOURCE` to `"xs18_loopback"` for the
+XS18 -> XS19 loopback, or leave it as `"external_input"` to wait for an
+external XS19 Trigger.
 
 For normal use, build the frontend once and run the backend from the repository
 root:

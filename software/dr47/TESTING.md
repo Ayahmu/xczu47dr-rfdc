@@ -1,27 +1,29 @@
 # 47DR 驱动测试说明
 
-本文把“真正访问板卡的驱动测试”和“本地协议/仿真测试”分开。三个板级脚本都
+本文把“真正访问板卡的驱动测试”和“本地协议/仿真测试”分开。四个板级脚本都
 先广播发现板卡、读取 bitstream 主从角色、按照脚本顶部常量分配目标 IP 并验证，
 然后才连接并发波。它们不接收网络命令行参数；运行前直接修改脚本顶部的网卡、
 发现源地址、目标 IP、可选 `device_uid` 和可选 MAC。
 
-## 三个正式发波入口
+## 四个正式发波入口
 
 | 测试文件 | 是否上板 | 需要的 bitstream/接线 | 主要验证 | 不证明什么 |
 | --- | --- | --- | --- | --- |
-| `hardware_master_slave_wave_test.py` | 是，两块板 | 主卡 + 从卡；两块 XS17 接同一参考时钟；主 XS20 -> 从 XS20；主 XS18 -> 从 XS19 | external 模式下主卡发 SYNC，从卡 `sync_seen`/`sync_link_ready` 变真；主卡本地 UDP 发波；主卡物理 Trigger 触发从卡 | 不给出 RF 相位、频率、幅度或同步抖动的仪器结论 |
-| `hardware_master_standalone_wave_test.py` | 是，一块板 | 正式主卡；XS17 接参考时钟；XS20、XS18、XS19 可悬空 | 主卡不调用 `sync()`，直接配置、ARM、UDP `trigger()` 进入 RUNNING | 不验证 XS20 实际输出脉冲，也不验证 XS18 电缆回环 |
-| `hardware_slave_bypass_software_trigger_test.py` | 是，一块板 | 正式从卡；XS17 接参考时钟；XS20 悬空；不需要 XS18 -> XS19 | 从卡 `bypass_sync()` 后，仅由 UDP `trigger()` 自己发波；`sync_seen` 仍为 False；物理 Trigger 计数不被软件 Trigger 改变 | 不证明板卡与外部时钟/主卡已经同步，也不测 RF 输出 |
+| `examples/hardware_master_slave_wave_test.py` | 是，两块板 | 主卡 + 从卡；两块 XS17 接同一参考时钟；主 XS20 -> 从 XS20；主 XS18 -> 从 XS19 | external 模式下主卡发 SYNC，从卡 `sync_seen`/`sync_link_ready` 变真；主卡本地 UDP 发波；主卡物理 Trigger 触发从卡 | 不给出 RF 相位、频率、幅度或同步抖动的仪器结论 |
+| `examples/hardware_master_standalone_wave_test.py` | 是，一块板 | 正式主卡；XS17 接参考时钟；XS20、XS18、XS19 可悬空 | 主卡不调用 `sync()`，直接配置、ARM、UDP `trigger()` 进入 RUNNING | 不验证 XS20 实际输出脉冲，也不验证 XS18 电缆回环 |
+| `examples/hardware_slave_bypass_software_trigger_test.py` | 是，一块板 | 正式从卡；XS17 接参考时钟；XS20 悬空；不需要 XS18 -> XS19 | 从卡 `bypass_sync()` 后，仅由 UDP `trigger()` 自己发波；`sync_seen` 仍为 False；物理 Trigger 计数不被软件 Trigger 改变 | 不证明板卡与外部时钟/主卡已经同步，也不测 RF 输出 |
+| `examples/hardware_slave_external_trigger_test.py` | 是，一块板 | 正式从卡；XS17 接参考时钟；XS20 接外部 SYNC；XS19 接外部 Trigger，或 XS18 -> XS19 回环 | 不 bypass；等待真实 XS20 SYNC 后，等待 XS19 外部 Trigger，或由 XS18 回环触发 | 不证明 RF 相位/频率/幅度或跨设备同步精度 |
 
 运行命令（在仓库根目录）：
 
 ```bash
-PYTHONPATH=software python -m dr47.hardware_master_slave_wave_test
-PYTHONPATH=software python -m dr47.hardware_master_standalone_wave_test
-PYTHONPATH=software python -m dr47.hardware_slave_bypass_software_trigger_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_slave_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
+PYTHONPATH=software python -m dr47.examples.hardware_slave_external_trigger_test
 ```
 
-三者都执行 `finally -> abort_mute()`，测试失败时也会尽力停止输出。成功只代表
+四者都执行 `finally -> abort_mute()`，测试失败时也会尽力停止输出。成功只代表
 数字控制和播放状态机走通；示波器或频谱仪必须另外接到实际 DAC 输出端，确认
 载波频率、幅度、脉冲宽度和相位关系。
 
@@ -56,7 +58,7 @@ PYTHONPATH=software python -m unittest tests.test_dr47_driver -q
 
 ## 仓库其余测试分类
 
-以下测试服务于驱动依赖的其他层，属于本地测试，不是上述三类发波脚本：
+以下测试服务于驱动依赖的其他层，属于本地测试，不是上述四类发波脚本：
 
 | 文件 | 分类和用途 |
 | --- | --- |
@@ -69,10 +71,26 @@ PYTHONPATH=software python -m unittest tests.test_dr47_driver -q
 | `test_ila_capture_report.py` | ILA 报告解析 |
 | `test_webapp_api.py`、`test_webapp_management.py`、`test_webapp_network.py`、`test_webapp_waveforms.py` | 网页端 API、管理、网络和波形接口 |
 
+## external 模式脚本的两种触发方式
+
+编辑 `examples/hardware_slave_external_trigger_test.py` 顶部的
+`TRIGGER_SOURCE`，不使用命令行参数：
+
+```python
+TRIGGER_SOURCE = "external_input"  # 外部设备直接接 XS19，脚本等待上升沿
+# TRIGGER_SOURCE = "xs18_loopback"  # XS20 先接真实 SYNC，再接 XS18 -> XS19
+```
+
+两种方式都必须先看到 `sync_seen=True` 和 `sync_link_ready=True`。第一种方式
+ARM 后脚本保持等待，用户从 XS19 输入 Trigger；第二种方式脚本调用
+`emit_trigger()`，只产生 XS18 物理脉冲，必须由电缆回到 XS19 才会被接受。
+`trigger()` 是 UDP 本地软件 Trigger，不属于这两个 external 测试路径。
+
 ## 推荐验收顺序
 
 单板从卡只想验证“跳过同步后自己发波”时，先运行
-`hardware_slave_bypass_software_trigger_test.py`。主卡单板使用
-`hardware_master_standalone_wave_test.py`。只有在主卡、从卡和两条连接线都准备好后，才运行
-`hardware_master_slave_wave_test.py`。最后用仪器记录 RF 结果；驱动日志中的
+`examples/hardware_slave_bypass_software_trigger_test.py`。需要验证真实同步和外部
+触发时运行 `examples/hardware_slave_external_trigger_test.py`；主卡单板使用
+`examples/hardware_master_standalone_wave_test.py`。只有在主卡、从卡和两条连接线都准备好后，才运行
+`examples/hardware_master_slave_wave_test.py`。最后用仪器记录 RF 结果；驱动日志中的
 `RUNNING`、`sync_seen` 和 Trigger 计数只能作为数字路径证据。
