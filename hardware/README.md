@@ -62,7 +62,7 @@ artifacts/custom_xczu47dr_slave.ltx
 artifacts/custom_xczu47dr_slave.xsa
 ```
 
-The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove artifacts. `make clean` also preserves artifacts. Use `make artifacts-clean TARGET=...` only when explicitly removing a role's programming files. Vivado state, reports, and Vitis workspaces remain ignored.
+The build prints each bitstream's path, byte size, and SHA256. `make bitstream-dual-clean` removes only the dual-build projects and reports; it does not remove artifacts. `make clean` removes all ignored Vivado work/report trees, including historical `work-10mhz`, `work-isolated-sync`, `work-selftest`, and `reports-*` directories, as well as Chisel/Mill and Vitis generated state. It preserves artifacts. Use `make artifacts-clean TARGET=...` only when explicitly removing a role's programming files.
 
 ## Firmware and Programming
 

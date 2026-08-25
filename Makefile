@@ -67,7 +67,7 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -109,8 +109,9 @@ help:
 	@echo "Maintenance:"
 	@echo "  make hardware-clean   Clean Vivado work, reports, dual trees, and old ignored output"
 	@echo "  make bitstream-dual-clean  Remove only the isolated dual-build trees"
+	@echo "  make chisel-clean     Remove Chisel/Mill generated state"
 	@echo "  make firmware-clean   Remove Vitis workspace"
-	@echo "  make clean            Clean firmware workspace and Vivado generated outputs"
+	@echo "  make clean            Clean all generated build state except artifacts"
 	@echo ""
 	@echo "Defaults:"
 	@echo "  PROJECT=$(TARGET_PROJECT_BASENAME)"
@@ -214,7 +215,18 @@ hardware-clean:
 	@echo "Cleaning Vivado generated state; preserving $(ARTIFACT_DIR)"
 	rm -rf "$(VIVADO_WORK_DIR)" "$(VIVADO_REPORT_DIR)" \
 	       "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual" \
-	       "$(VIVADO_DIR)/output"
+	       "$(VIVADO_DIR)/output" \
+	       "$(VIVADO_DIR)/hardware" "$(VIVADO_DIR)/.Xil"
+	@for generated_dir in "$(VIVADO_DIR)"/work-* "$(VIVADO_DIR)"/reports-*; do \
+		if [ -e "$$generated_dir" ]; then rm -rf "$$generated_dir"; fi; \
+	done
+	rm -f "$(VIVADO_DIR)"/*.jou "$(VIVADO_DIR)"/*.log \
+	      "$(VIVADO_DIR)"/*.pb "$(VIVADO_DIR)"/*.str \
+	      "$(VIVADO_DIR)"/*.zip "$(VIVADO_DIR)"/*.backup.*
+
+chisel-clean:
+	@echo "Cleaning Chisel/Mill generated state"
+	rm -rf "$(CHISEL_DIR)/out" "$(CHISEL_DIR)/generated" "$(CHISEL_DIR)/Verilog"
 
 firmware:
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
@@ -233,7 +245,8 @@ firmware-rebuild:
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 firmware-clean:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean
+	@echo "Cleaning all Vitis workspaces; preserving $(ARTIFACT_DIR)"
+	rm -rf "$(FIRMWARE_DIR)/workspace"
 
 artifacts:
 	@test -f "$(BIT)" || { echo "ERROR: missing bitstream: $(BIT)"; exit 1; }
@@ -285,4 +298,4 @@ host:
 host-dry-run:
 	cd $(SOFTWARE_DIR) && python3 host.py --dry-run --output-dir "$(HOST_OUTPUT_DIR)"
 
-clean: firmware-clean hardware-clean
+clean: firmware-clean hardware-clean chisel-clean
