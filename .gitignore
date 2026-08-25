@@ -81,8 +81,8 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Build artifacts. Generated outputs remain local unless explicitly copied to
-# the versioned releases/ directory below.
+# Build artifacts. The root artifacts/ directory is the checked-in handoff;
+# all other generated binary outputs remain ignored.
 *.o
 *.elf
 *.bin
@@ -91,17 +91,16 @@ Thumbs.db
 *.mmi
 *.xsa
 
-# Checked-in release bundles override the generic binary ignores above. Keep
-# generated Vivado/Vitis workspaces and hardware/vivado/output ignored.
-!/releases/
-!/releases/**/
-!/releases/**/*.bit
-!/releases/**/*.elf
-!/releases/**/*.ltx
-!/releases/**/*.xsa
-!/releases/**/*.tcl
-!/releases/**/*.txt
-!/releases/**/*.md
+# Checked-in programming artifacts. Vivado/Vitis workspaces remain ignored.
+!/artifacts/
+!/artifacts/**/
+!/artifacts/**/*.bit
+!/artifacts/**/*.elf
+!/artifacts/**/*.ltx
+!/artifacts/**/*.xsa
+!/artifacts/**/*.tcl
+!/artifacts/**/*.txt
+!/artifacts/**/*.md
 
 # Temporary and backup files
 ch*_waveform_hex.txt

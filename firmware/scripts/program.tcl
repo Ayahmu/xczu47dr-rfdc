@@ -5,7 +5,7 @@
 
 if {$argc < 2 || $argc > 3} {
     puts "Usage: xsct program.tcl <bit_file> <elf_file> \[psu_init_tcl\]"
-    puts "Example: xsct program.tcl ../hardware/vivado/output/<target>_rfdc.bit <target-workspace>/rfdc_app/Debug/rfdc_app.elf <target-workspace>/hw_platform/hw/psu_init.tcl"
+    puts "Example: xsct program.tcl ../artifacts/custom_xczu47dr_master.bit ../artifacts/custom_xczu47dr_master.elf ../artifacts/custom_xczu47dr_master_psu_init.tcl"
     exit 1
 }
 

@@ -9,8 +9,9 @@ endif
 ROOT := $(CURDIR)
 
 VIVADO_DIR := $(ROOT)/hardware/vivado
+ARTIFACT_DIR ?= $(ROOT)/artifacts
 VIVADO_WORK_DIR ?= $(VIVADO_DIR)/work
-VIVADO_OUTPUT_DIR ?= $(VIVADO_DIR)/output
+VIVADO_OUTPUT_DIR ?= $(ARTIFACT_DIR)
 VIVADO_REPORT_DIR ?= $(VIVADO_DIR)/reports
 CHISEL_DIR := $(ROOT)/hardware/chisel
 FIRMWARE_DIR := $(ROOT)/firmware
@@ -22,11 +23,11 @@ TARGET_FIRMWARE_WORKSPACE := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_co
 TARGET_FIRMWARE_ELF := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^firmware_elf:/ {print $$2}')
 TARGET_PSU_INIT := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^psu_init:/ {print $$2}')
 
-BIT ?= $(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).bit
-LTX ?= $(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).ltx
-XSA ?= $(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).xsa
-ELF ?= $(ROOT)/$(TARGET_FIRMWARE_ELF)
-PSU_INIT ?= $(ROOT)/$(TARGET_PSU_INIT)
+BIT ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit
+LTX ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx
+XSA ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa
+ELF ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf
+PSU_INIT ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl
 
 BIT_ORIGIN := $(origin BIT)
 ELF_ORIGIN := $(origin ELF)
@@ -65,10 +66,8 @@ IP ?= 10.87.5.241
 PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
-RELEASE_NAME ?= 10mhz-$(shell date +%Y%m%d)
-RELEASE_DIR ?= $(ROOT)/releases/$(RELEASE_NAME)
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts release-dual host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -79,8 +78,8 @@ help:
 	@echo "  make hardware         Build Chisel, Vivado project, synth, impl, bitstream, XSA"
 	@echo "  make hardware-fast    Reuse the current Vivado project for RTL/constraint iterations"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
-	@echo "  make artifacts        Verify expected .bit/.ltx/.xsa/.elf artifacts exist"
-	@echo "  make release-dual     Package checked-in master/slave release artifacts"
+	@echo "  make artifacts        Verify the selected role's checked-in artifacts"
+	@echo "  make artifacts-clean  Remove local checked-in artifacts explicitly"
 	@echo ""
 	@echo "Step targets:"
 	@echo "  make chisel           Generate Chisel Verilog"
@@ -120,13 +119,13 @@ help:
 	@echo "  PSU_INIT=$(PSU_INIT)"
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
+	@echo "  ARTIFACT_DIR=$(ARTIFACT_DIR)"
 	@echo "  TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
 	@echo "  TARGET=custom_xczu47dr_slave builds the slave synchronization bitstream"
 	@echo "  Default TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
 	@echo "  Use TARGET=custom_xczu47dr_bw only for the standalone DDR bandwidth pressure path"
 	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
-	@echo "  RELEASE_DIR=$(RELEASE_DIR)"
 
 all: hardware firmware artifacts
 
@@ -171,20 +170,20 @@ xsa: bitstream
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
 
 bitstream-master:
-	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
-	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_master.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "MASTER LTX: $$ltx"
+	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_master.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "MASTER LTX: $$ltx"
 
 bitstream-slave:
-	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
-	@bit="$(VIVADO_DIR)/output/custom_xczu47dr_slave.bit"; ltx="$(VIVADO_DIR)/output/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
+	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
 
 xsa-master:
 	@test -f "$(VIVADO_DIR)/work-dual/master/custom_xczu47dr_master_rfdc.xpr" || { echo "ERROR: isolated master project is missing; run make bitstream-master first"; exit 1; }
-	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_master
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_master
 
 xsa-slave:
 	@test -f "$(VIVADO_DIR)/work-dual/slave/custom_xczu47dr_slave_rfdc.xpr" || { echo "ERROR: isolated slave project is missing; run make bitstream-slave first"; exit 1; }
-	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(VIVADO_DIR)/output" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_slave
+	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_slave
 
 bitstream-dual: chisel
 	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-master bitstream-slave
@@ -194,82 +193,58 @@ bitstream-dual: chisel
 
 bitstream-dual-clean:
 	rm -rf "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual"
-	rm -f "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.ltx" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.ltx"
 
 hardware:
 	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) BIT=$(BIT) LTX=$(LTX) XSA=$(XSA)"
-	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh --clean
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh --clean
 
 hardware-fast:
 	@echo "INFO: Fast hardware build reusing PROJECT=$(TARGET_PROJECT_BASENAME)"
-	cd $(VIVADO_DIR) && TARGET=$(TARGET) ./build.sh
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh
 
 hardware-clean:
 	rm -rf "$(VIVADO_DIR)/work"
-	rm -f "$(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).bit" "$(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).ltx" "$(VIVADO_DIR)/output/$(TARGET_OUTPUT_BASENAME).xsa"
-	mkdir -p "$(VIVADO_DIR)/output"
+	rm -rf "$(VIVADO_DIR)/reports"
 
 firmware:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh clean && TARGET=$(TARGET) ./build.sh create && TARGET=$(TARGET) ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
 
 firmware-create:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh create
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create
 
 firmware-build:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
 
 firmware-rebuild:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh clean && TARGET=$(TARGET) ./build.sh create && TARGET=$(TARGET) ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
 
 firmware-clean:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh clean
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean
 
 artifacts:
 	@test -f "$(BIT)" || { echo "ERROR: missing bitstream: $(BIT)"; exit 1; }
-	@test -f "$(LTX)" || { echo "ERROR: missing debug probes: $(LTX)"; exit 1; }
 	@test -f "$(XSA)" || { echo "ERROR: missing XSA: $(XSA)"; exit 1; }
 	@test -f "$(ELF)" || { echo "ERROR: missing ELF: $(ELF)"; exit 1; }
-	@du -h "$(BIT)" "$(LTX)" "$(XSA)" "$(ELF)"
+	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PS init script: $(PSU_INIT)"; exit 1; }
+	@du -h "$(BIT)" "$(XSA)" "$(ELF)" "$(PSU_INIT)"
+	@test ! -e "$(LTX)" || du -h "$(LTX)"
 
-# Package already-built, role-matched artifacts for clone-and-program use.
-# This target deliberately does not invoke Vivado or Vitis; run the build
-# targets first, then commit the resulting release directory.
-release-dual:
-	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" || { echo "ERROR: missing master bitstream; run make bitstream-master"; exit 1; }
-	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit" || { echo "ERROR: missing slave bitstream; run make bitstream-slave"; exit 1; }
-	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.xsa" || { echo "ERROR: missing master XSA; run make xsa-master"; exit 1; }
-	@test -s "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.xsa" || { echo "ERROR: missing slave XSA; run make xsa-slave"; exit 1; }
-	@test -s "$(ROOT)/firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf" || { echo "ERROR: missing master ELF; run make firmware TARGET=custom_xczu47dr_master"; exit 1; }
-	@test -s "$(ROOT)/firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf" || { echo "ERROR: missing slave ELF; run make firmware TARGET=custom_xczu47dr_slave"; exit 1; }
-	@mkdir -p "$(RELEASE_DIR)"
-	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(RELEASE_DIR)/"
-	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit" "$(RELEASE_DIR)/"
-	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.xsa" "$(RELEASE_DIR)/"
-	@cp "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.xsa" "$(RELEASE_DIR)/"
-	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf" "$(RELEASE_DIR)/custom_xczu47dr_master.elf"
-	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_slave/rfdc_app/Debug/rfdc_app.elf" "$(RELEASE_DIR)/custom_xczu47dr_slave.elf"
-	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_master/hw_platform/export/hw_platform/hw/psu_init.tcl" "$(RELEASE_DIR)/custom_xczu47dr_master_psu_init.tcl"
-	@cp "$(ROOT)/firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl" "$(RELEASE_DIR)/custom_xczu47dr_slave_psu_init.tcl"
-	@{ \
-		echo "# XCZU47DR 10 MHz Hardware Release"; \
-		echo; \
-		echo "- Source commit: $$(git rev-parse HEAD)"; \
-		echo "- XS17 reference: 10 MHz"; \
-		echo "- HMC7044 DAC reference: 128 MHz"; \
-		echo "- Roles: master XS20 output; slave XS20 input"; \
-		echo "- Program only files with the same role prefix."; \
-	} > "$(RELEASE_DIR)/MANIFEST.md"
-	@(cd "$(RELEASE_DIR)" && sha256sum *.bit *.xsa *.elf *.tcl > SHA256SUMS)
-	@echo "Release packaged at $(RELEASE_DIR)"
+artifacts-clean:
+	@echo "Removing checked-in artifacts under $(ARTIFACT_DIR)"
+	rm -f "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" \
+	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx" \
+	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa" \
+	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf" \
+	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"
 
 run program:
 ifeq ($(EXPLICIT_PROGRAM_ARTIFACTS),1)
-	@test -f "$(BIT)" || { echo "ERROR: missing BIT=$(BIT). Run make hardware first or pass BIT=..."; exit 1; }
+	@test -f "$(BIT)" || { echo "ERROR: missing BIT=$(BIT). Run make bitstream first or pass BIT=..."; exit 1; }
 	@test -f "$(ELF)" || { echo "ERROR: missing ELF=$(ELF). Run make firmware first or pass ELF=..."; exit 1; }
 	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PSU_INIT=$(PSU_INIT). Run make firmware-create first or pass PSU_INIT=..."; exit 1; }
 	cd $(FIRMWARE_DIR) && xsct scripts/program.tcl "$(BIT)" "$(ELF)" "$(PSU_INIT)"
 else
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ./build.sh program
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh program
 endif
 
 $(RUN_ARGS):

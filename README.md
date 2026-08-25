@@ -27,17 +27,16 @@ For the two-board synchronization build, run `make bitstream-dual`. This builds
 the master and slave Vivado projects in parallel using isolated trees under
 `hardware/vivado/work-dual/master` and `hardware/vivado/work-dual/slave`; the
 generated bitstreams and LTX files are written as
-`hardware/vivado/output/custom_xczu47dr_master.*` and
-`hardware/vivado/output/custom_xczu47dr_slave.*`. The physical synchronization
+`artifacts/custom_xczu47dr_master.*` and
+`artifacts/custom_xczu47dr_slave.*`. The physical synchronization
 connection for the current hardware revision is **master A <-> slave A**. Use
 `make bitstream-dual-clean` to remove only the isolated dual-build trees.
 
-Generated artifacts intended for other developers are published as a checked-in
-release bundle. After building both roles, their XSAs, firmware ELFs, and PS init
-scripts, run `make release-dual RELEASE_NAME=10mhz-YYYYMMDD`; see
-[`releases/README.md`](releases/README.md). This avoids requiring a clone user to
-rerun Vivado synthesis and implementation. Vivado workspaces and ordinary output
-directories remain ignored.
+The checked-in `artifacts/` directory is the single programming handoff. A fresh
+clone can run `make program` immediately after sourcing Vitis; no Vivado
+synthesis/implementation or Vitis workspace creation is required. Local
+`make bitstream`, `make xsa`, and `make firmware` commands atomically overwrite
+the same role-matched files in `artifacts/`.
 
 ```bash
 # Build one formal role and its role-specific XSA/firmware workspace.
@@ -60,8 +59,8 @@ make firmware
 # Verify expected handoff artifacts exist
 make artifacts
 
-# Program the custom board over JTAG with the default bitstream and ELF
-make run
+# Program the custom board over JTAG with the checked-in default artifacts
+make program
 
 # Select one board when multiple JTAG cables are connected
 JTAG_CABLE_SERIAL=210512180082 make program
