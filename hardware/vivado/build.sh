@@ -115,10 +115,10 @@ if [ "$CLEAN_FIRST" = true ]; then
            "${WORK_DIR}/${PROJECT_NAME}.hw" \
            "${WORK_DIR}/${PROJECT_NAME}.ip_user_files" \
            "${WORK_DIR}/${PROJECT_NAME}.sim"
-    rm -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" \
-          "${OUTPUT_DIR}/${OUTPUT_BASENAME}.ltx" \
-          "${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa" \
-          "${OUTPUT_DIR}/${OUTPUT_BASENAME}_timing.rpt"
+    # Final programming artifacts are written with temporary files and atomic
+    # renames by the Vivado Tcl scripts. Keep the previous checked-in files
+    # available until a replacement has completed successfully.
+    rm -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}_timing.rpt"
     mkdir -p "${OUTPUT_DIR}"
     print_info "Clean complete"
 fi

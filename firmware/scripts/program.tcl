@@ -152,7 +152,7 @@ if {![file exists $elf_file]} {
 }
 if {!$download_elf_only && ![file exists $psu_init_file]} {
     puts "ERROR: psu_init.tcl not found: $psu_init_file"
-    puts "Run firmware platform creation first: make firmware-create or make firmware"
+    puts "Run make firmware-create to regenerate it, or restore the checked-in artifacts/ file"
     exit 1
 }
 }

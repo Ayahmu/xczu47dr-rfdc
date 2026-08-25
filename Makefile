@@ -107,7 +107,7 @@ help:
 	@echo "  make host-dry-run     Generate host artifacts without board access"
 	@echo ""
 	@echo "Maintenance:"
-	@echo "  make hardware-clean   Clean Vivado work/output before hardware build"
+	@echo "  make hardware-clean   Clean Vivado work, reports, dual trees, and old ignored output"
 	@echo "  make bitstream-dual-clean  Remove only the isolated dual-build trees"
 	@echo "  make firmware-clean   Remove Vitis workspace"
 	@echo "  make clean            Clean firmware workspace and Vivado generated outputs"
@@ -183,10 +183,12 @@ bitstream-slave:
 xsa-master:
 	@test -f "$(VIVADO_DIR)/work-dual/master/custom_xczu47dr_master_rfdc.xpr" || { echo "ERROR: isolated master project is missing; run make bitstream-master first"; exit 1; }
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_master
+	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 xsa-slave:
 	@test -f "$(VIVADO_DIR)/work-dual/slave/custom_xczu47dr_slave_rfdc.xpr" || { echo "ERROR: isolated slave project is missing; run make bitstream-slave first"; exit 1; }
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_slave
+	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 bitstream-dual: chisel
 	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-master bitstream-slave
@@ -209,8 +211,10 @@ hardware-fast:
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 hardware-clean:
-	rm -rf "$(VIVADO_DIR)/work"
-	rm -rf "$(VIVADO_DIR)/reports"
+	@echo "Cleaning Vivado generated state; preserving $(ARTIFACT_DIR)"
+	rm -rf "$(VIVADO_WORK_DIR)" "$(VIVADO_REPORT_DIR)" \
+	       "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual" \
+	       "$(VIVADO_DIR)/output"
 
 firmware:
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
@@ -260,6 +264,7 @@ artifacts-clean:
 	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa" \
 	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf" \
 	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"
+	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 run program:
 ifeq ($(EXPLICIT_PROGRAM_ARTIFACTS),1)

@@ -367,8 +367,8 @@ python3 software/ila_capture_report.py \
   --capture \
   --send-after-arm \
   --artifact-dir software/waveform_out \
-  --bit hardware/vivado/output/custom_xczu47dr_master.bit \
-  --ltx hardware/vivado/output/custom_xczu47dr_master.ltx \
+  --bit artifacts/custom_xczu47dr_master.bit \
+  --ltx artifacts/custom_xczu47dr_master.ltx \
   --out-dir software/ila_reports \
   --udp-interface enp225s0f0 \
   --udp-source-ip 192.168.1.10

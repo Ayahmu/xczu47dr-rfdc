@@ -17,8 +17,8 @@
 | 项目 | 记录值 |
 | --- | --- |
 | 板卡编号 | 待填写 |
-| bitstream | `hardware/vivado/output/custom_xczu47dr_master.bit` 或 `custom_xczu47dr_slave.bit`，记录实际路径和 SHA256 |
-| firmware ELF | 对应 role 的 `firmware/workspace/custom_xczu47dr_<role>/rfdc_app/Debug/rfdc_app.elf` |
+| bitstream | `artifacts/custom_xczu47dr_master.bit` 或 `custom_xczu47dr_slave.bit`，记录实际路径和 SHA256 |
+| firmware ELF | 对应 role 的 `artifacts/custom_xczu47dr_<role>.elf` |
 | 主机脚本 | `software/send_waveform_udp.py` |
 | DDR 布局 | `interleaved_512b` |
 | 使能通道 | CH1-CH8 或记录实际通道 |

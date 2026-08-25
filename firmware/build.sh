@@ -146,7 +146,7 @@ run_xsct() {
 check_xsa() {
     if [ ! -f "${XSA_FILE}" ]; then
         print_error "XSA file not found: ${XSA_FILE}"
-        print_info "Please build hardware first: cd ../hardware/vivado && ./build.sh xsa"
+        print_info "Please build hardware first: make xsa TARGET=${TARGET}"
         exit 1
     fi
 }
@@ -154,7 +154,7 @@ check_xsa() {
 check_bit() {
     if [ ! -f "${BIT_FILE}" ]; then
         print_error "Bitstream file not found: ${BIT_FILE}"
-        print_info "Please build hardware first: cd ../hardware/vivado && ./build.sh"
+        print_info "Please build hardware first: make bitstream TARGET=${TARGET}"
         exit 1
     fi
 }
@@ -162,7 +162,7 @@ check_bit() {
 check_psu_init() {
     if [ ! -f "${PSU_INIT_FILE}" ]; then
         print_error "PS init script not found: ${PSU_INIT_FILE}"
-        print_info "Please create the firmware platform first: $0 create"
+        print_info "Please run 'make firmware-create TARGET=${TARGET}' or restore the checked-in artifacts/ files"
         exit 1
     fi
 }

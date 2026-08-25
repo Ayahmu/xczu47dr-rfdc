@@ -66,10 +66,10 @@ polarity, external-reference level, and PLL lock behavior.
 The generated artifacts are:
 
 ```text
-hardware/vivado/output/custom_xczu47dr_master.bit
-hardware/vivado/output/custom_xczu47dr_master.ltx
-hardware/vivado/output/custom_xczu47dr_master.xsa
-firmware/workspace/custom_xczu47dr_master/rfdc_app/Debug/rfdc_app.elf
+artifacts/custom_xczu47dr_master.bit
+artifacts/custom_xczu47dr_master.ltx
+artifacts/custom_xczu47dr_master.xsa
+artifacts/custom_xczu47dr_master.elf
 ```
 
 Record the generated role, bitstream SHA256, firmware ELF SHA256, source

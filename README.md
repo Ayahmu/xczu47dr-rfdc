@@ -233,4 +233,7 @@ Generated build state is intentionally excluded from version control. To remove 
 make clean
 ```
 
-This removes Vivado work/output artifacts and the Vitis workspace. Recreate them with `make hardware` and `make firmware`.
+This removes Vivado work trees, reports, the old ignored `hardware/vivado/output/`
+directory, and the Vitis workspace. It does not delete the checked-in
+`artifacts/` programming handoff. Recreate generated state with `make hardware`
+and `make firmware`.

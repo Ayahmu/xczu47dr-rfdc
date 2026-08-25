@@ -91,9 +91,9 @@ not the programming handoff and remains ignored by Git.
 
 `TARGET=custom_xczu47dr_bw` outputs:
 
-- **ELF file**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf`
-- **Map file**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/bandwidth_app.elf.map`
-- **PS init script**: `workspace/custom_xczu47dr_bandwidth/hw_platform/hw/psu_init.tcl`
+- **ELF handoff**: `../artifacts/custom_xczu47dr_bandwidth.elf`
+- **PS init handoff**: `../artifacts/custom_xczu47dr_bandwidth_psu_init.tcl`
+- **Intermediate ELF/map**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/`
 
 ## Hardware Configuration
 
