@@ -97,14 +97,35 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define FW_STATUS_MTS_TILE_SHIFT 4U
 #define FW_STATUS_MTS_ERROR_SHIFT 8U
 #define FW_STATUS_NCO_SYNC_READY (1U << 24)
+#define FW_STATUS_SYNC_ACK_SHIFT 25U
+#define FW_STATUS_SYNC_ACK_MASK (0x3FU << FW_STATUS_SYNC_ACK_SHIFT)
+#define SYNC_EVENT_EPOCH_MASK 0x3FU
+#define SYNC_EVENT_POLL_INTERVAL_US 10000U
+/* Allow the HMC7044 SYNC/SYSREF event to settle before re-running RFDC MTS. */
+#define SYNC_ALIGNMENT_SETTLE_US 1000U
 
 static u32 DacMtsStatus;
+static u32 SyncAckStatus;
+
+static u32 Read_Sync_Event_Epoch(void)
+{
+	u32 status = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
+	return (status >> FW_STATUS_SYNC_ACK_SHIFT) & SYNC_EVENT_EPOCH_MASK;
+}
+
+static void Publish_Sync_Alignment_Ack(u32 Epoch)
+{
+	SyncAckStatus = (Epoch & SYNC_EVENT_EPOCH_MASK) << FW_STATUS_SYNC_ACK_SHIFT;
+	DacMtsStatus = (DacMtsStatus & ~FW_STATUS_SYNC_ACK_MASK) | SyncAckStatus;
+	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
+}
 
 static void Publish_DAC_MTS_Status(u32 Ready, u32 Failed, u32 Error)
 {
 	DacMtsStatus = FW_STATUS_MTS_REQUIRED |
 		((DAC_MTS_TILE_MASK & 0xFU) << FW_STATUS_MTS_TILE_SHIFT) |
-		((Error & 0xFFFFU) << FW_STATUS_MTS_ERROR_SHIFT);
+		((Error & 0xFFFFU) << FW_STATUS_MTS_ERROR_SHIFT) |
+		SyncAckStatus;
 
 	if (Ready != 0U)
 		DacMtsStatus |= FW_STATUS_MTS_READY;
@@ -114,9 +135,16 @@ static void Publish_DAC_MTS_Status(u32 Ready, u32 Failed, u32 Error)
 	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
 }
 
+static void Publish_Sync_Alignment_Failure(u32 Epoch, u32 Error)
+{
+	SyncAckStatus = (Epoch & SYNC_EVENT_EPOCH_MASK) << FW_STATUS_SYNC_ACK_SHIFT;
+	Publish_DAC_MTS_Status(0U, 1U, Error);
+}
+
 static void Publish_DAC_NCO_Sync_Ready(void)
 {
 	DacMtsStatus |= FW_STATUS_NCO_SYNC_READY;
+	DacMtsStatus = (DacMtsStatus & ~FW_STATUS_SYNC_ACK_MASK) | SyncAckStatus;
 	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
 }
 
@@ -468,7 +496,6 @@ int Align_DAC_NCO_To_SYSREF(void)
 		}
 
 		MixerSettings.EventSource = XRFDC_EVNT_SRC_SYSREF;
-		MixerSettings.PhaseOffset = 0.0;
 
 		Status = XRFdc_SetMixerSettings(&RFdcInst, XRFDC_DAC_TILE, Tile_Id, Block_Id, &MixerSettings);
 		if (Status != XST_SUCCESS)
@@ -491,6 +518,44 @@ int Align_DAC_NCO_To_SYSREF(void)
 	}
 
 	xil_printf("DAC NCO SYSREF alignment complete.\r\n");
+	return XST_SUCCESS;
+}
+
+/* Re-run the complete runtime alignment transaction for one real PL SYNC
+ * event.  The PL playback gate is already closed while this function runs;
+ * only the matching epoch ACK below can reopen it. */
+static int Realign_DAC_For_Sync_Epoch(u32 Epoch)
+{
+	int Status;
+
+	xil_printf("SYNC alignment epoch %lu: stopping DAC readiness and rerunning MTS/NCO.\r\n",
+		   (unsigned long)Epoch);
+	DacMtsStatus &= ~(FW_STATUS_MTS_READY | FW_STATUS_MTS_FAILED |
+				  FW_STATUS_NCO_SYNC_READY);
+	Publish_DAC_MTS_Status(0U, 0U, 0U);
+	usleep(SYNC_ALIGNMENT_SETTLE_US);
+
+	Status = Configure_DAC_MTS();
+	if (Status != XST_SUCCESS)
+	{
+		u32 MtsError = (DacMtsStatus >> FW_STATUS_MTS_ERROR_SHIFT) & 0xFFFFU;
+		Publish_Sync_Alignment_Failure(Epoch, MtsError);
+		xil_printf("SYNC alignment epoch %lu: DAC MTS failed; playback remains muted.\r\n",
+			   (unsigned long)Epoch);
+		return XST_FAILURE;
+	}
+	Status = Align_DAC_NCO_To_SYSREF();
+	if (Status != XST_SUCCESS)
+	{
+		Publish_Sync_Alignment_Failure(Epoch, XST_FAILURE);
+		xil_printf("SYNC alignment epoch %lu: NCO SYSREF alignment failed; playback remains muted.\r\n",
+			   (unsigned long)Epoch);
+		return XST_FAILURE;
+	}
+	Publish_DAC_NCO_Sync_Ready();
+	Publish_Sync_Alignment_Ack(Epoch);
+	xil_printf("SYNC alignment epoch %lu complete: MTS/NCO ready, ACK published.\r\n",
+		   (unsigned long)Epoch);
 	return XST_SUCCESS;
 }
 
@@ -517,6 +582,7 @@ int main(void)
 	u32 Major;
 	int Status;
 	XRFdc_Config *ConfigPtr;
+	u32 LastSyncEventEpoch = 0U;
 	init_platform();
 	if (Init_GPIO() != XST_SUCCESS)
 		return XST_FAILURE;
@@ -651,7 +717,15 @@ int main(void)
 	// measure_dma_bandwidth();
 	while (1)
 	{
-		usleep(1000000);
+		u32 SyncEventEpoch = Read_Sync_Event_Epoch();
+		if (SyncEventEpoch != LastSyncEventEpoch)
+		{
+			/* Consume each real PL event once.  A failed attempt is still
+			 * consumed and leaves the PL gate closed until a later SYNC. */
+			LastSyncEventEpoch = SyncEventEpoch;
+			(void)Realign_DAC_For_Sync_Epoch(SyncEventEpoch);
+		}
+		usleep(SYNC_EVENT_POLL_INTERVAL_US);
 	}
 
 	return 0;

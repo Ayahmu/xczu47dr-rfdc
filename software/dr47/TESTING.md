@@ -9,7 +9,8 @@
 
 | 测试文件 | 是否上板 | 需要的 bitstream/接线 | 主要验证 | 不证明什么 |
 | --- | --- | --- | --- | --- |
-| `examples/hardware_master_slave_wave_test.py` | 是，两块板 | 主卡 + 从卡；两块 XS17 接同一参考时钟；主 XS20 -> 从 XS20；主 XS18 -> 从 XS19 | external 模式下主卡发 SYNC，从卡 `sync_seen`/`sync_link_ready` 变真；主卡本地 UDP 发波；主卡物理 Trigger 触发从卡 | 不给出 RF 相位、频率、幅度或同步抖动的仪器结论 |
+| `examples/hardware_master_slave_wave_test.py` | 是，两块板 | 主卡 + 从卡；两块 XS17 接同一参考时钟；主 XS20 -> 从 XS20；主 XS18 -> 从 XS19 | external 模式下主卡发 SYNC，从卡 `sync_seen`/`sync_link_ready` 变真；一次主卡 UDP Trigger 同时启动主卡本地播放并经 XS18/XS19 触发从卡 | 不给出 RF 相位、频率、幅度或同步抖动的仪器结论 |
+| `examples/hardware_master_slave_gaussian_sine_test.py` | 是，两块板 | 082 主卡 + 081 从卡；两块 XS17 共享 10 MHz；082 XS20 -> 081 XS20；082 XS18 -> 081 XS19；两个独立 10G 网口 | 单次 60 ns 高斯正弦；一次主卡 RFCTRL2 Trigger 产生本地播放和 XS18 物理 Trigger | 不给出 RF 相位、频率、幅度或同步抖动的仪器结论 |
 | `examples/hardware_master_standalone_wave_test.py` | 是，一块板 | 正式主卡；XS17 接参考时钟；XS20、XS18、XS19 可悬空 | 主卡不调用 `sync()`，直接配置、ARM、UDP `trigger()` 进入 RUNNING | 不验证 XS20 实际输出脉冲，也不验证 XS18 电缆回环 |
 | `examples/hardware_slave_bypass_software_trigger_test.py` | 是，一块板 | 正式从卡；XS17 接参考时钟；XS20 悬空；不需要 XS18 -> XS19 | 从卡 `bypass_sync()` 后，仅由 UDP `trigger()` 自己发波；`sync_seen` 仍为 False；物理 Trigger 计数不被软件 Trigger 改变 | 不证明板卡与外部时钟/主卡已经同步，也不测 RF 输出 |
 | `examples/hardware_slave_external_trigger_test.py` | 是，一块板 | 正式从卡；XS17 接参考时钟；XS20 接外部 SYNC；XS19 接外部 Trigger，或 XS18 -> XS19 回环 | 不 bypass；等待真实 XS20 SYNC 后，等待 XS19 外部 Trigger，或由 XS18 回环触发 | 不证明 RF 相位/频率/幅度或跨设备同步精度 |

@@ -158,6 +158,13 @@ module Top #(
   wire [31:0] trigger_input_count;
   wire [31:0] trigger_accepted_count;
   wire [31:0] trigger_output_count;
+  wire [31:0] gpio_out_reg;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_meta;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
+  wire [5:0] sync_event_epoch;
+  wire sync_align_busy;
+  wire sync_align_failed;
+  wire [5:0] sync_alignment_epoch;
   wire rfctrl2_sync_epoch_pulse;
   wire rfctrl2_trigger_pulse;
   wire rfctrl2_set_sync_role_pulse;
@@ -168,6 +175,16 @@ module Top #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_bypass_pl_sync;
   wire sync_role_master_pl = IS_MASTER ? 1'b1 : 1'b0;
   wire sync_bypass_pl = sync_bypass_pl_sync[1];
+  wire [5:0] firmware_ack_epoch_pl = gpio_out_reg[30:25];
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] firmware_align_failed_pl_sync;
+  wire firmware_align_failed_pl = firmware_align_failed_pl_sync[1];
+
+  always @(posedge pl_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn)
+      firmware_align_failed_pl_sync <= 2'b00;
+    else
+      firmware_align_failed_pl_sync <= {firmware_align_failed_pl_sync[0], firmware_status_ddr[3]};
+  end
 
   IOBUF sync_xs20_iobuf (
       .I  (sync_xs20_out),
@@ -199,13 +216,16 @@ module Top #(
       .pl_clk              (pl_clk),
       .pl_rst_n            (pl_aresetn),
       .sync_request_ddr   (rfctrl2_sync_epoch_pulse),
-      .trigger_request_ddr(rfctrl2_emit_trigger_pulse),
+      .trigger_request_ddr(rfctrl2_emit_trigger_pulse |
+                           rfctrl2_master_launch_pulse),
       .sync_request_vio_pl(vio_sync_request),
       .sync_in            (sync_xs20_in),
       .trigger_in         (TRIG_2),
       .dac_trigger_start  (dac_trigger_start),
       .role_master        (sync_role_master_pl),
       .sync_bypass       (sync_bypass_pl),
+      .firmware_ack_epoch (firmware_ack_epoch_pl),
+      .firmware_align_failed(firmware_align_failed_pl),
       .hmc_sync           (sync_hmc),
       .sync_link_out      (sync_link_out),
       .trigger_link_out   (trigger_link_out),
@@ -213,6 +233,10 @@ module Top #(
       .sync_done          (sync_done_pl),
       .sync_seen          (sync_seen),
       .sync_link_ready    (sync_link_ready),
+      .sync_event_epoch   (sync_event_epoch),
+      .sync_align_busy    (sync_align_busy),
+      .sync_align_failed  (sync_align_failed),
+      .sync_alignment_epoch(sync_alignment_epoch),
       .trigger_in_seen    (trigger_in_seen),
       .trigger_accepted   (trigger_accepted),
       .trigger_output_active(trigger_output_active),
@@ -227,6 +251,10 @@ module Top #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_seen_ddr_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_ready_ddr_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_align_busy_ddr_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_align_failed_ddr_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [5:0] sync_alignment_epoch_ddr_meta;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [5:0] sync_alignment_epoch_ddr;
   reg [31:0] trigger_input_count_ddr_meta;
   reg [31:0] trigger_input_count_ddr;
   reg [31:0] trigger_accepted_count_ddr_meta;
@@ -236,6 +264,14 @@ module Top #(
   wire hmc_done_ddr = hmc_done_ddr_sync[1];
   wire sync_seen_ddr = sync_seen_ddr_sync[1];
   wire sync_link_ready_ddr = sync_ready_ddr_sync[1];
+  wire sync_align_busy_ddr = sync_align_busy_ddr_sync[1];
+  wire sync_align_failed_ddr = sync_align_failed_ddr_sync[1];
+  // One RFCTRL2 TRIGGER is the master launch event: it starts the local
+  // player and, in the same DDR clock domain, requests the XS18 pulse.
+  // EMIT_TRIGGER remains a separate diagnostic-only physical trigger.
+  wire rfctrl2_master_launch_pulse = rfctrl2_trigger_pulse &&
+                                     sync_link_ready_ddr &&
+                                     sync_role_master_ddr;
 
   assign H7044_SYNC_0 = sync_hmc;
 
@@ -424,9 +460,6 @@ module Top #(
   wire         rfdc_dac0_sysref_int_gating;
   wire         rfdc_dac0_sysref_int_reenable;
   wire         pl_sysref_dac;
-  wire [31:0]  gpio_out_reg;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_meta;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
   wire         dac_mts_required = firmware_status_ddr[1];
   wire         dac_mts_ready = firmware_status_ddr[2];
   wire         dac_mts_failed = firmware_status_ddr[3];
@@ -804,6 +837,10 @@ module Top #(
       .sync_bypass         (sync_bypass_ddr),
       .sync_seen           (sync_seen_ddr),
       .sync_link_ready     (sync_link_ready_ddr),
+      .sync_align_busy     (sync_align_busy_ddr),
+      .sync_align_failed   (sync_align_failed_ddr),
+      .sync_alignment_epoch(sync_alignment_epoch_ddr),
+      .sync_alignment_error(dac_mts_error),
       .trigger_input_count (trigger_input_count_ddr),
       .trigger_accepted_count(trigger_accepted_count_ddr),
       .trigger_output_count(trigger_output_count_ddr),
@@ -1070,6 +1107,10 @@ module Top #(
       hmc_done_ddr_sync <= 2'b00;
       sync_seen_ddr_sync <= 2'b00;
       sync_ready_ddr_sync <= 2'b00;
+      sync_align_busy_ddr_sync <= 2'b00;
+      sync_align_failed_ddr_sync <= 2'b00;
+      sync_alignment_epoch_ddr_meta <= 6'd0;
+      sync_alignment_epoch_ddr <= 6'd0;
       trigger_input_count_ddr_meta <= 32'd0;
       trigger_input_count_ddr <= 32'd0;
       trigger_accepted_count_ddr_meta <= 32'd0;
@@ -1082,6 +1123,10 @@ module Top #(
       hmc_done_ddr_sync <= {hmc_done_ddr_sync[0], hmc7044_set_finish};
       sync_seen_ddr_sync <= {sync_seen_ddr_sync[0], sync_seen};
       sync_ready_ddr_sync <= {sync_ready_ddr_sync[0], sync_link_ready};
+      sync_align_busy_ddr_sync <= {sync_align_busy_ddr_sync[0], sync_align_busy};
+      sync_align_failed_ddr_sync <= {sync_align_failed_ddr_sync[0], sync_align_failed};
+      sync_alignment_epoch_ddr_meta <= sync_alignment_epoch;
+      sync_alignment_epoch_ddr <= sync_alignment_epoch_ddr_meta;
       // Counters are monotonic snapshots. Two DDR-domain samples avoid
       // exposing the PL-domain bus directly to RFCTRL2 STATUS.
       trigger_input_count_ddr_meta <= trigger_input_count;
@@ -2686,7 +2731,14 @@ module Top #(
       .io_gpio2(gpio_out_reg)
   );
 
-  assign M_AXI_GPIO_rdata = axigpio_rdata | {hmc7044_set_finish, sync_seen, 30'b0};
+  // GPIO2 readback keeps the legacy HMC done bit and exposes the six-bit
+  // runtime SYNC event epoch in bits 30:25.  Firmware acknowledges the same
+  // epoch by writing those bits back in its GPIO2 status word.
+  // GPIO2 is bidirectional from the firmware's point of view: writes carry
+  // the ACK epoch, while reads must return the PL event epoch.  Do not OR the
+  // two epoch values together (for example, old ACK 1 OR new event 2 is 3).
+  assign M_AXI_GPIO_rdata =
+      {hmc7044_set_finish, sync_event_epoch, axigpio_rdata[24:0]};
 
 
   ila_s_axi_01 u_ila_s_axi_01 (

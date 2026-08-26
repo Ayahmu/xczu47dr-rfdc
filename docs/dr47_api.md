@@ -341,6 +341,9 @@ result = provision_board(
 | `nco_sync_ready` | NCO 同步状态 |
 | `sync_role` / `sync_mode` | 当前同步角色和模式 |
 | `sync_seen` / `sync_link_ready` | 外部同步链路状态 |
+| `sync_align_busy` / `sync_align_failed` | 本次 SYNC 触发的运行时 MTS/NCO 对齐状态 |
+| `sync_alignment_epoch` | 固件完成并 ACK 的六位硬件对齐 epoch |
+| `sync_alignment_error` | 最近一次对齐失败的 RFDC/MTS 错误码 |
 | `trigger_input_count` | 收到的 Trigger 数 |
 | `trigger_accepted_count` | 被接受的 Trigger 数 |
 | `trigger_output_count` | 输出 Trigger 数 |
@@ -519,6 +522,35 @@ XS20 断开
 携带 epoch，成功返回 `0`。从卡调用或 bypass 模式调用会抛出
 `SynchronizationError`。它不是播放 Trigger：在已经完成该 epoch 后，随后
 多次 Trigger 不需要再次调用它。
+
+#### `SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01)`
+
+双板正式应用应使用 `SyncGroup.sync()`，而不是自行组合底层 `sync()` 和状态轮询。
+它会先对主卡、从卡执行 `abort_mute()`，记录同步前 alignment epoch，调用主卡发出
+XS20 SYNC，然后等待从卡收到真实 XS20 事件、两侧 `sync_align_busy=False`、
+alignment epoch 都递增，并同时确认 DAC MTS、NCO SYSREF 和 `sync_link_ready` 已就绪。
+成功返回 `SyncAlignmentResult`；同步成功后波形仍保留，但两块板卡都必须重新
+`arm()` 才能 Trigger。
+
+```python
+from dr47 import Dr47Device, SyncGroup
+
+with Dr47Device(ip="10.50.0.101", sync_role="master") as master, \
+     Dr47Device(ip="10.50.0.102", sync_role="slave") as slave:
+    master.require_external_sync()
+    slave.require_external_sync()
+    # 波形上传和 RFDC 配置可在此之前完成；同步会自动停止已 ARM 的播放。
+    result = SyncGroup(master, slave, timeout_s=5.0).sync(epoch=1)
+    print(result.master_alignment_epoch, result.slave_alignment_epoch)
+    master.arm(channel_mask=0x01)
+    slave.arm(channel_mask=0x01)
+    master.trigger()
+```
+
+`SyncAlignmentResult` 的两个 alignment epoch 是固件完成本次
+`XRFdc_MultiConverter_Sync()` 和 NCO SYSREF reset 后写回的确认值，不是示波器
+测得的 RF 相位误差。旧版 96 字节 STATUS 没有这些字段，驱动使用默认值，不会把
+旧设备误判为已完成严格对齐。
 
 #### `emit_trigger() -> int`
 

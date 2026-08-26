@@ -249,18 +249,20 @@ PYTHONPATH=software python -m dr47.examples.hardware_slave_external_trigger_test
 | XS18 (`TRIG_1`) | Trigger 输出 | `emit_trigger()` |
 | XS19 (`TRIG_2`) | Trigger 输入 | 外部物理上升沿 |
 
-正式双卡操作顺序如下：
+正式双卡操作顺序如下。`sync()` 不是一次性的“开门”命令：每次调用都会自动静音、
+重新执行两块板卡的 DAC MTS 和 NCO SYSREF 对齐；完成后必须重新 `arm()`。
 
 1. 接线：主卡 XS20 到从卡 XS20，主卡 XS18 到从卡 XS19。
 2. 两块板卡均设置 `set_sync_mode("external")`；从卡设置
    `set_sync_role("slave")`，主卡设置 `set_sync_role("master")`。
-3. 主卡调用一次 `sync()`，从卡的 `sync_seen` 与 `sync_link_ready` 应变为真。
+3. 使用 `SyncGroup.sync()`；它会自动 `abort_mute()`，由主卡发出 XS20 SYNC，
+   等待从卡接收，并等待两边的 MTS/NCO alignment epoch ACK。
 4. 向从卡上传含 Trigger-wait 的序列并调用 `arm()`。
 5. 每需要播放一次，主卡调用 `emit_trigger()`；该脉冲通过 XS18/XS19 触发从卡。
 
 `trigger()` 是软件本地触发，不会驱动 XS18；`emit_trigger()` 只输出 XS18 脉冲，
-不会直接播放本机波形。不要把每次 Trigger 前再发送一次 SYNC，当前同步周期中一条
-有效 XS20 上升沿即可。
+不会直接播放本机波形。不要把每次 Trigger 前再发送一次 SYNC；每次确实需要重新
+对齐时才调用 `SyncGroup.sync()`，同步成功后重新 ARM 再触发。
 
 单板从卡测试可将 XS18 接到 XS19，使用 `bypass_sync()` 显式绕过 XS20
 门控；该操作不会把 `sync_seen` 伪造为真。
@@ -296,18 +298,19 @@ with Dr47Device(MASTER_IP, udp_interface=INTERFACE, udp_source_ip=HOST_IP) as ma
     slave.set_sync_role("slave")
     slave.set_sync_mode("external")
 
-    # 2. 主卡从 XS20 发出一次同步边沿，从卡因此打开 Trigger 接收门。
-    master.sync()
-    sync_status = slave.status().capabilities
-    if not (sync_status.sync_seen and sync_status.sync_link_ready):
-        raise RuntimeError("从卡尚未观察到 XS20 SYNC；检查 XS20 连线和角色配置")
+    # 2. 自动停止并静音两边，发送 XS20 SYNC，重新执行 DAC MTS/NCO 对齐。
+    #    成功返回后，之前的 ARM 已失效，后面必须重新 ARM。
+    from dr47 import SyncGroup
+    alignment = SyncGroup(master, slave).sync(epoch=1)
+    print("alignment epochs:", alignment.master_alignment_epoch,
+          alignment.slave_alignment_epoch)
 
     # 3. 从卡上传一个“每次 Trigger 后播放一次”的 CH1 IQ 波形和序列。
     slave.download_qc_wave_seq("xy", 1, iq, sequence)
     slave.set_xy_nco_frequency(1, 1.0)  # 单位 GHz。
     slave.set_qc_on_off("xy", 1, "on")
 
-    # 4. ARM 后，从卡等待 XS19 的外部 Trigger，而不是立刻输出。
+    # 4. 对齐后重新 ARM；从卡等待 XS19 的外部 Trigger，而不是立刻输出。
     slave.arm(channel_mask=0x01)
 
     # 5. 主卡在 XS18 输出一个物理 Trigger；它沿电缆到从卡 XS19 后播放一次。

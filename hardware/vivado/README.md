@@ -85,7 +85,7 @@ make xsa TARGET=custom_xczu47dr_slave
 
 ## Firmware Pairing and Board Verification
 
-Build one shared firmware source tree against the XSA matching the selected role. The firmware waits for the HMC7044 PL sequencer but intentionally does not wait for XS20 before initializing RFDC, DAC MTS, and NCO SYSREF.
+Build one shared firmware source tree against the XSA matching the selected role. The firmware waits for the HMC7044 PL sequencer but intentionally does not wait for XS20 before initial RFDC, DAC MTS, and NCO SYSREF setup. A real XS20 SYNC later starts a strict runtime MTS/NCO alignment handshake; `sync_link_ready` is not restored until the matching firmware epoch ACK arrives.
 
 For the standalone slave bypass test, use XS17 = 10 MHz and leave XS20
 unconnected. Program the slave bitstream and matching ELF, then run:

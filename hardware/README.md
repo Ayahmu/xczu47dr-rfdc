@@ -66,7 +66,7 @@ The build prints each bitstream's path, byte size, and SHA256. `make bitstream-d
 
 ## Firmware and Programming
 
-The firmware source is shared by master and slave. Build it with the XSA that matches the bitstream role being programmed. Firmware waits only for the HMC7044 PL sequencer, then initializes RFDC, DAC MTS, and NCO SYSREF; it does not wait for XS20 synchronization.
+The firmware source is shared by master and slave. Build it with the XSA that matches the bitstream role being programmed. Firmware waits only for the HMC7044 PL sequencer, then initializes RFDC, DAC MTS, and NCO SYSREF without waiting for XS20. Each real XS20 SYNC event later closes the playback gate until both MTS and NCO SYSREF are rerun and the matching epoch is acknowledged; the driver must re-ARM after `SyncGroup.sync()`.
 
 ```bash
 JTAG_CABLE_SERIAL=<serial> TARGET=custom_xczu47dr_slave make program

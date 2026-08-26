@@ -70,6 +70,10 @@ class SimulatedDr47Device(Dr47Device):
         self._trigger_output_count = 0
         self._sim_sync_seen = False
         self._sim_sync_ready = sync_role == "master"
+        self._sim_sync_align_busy = False
+        self._sim_sync_align_failed = False
+        self._sim_sync_alignment_epoch = 0
+        self._sim_sync_alignment_error = 0
 
     def _make_status_payload(self) -> bytes:
         capabilities = (RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
@@ -100,6 +104,11 @@ class SimulatedDr47Device(Dr47Device):
         return base + struct.pack(
             "<QIIII", sync_status, self._trigger_input_count,
             self._trigger_accepted_count, self._trigger_output_count, 0,
+        ) + struct.pack(
+            "<QII", (self._sim_sync_alignment_epoch & 0x3F) |
+            (int(self._sim_sync_align_busy) << 22) |
+            (int(self._sim_sync_align_failed) << 23),
+            self._sim_sync_alignment_error, 0,
         )
 
     def _response(self, opcode: int, payload: bytes = b"", seq: int = 1, status: int = RF2_STATUS_OK) -> dict[str, Any]:
@@ -132,6 +141,10 @@ class SimulatedDr47Device(Dr47Device):
             sync_mode=self._sync_mode,
             sync_seen=self._sim_sync_seen,
             sync_link_ready=self._sim_sync_ready,
+            sync_align_busy=self._sim_sync_align_busy,
+            sync_align_failed=self._sim_sync_align_failed,
+            sync_alignment_epoch=self._sim_sync_alignment_epoch,
+            sync_alignment_error=self._sim_sync_alignment_error,
             trigger_input_count=self._trigger_input_count,
             trigger_accepted_count=self._trigger_accepted_count,
             trigger_output_count=self._trigger_output_count,
@@ -154,6 +167,10 @@ class SimulatedDr47Device(Dr47Device):
                "sync_mode": self._sync_mode,
                "sync_seen": self._sim_sync_seen,
                "sync_link_ready": self._sim_sync_ready,
+               "sync_align_busy": self._sim_sync_align_busy,
+               "sync_align_failed": self._sim_sync_align_failed,
+               "sync_alignment_epoch": self._sim_sync_alignment_epoch,
+               "sync_alignment_error": self._sim_sync_alignment_error,
                "trigger_input_count": self._trigger_input_count,
                "trigger_accepted_count": self._trigger_accepted_count,
                "trigger_output_count": self._trigger_output_count,
@@ -176,14 +193,32 @@ class SimulatedDr47Device(Dr47Device):
         self._sync_mode = "bypass" if int(mode) == RF2_SYNC_MODE_BYPASS else "external"
         self._sim_sync_seen = False
         self._sim_sync_ready = self._sync_role == "master" or self._sync_mode == "bypass"
+        self._sim_sync_align_busy = False
+        self._sim_sync_align_failed = False
         return self._response(RF2_OP_SET_SYNC_ROLE, self._make_status_payload(), seq or 1)
 
     def rfctrl2_sync_epoch(self, epoch: int, seq: int | None = None, wait_response: bool = True):
         if self._sync_role != "master":
             return self._response(RF2_OP_SYNC_EPOCH, seq=seq or 1, status=6)
         self._sim_sync_seen = True
+        self._sim_sync_align_busy = True
+        self._sim_sync_ready = False
+        self._sim_sync_alignment_epoch = (self._sim_sync_alignment_epoch + 1) & 0x3F
+        self._sim_sync_align_busy = False
         self._sim_sync_ready = True
         return self._response(RF2_OP_SYNC_EPOCH, self._make_status_payload(), seq or 1)
+
+    def _simulate_external_sync(self, epoch: int = 1) -> None:
+        """Inject the XS20 event used by :class:`SyncGroup` tests."""
+
+        if self._sync_role != "slave" or self._sync_mode != "external":
+            return
+        self._sim_sync_seen = True
+        self._sim_sync_align_busy = True
+        self._sim_sync_ready = False
+        self._sim_sync_alignment_epoch = (self._sim_sync_alignment_epoch + 1) & 0x3F
+        self._sim_sync_align_busy = False
+        self._sim_sync_ready = True
 
     def rfctrl2_emit_trigger(self, seq: int | None = None, wait_response: bool = True):
         self._trigger_output_count = (self._trigger_output_count + 1) & 0xFFFFFFFF

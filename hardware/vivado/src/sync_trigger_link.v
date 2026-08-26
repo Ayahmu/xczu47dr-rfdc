@@ -23,6 +23,8 @@ module sync_trigger_link #(
     input  wire dac_trigger_start,
     input  wire role_master,
     input  wire sync_bypass,
+    input  wire [5:0] firmware_ack_epoch,
+    input  wire firmware_align_failed,
     output wire hmc_sync,
     output wire sync_link_out,
     output wire trigger_link_out,
@@ -30,6 +32,10 @@ module sync_trigger_link #(
     output wire sync_done,
     output wire sync_seen,
     output wire sync_link_ready,
+    output wire [5:0] sync_event_epoch,
+    output wire sync_align_busy,
+    output wire sync_align_failed,
+    output wire [5:0] sync_alignment_epoch,
     output wire trigger_in_seen,
     output wire trigger_accepted,
     output wire trigger_output_active,
@@ -58,7 +64,15 @@ module sync_trigger_link #(
   reg [31:0] trigger_output_count_reg;
   reg sync_link_ready_reg;
   reg sync_bypass_prev;
-  wire trigger_allowed = role_master || sync_bypass || sync_link_ready_reg;
+  reg [5:0] sync_event_epoch_reg;
+  reg [5:0] sync_alignment_epoch_reg;
+  reg sync_align_busy_reg;
+  reg sync_align_failed_reg;
+  reg sync_sequence_pending_reg;
+  reg sync_request_pl_prev;
+  wire sync_transaction_busy = sync_sequence_pending_reg || sync_align_busy_reg;
+  wire trigger_allowed = (role_master || sync_bypass || sync_link_ready_reg) &&
+                         !sync_transaction_busy && !sync_align_failed_reg;
 
   always @(posedge ddr_clk or negedge ddr_rst_n) begin
     if (!ddr_rst_n) begin
@@ -126,6 +140,7 @@ module sync_trigger_link #(
   end
 
   wire sync_request_pl = sync_request_vio_pl | sync_epoch_pl_sync[1];
+  wire sync_request_pl_rise = sync_request_pl && !sync_request_pl_prev;
   wire master_hmc_sync;
   wire master_slave_sync;
   reg sync_seen_reg;
@@ -153,29 +168,69 @@ module sync_trigger_link #(
       sync_link_ready_reg <= 1'b0;
       sync_in_prev <= 1'b0;
       sync_bypass_prev <= 1'b0;
+      sync_event_epoch_reg <= 6'd0;
+      sync_alignment_epoch_reg <= 6'd0;
+      sync_align_busy_reg <= 1'b0;
+      sync_align_failed_reg <= 1'b0;
+      sync_sequence_pending_reg <= 1'b0;
+      sync_request_pl_prev <= 1'b0;
     end else begin
       sync_in_prev <= sync_in;
       sync_bypass_prev <= sync_bypass;
+      sync_request_pl_prev <= sync_request_pl;
+      // Close every playback/configuration gate as soon as a master SYNC
+      // request enters the PL sequencer, including its pre-pulse wait state.
+      if (role_master && !sync_bypass && sync_request_pl_rise) begin
+        sync_sequence_pending_reg <= 1'b1;
+        sync_align_failed_reg <= 1'b0;
+        sync_link_ready_reg <= 1'b0;
+      end
+      // Every real SYNC completion starts a fresh firmware alignment
+      // transaction.  Bypass is intentionally excluded from this path.
+      if (sync_done && !sync_bypass) begin
+        sync_sequence_pending_reg <= 1'b0;
+        sync_event_epoch_reg <= sync_event_epoch_reg + 1'b1;
+        sync_align_busy_reg <= 1'b1;
+        sync_align_failed_reg <= 1'b0;
+        sync_link_ready_reg <= 1'b0;
+      end else if (sync_align_busy_reg) begin
+        if (firmware_align_failed &&
+            (firmware_ack_epoch == sync_event_epoch_reg)) begin
+          // Failures are epoch-qualified so a stale firmware failure bit
+          // cannot poison the next realignment attempt.
+          sync_align_failed_reg <= 1'b1;
+        end else if (firmware_ack_epoch == sync_event_epoch_reg) begin
+          sync_alignment_epoch_reg <= firmware_ack_epoch;
+          sync_align_busy_reg <= 1'b0;
+          sync_align_failed_reg <= 1'b0;
+          sync_link_ready_reg <= 1'b1;
+        end
+      end
       if (role_master) begin
         // A master can always operate locally. sync_seen remains an event
         // indicator: it records a sync pulse actually emitted on XS20.
-        sync_link_ready_reg <= 1'b1;
+        if (!sync_transaction_busy && !sync_request_pl_rise &&
+            !sync_done && !sync_align_failed_reg)
+          sync_link_ready_reg <= 1'b1;
         if (sync_done)
           sync_seen_reg <= 1'b1;
       end else if (sync_bypass != sync_bypass_prev) begin
         // A mode change starts a fresh slave synchronization epoch. Bypass
         // grants local operation but never pretends an XS20 pulse occurred.
         sync_seen_reg <= 1'b0;
-        sync_link_ready_reg <= sync_bypass;
+        if (!sync_transaction_busy && !sync_done)
+          sync_link_ready_reg <= sync_bypass;
       end else if (sync_bypass) begin
-        sync_link_ready_reg <= 1'b1;
+        if (!sync_transaction_busy && !sync_done)
+          sync_link_ready_reg <= 1'b1;
       end else if (sync_done && !role_master) begin
         sync_seen_reg <= 1'b1;
       end
       // The input must return low before a received SYNC is considered a
       // complete external synchronization event. This prevents its high
       // level from being interpreted as a Trigger.
-      if (sync_seen_reg && !sync_in && !role_master)
+      if (sync_seen_reg && !sync_in && !role_master &&
+          !sync_transaction_busy && !sync_done)
         sync_link_ready_reg <= 1'b1;
       if (!sync_bypass && !role_master && !sync_seen_reg && sync_in_prev && !sync_in)
         sync_link_ready_reg <= 1'b0;
@@ -193,6 +248,10 @@ module sync_trigger_link #(
       trigger_allowed;
   assign sync_seen = sync_seen_reg;
   assign sync_link_ready = sync_link_ready_reg;
+  assign sync_event_epoch = sync_event_epoch_reg;
+  assign sync_align_busy = sync_transaction_busy;
+  assign sync_align_failed = sync_align_failed_reg;
+  assign sync_alignment_epoch = sync_alignment_epoch_reg;
   assign trigger_in_seen = trigger_in_seen_reg;
   assign trigger_accepted = trigger_accepted_reg;
   assign trigger_output_active = trigger_output_active_reg;

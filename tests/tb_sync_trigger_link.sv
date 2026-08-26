@@ -17,6 +17,13 @@ module tb_sync_trigger_link;
   wire slave_seen;
   wire slave_ready;
   wire slave_trigger;
+  wire [5:0] master_event_epoch, slave_event_epoch;
+  wire master_align_busy, slave_align_busy;
+  wire master_align_failed, slave_align_failed;
+  reg [5:0] master_ack_epoch = 6'd0;
+  reg [5:0] slave_ack_epoch = 6'd0;
+  reg master_firmware_failed = 1'b0;
+  reg slave_firmware_failed = 1'b0;
 
   always #5 ddr_clk = ~ddr_clk;
   always #7 pl_clk = ~pl_clk;
@@ -32,11 +39,14 @@ module tb_sync_trigger_link;
       .trigger_request_ddr(trigger_request_ddr),
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
       .trigger_in(1'b0), .role_master(1'b1), .sync_bypass(1'b0),
+      .firmware_ack_epoch(master_ack_epoch), .firmware_align_failed(master_firmware_failed),
       .dac_trigger_start(1'b0),
       .hmc_sync(master_hmc_sync), .sync_link_out(master_sync_link),
       .trigger_link_out(master_trigger_link),
       .role_trigger_raw(), .sync_done(master_done),
-      .sync_seen(master_seen), .sync_link_ready(), .trigger_in_seen(),
+      .sync_seen(master_seen), .sync_link_ready(),
+      .sync_event_epoch(master_event_epoch), .sync_align_busy(master_align_busy),
+      .sync_align_failed(master_align_failed), .sync_alignment_epoch(), .trigger_in_seen(),
       .trigger_accepted(), .trigger_output_active(),
       .trigger_input_count(), .trigger_accepted_count(), .trigger_output_count()
   );
@@ -51,10 +61,13 @@ module tb_sync_trigger_link;
       .sync_request_ddr(1'b0), .trigger_request_ddr(1'b0),
       .sync_request_vio_pl(1'b0), .sync_in(master_sync_link),
       .trigger_in(master_trigger_link), .role_master(1'b0), .sync_bypass(1'b0),
+      .firmware_ack_epoch(slave_ack_epoch), .firmware_align_failed(slave_firmware_failed),
       .dac_trigger_start(1'b0),
       .hmc_sync(slave_hmc_sync), .sync_link_out(), .trigger_link_out(),
       .role_trigger_raw(slave_trigger), .sync_done(slave_done),
-      .sync_seen(slave_seen), .sync_link_ready(slave_ready), .trigger_in_seen(),
+      .sync_seen(slave_seen), .sync_link_ready(slave_ready),
+      .sync_event_epoch(slave_event_epoch), .sync_align_busy(slave_align_busy),
+      .sync_align_failed(slave_align_failed), .sync_alignment_epoch(), .trigger_in_seen(),
       .trigger_accepted(), .trigger_output_active(),
       .trigger_input_count(), .trigger_accepted_count(), .trigger_output_count()
   );
@@ -110,9 +123,32 @@ module tb_sync_trigger_link;
                master_done_count, slave_done_count, master_seen, slave_seen);
       $finish;
     end
-    if (!slave_ready || trigger_seen_during_sync) begin
-      $display("FAIL: slave trigger gate ready=%b early=%b",
-               slave_ready, trigger_seen_during_sync);
+    if (!master_align_busy || !slave_align_busy || trigger_seen_during_sync) begin
+      $display("FAIL: alignment transaction busy master=%b slave=%b early=%b",
+               master_align_busy, slave_align_busy, trigger_seen_during_sync);
+      $finish;
+    end
+
+    // A stale failure from the previous firmware epoch must not poison this
+    // new transaction.
+    master_firmware_failed = 1'b1;
+    slave_firmware_failed = 1'b1;
+    repeat (3) @(posedge pl_clk);
+    if (master_align_failed || slave_align_failed ||
+        !master_align_busy || !slave_align_busy) begin
+      $display("FAIL: stale firmware failure was accepted for a new epoch");
+      $finish;
+    end
+    master_firmware_failed = 1'b0;
+    slave_firmware_failed = 1'b0;
+
+    // Model the firmware completing MTS/NCO and writing the matching epoch
+    // acknowledgement.  The gate must remain closed until this handshake.
+    master_ack_epoch = master_event_epoch;
+    slave_ack_epoch = slave_event_epoch;
+    repeat (8) @(posedge pl_clk);
+    if (!slave_ready || master_align_busy || slave_align_busy) begin
+      $display("FAIL: matching alignment ACK did not reopen both gates");
       $finish;
     end
 

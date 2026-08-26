@@ -44,7 +44,9 @@ open_checkpoint ${implemented_dcp}
 
 puts "INFO: Exporting hardware platform (XSA)..."
 set xsa_file "${output_dir}/${output_basename}.xsa"
-set xsa_tmp "${xsa_file}.tmp"
+# Vivado requires the output argument to retain the .xsa suffix.  Keep the
+# atomic staging file within the same directory while preserving that suffix.
+set xsa_tmp "${output_dir}/${output_basename}.tmp.xsa"
 file delete -force ${xsa_tmp}
 
 # Export XSA with bitstream

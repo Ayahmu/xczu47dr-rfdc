@@ -355,6 +355,8 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         "nco_sync_ready": False, "nco_sync_epoch": 0,
         "sync_status": 0, "sync_role": "slave", "sync_mode": "external",
         "sync_seen": False, "sync_link_ready": False,
+        "sync_align_busy": False, "sync_align_failed": False,
+        "sync_alignment_epoch": 0, "sync_alignment_error": 0,
         "trigger_input_count": 0, "trigger_accepted_count": 0,
         "trigger_output_count": 0,
     })
@@ -392,6 +394,15 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)
     if len(payload) >= 96:
         result["trigger_output_count"] = struct.unpack_from("<I", payload, 88)[0]
+    # STATUS extensions are appended after the legacy 96-byte payload.  A
+    # short response therefore remains fully usable with default values.
+    if len(payload) >= 104:
+        alignment_word = struct.unpack_from("<Q", payload, 96)[0]
+        result["sync_alignment_epoch"] = alignment_word & 0x3F
+        result["sync_align_busy"] = bool((alignment_word >> 22) & 1)
+        result["sync_align_failed"] = bool((alignment_word >> 23) & 1)
+    if len(payload) >= 112:
+        result["sync_alignment_error"] = struct.unpack_from("<I", payload, 104)[0] & 0xFFFF
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)

@@ -19,7 +19,18 @@ PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
 
 # Standalone slave: explicit sync bypass and local UDP Trigger.
 PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
+
+# 082 master -> 081 slave: one shared 10 MHz reference and one atomic Trigger.
+PYTHONPATH=software python -m dr47.examples.hardware_master_slave_gaussian_sine_test
 ```
+
+The atomic master/slave test uses the fixed laboratory topology 082 XS20 ->
+081 XS20 and 082 XS18 -> 081 XS19. It discovers and provisions each board on
+its dedicated 10G interface, uploads the same one-shot Gaussian-sine record to
+CH1, and sends exactly one RFCTRL2 `TRIGGER`. The master RTL uses that one DDR
+clock-domain event for both local playback and the XS18 output; it does not use
+the time between separate Python UDP calls. See the test file for the fixed
+interface/IP constants and the required host `ip address` setup.
 
 Each entry point first broadcasts `NETWORK_GET`, identifies boards by the
 bitstream-reported master/slave role (and optional UID), applies the target IP
