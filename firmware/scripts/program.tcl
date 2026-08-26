@@ -44,6 +44,13 @@ proc board_target_filter {target role} {
         dap { set role_filter {name =~ "DAP*"} }
         default { error "Unknown target role: $role" }
     }
+    # targets is global even after selecting a level-0 JTAG cable.  Include
+    # the cable serial so two simultaneously connected boards cannot match
+    # each other's nested PSU/FPGA/A53 targets.
+    if {[info exists ::env(JTAG_CABLE_SERIAL)] && $::env(JTAG_CABLE_SERIAL) ne ""} {
+        set serial_filter "jtag_cable_serial == \"$::env(JTAG_CABLE_SERIAL)\""
+        return "$serial_filter && $role_filter"
+    }
     return $role_filter
 }
 

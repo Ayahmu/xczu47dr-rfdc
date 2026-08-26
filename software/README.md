@@ -19,6 +19,9 @@ PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
 
 # Standalone slave: explicit sync bypass and local UDP Trigger.
 PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
+
+# 082 主卡 -> 081 从卡：XS20 同步 + XS18/XS19 触发的高斯正弦波
+PYTHONPATH=software python -m dr47.examples.hardware_master_slave_gaussian_sine_test
 ```
 
 Each entry point first broadcasts `NETWORK_GET`, identifies boards by the

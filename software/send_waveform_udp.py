@@ -112,8 +112,16 @@ def print_rvresp1(resp: dict[str, object]) -> None:
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ip", default=host.DEFAULT_BOARD_IP, help="RFSoC board IPv4 address")
     parser.add_argument("--port", type=int, default=host.DEFAULT_BOARD_PORT, help="RFSoC UDP port")
-    parser.add_argument("--udp-interface", default="enp225s0f0", help="PC NIC used for 10G UDP sending")
-    parser.add_argument("--udp-source-ip", default="192.168.1.10", help="PC source IPv4 address bound to the UDP socket")
+    parser.add_argument(
+        "--udp-interface",
+        default=host.DEFAULT_UDP_INTERFACE,
+        help="PC NIC used for UDP sending (or RFSOC_UDP_INTERFACE)",
+    )
+    parser.add_argument(
+        "--udp-source-ip",
+        default=host.DEFAULT_UDP_SOURCE_IP,
+        help="PC source IPv4 address bound to the UDP socket (or RFSOC_UDP_SOURCE_IP)",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/opencode/rfsoc_waveform_send"))
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument("--post-upload-sleep-s", type=float, default=0.5)
