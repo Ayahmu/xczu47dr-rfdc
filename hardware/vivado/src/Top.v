@@ -148,6 +148,8 @@ module Top #(
   wire trigger_link_out;
   wire sync_hmc;
   wire sync_link_out;
+  wire mclk_10m;
+  wire mclk_10m_bufg;
   wire sync_link_ready;
   wire role_trigger_raw;
   wire sync_done_pl;
@@ -199,6 +201,21 @@ module Top #(
   assign trigger_xs18_out = trigger_link_out;
   assign TRIG_1 = trigger_xs18_out;
 
+  // HMC7044 10 MHz monitor clock returned to the FPGA.  It is phase-locked
+  // to the HMC7044 VCXO, so the deterministic SYNC sequencer uses it to
+  // re-seed the HMC7044 output dividers at a repeatable phase.
+  IBUFDS #(
+      .IBUF_LOW_PWR("FALSE")
+  ) mclk_10m_ibufds_i (
+      .I (mclk_10m_p),
+      .IB(mclk_10m_n),
+      .O (mclk_10m)
+  );
+  BUFG mclk_10m_bufg_i (
+      .I (mclk_10m),
+      .O (mclk_10m_bufg)
+  );
+
   // VIO is generated only for the master project. It is a local debug source;
   // physical synchronization is carried only by the XS20 IOBUF.
 `ifdef CUSTOM_XCZU47DR_MASTER
@@ -212,13 +229,14 @@ module Top #(
 
   sync_trigger_link #(
       .IS_MASTER(IS_MASTER),
-      .WAIT_CYCLES(100000),
-      .HIGH_CYCLES(100)
+      .WAIT_CYCLES(20000),
+      .HIGH_CYCLES(40)
   ) sync_trigger_link_i (
       .ddr_clk             (ddr4_ui_clk),
       .ddr_rst_n           (ddr4_ui_aresetn),
       .pl_clk              (pl_clk),
       .pl_rst_n            (pl_aresetn),
+      .mclk                (mclk_10m_bufg),
       .sync_request_ddr   (rfctrl2_sync_epoch_pulse),
       .trigger_request_ddr(rfctrl2_emit_trigger_pulse |
                            rfctrl2_master_launch_pulse),
@@ -1450,7 +1468,7 @@ module Top #(
   wire rfctrl2_play_prepare;
   wire rfctrl2_play_abort;
   wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger | role_trigger_dac_pulse;
-  wire unused_single_board_inputs = mclk_10m_p | mclk_10m_n | EXT_TRIGGER_P | EXT_TRIGGER_N |
+  wire unused_single_board_inputs = EXT_TRIGGER_P | EXT_TRIGGER_N |
       rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if (!ddr4_ui_aresetn) begin

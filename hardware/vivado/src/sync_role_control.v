@@ -2,14 +2,23 @@
 
 // Single-pulse board synchronization sequencer.
 //
-// role_master is fixed by the selected master/slave bitstream. IS_MASTER only
-// supplies the matching reset state for this reusable sequencer.
+// SYNC is generated (master) or forwarded (slave) in the mclk clock domain.
+// mclk is the HMC7044 10 MHz monitor clock returned to the FPGA; it is
+// phase-deterministic relative to the HMC7044 VCXO/VCO.  Re-timing the SYNC
+// rising edge to mclk places the HMC7044 "multichip synchronization" divider
+// re-seed at a repeatable VCO phase instead of the random integer-VCO-cycle
+// offset produced by the asynchronous pl_clk domain.
+//
+// clk (pl_clk) is retained only for the request CDC input and the sync_done
+// status return path.  role_master is fixed by the selected master/slave
+// bitstream.
 module sync_role_control #(
     parameter integer IS_MASTER = 1,
-    parameter integer WAIT_CYCLES = 100000,
-    parameter integer HIGH_CYCLES = 100
+    parameter integer WAIT_CYCLES = 20000,
+    parameter integer HIGH_CYCLES = 40
 ) (
     input  wire clk,
+    input  wire mclk,
     input  wire rst_n,
     input  wire sync_request,
     input  wire sync_in,
@@ -22,28 +31,38 @@ module sync_role_control #(
   localparam integer WAIT_LAST = (WAIT_CYCLES < 1) ? 0 : WAIT_CYCLES - 1;
   localparam integer HIGH_LAST = (HIGH_CYCLES < 1) ? 0 : HIGH_CYCLES - 1;
 
-  localparam [2:0] ST_IDLE = 3'd0;
-  localparam [2:0] ST_WAIT = 3'd1;
-  localparam [2:0] ST_HIGH = 3'd2;
-  localparam [2:0] ST_DONE = 3'd3;
+  localparam [1:0] ST_IDLE = 2'd0;
+  localparam [1:0] ST_WAIT = 2'd1;
+  localparam [1:0] ST_HIGH = 2'd2;
+  localparam [1:0] ST_DONE = 2'd3;
 
-  reg sync_req_meta;
-  reg sync_req_sync;
-  reg sync_req_prev;
-  reg sync_in_meta;
-  reg sync_in_sync;
-  reg sync_in_prev;
+  // ===== pl_clk (clk) domain: request CDC + status return =====
+  reg sync_req_meta, sync_req_sync, sync_req_prev;
+  reg sync_in_meta, sync_in_sync, sync_in_prev;
   reg role_master_d;
-  reg sync_pulse;
+  reg request_toggle_clk;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] done_toggle_clk_sync;
+  reg done_toggle_clk_seen;
   reg sync_done_pulse;
-  reg [2:0] state;
+
+  // ===== mclk domain: deterministic SYNC pulse generation/forwarding =====
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] request_toggle_mclk_sync;
+  reg request_toggle_mclk_seen;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_in_mclk_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] role_master_mclk_sync;
+  reg [1:0] state;
   reg [31:0] count;
+  reg sync_pulse_mclk;
+  reg done_toggle_mclk;
 
   wire role_master_selected = role_master;
   wire role_changed = (role_master_selected != role_master_d);
   wire sync_request_rise = sync_req_sync && !sync_req_prev;
   wire sync_input_rise = sync_in_sync && !sync_in_prev;
+  wire request_rise_mclk = request_toggle_mclk_sync[1] != request_toggle_mclk_seen;
+  wire role_master_mclk = role_master_mclk_sync[1];
 
+  // ---- clk domain ----
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       sync_req_meta <= 1'b0;
@@ -53,6 +72,10 @@ module sync_role_control #(
       sync_in_sync <= 1'b0;
       sync_in_prev <= 1'b0;
       role_master_d <= IS_MASTER ? 1'b1 : 1'b0;
+      request_toggle_clk <= 1'b0;
+      done_toggle_clk_sync <= 2'b00;
+      done_toggle_clk_seen <= 1'b0;
+      sync_done_pulse <= 1'b0;
     end else begin
       sync_req_meta <= sync_request;
       sync_req_sync <= sync_req_meta;
@@ -61,78 +84,96 @@ module sync_role_control #(
       sync_in_sync <= sync_in_meta;
       sync_in_prev <= sync_in_sync;
       role_master_d <= role_master_selected;
+      done_toggle_clk_sync <= {done_toggle_clk_sync[0], done_toggle_mclk};
+      done_toggle_clk_seen <= done_toggle_clk_sync[1];
+
+      sync_done_pulse <= 1'b0;
+      if (role_changed)
+        request_toggle_clk <= 1'b0;
+      else if (role_master_selected && sync_request_rise)
+        request_toggle_clk <= ~request_toggle_clk;
+
+      // Slave completes on a received XS20 rise; master completes when the
+      // mclk-domain pulse generator toggles done back into this domain.
+      if (!role_master_selected && sync_input_rise)
+        sync_done_pulse <= 1'b1;
+      else if (role_master_selected &&
+               (done_toggle_clk_sync[1] != done_toggle_clk_seen))
+        sync_done_pulse <= 1'b1;
     end
   end
 
-  always @(posedge clk or negedge rst_n) begin
+  // ---- mclk domain ----
+  always @(posedge mclk or negedge rst_n) begin
     if (!rst_n) begin
-      state <= (IS_MASTER ? ST_IDLE : ST_DONE);
+      request_toggle_mclk_sync <= 2'b00;
+      request_toggle_mclk_seen <= 1'b0;
+      sync_in_mclk_sync <= 2'b00;
+      role_master_mclk_sync <= IS_MASTER ? 2'b11 : 2'b00;
+      state <= IS_MASTER ? ST_IDLE : ST_DONE;
       count <= 32'd0;
-      sync_pulse <= 1'b0;
-      sync_done_pulse <= 1'b0;
+      sync_pulse_mclk <= 1'b0;
+      done_toggle_mclk <= 1'b0;
     end else begin
-      sync_done_pulse <= 1'b0;
+      request_toggle_mclk_sync <= {request_toggle_mclk_sync[0], request_toggle_clk};
+      request_toggle_mclk_seen <= request_toggle_mclk_sync[1];
+      sync_in_mclk_sync <= {sync_in_mclk_sync[0], sync_in};
+      role_master_mclk_sync <= {role_master_mclk_sync[0], role_master_selected};
 
-      // A role change starts a fresh epoch and cannot leak a pulse into the
-      // newly selected direction.
-      if (role_changed) begin
-        state <= role_master_selected ? ST_IDLE : ST_DONE;
-        count <= 32'd0;
-        sync_pulse <= 1'b0;
-      end else if (!role_master_selected) begin
-        sync_pulse <= 1'b0;
+      if (!role_master_mclk) begin
+        sync_pulse_mclk <= 1'b0;
         count <= 32'd0;
         state <= ST_DONE;
-        if (sync_input_rise)
-          sync_done_pulse <= 1'b1;
       end else begin
         case (state)
           ST_IDLE: begin
-            sync_pulse <= 1'b0;
+            sync_pulse_mclk <= 1'b0;
             count <= 32'd0;
-            if (sync_request_rise)
+            if (request_rise_mclk)
               state <= ST_WAIT;
           end
           ST_WAIT: begin
-            sync_pulse <= 1'b0;
+            sync_pulse_mclk <= 1'b0;
             if (count >= WAIT_LAST) begin
               count <= 32'd0;
-              sync_pulse <= 1'b1;
+              sync_pulse_mclk <= 1'b1;
               state <= ST_HIGH;
             end else begin
               count <= count + 1'b1;
             end
           end
           ST_HIGH: begin
-            sync_pulse <= 1'b1;
+            sync_pulse_mclk <= 1'b1;
             if (count >= HIGH_LAST) begin
               count <= 32'd0;
-              sync_pulse <= 1'b0;
-              sync_done_pulse <= 1'b1;
+              sync_pulse_mclk <= 1'b0;
+              done_toggle_mclk <= ~done_toggle_mclk;
               state <= ST_DONE;
             end else begin
               count <= count + 1'b1;
             end
           end
           ST_DONE: begin
-            sync_pulse <= 1'b0;
+            sync_pulse_mclk <= 1'b0;
             count <= 32'd0;
-            if (sync_request_rise)
+            if (request_rise_mclk)
               state <= ST_WAIT;
           end
           default: begin
-            state <= role_master_selected ? ST_IDLE : ST_DONE;
+            state <= ST_IDLE;
             count <= 32'd0;
-            sync_pulse <= 1'b0;
+            sync_pulse_mclk <= 1'b0;
           end
         endcase
       end
     end
   end
 
-  // On a master, hmc_sync and slave_sync are the same one-pulse source. On a
-  // slave, hmc_sync is the synchronized external pulse forwarded to HMC7044.
-  assign hmc_sync = role_master_selected ? sync_pulse : sync_in_sync;
-  assign slave_sync = role_master_selected ? sync_pulse : 1'b0;
+  // Master drives its own HMC7044 SYNC and the XS20 output with the same
+  // deterministic pulse.  Slave forwards the received XS20, re-timed to mclk,
+  // to its own HMC7044.
+  assign hmc_sync = role_master_mclk ? sync_pulse_mclk : sync_in_mclk_sync[1];
+  assign slave_sync = role_master_mclk ? sync_pulse_mclk : 1'b0;
   assign sync_done = sync_done_pulse;
+
 endmodule

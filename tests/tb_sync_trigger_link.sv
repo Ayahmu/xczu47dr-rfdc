@@ -3,6 +3,7 @@
 module tb_sync_trigger_link;
   reg ddr_clk = 1'b0;
   reg pl_clk = 1'b0;
+  reg mclk = 1'b0;
   reg ddr_rst_n = 1'b0;
   reg pl_rst_n = 1'b0;
   reg sync_request_ddr = 1'b0;
@@ -27,6 +28,7 @@ module tb_sync_trigger_link;
 
   always #5 ddr_clk = ~ddr_clk;
   always #7 pl_clk = ~pl_clk;
+  always #50 mclk = ~mclk;
 
   sync_trigger_link #(
       .IS_MASTER(1),
@@ -35,6 +37,7 @@ module tb_sync_trigger_link;
   ) master_i (
       .ddr_clk(ddr_clk), .ddr_rst_n(ddr_rst_n),
       .pl_clk(pl_clk), .pl_rst_n(pl_rst_n),
+      .mclk(mclk),
       .sync_request_ddr(sync_request_ddr),
       .trigger_request_ddr(trigger_request_ddr),
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
@@ -58,6 +61,7 @@ module tb_sync_trigger_link;
   ) slave_i (
       .ddr_clk(ddr_clk), .ddr_rst_n(ddr_rst_n),
       .pl_clk(pl_clk), .pl_rst_n(pl_rst_n),
+      .mclk(mclk),
       .sync_request_ddr(1'b0), .trigger_request_ddr(1'b0),
       .sync_request_vio_pl(1'b0), .sync_in(master_sync_link),
       .trigger_in(master_trigger_link), .role_master(1'b0), .sync_bypass(1'b0),
@@ -110,7 +114,7 @@ module tb_sync_trigger_link;
     sync_request_ddr = 1'b1;
     @(negedge ddr_clk);
     sync_request_ddr = 1'b0;
-    repeat (45) @(posedge pl_clk);
+    repeat (220) @(posedge pl_clk);
 
     if (master_hmc_rises != 1 || slave_hmc_rises != 1) begin
       $display("FAIL: HMC rises master=%0d slave=%0d expected 1/1",

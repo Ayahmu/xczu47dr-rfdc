@@ -174,6 +174,16 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: single-pulse XS20 SYNC and independent XS18->XS19 trigger link",
         )
 
+    def test_sync_role_control_registers_sync_edge_to_monitor_clock(self):
+        self.run_sim(
+            "tb_sync_deterministic",
+            [
+                ROOT / "hardware/vivado/src/sync_role_control.v",
+                ROOT / "tests/tb_sync_deterministic.sv",
+            ],
+            "PASS: deterministic SYNC edges are registered to the HMC7044 monitor clock",
+        )
+
     def test_sync_trigger_link_bypass_accepts_missing_sync(self):
         self.run_sim(
             "tb_sync_bypass",

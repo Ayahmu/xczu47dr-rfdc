@@ -7,14 +7,15 @@
 // sampled from XS19. No Type-C signal is used by this module.
 module sync_trigger_link #(
     parameter integer IS_MASTER = 1,
-    parameter integer WAIT_CYCLES = 100000,
-    parameter integer HIGH_CYCLES = 100,
+    parameter integer WAIT_CYCLES = 20000,
+    parameter integer HIGH_CYCLES = 40,
     parameter integer TRIGGER_HIGH_CYCLES = 64
 ) (
     input  wire ddr_clk,
     input  wire ddr_rst_n,
     input  wire pl_clk,
     input  wire pl_rst_n,
+    input  wire mclk,
     input  wire sync_request_ddr,
     input  wire trigger_request_ddr,
     input  wire sync_request_vio_pl,
@@ -152,6 +153,7 @@ module sync_trigger_link #(
       .HIGH_CYCLES(HIGH_CYCLES)
   ) sync_role_i (
       .clk         (pl_clk),
+      .mclk        (mclk),
       .rst_n       (pl_rst_n),
       .sync_request(sync_request_pl),
       .sync_in     (sync_in),

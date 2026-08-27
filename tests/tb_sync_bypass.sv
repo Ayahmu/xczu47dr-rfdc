@@ -3,6 +3,7 @@
 module tb_sync_bypass;
   reg ddr_clk = 1'b0;
   reg pl_clk = 1'b0;
+  reg mclk = 1'b0;
   reg ddr_rst_n = 1'b0;
   reg pl_rst_n = 1'b0;
   reg trigger_in = 1'b0;
@@ -14,10 +15,12 @@ module tb_sync_bypass;
 
   always #5 ddr_clk = ~ddr_clk;
   always #7 pl_clk = ~pl_clk;
+  always #50 mclk = ~mclk;
 
   sync_trigger_link #(.IS_MASTER(0), .WAIT_CYCLES(3), .HIGH_CYCLES(2)) dut (
       .ddr_clk(ddr_clk), .ddr_rst_n(ddr_rst_n),
       .pl_clk(pl_clk), .pl_rst_n(pl_rst_n),
+      .mclk(mclk),
       .sync_request_ddr(1'b0), .trigger_request_ddr(1'b0),
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
       .trigger_in(trigger_in), .dac_trigger_start(1'b0),
