@@ -171,6 +171,10 @@ module Top #(
   wire [31:0] rfctrl2_sync_mode;
   wire rfctrl2_emit_trigger_pulse;
   wire sync_role_master_ddr = IS_MASTER ? 1'b1 : 1'b0;
+  // Declare this before the sync_trigger_link instance below.  Vivado's
+  // Verilog compiler otherwise creates an implicit net at the port
+  // connection and rejects the later explicit declaration.
+  wire rfctrl2_master_launch_pulse;
   reg sync_bypass_ddr;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_bypass_pl_sync;
   wire sync_role_master_pl = IS_MASTER ? 1'b1 : 1'b0;
@@ -269,9 +273,9 @@ module Top #(
   // One RFCTRL2 TRIGGER is the master launch event: it starts the local
   // player and, in the same DDR clock domain, requests the XS18 pulse.
   // EMIT_TRIGGER remains a separate diagnostic-only physical trigger.
-  wire rfctrl2_master_launch_pulse = rfctrl2_trigger_pulse &&
-                                     sync_link_ready_ddr &&
-                                     sync_role_master_ddr;
+  assign rfctrl2_master_launch_pulse = rfctrl2_trigger_pulse &&
+                                       sync_link_ready_ddr &&
+                                       sync_role_master_ddr;
 
   assign H7044_SYNC_0 = sync_hmc;
 
@@ -2865,7 +2869,8 @@ module Top #(
   ila_dac_axis u_ila_dac_axis (
     .clk(dac_axis_clk),
     .probe0({
-      7'd0,
+      // bit0: DAC-domain reset; bit1: final RFDC output permission.
+      6'd0,
       rfctrl2_play_prepare,
       rfctrl2_play_trigger,
       rfctrl2_play_abort,
@@ -2917,24 +2922,27 @@ module Top #(
       dac_ch3_valid_gated,
       dac_ch2_valid_gated,
       dac_ch1_valid_gated,
-      dac_in_ch8_tvalid,
-      dac_in_ch7_tvalid,
-      dac_in_ch6_tvalid,
-      dac_in_ch5_tvalid,
-      dac_in_ch4_tvalid,
-      dac_in_ch3_tvalid,
-      dac_in_ch2_tvalid,
-      dac_in_ch1_tvalid,
+      // Final AXIS valids presented to the RFDC, after output gating.
+      rfdc_ch8_tvalid,
+      rfdc_ch7_tvalid,
+      rfdc_ch6_tvalid,
+      rfdc_ch5_tvalid,
+      rfdc_ch4_tvalid,
+      rfdc_ch3_tvalid,
+      rfdc_ch2_tvalid,
+      rfdc_ch1_tvalid,
+      rfdc_output_permitted_dac,
       dac_rst_n
     }),
-    .probe1(dac_in_ch1_tdata),
-    .probe2(dac_in_ch2_tdata),
-    .probe3(dac_in_ch3_tdata),
-    .probe4(dac_in_ch4_tdata),
-    .probe5(dac_in_ch5_tdata),
-    .probe6(dac_in_ch6_tdata),
-    .probe7(dac_in_ch7_tdata),
-    .probe8(dac_in_ch8_tdata),
+    // These are the exact data buses connected to RFDC sXX_axis_tdata.
+    .probe1(rfdc_ch1_tdata),
+    .probe2(rfdc_ch2_tdata),
+    .probe3(rfdc_ch3_tdata),
+    .probe4(rfdc_ch4_tdata),
+    .probe5(rfdc_ch5_tdata),
+    .probe6(rfdc_ch6_tdata),
+    .probe7(rfdc_ch7_tdata),
+    .probe8(rfdc_ch8_tdata),
     .probe9({ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count,
              ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count}),
     .probe10({ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,

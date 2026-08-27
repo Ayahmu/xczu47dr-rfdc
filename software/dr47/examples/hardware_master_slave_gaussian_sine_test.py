@@ -161,8 +161,37 @@ def _wait_prepared(device: Dr47Device, label: str) -> None:
     raise AssertionError(f"{label} ARM 未进入 PREPARED，实际状态={actual}")
 
 
-def _configure_and_arm(device: Dr47Device, record: np.ndarray, label: str) -> None:
-    """配置 CH1、上传一次性等待 Trigger 的记录并 ARM。"""
+def _wait_waveform_config(device: Dr47Device, label: str) -> None:
+    """Wait until the DDR executor has accepted and prefetched the frame."""
+
+    deadline = time.monotonic() + 10.0
+    last = None
+    while time.monotonic() < deadline:
+        last = device.status(refresh=True)
+        caps = last.capabilities
+        raw = caps.raw
+        channel_mask = int(raw.get("play_config_channel_mask", 0)) & 0xFF
+        pending = bool(raw.get("play_pending_valid", False))
+        prefill = bool(raw.get("play_prefill_ready", False))
+        bad_instr = int(raw.get("play_bad_instr_count", 0))
+        if (channel_mask & CHANNEL_MASK) == CHANNEL_MASK and pending and prefill:
+            if bad_instr:
+                raise AssertionError(f"{label} executor 拒绝了 {bad_instr} 条播放指令")
+            return
+        time.sleep(0.02)
+    if last is None:
+        raise AssertionError(f"{label} 未返回波形 executor 状态")
+    raw = last.capabilities.raw
+    raise AssertionError(
+        f"{label} 波形配置未就绪：play_config_mask=0x{int(raw.get('play_config_channel_mask', 0)) & 0xFF:02X}, "
+        f"pending={int(bool(raw.get('play_pending_valid', False)))}, "
+        f"prefill={int(bool(raw.get('play_prefill_ready', False)))}, "
+        f"bad_instr={int(raw.get('play_bad_instr_count', 0))}"
+    )
+
+
+def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) -> None:
+    """Configure CH1, upload the frame, and wait for DDR prefill."""
 
     device.set_xy_nco_frequency(1, RF_NCO_GHZ)
     device.set_gain("xy", 1, GAIN, gain_type="norm")
@@ -176,6 +205,13 @@ def _configure_and_arm(device: Dr47Device, record: np.ndarray, label: str) -> No
         loop=False,
         instruction_repeats=1,
     )
+    _wait_waveform_config(device, label)
+    print(f"{label}波形已上传并完成 DDR 预取，等待 SYNC")
+
+
+def _arm_after_sync(device: Dr47Device, label: str) -> None:
+    """Arm only after SYNC so the prepared frame survives the alignment."""
+
     device.arm(channel_mask=CHANNEL_MASK)
     status = device.status(refresh=True)
     if status.state not in {PlaybackState.PREPARED, PlaybackState.ARMED}:
@@ -252,19 +288,19 @@ def run() -> int:
             )
         _wait_rfdc_ready(master, "082 主卡")
         _wait_rfdc_ready(slave, "081 从卡")
-        _configure_and_arm(master, record, "082 主卡")
-        _configure_and_arm(slave, record, "081 从卡")
+        _configure_and_upload(master, record, "082 主卡")
+        _configure_and_upload(slave, record, "081 从卡")
 
-        # 先完成一次严格 XS20 同步；SyncGroup 会自动 ABORT/MUTE，随后必须 ARM。
-        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(epoch=1)
+        # 两卡仍为空闲状态，保留已预取的 PLAY/END 配置进行 XS20 同步。
+        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(
+            epoch=1, abort_before_sync=False
+        )
         print(
             f"SYNC 完成：master_epoch={alignment.master_alignment_epoch}，"
             f"slave_epoch={alignment.slave_alignment_epoch}"
         )
-        master.arm(channel_mask=CHANNEL_MASK)
-        slave.arm(channel_mask=CHANNEL_MASK)
-        _wait_prepared(master, "082 主卡同步后")
-        _wait_prepared(slave, "081 从卡同步后")
+        _arm_after_sync(master, "082 主卡同步后")
+        _arm_after_sync(slave, "081 从卡同步后")
         master_before = master.status(refresh=True).capabilities
         slave_before = slave.status(refresh=True).capabilities
 

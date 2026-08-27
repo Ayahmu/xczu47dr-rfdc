@@ -2,8 +2,9 @@
 
 ``Dr47Device.sync()`` remains the low-level master pulse API.  Applications
 that need the DAC MTS/NCO re-alignment contract should use ``SyncGroup`` so a
-single call also stops both players and waits for both boards to acknowledge
-the new hardware synchronization epoch.
+single call waits for both boards to acknowledge the new hardware
+synchronization epoch.  The default transaction aborts active playback; a
+preloaded one-shot can opt out when both boards are still idle.
 """
 
 from __future__ import annotations
@@ -54,11 +55,14 @@ class SyncGroup:
     def _status(self, device):
         return device.status(refresh=True).capabilities
 
-    def sync(self, epoch: int = 1) -> SyncAlignmentResult:
-        """Abort, emit XS20 SYNC, and wait for both boards to re-align.
+    def sync(self, epoch: int = 1, *, abort_before_sync: bool = True) -> SyncAlignmentResult:
+        """Emit XS20 SYNC and wait for both boards to re-align.
 
-        The uploaded waveform is intentionally retained by ``abort_mute``;
-        callers must ARM again after this method returns successfully.
+        ``abort_before_sync=True`` is the safe default for an already active
+        player.  The hardware ABORT_MUTE path clears the waveform executor's
+        PLAY/END configuration, so callers must upload it again before ARM.
+        A preloaded one-shot may pass ``False``; that mode requires both
+        boards to be idle and preserves the executor configuration.
         """
 
         started = time.monotonic()
@@ -86,15 +90,27 @@ class SyncGroup:
         slave_before = slave_caps.sync_alignment_epoch
         master_expected = _next_epoch(master_before)
         slave_expected = _next_epoch(slave_before)
-        self.master.abort_mute()
-        self.slave.abort_mute()
-        # Do not start an alignment transaction while either PL executor still
-        # reports a stale running/armed state after ABORT_MUTE.
-        post_abort_master = self._status(self.master)
-        post_abort_slave = self._status(self.slave)
-        if (post_abort_master.playback_running or post_abort_master.playback_armed or
-                post_abort_slave.playback_running or post_abort_slave.playback_armed):
-            raise SynchronizationError("synchronization started while playback was still active")
+        if abort_before_sync:
+            self.master.abort_mute()
+            self.slave.abort_mute()
+            # Do not start an alignment transaction while either PL executor
+            # still reports a stale running/armed/prepared state after ABORT.
+            post_master = self._status(self.master)
+            post_slave = self._status(self.slave)
+            if any(
+                caps.playback_running or caps.playback_armed or caps.playback_prepared
+                for caps in (post_master, post_slave)
+            ):
+                raise SynchronizationError(
+                    "synchronization started while playback was still active after ABORT_MUTE"
+                )
+        elif any(
+            caps.playback_running or caps.playback_armed or caps.playback_prepared
+            for caps in (master_caps, slave_caps)
+        ):
+            raise SynchronizationError(
+                "abort_before_sync=False requires both boards to be idle and not prepared"
+            )
         try:
             self.master.sync(epoch=int(epoch))
         except Exception as exc:

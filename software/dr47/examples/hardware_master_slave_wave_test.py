@@ -7,9 +7,9 @@
 * XS17 分别接入两块板卡要求的同一参考时钟；参考频率必须与 bitstream 匹配；
 * 主卡 XS20 输出连接从卡 XS20 输入；
 * 主卡 XS18（TRIG_1）连接从卡 XS19（TRIG_2）；
-* 两块板卡都设置为 ``external``，使用 ``SyncGroup.sync()``；
-* ``SyncGroup.sync()`` 会自动 ABORT/MUTE、发出 XS20 SYNC，并等待两卡重新完成
-  DAC MTS/NCO 对齐；成功后脚本重新 ARM；
+* 两块板卡都设置为 ``external``，使用 ``SyncGroup.sync(abort_before_sync=False)``；
+* 两卡先完成波形上传和 DDR 预取，再由 ``SyncGroup`` 发出 XS20 SYNC 并等待
+  两卡重新完成 DAC MTS/NCO 对齐；成功后脚本才 ARM；
 * 主卡只使用一次 UDP ``trigger()``；主卡 RTL 同时通过 XS18/XS19
   启动本地和从卡播放。
 
@@ -121,8 +121,36 @@ def _wait_slave_sync(slave: Dr47Device) -> None:
     raise AssertionError("从卡没有在 XS20 上观察到 SYNC；请检查 XS20 连接和电气方向")
 
 
-def _configure_and_upload(device: Dr47Device, iq: np.ndarray) -> None:
-    """在一块板上配置 CH1，并上传一个等待 Trigger 的波形序列。"""
+def _wait_waveform_config(device: Dr47Device, label: str) -> None:
+    """等待 DDR executor 接收 PLAY/END 并完成预取。"""
+
+    deadline = time.monotonic() + 10.0
+    last = None
+    while time.monotonic() < deadline:
+        last = device.status(refresh=True)
+        raw = last.capabilities.raw
+        channel_mask = int(raw.get("play_config_channel_mask", 0)) & 0xFF
+        pending = bool(raw.get("play_pending_valid", False))
+        prefill = bool(raw.get("play_prefill_ready", False))
+        bad_instr = int(raw.get("play_bad_instr_count", 0))
+        if (channel_mask & CHANNEL_MASK) == CHANNEL_MASK and pending and prefill:
+            if bad_instr:
+                raise AssertionError(f"{label} executor 拒绝了 {bad_instr} 条播放指令")
+            return
+        time.sleep(0.02)
+    if last is None:
+        raise AssertionError(f"{label} 未返回波形 executor 状态")
+    raw = last.capabilities.raw
+    raise AssertionError(
+        f"{label} 波形配置未就绪：play_config_mask=0x{int(raw.get('play_config_channel_mask', 0)) & 0xFF:02X}, "
+        f"pending={int(bool(raw.get('play_pending_valid', False)))}, "
+        f"prefill={int(bool(raw.get('play_prefill_ready', False)))}, "
+        f"bad_instr={int(raw.get('play_bad_instr_count', 0))}"
+    )
+
+
+def _configure_and_upload(device: Dr47Device, iq: np.ndarray, label: str) -> None:
+    """配置 CH1、上传一个等待 Trigger 的波形序列并等待预取完成。"""
 
     # 该记录是 64 KiB 的交织 IQ：I=4096、Q=0，作为稳定的直流复包络。
     # 实际 RF 载波由 RFDC NCO 设置，避免把高 RF 频率错误地当成基带频率上传。
@@ -138,8 +166,14 @@ def _configure_and_upload(device: Dr47Device, iq: np.ndarray) -> None:
         loop=False,
         instruction_repeats=3,
     )
+    _wait_waveform_config(device, label)
+
+
+def _arm_after_sync(device: Dr47Device, label: str) -> None:
+    """同步后 ARM，避免对齐事务清除或竞争播放准备状态。"""
+
     device.arm(channel_mask=CHANNEL_MASK)
-    _wait_state(device, PlaybackState.PREPARED, "ARM 后等待 PREPARED")
+    _wait_state(device, PlaybackState.PREPARED, f"{label} ARM 后等待 PREPARED")
 
 
 def _new_device(ip: str, interface: str, source_ip: str) -> Dr47Device:
@@ -235,22 +269,21 @@ def run() -> int:
         _status(master, "主卡 external 模式")
         _status(slave, "从卡 external 模式，等待 XS20")
 
-        # 先在两块板卡完成配置和 ARM，再发同步，避免同步后仍有未准备好的板卡。
-        _configure_and_upload(master, iq)
-        _configure_and_upload(slave, iq)
+        # 两卡先上传并预取，但保持 IDLE；同步事务不会清空这份配置。
+        _configure_and_upload(master, iq, "主卡")
+        _configure_and_upload(slave, iq, "从卡")
 
         # 主卡 XS20 输出一个同步边沿；从卡 XS20 输入收到后打开 Trigger 门控。
-        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(epoch=1)
+        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(
+            epoch=1, abort_before_sync=False
+        )
         print(
             f"严格同步完成：master alignment_epoch={alignment.master_alignment_epoch}, "
             f"slave alignment_epoch={alignment.slave_alignment_epoch}, "
             f"elapsed={alignment.elapsed_s:.3f}s"
         )
-        # SyncGroup 自动 ABORT/MUTE 两卡；波形保留，但同步成功后必须重新 ARM。
-        master.arm(channel_mask=CHANNEL_MASK)
-        slave.arm(channel_mask=CHANNEL_MASK)
-        _wait_state(master, PlaybackState.PREPARED, "严格同步后主卡重新 ARM")
-        _wait_state(slave, PlaybackState.PREPARED, "严格同步后从卡重新 ARM")
+        _arm_after_sync(master, "严格同步后主卡")
+        _arm_after_sync(slave, "严格同步后从卡")
 
         # 记录一次触发前的计数。主卡只发送一个 RFCTRL2 TRIGGER；新的 RTL
         # 会在同一个 DDR 时钟域同时启动本地播放并产生 XS18 脉冲。
