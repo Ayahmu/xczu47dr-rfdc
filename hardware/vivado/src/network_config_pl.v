@@ -72,6 +72,7 @@ module network_config_pl #(
   reg [95:0] dna_value_dna;
   reg [63:0] dna_uid_dna;
   reg [47:0] dna_mac_dna;
+  reg [15:0] dna_ip_dna;
   reg dna_ready;
   reg dna_ready_sync1;
   reg dna_ready_sync2;
@@ -79,12 +80,20 @@ module network_config_pl #(
   reg [63:0] dna_uid_sync2;
   reg [47:0] dna_mac_sync1;
   reg [47:0] dna_mac_sync2;
+  reg [15:0] dna_ip_sync1;
+  reg [15:0] dna_ip_sync2;
 
-  wire [7:0] dna_ip_octet2 = ((dna_uid_sync2[15:8] == 8'h00) || (dna_uid_sync2[15:8] == 8'hFF))
-      ? 8'hFE : dna_uid_sync2[15:8];
-  wire [7:0] dna_ip_octet3 = ((dna_uid_sync2[7:0] == 8'h00) || (dna_uid_sync2[7:0] == 8'hFF))
-      ? 8'h7E : dna_uid_sync2[7:0];
-  wire [31:0] dna_default_ip = {8'd169, 8'd254, dna_ip_octet2, dna_ip_octet3};
+  // The bootstrap identity must remain unique even for devices whose low
+  // 64 DNA bits happen to match.  Fold all 96 DNA bits before mapping them
+  // into the link-local host portion of 169.254.0.0/16.
+  wire [15:0] dna_ip_fold = dna_ip_sync2;
+  wire [7:0] dna_ip_octet2 = ((dna_ip_fold[15:8] == 8'h00) || (dna_ip_fold[15:8] == 8'hFF))
+      ? 8'hFE : dna_ip_fold[15:8];
+  wire [7:0] dna_ip_octet3 = ((dna_ip_fold[7:0] == 8'h00) || (dna_ip_fold[7:0] == 8'hFF))
+      ? 8'h7E : dna_ip_fold[7:0];
+  wire [15:0] dna_ip_suffix = (dna_ip_fold == 16'hFA0B) ? 16'hFE7E :
+                              {dna_ip_octet2, dna_ip_octet3};
+  wire [31:0] dna_default_ip = {8'd169, 8'd254, dna_ip_suffix};
   wire [47:0] dna_default_mac = (dna_mac_sync2 == 48'd0)
       ? DEFAULT_MAC[47:0]
       : {8'h02, dna_mac_sync2[39:0]};
@@ -143,6 +152,8 @@ module network_config_pl #(
       dna_uid_sync2 <= 64'd0;
       dna_mac_sync1 <= 48'd0;
       dna_mac_sync2 <= 48'd0;
+      dna_ip_sync1 <= 16'd0;
+      dna_ip_sync2 <= 16'd0;
       dna_ready <= 1'b0;
       device_uid <= 64'd0;
       bootstrap_mac <= DEFAULT_MAC;
@@ -156,6 +167,8 @@ module network_config_pl #(
       dna_uid_sync2 <= dna_uid_sync1;
       dna_mac_sync1 <= dna_mac_dna;
       dna_mac_sync2 <= dna_mac_sync1;
+      dna_ip_sync1 <= dna_ip_dna;
+      dna_ip_sync2 <= dna_ip_sync1;
 
       // Delay the acknowledgement by one cycle. The RFCTRL2 decoder and
       // this block are clocked together; a same-cycle done pulse would be
@@ -271,6 +284,7 @@ module network_config_pl #(
       dna_value_dna <= 96'd0;
       dna_uid_dna <= 64'd0;
       dna_mac_dna <= 48'd0;
+      dna_ip_dna <= 16'd0;
     end else begin
       dna_read <= 1'b0;
       dna_shift <= 1'b0;
@@ -283,12 +297,18 @@ module network_config_pl #(
           dna_value_dna <= {dna_value_dna[94:0], dna_dout};
           dna_count <= dna_count + 8'd1;
         end else begin
+          // Keep the established 64-bit UID wire contract.  Older boards can
+          // still share this truncated value; software uses UID+MAC as the
+          // discovery identity.  The bootstrap IP below uses all 96 bits.
           dna_uid_dna <= dna_value_dna[63:0];
           // Fold all 96 DNA bits into the locally administered MAC suffix
           // instead of exposing a raw DNA slice on the Ethernet network.
           dna_mac_dna <= dna_value_dna[31:0] ^
                          dna_value_dna[63:32] ^
                          dna_value_dna[95:64];
+          dna_ip_dna <= dna_value_dna[15:0] ^ dna_value_dna[31:16] ^
+                        dna_value_dna[47:32] ^ dna_value_dna[63:48] ^
+                        dna_value_dna[79:64] ^ dna_value_dna[95:80];
           dna_ready_dna <= 1'b1;
         end
       end

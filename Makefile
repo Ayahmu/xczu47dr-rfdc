@@ -175,11 +175,11 @@ xsa: bitstream
 
 bitstream-master:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_master.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "MASTER LTX: $$ltx"
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_master.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: master debug probes missing: $$ltx"; exit 1; }; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "MASTER LTX: $$ltx"
 
 bitstream-slave:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; test ! -e "$$ltx" || echo "SLAVE LTX: $$ltx"
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: slave debug probes missing: $$ltx"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "SLAVE LTX: $$ltx"
 
 xsa-master:
 	@test -f "$(VIVADO_DIR)/work-dual/master/custom_xczu47dr_master_rfdc.xpr" || { echo "ERROR: isolated master project is missing; run make bitstream-master first"; exit 1; }

@@ -146,6 +146,30 @@ def discover_and_provision_boards(
         timeout_s=timeout_s,
         rounds=rounds,
     )
+
+    # A broadcast response carries the board MAC, but a normal UDP unicast is
+    # selected by IP/ARP only.  Detect an old or misconfigured bitstream that
+    # gives multiple boards the same bootstrap address before probing roles;
+    # otherwise connect_discovered() could read or provision the wrong board.
+    endpoints: dict[tuple[str, int], list[DiscoveredBoard]] = {}
+    for board in boards:
+        endpoints.setdefault((board.current_ip, board.port), []).append(board)
+    duplicate_endpoints = [
+        (endpoint, items) for endpoint, items in endpoints.items() if len(items) > 1
+    ]
+    if duplicate_endpoints:
+        details = "; ".join(
+            f"{ip}:{port} -> "
+            + ", ".join(
+                f"UID={item.device_uid},MAC={item.current_mac}" for item in items
+            )
+            for (ip, port), items in duplicate_endpoints
+        )
+        raise DriverError(
+            f"发现多块板卡共用临时地址（{details}）。请重新烧写支持全 DNA 临时 IP 的"
+            " master/slave bitstream；旧 bitstream 不能在交换机上安全自动配置"
+        )
+
     roles = _read_discovered_roles(boards)
 
     selected: list[tuple[BoardNetworkAssignment, DiscoveredBoard]] = []
@@ -154,19 +178,6 @@ def discover_and_provision_boards(
         board = _select_board(boards, roles, assignment, used_boards)
         selected.append((assignment, board))
         used_boards.add(board.identity_key)
-
-    # 同一临时 IP 上的多个板无法通过普通 UDP 单播区分。继续 NETWORK_APPLY
-    # 会随机命中其中一块，必须要求用户先断开/隔离板卡，避免破坏网络身份。
-    endpoints: dict[tuple[str, int], DiscoveredBoard] = {}
-    for _, board in selected:
-        endpoint = (board.current_ip, board.port)
-        previous = endpoints.get(endpoint)
-        if previous is not None and previous.identity_key != board.identity_key:
-            raise DriverError(
-                f"板卡 {previous.current_mac} 与 {board.current_mac} 共用临时地址 "
-                f"{board.current_ip}:{board.port}；请先逐块隔离并分配唯一 IP"
-            )
-        endpoints[endpoint] = board
 
     enrolled: list[EnrolledBoard] = []
     for assignment, board in selected:

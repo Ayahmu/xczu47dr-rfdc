@@ -12,13 +12,17 @@
 Trigger 输出。从卡只通过 XS19 接收物理 Trigger，因此主从启动时间不再由
 两条 UDP 命令之间的 Python 时间间隔决定。
 
-运行前请确认服务器的两个 10G 网口已经配置为下面的源地址，并且分别直连
-对应板卡：
+运行前请确认服务器通过 ``enp1s0f0`` 接入交换机，交换机再分别连接两块板卡，
+并配置下面的发现源地址：
 
-    sudo ip address replace 169.254.250.12/16 dev enp1s0f1
-    sudo ip route replace 169.254.0.0/16 dev enp1s0f1 src 169.254.250.12
+    sudo ip link set enp1s0f0 up
     sudo ip address replace 169.254.250.11/16 dev enp1s0f0
     sudo ip route replace 169.254.0.0/16 dev enp1s0f0 src 169.254.250.11
+
+烧写后的 bitstream 会用 FPGA DNA 生成不同的临时 IP。脚本会在一次广播发现中
+按 bitstream 固定的 ``master``/``slave`` 角色选板，自动分配正式 IP，再完成同步发波。
+如果仍看到相同临时 IP，说明板卡还在运行旧 bitstream，必须重新烧写最新的
+``artifacts/custom_xczu47dr_{master,slave}.bit``。
 
 运行：
 
@@ -36,7 +40,10 @@ import numpy as np
 from ..capabilities import PlaybackState
 from ..device import Dr47Device
 from ..errors import DriverError
-from ..network import DiscoveredBoard, discover_boards, connect_discovered, provision_board
+from ..hardware_test_network import (
+    BoardNetworkAssignment,
+    discover_and_provision_boards,
+)
 from ..sequence import make_trigger_sequence
 from ..sync_group import SyncGroup
 from ..waveforms import (
@@ -46,14 +53,12 @@ from ..waveforms import (
 )
 
 
-# 每个网口只直连一块板，因此发现分别在两个接口上进行。
+# 主机通过一个交换机端口连接两块板；一次广播发现后按固定 bitstream 角色选择。
 BOARD_PORT = 1234
-MASTER_INTERFACE = "enp1s0f1"  # 082
-MASTER_SOURCE_IP = "169.254.250.12"
-MASTER_SOURCE_CIDR = "169.254.250.12/16"
-SLAVE_INTERFACE = "enp1s0f0"  # 081
-SLAVE_SOURCE_IP = "169.254.250.11"
-SLAVE_SOURCE_CIDR = "169.254.250.11/16"
+NETWORK_INTERFACE = "enp1s0f0"
+DISCOVERY_SOURCE_IP = "169.254.250.11"
+DISCOVERY_SOURCE_CIDR = "169.254.250.11/16"
+CONTROL_SOURCE_IP = "169.254.250.11"
 DISCOVERY_BROADCAST_IP = "169.254.255.255"
 
 MASTER_TARGET_IP = "169.254.100.101"
@@ -61,9 +66,11 @@ SLAVE_TARGET_IP = "169.254.100.102"
 TARGET_SUBNET_MASK = "255.255.0.0"
 TARGET_GATEWAY = "0.0.0.0"
 
-# 直连时每个接口理论上只有一块板；填写 UID 后可避免误选其他设备。
+# 交换机上若接入额外同角色板卡，填写 UID/MAC 才能避免误选。
 MASTER_DEVICE_UID = ""
 SLAVE_DEVICE_UID = ""
+MASTER_MATCH_MAC = ""
+SLAVE_MATCH_MAC = ""
 MASTER_TARGET_MAC = None
 SLAVE_TARGET_MAC = None
 
@@ -102,76 +109,56 @@ def _make_gaussian_record() -> np.ndarray:
     )
 
 
-def _discover_one(
-    *,
-    label: str,
-    role: str,
-    interface: str,
-    source_ip: str,
-    source_cidr: str,
-    target_ip: str,
-    device_uid: str,
-    target_mac: str | None,
-) -> tuple[str, str]:
-    """在指定直连接口发现、确认角色并配置一块板卡的正式 IP。"""
-
-    print(f"{label}：通过 {interface} 从 {source_ip} 广播 NETWORK_GET")
-    boards = discover_boards(
-        interface=interface,
-        source_ip=source_ip,
-        source_cidr=source_cidr,
-        broadcast_ip=DISCOVERY_BROADCAST_IP,
-        port=BOARD_PORT,
-        timeout_s=1.0,
-        rounds=3,
-    )
-    candidates: list[DiscoveredBoard] = []
-    for board in boards:
-        device = connect_discovered(board, timeout_s=1.0, retries=2)
-        try:
-            caps = device.status(refresh=False).capabilities
-            print(
-                f"发现 {label} 候选：UID={board.device_uid}，临时IP={board.current_ip}，"
-                f"角色={caps.sync_role}"
-            )
-            if caps.sync_role == role and (
-                not device_uid or board.device_uid.lower() == device_uid.lower()
-            ):
-                candidates.append(board)
-        finally:
-            device.close()
-    if len(candidates) != 1:
-        raise DriverError(
-            f"{label} 应发现唯一 {role} 板卡，实际候选数={len(candidates)}"
-        )
-    board = candidates[0]
-    print(f"配置{label}：{board.current_ip} -> {target_ip}")
-    result = provision_board(
-        board,
-        ip=target_ip,
-        mac=target_mac,
-        subnet_mask=TARGET_SUBNET_MASK,
-        gateway=TARGET_GATEWAY,
-        port=BOARD_PORT,
-        known_boards=boards,
-        verification_source_ip=source_ip,
-    )
-    print(f"{label}配置完成：UID={result.device_uid}，IP={result.ip}")
-    return result.ip, result.device_uid
-
-
-def _new_device(ip: str, interface: str, source_ip: str) -> Dr47Device:
+def _new_device(ip: str) -> Dr47Device:
     """创建绑定到指定 10G 网口的板卡驱动对象。"""
 
     return Dr47Device(
         ip=ip,
         port=BOARD_PORT,
-        udp_interface=interface,
-        udp_source_ip=source_ip,
+        udp_interface=NETWORK_INTERFACE,
+        udp_source_ip=CONTROL_SOURCE_IP,
         timeout_s=1.0,
         retries=2,
         batch_mode=True,
     )
+
+
+def _wait_rfdc_ready(device: Dr47Device, label: str) -> None:
+    """Wait for firmware RFDC/MTS/NCO startup before sending configuration."""
+
+    deadline = time.monotonic() + 30.0
+    last = None
+    while time.monotonic() < deadline:
+        last = device.status(refresh=True)
+        caps = last.capabilities
+        if caps.rfdc_ready and caps.dac_mts_ready and caps.nco_sync_ready:
+            return
+        if caps.dac_mts_failed:
+            raise AssertionError(
+                f"{label} DAC MTS 失败：error=0x{caps.dac_mts_error:04X}"
+            )
+        time.sleep(0.05)
+    caps = None if last is None else last.capabilities
+    if caps is None:
+        raise AssertionError(f"{label} 未返回 RFDC 状态")
+    raise AssertionError(
+        f"{label} RFDC 未就绪：rfdc_ready={caps.rfdc_ready}, "
+        f"dac_mts_ready={caps.dac_mts_ready}, nco_sync_ready={caps.nco_sync_ready}"
+    )
+
+
+def _wait_prepared(device: Dr47Device, label: str) -> None:
+    """Wait until ARM has reached the DAC-domain PREPARED state."""
+
+    deadline = time.monotonic() + 5.0
+    last = None
+    while time.monotonic() < deadline:
+        last = device.status(refresh=True)
+        if last.state is PlaybackState.PREPARED:
+            return
+        time.sleep(0.02)
+    actual = "unknown" if last is None else last.state.value
+    raise AssertionError(f"{label} ARM 未进入 PREPARED，实际状态={actual}")
 
 
 def _configure_and_arm(device: Dr47Device, record: np.ndarray, label: str) -> None:
@@ -193,6 +180,7 @@ def _configure_and_arm(device: Dr47Device, record: np.ndarray, label: str) -> No
     status = device.status(refresh=True)
     if status.state not in {PlaybackState.PREPARED, PlaybackState.ARMED}:
         raise AssertionError(f"{label} ARM 后状态异常：{status.state.value}")
+    _wait_prepared(device, label)
     print(f"{label}已 ARM，等待物理 Trigger")
 
 
@@ -217,20 +205,41 @@ def run() -> int:
     record = _make_gaussian_record()
     master = slave = None
     try:
-        master_ip, _ = _discover_one(
-            label="082 主卡", role="master", interface=MASTER_INTERFACE,
-            source_ip=MASTER_SOURCE_IP, source_cidr=MASTER_SOURCE_CIDR,
-            target_ip=MASTER_TARGET_IP, device_uid=MASTER_DEVICE_UID,
-            target_mac=MASTER_TARGET_MAC,
+        enrolled = discover_and_provision_boards(
+            [
+                BoardNetworkAssignment(
+                    label="082 主卡",
+                    sync_role="master",
+                    ip=MASTER_TARGET_IP,
+                    device_uid=MASTER_DEVICE_UID,
+                    mac=MASTER_TARGET_MAC,
+                    match_mac=MASTER_MATCH_MAC,
+                    subnet_mask=TARGET_SUBNET_MASK,
+                    gateway=TARGET_GATEWAY,
+                ),
+                BoardNetworkAssignment(
+                    label="081 从卡",
+                    sync_role="slave",
+                    ip=SLAVE_TARGET_IP,
+                    device_uid=SLAVE_DEVICE_UID,
+                    mac=SLAVE_TARGET_MAC,
+                    match_mac=SLAVE_MATCH_MAC,
+                    subnet_mask=TARGET_SUBNET_MASK,
+                    gateway=TARGET_GATEWAY,
+                ),
+            ],
+            interface=NETWORK_INTERFACE,
+            discovery_source_ip=DISCOVERY_SOURCE_IP,
+            discovery_source_cidr=DISCOVERY_SOURCE_CIDR,
+            control_source_ip=CONTROL_SOURCE_IP,
+            broadcast_ip=DISCOVERY_BROADCAST_IP,
+            port=BOARD_PORT,
         )
-        slave_ip, _ = _discover_one(
-            label="081 从卡", role="slave", interface=SLAVE_INTERFACE,
-            source_ip=SLAVE_SOURCE_IP, source_cidr=SLAVE_SOURCE_CIDR,
-            target_ip=SLAVE_TARGET_IP, device_uid=SLAVE_DEVICE_UID,
-            target_mac=SLAVE_TARGET_MAC,
-        )
-        master = _new_device(master_ip, MASTER_INTERFACE, MASTER_SOURCE_IP)
-        slave = _new_device(slave_ip, SLAVE_INTERFACE, SLAVE_SOURCE_IP)
+        enrolled_by_role = {item.sync_role: item for item in enrolled}
+        master_net = enrolled_by_role["master"]
+        slave_net = enrolled_by_role["slave"]
+        master = _new_device(master_net.ip)
+        slave = _new_device(slave_net.ip)
         master.connect()
         slave.connect()
         master.require_external_sync()
@@ -241,6 +250,8 @@ def run() -> int:
             raise AssertionError(
                 f"角色错误：主卡={master_caps.sync_role}，从卡={slave_caps.sync_role}"
             )
+        _wait_rfdc_ready(master, "082 主卡")
+        _wait_rfdc_ready(slave, "081 从卡")
         _configure_and_arm(master, record, "082 主卡")
         _configure_and_arm(slave, record, "081 从卡")
 
@@ -252,6 +263,8 @@ def run() -> int:
         )
         master.arm(channel_mask=CHANNEL_MASK)
         slave.arm(channel_mask=CHANNEL_MASK)
+        _wait_prepared(master, "082 主卡同步后")
+        _wait_prepared(slave, "081 从卡同步后")
         master_before = master.status(refresh=True).capabilities
         slave_before = slave.status(refresh=True).capabilities
 

@@ -317,25 +317,45 @@ def provision_board(
     finally:
         device.close()
 
-    confirmed = Dr47Device(
-        ip=target_ip,
-        port=int(port),
-        timeout_s=3.0,
-        udp_interface=board.interface,
-        udp_source_ip=board.source_ip,
-        retries=3,
-    )
-    try:
-        response = confirmed.rfctrl2_network_get()
-    except Exception as exc:
-        confirmed.close()
-        raise ProvisionError(f"new IP {target_ip} did not respond for {board.device_uid}: {exc}") from exc
-    finally:
-        confirmed.close()
-    if str(response.get("device_uid") or "") != board.device_uid:
-        raise ProvisionError(
-            f"new IP {target_ip} returned device_uid {response.get('device_uid')!r}, expected {board.device_uid}"
+    # The Ethernet/ARP path can need a few hundred milliseconds after the
+    # restart. Probe repeatedly and verify the complete identity, not just the
+    # UID (old DNA revisions may legitimately share a UID).
+    response = None
+    last_error: Exception | None = None
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        confirmed = Dr47Device(
+            ip=target_ip,
+            port=int(port),
+            timeout_s=1.0,
+            udp_interface=board.interface,
+            udp_source_ip=verified_source_ip or board.source_ip,
+            retries=1,
         )
+        try:
+            candidate = confirmed.rfctrl2_network_get()
+            if (
+                str(candidate.get("device_uid") or "").strip().lower()
+                == board.device_uid.strip().lower()
+                and str(candidate.get("current_mac") or "").strip().lower()
+                == target_mac.strip().lower()
+                and str(candidate.get("current_ip") or "") == target_ip
+            ):
+                response = candidate
+                break
+            last_error = ProvisionError(
+                f"new IP {target_ip} returned UID={candidate.get('device_uid')!r}, "
+                f"MAC={candidate.get('current_mac')!r}, IP={candidate.get('current_ip')!r}; "
+                f"expected UID={board.device_uid!r}, MAC={target_mac!r}, IP={target_ip!r}"
+            )
+        except Exception as exc:
+            last_error = exc
+        finally:
+            confirmed.close()
+        time.sleep(0.1)
+    if response is None:
+        detail = f": {last_error}" if last_error is not None else ""
+        raise ProvisionError(f"new IP {target_ip} did not pass identity verification for {board.device_uid}{detail}")
     return ProvisionedBoard(
         device_uid=board.device_uid,
         previous_ip=board.current_ip,
