@@ -307,12 +307,12 @@ class SendWaveformUdpTests(unittest.TestCase):
         self.assertEqual(metadata["xy_freq_hz"], 90e6)
         self.assertEqual(metadata["readout_freq_hz"], 140e6)
 
-    def test_legacy_xy_args_override_ch1_ch2_only(self):
+    def test_channel_arguments_set_each_channel_independently(self):
         args = send_waveform_udp.build_parser().parse_args([
             "golden",
             "--dry-run",
-            "--x-start", "16",
-            "--y-start", "32",
+            "--ch1-start", "16",
+            "--ch2-start", "32",
             "--ch3-start", "48",
             "--ch4-start", "64",
         ])
@@ -329,6 +329,12 @@ class SendWaveformUdpTests(unittest.TestCase):
         self.assertEqual(metadata["ch2_start"], 32)
         self.assertEqual(metadata["ch3_start"], 48)
         self.assertEqual(metadata["ch4_start"], 64)
+
+    def test_removed_channel_alias_options_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            send_waveform_udp.build_parser().parse_args([
+                "sine", "--dry-run", "--x-freq-hz", "1000000",
+            ])
 
     def test_default_channel_start_addresses_match_32b_aligned_ddr_layout(self):
         self.assertEqual(send_waveform_udp.CHANNEL_DEFAULTS[1]["start"], host.DDR_CH1_ADDR)

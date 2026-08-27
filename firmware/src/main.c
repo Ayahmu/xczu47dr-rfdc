@@ -15,8 +15,6 @@
 #include "xrfdc.h"
 
 #include "platform/platform.h"
-#include "modules/dma/dma_ctrl.h"
-
 #include <metal/log.h>
 #include <metal/sys.h>
 
@@ -28,8 +26,6 @@
 #endif
 
 #define URAM_PLAY_BASE XPAR_HIER_PLAY_AXI_BRAM_CTRL_0_S_AXI_BASEADDR
-
-// XAxiDma AxiDma;
 
 void my_metal_default_log_handler(enum metal_log_level level,
 								  const char *format, ...);
@@ -648,7 +644,6 @@ int main(void)
 	preload_debug_waveforms();
 #endif
 
-	// measure_dma_bandwidth();
 	while (1)
 	{
 		usleep(1000000);

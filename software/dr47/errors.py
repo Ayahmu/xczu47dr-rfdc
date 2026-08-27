@@ -81,7 +81,7 @@ class UnsupportedCapabilityError(DriverError, NotImplementedError):
 
 
 class UnsupportedParameterError(UnsupportedCapabilityError):
-    """A compatibility parameter has no safe physical mapping yet."""
+    """A requested parameter has no safe physical mapping."""
 
 
 class UnsupportedSequenceError(DriverError, ValueError):

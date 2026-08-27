@@ -46,6 +46,15 @@ class DiscoveredBoard:
     def ip(self) -> str:
         return self.current_ip
 
+    @property
+    def identity_key(self) -> tuple[str, str]:
+        """返回发现阶段使用的稳定复合身份。
+
+        某些旧版或特定批次 bitstream 可能让多块板报告相同的 DNA UID。
+        MAC 地址仍然不同，因此不能只用 ``device_uid`` 去重或选择板卡。
+        """
+        return self.device_uid.strip().lower(), self.current_mac.strip().lower()
+
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
 
@@ -146,7 +155,9 @@ def discover_boards(
         udp_interface=interface,
         udp_source_ip=source_ip,
     )
-    found: dict[str, DiscoveredBoard] = {}
+    # 不能只按 device_uid 去重：交换机上多块板可能共享同一个 UID，而每块
+    # 板的 MAC 仍然唯一。复合键可同时支持正常 UID 和旧 bitstream。
+    found: dict[tuple[str, str], DiscoveredBoard] = {}
     try:
         for _ in range(int(rounds)):
             sequence = int(time.time_ns()) & 0xFFFFFFFF or 1
@@ -159,7 +170,7 @@ def discover_boards(
             ):
                 board = _board_from_response(response, interface, source_ip)
                 if board is not None:
-                    found.setdefault(board.device_uid, board)
+                    found.setdefault(board.identity_key, board)
     finally:
         transport.close()
     if not found:
@@ -167,7 +178,7 @@ def discover_boards(
             f"no RFCTRL2 boards replied on {interface} via {broadcast_ip}:{port}; "
             "check the 169.254.0.0/16 address, VLAN broadcast and link state"
         )
-    return sorted(found.values(), key=lambda board: board.device_uid)
+    return sorted(found.values(), key=lambda board: board.identity_key)
 
 
 def connect_discovered(board: DiscoveredBoard, *, timeout_s: float = 5.0, retries: int = 2) -> Dr47Device:
@@ -193,10 +204,22 @@ def _check_duplicate_assignments(
     mac: str,
     *,
     exclude_device_uid: str = "",
+    exclude_device_mac: str = "",
 ) -> None:
-    """Reject identities used by another discovered board, never by itself."""
+    """拒绝与其他板卡冲突的 IP/MAC，同时跳过正在配置的同一板卡。
+
+    ``device_uid`` 不是充分身份，因此只有 UID 和 MAC 同时相同才视为“自身”。
+    这样即使两块板 UID 相同，也能正确发现它们共用临时 IP 的冲突。
+    """
+    normalized_uid = str(exclude_device_uid).strip().lower()
+    normalized_mac = str(mac).strip().lower()
+    identity_mac = str(exclude_device_mac or mac).strip().lower()
     for board in boards:
-        if board.device_uid == exclude_device_uid:
+        if (
+            normalized_uid
+            and board.device_uid.strip().lower() == normalized_uid
+            and board.current_mac.strip().lower() == identity_mac
+        ):
             continue
         if board.current_ip == ip and board.current_mac.lower() != mac.lower():
             raise ProvisionError(f"IP {ip} is already used by discovered device {board.device_uid}")
@@ -250,6 +273,7 @@ def provision_board(
         target_ip,
         target_mac,
         exclude_device_uid=board.device_uid,
+        exclude_device_mac=board.current_mac,
     )
     # The board itself legitimately answers ARP when the requested address is
     # already its current address.  Treat that as an idempotent re-apply, not

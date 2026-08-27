@@ -41,12 +41,10 @@ DAC_FABRIC_HZ = DAC_IQ_SAMPLE_RATE_HZ / 8
 DEFAULT_WAVEFORM_SAMPLE_RATE_HZ = DAC_IQ_SAMPLE_RATE_HZ
 DEFAULT_AXIS_HZ = DAC_FABRIC_HZ
 RFDC_INTERPOLATION = DAC_INTERP
-DAC_AXIS_HZ = DAC_FABRIC_HZ
 BEAT_SAMPLES = BEAT_BYTES // 2
 NUM_SAMPLES = 4096 // 2
 INT16_PER_DACWORD = 16
 INT16_PER_BEAT = INT16_PER_DACWORD
-DDR_INTERLEAVED_CHANNELS = 8
 
 
 def iq_duration_to_interleaved_sample_count(duration_s: float, sample_rate_hz: float) -> int:
@@ -120,8 +118,8 @@ def make_iq_gaussian_sine_interleaved(
     """Build the web manual-path XY Gaussian IQ waveform exactly.
 
     The web's manual ``xy`` control uses ``FWHM=duration/2`` and has its
-    HLS-DRAG option disabled.  The optional DRAG arguments are retained for
-    callers that intentionally need the legacy ``iq-gaussian-sine`` variant.
+    HLS-DRAG option disabled.  The optional DRAG arguments expose the explicit
+    derivative-quadrature variant for callers that need it.
     """
 
     if int(q_sign) not in (-1, 1):
@@ -487,7 +485,7 @@ def iter_max_length_udp_batches(
     beats_per_datagram: int = 4,
     **_: Any,
 ):
-    """Yield deterministic zero-filled bulk packets for compatibility tools."""
+    """Yield deterministic zero-filled bulk packets for max-length testing."""
     per_channel = require_beat_aligned(bytes_per_channel, "bytes_per_channel")
     if per_channel <= 0 or per_channel > DDR_MAX_BYTES_PER_CHANNEL:
         raise ParameterRangeError(f"bytes_per_channel must be in [32, {DDR_MAX_BYTES_PER_CHANNEL}], got {per_channel}")

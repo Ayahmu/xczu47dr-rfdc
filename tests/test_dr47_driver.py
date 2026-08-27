@@ -11,7 +11,6 @@ import socket
 import struct
 import sys
 import unittest
-import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -24,13 +23,11 @@ sys.path.insert(0, str(ROOT / "software"))
 
 from dr47 import (  # noqa: E402
     Dr47Device,
+    DeviceCapabilities,
     RFDC_NCO_MAX_GHZ,
     RFDC_NCO_MIN_GHZ,
-    SequenceGenerator,
     SimulatedDr47Device,
-    TriggerSeqGenerate,
     make_trigger_sequence,
-    UnsupportedCapabilityError,
     SynchronizationError,
     DeviceStatusError,
     UDP_RFCTRL2_MAGIC,
@@ -48,6 +45,7 @@ from dr47 import (  # noqa: E402
     place_interleaved_iq_in_record,
 )
 from dr47.transport import UdpTransport  # noqa: E402
+from dr47.errors import DriverError  # noqa: E402
 import waveform_model  # noqa: E402
 import waveform_tools  # noqa: E402
 from dr47 import hardware_test_network  # noqa: E402
@@ -179,6 +177,70 @@ class DriverTests(unittest.TestCase):
         board = DiscoveredBoard("uid", "169.254.1.2", "02:00:00:00:00:01")
         self.assertEqual(board.as_dict()["current_ip"], "169.254.1.2")
 
+    def test_same_uid_boards_are_distinguished_by_mac(self):
+        """交换机广播下 UID 重复时，MAC 仍能区分主卡和从卡。"""
+        master = DiscoveredBoard(
+            "same-uid", "169.254.32.1", "02:00:00:00:00:01",
+        )
+        slave = DiscoveredBoard(
+            "same-uid", "169.254.32.1", "02:00:00:00:00:02",
+        )
+        roles = {
+            master.identity_key: "master",
+            slave.identity_key: "slave",
+        }
+        selected_master = hardware_test_network._select_board(
+            [master, slave], roles,
+            hardware_test_network.BoardNetworkAssignment("主卡", "master", "10.0.0.1"),
+            set(),
+        )
+        selected_slave = hardware_test_network._select_board(
+            [master, slave], roles,
+            hardware_test_network.BoardNetworkAssignment("从卡", "slave", "10.0.0.2"),
+            {selected_master.identity_key},
+        )
+        self.assertEqual(selected_master.current_mac, master.current_mac)
+        self.assertEqual(selected_slave.current_mac, slave.current_mac)
+
+    def test_shared_temporary_ip_is_rejected_before_provisioning(self):
+        """两块板共用临时 IP 时，不能让 NETWORK_APPLY 随机命中目标。"""
+        boards = [
+            DiscoveredBoard(
+                "same-uid", "169.254.32.1", "02:00:00:00:00:01",
+                interface="enp-test", source_ip="169.254.250.11",
+            ),
+            DiscoveredBoard(
+                "same-uid", "169.254.32.1", "02:00:00:00:00:02",
+                interface="enp-test", source_ip="169.254.250.11",
+            ),
+        ]
+
+        def connected(board, **_kwargs):
+            device = MagicMock()
+            role = "master" if board.current_mac.endswith("01") else "slave"
+            device.status.return_value = SimpleNamespace(
+                capabilities=SimpleNamespace(sync_role=role)
+            )
+            return device
+
+        with (
+            patch.object(hardware_test_network, "discover_boards", return_value=boards),
+            patch.object(hardware_test_network, "connect_discovered", side_effect=connected),
+            patch.object(hardware_test_network, "provision_board") as provision,
+            self.assertRaisesRegex(DriverError, "共用临时地址"),
+        ):
+            hardware_test_network.discover_and_provision_boards(
+                [
+                    hardware_test_network.BoardNetworkAssignment("主卡", "master", "10.0.0.1"),
+                    hardware_test_network.BoardNetworkAssignment("从卡", "slave", "10.0.0.2"),
+                ],
+                interface="enp-test",
+                discovery_source_ip="169.254.250.11",
+                discovery_source_cidr="169.254.250.11/16",
+                control_source_ip="169.254.250.11",
+            )
+        provision.assert_not_called()
+
     def test_network_duplicate_check_excludes_board_being_provisioned(self):
         """同一板卡保留 DNA MAC、只改 IP 时不能被错误地判为 MAC 冲突。"""
         from dr47.network import ProvisionError, _check_duplicate_assignments
@@ -308,8 +370,6 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(device.status(refresh=False).state.value, "running")
         device.abort_mute()
         self.assertEqual(device.status(refresh=False).state.value, "idle")
-        with self.assertRaises(UnsupportedCapabilityError):
-            device.get_daq_data(1)
 
     def test_simulator_bypass_models_xs18_to_xs19_loopback(self):
         """检查 simulator 中 bypass 会放开 XS18->XS19 的本地回环门控。"""
@@ -404,16 +464,6 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(status.state.value, "running")
         self.assertEqual(status.capabilities.trigger_accepted_count, 1)
 
-    def test_self_test_alias_warns_and_selects_bypass(self):
-        """检查历史 self_test 名称只作为弃用别名映射到 bypass。"""
-        device = SimulatedDr47Device(batch_mode=True, sync_role="slave")
-        device.connect()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            device.set_sync_mode("self_test")
-        self.assertEqual(device.status(refresh=False).capabilities.sync_mode, "bypass")
-        self.assertTrue(any(item.category is DeprecationWarning for item in caught))
-
     def test_negative_nco_preserves_explicit_nyquist_zone(self):
         """检查设置负 NCO 时不会错误覆盖用户明确指定的 Nyquist zone。"""
         device = SimulatedDr47Device(batch_mode=True)
@@ -460,6 +510,11 @@ class DriverTests(unittest.TestCase):
         sequence = make_trigger_sequence(24)
         self.assertEqual(sequence.dtype, np.dtype("<u2"))
         self.assertEqual(sequence[1, 3] >> 11, 8)
+
+    def test_public_api_does_not_expose_removed_aliases(self):
+        """旧状态属性不应重新作为兼容入口暴露。"""
+        self.assertFalse(hasattr(DeviceCapabilities(), "rfcd_ready"))
+        self.assertFalse(hasattr(DeviceCapabilities(), "capabilities"))
 
     def test_waveform_record_uses_web_manual_xy_contract(self):
         """检查正式波形工具遵守网页手动 XY 的零填充和延迟约定。"""
@@ -549,22 +604,6 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(upload["commands"], web_commands)
         self.assertEqual(upload["instruction_repeats"], 3)
         self.assertEqual(transport.sent, expected_ddr + [expected_instruction] * 3)
-
-    def test_sequence_generator_emits_trigger_delay_loop_and_stop(self):
-        """检查序列生成器包含 Trigger、延时、循环和停止指令。"""
-        generator = SequenceGenerator("XY", time_data=[0.0], event_data=[np.array([1, 2], dtype=np.int32)], period=1e-6, repeat=1)
-        wave, sequence = generator.TriggerSeqGenerate()
-        self.assertEqual(wave.dtype, np.int32)
-        self.assertEqual(sequence.shape[1], 4)
-        funcs = ((sequence[:, 3] >> 11) & 0xF).tolist()
-        self.assertIn(8, funcs)
-        self.assertIn(1, funcs)
-        self.assertTrue(bool(sequence[-1, 3] & 0x8000))
-        functional_wave, functional_sequence = TriggerSeqGenerate(
-            "XY", time_data=[0.0], event_data=[np.array([1, 2], dtype=np.int32)], period=1e-6, repeat=1
-        )
-        self.assertEqual(functional_wave.dtype, np.int32)
-        self.assertEqual(functional_sequence.shape[1], 4)
 
 
 if __name__ == "__main__":

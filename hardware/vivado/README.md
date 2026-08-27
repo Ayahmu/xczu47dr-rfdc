@@ -1,113 +1,45 @@
-# Vivado RFDC Build
+ # Vivado 硬件构建
 
-This directory holds the Vivado sources for the custom XCZU47DR RFDC design. Design inputs are in `src/`, `xdc/`, `bd/`, `ip/`, and `scripts/`. Vivado projects, generated IP products, `.Xil`, and reports are generated locally and ignored by Git; final programming artifacts are written to the checked-in root `artifacts/` directory.
+ 这里是 XCZU47DR 的 Vivado 输入：src/ 放 RTL，bd/ 放 Block Design，ip/ 放
+ 固定 IP，xdc/ 放引脚和时序约束，scripts/ 放自动化流程。工程和报告只在本地
+ 生成，交付文件写入根目录 artifacts/。
 
-## Production Targets
+ ## 目标和关键接口
 
-| Make target | Fixed role | XS20 | Trigger policy |
-|---|---|---|---|
-| `custom_xczu47dr_master` | master | output | Local software and XS19 triggers are always accepted; driver `sync()` emits XS20 synchronization. |
-| `custom_xczu47dr_slave` | slave | input | In `external` mode, playback requires a real XS20 event. In explicit driver `bypass` mode, local software and XS19 triggers are allowed. |
+ - custom_xczu47dr_master：XS20 为输出。
+ - custom_xczu47dr_slave：XS20 为输入。
+ - custom_xczu47dr_bw：独立带宽测试顶层，不包含正常 RFDC 播放角色。
+ - XS18 (TRIG_1) 为 Trigger 输出，XS19 (TRIG_2) 为 Trigger 输入。
+ - RFDC 为 6.4 GS/s、16 倍插值、400 MS/s IQ、50 MHz AXIS。
 
-The role is a synthesis-time definition (`CUSTOM_XCZU47DR_MASTER` or `CUSTOM_XCZU47DR_SLAVE`), not a run-time selection. A slave cannot be changed into a master by software. `sync_seen` reports only an actual XS20 event; it is never set merely because bypass is enabled.
+ 主从方向是综合时固定的宏定义，软件不能切换。主从接线和仪器检查见
+ [硬件验收](../../docs/硬件验收.md)。
 
-The mainline clock plan uses a 10 MHz XS17 reference, HMC7044 programming in the PL sequencer, and a 128 MHz DAC reference. Connect synchronization as **master A <-> slave A**. XS18 is trigger output and XS19 is trigger input.
+ ## 构建命令
 
-`custom_xczu47dr_bw` remains an independent bandwidth-pressure target. There is no production `custom_xczu47dr_selftest` target.
+ ~~~bash
+ source /tools/Xilinx/Vivado/2024.2/settings64.sh
 
-## Build
+ make vivado-project TARGET=custom_xczu47dr_slave
+ make preflight TARGET=custom_xczu47dr_slave
+ make synth TARGET=custom_xczu47dr_slave
+ make impl TARGET=custom_xczu47dr_slave
+ make bitstream TARGET=custom_xczu47dr_slave
+ make xsa TARGET=custom_xczu47dr_slave
+ ~~~
 
-Source the required toolchain, then run commands from the repository root:
+ 双板一次构建：
 
-```bash
-source /tools/Xilinx/Vivado/2024.2/settings64.sh
-source /tools/Xilinx/Vitis/2024.2/settings64.sh
+ ~~~bash
+ make bitstream-dual
+ make bitstream-dual-clean       # 只清理双板生成的工程和报告
+ ~~~
 
-make bitstream TARGET=custom_xczu47dr_master
-make bitstream TARGET=custom_xczu47dr_slave
-make bitstream-dual
-```
+ 每个目标的输出都使用角色前缀，随后由 make firmware 生成匹配 ELF。不要把主卡
+ bitstream 与从卡 XSA/ELF 混搭。
 
-For a complete single-role build, including the role-specific XSA:
+ ## 调试重点
 
-```bash
-make hardware TARGET=custom_xczu47dr_slave
-```
-
-The common Make variables may be overridden for an isolated build:
-
-```bash
-make bitstream TARGET=custom_xczu47dr_master \
-  VIVADO_WORK_DIR=/path/to/work \
-  VIVADO_OUTPUT_DIR=/path/to/output
-```
-
-## Dual Build Isolation
-
-`make bitstream-dual` runs two GNU Make children with `-j2`. Each owns all mutable Vivado state, so concurrent builds never share a `.xpr`, `.runs`, `.Xil`, cache, generated sources, or report directory:
-
-```text
-work-dual/master/      reports-dual/master/
-work-dual/slave/       reports-dual/slave/
-```
-
-Both publish role-specific outputs after bitstream generation:
-
-```text
-../../artifacts/custom_xczu47dr_master.bit
-../../artifacts/custom_xczu47dr_master.ltx
-../../artifacts/custom_xczu47dr_master.xsa
-../../artifacts/custom_xczu47dr_slave.bit
-../../artifacts/custom_xczu47dr_slave.ltx
-../../artifacts/custom_xczu47dr_slave.xsa
-```
-
-The dual command reports the size and SHA256 of each `.bit`. Remove only its isolated projects with:
-
-```bash
-make bitstream-dual-clean
-```
-
-## Build Stages
-
-For diagnosis, the individual stages are available and use the selected `TARGET`, `VIVADO_WORK_DIR`, `VIVADO_OUTPUT_DIR`, and `VIVADO_REPORT_DIR`:
-
-```bash
-make vivado-project TARGET=custom_xczu47dr_slave
-make preflight TARGET=custom_xczu47dr_slave
-make synth TARGET=custom_xczu47dr_slave
-make impl TARGET=custom_xczu47dr_slave
-make bitstream TARGET=custom_xczu47dr_slave
-make xsa TARGET=custom_xczu47dr_slave
-```
-
-`make xsa-master` and `make xsa-slave` export from existing corresponding dual-build projects.
-
-## Firmware Pairing and Board Verification
-
-Build one shared firmware source tree against the XSA matching the selected role. The firmware waits for the HMC7044 PL sequencer but intentionally does not wait for XS20 before initializing RFDC, DAC MTS, and NCO SYSREF.
-
-For the standalone slave bypass test, use XS17 = 10 MHz and leave XS20
-unconnected. Program the slave bitstream and matching ELF, then run:
-
-```bash
-PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
-```
-
-For the formal external path, connect XS20 to a real SYNC source and run
-`dr47.examples.hardware_slave_external_trigger_test`. Its default
-`TRIGGER_SOURCE = "external_input"` waits for XS19; changing it to
-`"xs18_loopback"` tests an XS18 -> XS19 cable loopback. These tests prove
-digital control state only; analog RF output requires independent instrument
-measurement.
-
-## Reports
-
-Within a chosen project directory, report paths follow Vivado's normal form:
-
-```text
-<work>/<project>.runs/synth_1/reports/
-<work>/<project>.runs/impl_1/reports/
-```
-
-Check the implementation timing summary for WNS/TNS and WHS/THS. Existing methodology DRC warnings must be evaluated by their rule and affected cells; they are not automatically timing failures.
+ 实现后先看时序报告中的 WNS/TNS、WHS/THS，再用 ILA 检查 UDP 接收、DDR 512 位
+ 交错数据、8 路打包器和 RFDC AXIS。Vivado DRC 警告需要按规则逐项判断，不能把所有
+ 警告都当成时序失败。

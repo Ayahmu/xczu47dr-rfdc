@@ -296,9 +296,9 @@ class WaveformConfig:
     mode: str = "ezq-quantum"
     ddr_layout: str = host.DEFAULT_DDR_LAYOUT
     output_dir: Path = Path("/tmp/opencode/rfsoc_waveform")
-    sample_rate_hz: float = host.DAC_XY_FS
+    sample_rate_hz: float = host.DAC_IQ_SAMPLE_RATE_HZ
     rfdc_interpolation: int = host.RFDC_INTERPOLATION
-    axis_freq_hz: float = host.DAC_AXIS_HZ
+    axis_freq_hz: float = host.DAC_FABRIC_HZ
     loop: bool = False
     wait_for_trigger: bool = False
     dry_run: bool = False
@@ -772,9 +772,9 @@ def _waveform_config_from_dict(data: object) -> WaveformConfig:
     }
     kwargs: dict[str, Any] = {key: value for key, value in data.items() if key in allowed}
     kwargs["loop"] = bool(kwargs.get("loop", False))
-    saved_sample_rate = float(kwargs.get("sample_rate_hz", host.DAC_XY_FS))
+    saved_sample_rate = float(kwargs.get("sample_rate_hz", host.DAC_IQ_SAMPLE_RATE_HZ))
     if saved_sample_rate in {float(host.DAC_TILE_FS), 9_600_000_000.0, 8_000_000_000.0, 6_000_000_000.0}:
-        kwargs["sample_rate_hz"] = host.DAC_XY_FS
+        kwargs["sample_rate_hz"] = host.DAC_IQ_SAMPLE_RATE_HZ
     if "output_dir" in data:
         kwargs["output_dir"] = Path(str(data["output_dir"]))
     for channel in ("ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"):
@@ -2501,8 +2501,8 @@ def extreme_playback_metadata(config: ExtremePlaybackConfig, bytes_per_channel: 
         "physical_ddr_bytes": total_bytes,
         "expected_rfdc_beats_per_channel": bytes_per_channel // host.BEAT_BYTES,
         "expected_datamover_beats": total_bytes // host.DDR_INTERLEAVED_BEAT_BYTES,
-        "expected_duration_s": bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
-        "axis_hz": host.DAC_AXIS_HZ,
+        "expected_duration_s": bytes_per_channel / (host.DAC_FABRIC_HZ * host.BEAT_BYTES),
+        "axis_hz": host.DAC_FABRIC_HZ,
         "bytes_per_axis_beat": host.BEAT_BYTES,
         "marker_bytes_per_channel": int(config.marker_bytes_per_channel),
         "sine_freq_hz": float(config.sine_freq_hz),
@@ -2523,7 +2523,7 @@ def build_extreme_playback_summary(config: ExtremePlaybackConfig, connection: Co
     bytes_per_channel = parse_byte_count(config.bytes_per_channel)
     host.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
     total_bytes = bytes_per_channel * host.DDR_INTERLEAVED_CHANNELS
-    duration_s = bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES)
+    duration_s = bytes_per_channel / (host.DAC_FABRIC_HZ * host.BEAT_BYTES)
     return "\n".join(
         [
             f"Target: {connection.ip}:{connection.port}",

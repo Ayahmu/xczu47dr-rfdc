@@ -28,8 +28,8 @@ host = load_software_module("host", "host.py")
 class UdpWaveformPacketTests(unittest.TestCase):
     def test_default_sample_rate_matches_custom_rfdc_config(self):
         self.assertEqual(host.DAC_TILE_FS, 6_400_000_000.0)
-        self.assertEqual(host.DAC_XY_FS, 400_000_000.0)
-        self.assertEqual(host.DAC_AXIS_HZ, 50_000_000.0)
+        self.assertEqual(host.DAC_IQ_SAMPLE_RATE_HZ, 400_000_000.0)
+        self.assertEqual(host.DAC_FABRIC_HZ, 50_000_000.0)
         self.assertEqual(host.RFDC_INTERPOLATION, 16)
         self.assertEqual(host.DEFAULT_DDR_LAYOUT, host.DDR_LAYOUT_INTERLEAVED_512B)
         self.assertEqual(host.CHANNEL_ROLES[5], "z")
@@ -71,7 +71,7 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(host.RFDC_CTRL_MAILBOX_OFFSET, 0x1FFF00000)
         self.assertEqual(host.DDR_MAX_BYTES_PER_CHANNEL // host.BEAT_BYTES, 33_550_336)
         self.assertAlmostEqual(
-            host.DDR_MAX_BYTES_PER_CHANNEL / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
+            host.DDR_MAX_BYTES_PER_CHANNEL / (host.DAC_FABRIC_HZ * host.BEAT_BYTES),
             0.67100672,
         )
 

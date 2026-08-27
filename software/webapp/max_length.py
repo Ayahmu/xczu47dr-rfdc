@@ -15,8 +15,6 @@ if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
 import dr47 as driver  # noqa: E402
-# Compatibility local name for the constants/packet helpers used below.
-host = driver
 import waveform_tools  # noqa: E402
 
 from .models import (  # noqa: E402
@@ -228,10 +226,10 @@ class MaxLengthService:
         record = self.store.get(test_id)
         request = self._request_for(record)
         try:
-            bytes_per_channel = request.bytes_per_channel or host.DDR_MAX_BYTES_PER_CHANNEL
-            bytes_per_channel = host.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
-            physical_bytes = bytes_per_channel * host.DDR_INTERLEAVED_CHANNELS
-            theoretical_duration_s = bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES)
+            bytes_per_channel = request.bytes_per_channel or driver.DDR_MAX_BYTES_PER_CHANNEL
+            bytes_per_channel = driver.require_beat_aligned(bytes_per_channel, "bytes_per_channel")
+            physical_bytes = bytes_per_channel * driver.DDR_INTERLEAVED_CHANNELS
+            theoretical_duration_s = bytes_per_channel / (driver.DAC_FABRIC_HZ * driver.BEAT_BYTES)
             if request.dry_run or self.boards.simulation:
                 self.store.update(
                     test_id,
@@ -272,10 +270,10 @@ class MaxLengthService:
                 sent_bytes = 0
                 datagram_count = 0
                 last_progress = 0.0
-                for datagram in host.iter_max_length_udp_batches(
+                for datagram in driver.iter_max_length_udp_batches(
                     bytes_per_channel,
-                    base_addr=host.DDR_BASE,
-                    beats_per_datagram=request.beats_per_datagram or host.UDP_BULK_SAFE_MAX_BEATS,
+                    base_addr=driver.DDR_BASE,
+                    beats_per_datagram=request.beats_per_datagram or driver.UDP_BULK_SAFE_MAX_BEATS,
                     pattern=request.pattern,
                     sine_freq_hz=request.sine_freq_hz,
                     sine_amplitude=request.sine_amplitude,
@@ -314,7 +312,7 @@ class MaxLengthService:
                         auto_start=False,
                         channel_lengths=lengths,
                         channel_delays={channel: 0 for channel in range(1, 9)},
-                        layout=host.DDR_LAYOUT_INTERLEAVED_512B,
+                        layout=driver.DDR_LAYOUT_INTERLEAVED_512B,
                     )
                 )
                 self.store.update(test_id, state=MaxLengthTestState.PLAYING, progress=0.95)
@@ -342,7 +340,7 @@ class MaxLengthService:
                     if stop.is_set():
                         raise RuntimeError("max-length test aborted during playback")
                     response = controller.rfctrl2_status(wait_response=True)
-                    decoded = host.parse_rfctrl2_status_payload(response)
+                    decoded = driver.parse_rfctrl2_status_payload(response)
                     if decoded["running"]:
                         if play_start is None:
                             play_start = time.monotonic()
@@ -391,7 +389,7 @@ class MaxLengthService:
 
     @staticmethod
     def _require_ok(response: dict, operation: str) -> None:
-        if int(response.get("status", 1)) != host.RF2_STATUS_OK:
+        if int(response.get("status", 1)) != driver.RF2_STATUS_OK:
             raise RuntimeError(f"RFCTRL2 {operation} failed with status 0x{int(response.get('status', 1)):04X}")
 
     def _wait_prepared(self, controller: driver.Dr47Device, stop: threading.Event, timeout_s: float = 30.0) -> bool:
@@ -400,7 +398,7 @@ class MaxLengthService:
             if stop.is_set():
                 return False
             response = controller.rfctrl2_status(wait_response=True)
-            decoded = host.parse_rfctrl2_status_payload(response)
+            decoded = driver.parse_rfctrl2_status_payload(response)
             if decoded["prepared"]:
                 return True
             time.sleep(0.02)

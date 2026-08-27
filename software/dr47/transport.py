@@ -183,10 +183,4 @@ class UdpTransport:
                     raise
         raise AssertionError("unreachable UDP retry state")
 
-
-# Short aliases are useful to applications that use the name from the design
-# document rather than the implementation class name.
-UDPTransport = UdpTransport
-
-
-__all__ = ["UdpTransport", "UDPTransport", "SO_BINDTODEVICE"]
+__all__ = ["UdpTransport", "SO_BINDTODEVICE"]

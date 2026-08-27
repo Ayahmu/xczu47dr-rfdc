@@ -62,18 +62,6 @@ class DeviceCapabilities:
     raw: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
-    def capabilities(self) -> int:
-        """Alias used by older applications."""
-
-        return self.capability_bits
-
-    @property
-    def rfcd_ready(self) -> bool:
-        """Compatibility spelling retained for early package previews."""
-
-        return self.rfdc_ready
-
-    @property
     def online(self) -> bool:
         return self.protocol_version > 0
 

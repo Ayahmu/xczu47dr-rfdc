@@ -204,7 +204,7 @@ class WaveformModelTests(unittest.TestCase):
             settings = waveform_model.load_gui_settings(Path(temp_dir) / "missing.json")
 
         self.assertEqual(settings.connection.ip, host.DEFAULT_BOARD_IP)
-        self.assertEqual(settings.waveform.sample_rate_hz, host.DAC_XY_FS)
+        self.assertEqual(settings.waveform.sample_rate_hz, host.DAC_IQ_SAMPLE_RATE_HZ)
         self.assertEqual(settings.ila.program_mode, "never")
 
     def test_legacy_hls_channel_settings_load_as_iq_gaussian_sine_for_gui(self):
@@ -314,7 +314,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_ezq_quantum_generates_gaussian_iq_from_frequency_rule_and_mask(self):
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             axis_freq_hz=100_000_000.0,
             ezq=waveform_model.EzqPulseConfig(
                 f10_hz=4.62e9,
@@ -345,7 +345,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_ezq_quantum_per_channel_table_controls_frequency_amplitude_and_delay(self):
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             axis_freq_hz=100_000_000.0,
             ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
@@ -391,7 +391,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_ezq_quantum_channel_table_uses_fixed_xy_z_and_readout_roles(self):
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             axis_freq_hz=100_000_000.0,
             ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
@@ -480,7 +480,7 @@ class WaveformModelTests(unittest.TestCase):
         )
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
                 ch1=dataclasses.replace(base, xy_gate="x_pi"),
@@ -517,7 +517,7 @@ class WaveformModelTests(unittest.TestCase):
         )
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ezq=waveform_model.EzqPulseConfig(
                 channel_mask=0,
                 ch5=waveform_model.EzqChannelConfig(**common, z_shape="square"),
@@ -537,7 +537,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_ezq_baseband_offset_above_recommended_limit_is_rejected(self):
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ezq=waveform_model.EzqPulseConfig(pi_df_hz=300e6),
         )
 
@@ -547,7 +547,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_ezq_channel_sequences_use_generated_delay_and_length(self):
         config = waveform_model.WaveformConfig(
             mode="ezq-quantum",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             axis_freq_hz=100_000_000.0,
             ezq=waveform_model.EzqPulseConfig(timing_lag_xy_s=90e-9, period_s=120e-9),
         )
@@ -664,7 +664,7 @@ class WaveformModelTests(unittest.TestCase):
             x_phase_rad=0.0,
             y_phase_rad=1.57079632679,
             amplitude=12000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             loop=True,
             encoding="signed",
         )
@@ -693,7 +693,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_per_channel_iq_gaussian_sine_generates_finite_iq_record(self):
         config = waveform_model.WaveformConfig(
             mode="per-channel",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="iq-gaussian-sine",
                 freq_hz=100e6,
@@ -721,7 +721,7 @@ class WaveformModelTests(unittest.TestCase):
             y_delay_s=140e-9,
             duration_s=120e-9,
             amplitude=24000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             axis_freq_hz=250_000_000.0,
         )
 
@@ -772,7 +772,7 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_independent_channel_generation_allows_different_types_and_off(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="sine",
                 freq_hz=20e6,
@@ -832,7 +832,7 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_pypulse_channel_generation_packs_interleaved_iq_and_metadata(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="xy", freq_hz=90e6),
             ch2=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="z", freq_hz=90e6),
             ch3=waveform_model.ChannelWaveformConfig(waveform_type="pypulse", pypulse_waveform="readout", freq_hz=140e6),
@@ -858,7 +858,7 @@ class WaveformModelTests(unittest.TestCase):
 
         result = waveform_model.generate_waveforms(config)
 
-        tail_len = waveform_tools.iq_duration_to_sample_count(50e-9, host.DAC_XY_FS)
+        tail_len = waveform_tools.iq_duration_to_sample_count(50e-9, host.DAC_IQ_SAMPLE_RATE_HZ)
         self.assertTrue(np.all(result.ch1[:-tail_len:2] == 12345))
         self.assertFalse(np.any(result.ch1[1:-tail_len:2]))
         self.assertFalse(np.any(result.ch1[-tail_len:]))
@@ -886,7 +886,7 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_new_waveform_types_support_iq_real_delay_and_shared_record(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="xy",
                 domain="iq",
@@ -981,11 +981,11 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_quantum_x_gate_is_per_channel(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
             ch2=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
         )
-        expected = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
+        expected = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_IQ_SAMPLE_RATE_HZ, 120e-9, 80e-9)
 
         result = waveform_model.generate_waveforms(config)
 
@@ -1000,11 +1000,11 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_quantum_y_gate_is_per_channel_quadrature_phase(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
             ch2=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
-        expected = waveform_tools.make_gaussian_burst(120e6, np.pi / 2.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
+        expected = waveform_tools.make_gaussian_burst(120e6, np.pi / 2.0, 24000, host.DAC_IQ_SAMPLE_RATE_HZ, 120e-9, 120e-9)
 
         result = waveform_model.generate_waveforms(config)
 
@@ -1020,12 +1020,12 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_pulse_x_y_presets_match_send_xy_gaussian_bursts(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="x", freq_hz=80e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=80e-9),
             ch2=waveform_model.ChannelWaveformConfig(waveform_type="pulse", pulse_preset="y", freq_hz=120e6, phase_rad=0.0, amplitude=24000, duration_s=120e-9, delay_s=120e-9),
         )
-        expected_x = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 80e-9)
-        expected_y = waveform_tools.make_gaussian_burst(120e6, 0.0, 24000, host.DAC_XY_FS, 120e-9, 120e-9)
+        expected_x = waveform_tools.make_gaussian_burst(80e6, 0.0, 24000, host.DAC_IQ_SAMPLE_RATE_HZ, 120e-9, 80e-9)
+        expected_y = waveform_tools.make_gaussian_burst(120e6, 0.0, 24000, host.DAC_IQ_SAMPLE_RATE_HZ, 120e-9, 120e-9)
 
         result = waveform_model.generate_waveforms(config)
 
@@ -1034,7 +1034,7 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_quantum_z_gate_emits_scipy_phase_marker_pulse(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="quantum",
                 quantum_gate="z",
@@ -1066,7 +1066,7 @@ class WaveformModelTests(unittest.TestCase):
     def test_burst_delay_controls_idle_cycles_not_waveform_prefix(self):
         config = waveform_model.WaveformConfig(
             mode="per-channel",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             ch1=waveform_model.ChannelWaveformConfig(
                 waveform_type="burst",
                 freq_hz=80e6,
@@ -1099,7 +1099,6 @@ class WaveformModelTests(unittest.TestCase):
 
             self.assertTrue(result.dry_run)
             self.assertIn("dry-run", "\n".join(result.log_lines))
-            self.assertTrue((Path(temp_dir) / "x_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "ch1_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "ch2_waveform.npy").exists())
             self.assertTrue((Path(temp_dir) / "ch3_waveform.npy").exists())
@@ -1294,7 +1293,7 @@ class WaveformModelTests(unittest.TestCase):
 
     def test_build_send_summary_includes_target_and_channel_plan(self):
         config = waveform_model.WaveformConfig(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             loop=True,
             wait_for_trigger=True,
             ch1=waveform_model.ChannelWaveformConfig(waveform_type="quantum", quantum_gate="x"),

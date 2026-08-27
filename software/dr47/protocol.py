@@ -15,15 +15,11 @@ from .errors import ParameterRangeError, ProtocolError, ProtocolVersionError
 
 UDP_RFCTRL2_MAGIC = 0x00324C5254434652
 UDP_RFRESP2_MAGIC = 0x0032505345524652
-# Readable aliases used by packet-analysis scripts.
-RFCTRL2_MAGIC = UDP_RFCTRL2_MAGIC
-RFRESP2_MAGIC = UDP_RFRESP2_MAGIC
 RFCTRL2_VERSION = 2
 
 RF2_OP_HELLO = 0x01
 RF2_OP_STATUS = 0x02
 RF2_OP_RFDC_APPLY = 0x03
-RF2_OP_SET_NCO = RF2_OP_RFDC_APPLY
 RF2_OP_UPLOAD_BEGIN = 0x04
 RF2_OP_UPLOAD_COMMIT = 0x05
 RF2_OP_ARM = 0x06
@@ -83,13 +79,9 @@ RF2_SYNC_ROLE_SLAVE = 0
 RF2_SYNC_ROLE_MASTER = 1
 RF2_SYNC_MODE_EXTERNAL = 0
 RF2_SYNC_MODE_BYPASS = 1
-# Wire-compatible spelling retained for early callers. New applications must
-# use RF2_SYNC_MODE_BYPASS and the public ``bypass`` mode string.
-RF2_SYNC_MODE_SELF_TEST = RF2_SYNC_MODE_BYPASS
 RF2_SYNC_STATUS_SEEN = 0x00000001
 RF2_SYNC_STATUS_READY = 0x00000002
 RF2_SYNC_STATUS_BYPASS = 0x00000004
-RF2_SYNC_STATUS_SELF_TEST = RF2_SYNC_STATUS_BYPASS
 RF2_SYNC_STATUS_ROLE_MASTER = 0x00000008
 RF2_SYNC_STATUS_INPUT_HIGH = 0x00000010
 RF2_SYNC_STATUS_OUTPUT_HIGH = 0x00000020
@@ -198,7 +190,7 @@ def pack_rfctrl2_set_sync_role(role: int, mode: int = RF2_SYNC_MODE_EXTERNAL, se
     mode_value = int(mode)
     if role_value not in {RF2_SYNC_ROLE_SLAVE, RF2_SYNC_ROLE_MASTER}:
         raise ParameterRangeError("sync role must be 0 (slave) or 1 (master)")
-    if mode_value not in {RF2_SYNC_MODE_EXTERNAL, RF2_SYNC_MODE_SELF_TEST}:
+    if mode_value not in {RF2_SYNC_MODE_EXTERNAL, RF2_SYNC_MODE_BYPASS}:
         raise ParameterRangeError("sync mode must be 0 (external) or 1 (bypass)")
     return pack_rfctrl2_packet(
         RF2_OP_SET_SYNC_ROLE,

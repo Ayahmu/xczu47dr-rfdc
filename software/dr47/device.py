@@ -1,4 +1,4 @@
-"""Public 47DR board object and ez-Q compatibility methods.
+"""Public 47DR board object and direct RFCTRL2 control API.
 
 The public driver API expresses RF frequencies in GHz.  RFCTRL2 still carries
 signed integer Hz on the wire, so conversion is kept at this module boundary.
@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 import threading
 import time
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Literal
@@ -30,7 +29,7 @@ from .errors import (
     SynchronizationError,
     TransportTimeout,
 )
-from .protocol import *  # noqa: F401,F403 - protocol names are part of the compatibility surface
+from .protocol import *  # noqa: F401,F403 - protocol constants are part of the public API
 from .protocol import (
     RF2_CAP_DAC_MTS,
     RF2_CAP_NCO_SYNC,
@@ -73,7 +72,6 @@ from .waveforms import (
     PLAY_FLAG_INTERLEAVED,
     ezq_wave_to_interleaved_int16,
     iter_interleaved_udp_waveform_packets,
-    iter_udp_waveform_packets,
     pack_udp_instruction_packet,
     sequence_to_play_commands,
     waveform_length_bytes,
@@ -133,9 +131,8 @@ class Dr47Device:
         udp_source_ip: str = "",
         retries: int = 2,
         batch_mode: bool = False,
-        slot: int | None = None,
+        sync_role: Literal["master", "slave"] = "slave",
         transport: object | None = None,
-        **legacy_options: Any,
     ) -> None:
         self.ip = str(ip)
         self.port = int(port)
@@ -144,7 +141,8 @@ class Dr47Device:
         self.udp_source_ip = str(udp_source_ip or "")
         self.retries = max(0, int(retries))
         self.batch_mode = bool(batch_mode)
-        self.slot = slot
+        if sync_role not in {"master", "slave"}:
+            raise ValueError("sync_role must be 'master' or 'slave'")
         self._transport = transport
         self._owns_transport = transport is None
         self._connected = False
@@ -161,12 +159,9 @@ class Dr47Device:
         self._pending_current = {channel: 20.0 for channel in range(1, 9)}
         self._pending_revision = 0
         self._capabilities = DeviceCapabilities()
-        self._sync_role = "master" if legacy_options.pop("sync_role", None) == "master" else "slave"
+        self._sync_role = sync_role
         self._sync_mode = "external"
         self._status = DeviceStatus(False, self.ip, self.port, PlaybackState.IDLE, self._capabilities, "not connected")
-        # Keep unknown legacy keyword options harmless.  They were register or
-        # logger settings in ezq_driver and have no meaning for a direct UDP board.
-        self.legacy_options = dict(legacy_options)
 
     @property
     def capabilities(self) -> DeviceCapabilities:
@@ -319,7 +314,7 @@ class Dr47Device:
         if not self.connected:
             raise ConnectionStateError("Dr47Device.connect() must be called before this operation")
 
-    # Low-level RFCTRL2 methods are retained for the web backend and old tools.
+    # Low-level RFCTRL2 methods are used by the web backend and protocol tools.
     def rfctrl2_hello(self, seq: int | None = None, wait_response: bool = True):
         sequence = self._next_sequence() if seq is None else int(seq)
         return self._request(pack_rfctrl2_hello(sequence), RF2_OP_HELLO, sequence, wait_response=wait_response)
@@ -403,9 +398,6 @@ class Dr47Device:
         """Select strict external synchronization or explicit local bypass."""
 
         value = str(mode).strip().lower()
-        if value == "self_test":
-            warnings.warn("sync mode 'self_test' is deprecated; use 'bypass'", DeprecationWarning, stacklevel=2)
-            value = "bypass"
         if value not in {"external", "bypass"}:
             raise ValueError("sync mode must be 'external' or 'bypass'")
         capability_bits = self.status(refresh=False).capabilities.capability_bits
@@ -609,7 +601,7 @@ class Dr47Device:
             self._pending_revision = int(revision) & 0xFFFFFFFF
         return self._apply_pending(int(channel_mask))
 
-    def set_xy_nco_frequency(self, channel: int, frequency_ghz: float, slot: int | None = None) -> int:
+    def set_xy_nco_frequency(self, channel: int, frequency_ghz: float) -> int:
         """Set an XY channel's RFDC NCO frequency in GHz."""
 
         physical = self._map_channel("xy", channel)
@@ -627,7 +619,7 @@ class Dr47Device:
         return 0
 
     def set_gain(self, channel_type: Literal["xy", "z"], channel: int, gain: float = 1.0,
-                 gain_type: Literal["norm", "dbm", "code", "volt"] = "norm", slot: int | None = None) -> int:
+                 gain_type: Literal["norm", "dbm", "code", "volt"] = "norm") -> int:
         physical = self._map_channel(channel_type, channel)
         if gain_type != "norm":
             raise UnsupportedParameterError("set_gain", f"gain_type={gain_type!r}")
@@ -653,10 +645,10 @@ class Dr47Device:
         self._mask_explicit = True
         return 0
 
-    def set_qc_on_off(self, channel_type: str, channel: int, on_off: str = "on", slot: int | None = None) -> int:
+    def set_qc_on_off(self, channel_type: str, channel: int, on_off: str = "on") -> int:
         return self._set_channel_mask(channel_type, channel, on_off)
 
-    def set_qr_on_off(self, gen_type: str, channel: int, on_off: str = "on", slot: int | None = None) -> int:
+    def set_qr_on_off(self, gen_type: str, channel: int, on_off: str = "on") -> int:
         if str(gen_type).lower() in {"ifin", "ri"}:
             raise UnsupportedCapabilityError("set_qr_on_off", "ADC/DAQ input")
         return self._set_channel_mask(gen_type, channel, on_off)
@@ -750,26 +742,6 @@ class Dr47Device:
             "instruction_repeats": repeats,
         }
 
-    def download_qc_wave_seq(self, channel_type: str, channel: int, wave, seq, slot: int | None = None, **kwargs: Any) -> int:
-        physical = self._map_channel(channel_type, channel)
-        fmt = kwargs.pop("wave_format", None)
-        if fmt is None:
-            arr = np.asarray(wave)
-            if str(channel_type).lower() == "z" and arr.ndim != 2:
-                fmt = "z"
-            else:
-                fmt = "iq_matrix" if arr.ndim == 2 else _infer_wave_format(wave, physical)
-        self.upload_waveforms({physical: wave}, {physical: seq}, wave_formats={physical: fmt}, auto_start=False)
-        return 0
-
-    def download_qr_wave_seq(self, gen_type: str, channel: int, wave, seq, slot: int | None = None, **kwargs: Any) -> int:
-        if str(gen_type).lower() in {"ifin", "ri"}:
-            raise UnsupportedCapabilityError("download_qr_wave_seq", "ADC/DAQ input")
-        physical = self._map_channel(gen_type, channel)
-        fmt = kwargs.pop("wave_format", None) or ("iq_matrix" if np.asarray(wave).ndim == 2 else "packed_iq")
-        self.upload_waveforms({physical: wave}, {physical: seq}, wave_formats={physical: fmt}, auto_start=False)
-        return 0
-
     def arm(self, channel_mask: int | None = None, run_id: int | None = None) -> int:
         self._require_connected()
         mask = (self._channel_mask if self._mask_explicit else 0xFF) if channel_mask is None else int(channel_mask)
@@ -820,49 +792,10 @@ class Dr47Device:
         self._status = DeviceStatus(True, self.ip, self.port, PlaybackState.IDLE, self._capabilities, "ABORT_MUTE accepted")
         return 0
 
-    def run_circuit(self, command: int = 1, slot: int | None = None) -> int:
-        value = int(command)
-        if value != 1:
-            raise UnsupportedCapabilityError("run_circuit", "command=1 (ARM/TRIGGER)", self._capabilities.capability_bits)
-        status = self.status(refresh=False)
-        if status.state not in {PlaybackState.ARMED, PlaybackState.PREPARED, PlaybackState.RUNNING}:
-            self.arm()
-        return self.trigger()
-
-    # DAQ/PUMP methods retain ez-Q signatures but never report false success.
-    def set_pump_LO_frequency(self, frequency_ghz: float, slot: int | None = None) -> int:
-        raise UnsupportedCapabilityError("set_pump_LO_frequency", "MIX/PUMP")
-
-    def set_acq_params(self, channel: int, mode: int | None = None, sample_count: int = 1,
-                       start=None, depth=None, slot: int | None = None) -> int:
-        raise UnsupportedCapabilityError("set_acq_params", "DAQ/ADC")
-
-    def set_daq_enable(self, channel: int, mode: int | None = None, ts_mask: int | None = None,
-                       slot: int | None = None) -> int:
-        raise UnsupportedCapabilityError("set_daq_enable", "DAQ/ADC")
-
-    def set_demod_filter(self, channel: int, demod_freqs, demod_weights=None, slot: int | None = None):
-        raise UnsupportedCapabilityError("set_demod_filter", "DAQ/ADC demodulator")
-
-    def get_daq_data(self, channel: int, mode: int | None = None, start_address: int | None = None,
-                     timeout: int | None = None, slot: int | None = None):
-        raise UnsupportedCapabilityError("get_daq_data", "DAQ/ADC readout")
-
     def commit(self) -> int:
         if self.batch_mode:
             self._apply_pending(0xFF)
         return 0
-
-    def send_instructions(self, commands) -> int:
-        self.transport.send(pack_udp_instruction_packet(commands))
-        return 0
-
-    def upload_waveform_udp(self, data_int16: np.ndarray, ddr_addr: int, dump_path: str = "", dump_style: str = "hexdump"):
-        count = 0
-        for packet in iter_udp_waveform_packets(data_int16, ddr_addr):
-            self.transport.send(packet)
-            count += 1
-        return count
 
     def close(self) -> None:
         with self._lock:
@@ -882,7 +815,7 @@ class Dr47Device:
 
 
 def _infer_wave_format(wave: Any, physical_channel: int) -> str:
-    """Choose a useful compatibility default for ambiguous Python lists."""
+    """Choose a useful default for ambiguous Python lists."""
     arr = np.asarray(wave)
     if arr.ndim == 2:
         return "iq_matrix"

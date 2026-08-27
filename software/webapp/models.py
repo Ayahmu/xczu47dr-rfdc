@@ -388,7 +388,7 @@ class BoardUpdateRequest(BaseModel):
     enabled: bool = True
 
     @model_validator(mode="after")
-    def normalize_network_aliases(self) -> "BoardUpdateRequest":
+    def normalize_network_fields(self) -> "BoardUpdateRequest":
         if not self.desired_ip:
             self.desired_ip = self.ip
         if not self.active_ip:

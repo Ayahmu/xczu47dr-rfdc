@@ -13,21 +13,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# The legacy module keeps its historical constants and ``RFSocController``
-# surface for old scripts.  New code should use the standalone wheel package;
-# these aliases make the migration incremental without importing web code.
+# The standalone driver package provides the protocol implementation used by
+# this utility and by the web service.
 try:
     from dr47 import (  # type: ignore
         Dr47Device,
         MagicMock,
-        SequenceGenerator,
         SimulatedDr47Device,
         connect,
     )
 except ImportError:  # pragma: no cover - package is present in normal installs
     Dr47Device = None
     MagicMock = None
-    SequenceGenerator = None
     SimulatedDr47Device = None
     connect = None
 
@@ -125,11 +122,6 @@ DDR_CH_ADDR = [
 ]
 DDR_X_ADDR = DDR_CH1_ADDR
 DDR_Y_ADDR = DDR_CH2_ADDR
-# Backward-compatible aliases used by older GUI/tests. DAC_XY_FS is the RFDC
-# input I/Q sample rate used for waveform synthesis, not the post-interpolation
-# analog DAC sample rate.
-DAC_XY_FS = DEFAULT_WAVEFORM_SAMPLE_RATE_HZ
-DAC_AXIS_HZ = DEFAULT_AXIS_HZ
 # 单帧固定字节数 / 样本数：一个 256-bit DAC 字 = 32B = 16 个 int16 lane。
 NUM_SAMPLES = FIXED_DATA_BYTES // 2
 INT16_PER_BEAT = 16
@@ -200,9 +192,6 @@ RV1_OP_STATUS_READ = 0x0000000A
 RF2_OP_HELLO = 0x00000001
 RF2_OP_STATUS = 0x00000002
 RF2_OP_RFDC_APPLY = 0x00000003
-# Kept as a source-compatible name for older scripts. Opcode 0x03 now always
-# means the structured PL RFDC apply command, never the old fake SET_NCO path.
-RF2_OP_SET_NCO = RF2_OP_RFDC_APPLY
 RF2_OP_UPLOAD_BEGIN = 0x00000004
 RF2_OP_UPLOAD_COMMIT = 0x00000005
 RF2_OP_ARM = 0x00000006
@@ -245,8 +234,6 @@ RF2_NET_STATUS_SYNC_DONE = 0x00000040
 RF2_SYNC_STATUS_SEEN = 0x00000001
 RF2_SYNC_STATUS_READY = 0x00000002
 RF2_SYNC_STATUS_BYPASS = 0x00000004
-# Compatibility name for old scripts. New callers should use bypass.
-RF2_SYNC_STATUS_SELF_TEST = RF2_SYNC_STATUS_BYPASS
 RF2_SYNC_STATUS_ROLE_MASTER = 0x00000008
 
 RF2_STATUS_OK = 0x0000
@@ -1317,7 +1304,7 @@ def max_length_waveform_cache_key(
     sine_amplitude: int = 0x1000,
 ) -> str:
     params = {
-        "axis_hz": DAC_AXIS_HZ,
+        "axis_hz": DAC_FABRIC_HZ,
         "bytes_per_channel": int(bytes_per_channel),
         "channels": DDR_INTERLEAVED_CHANNELS,
         "lane_bytes": DDR_INTERLEAVED_LANE_BYTES,

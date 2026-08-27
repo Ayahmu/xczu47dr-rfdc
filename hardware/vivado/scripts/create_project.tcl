@@ -180,6 +180,11 @@ if {[file exists ${src_dir}]} {
     set filtered_rtl_files [list]
     foreach rtl_file $rtl_files {
         set rtl_tail [file tail $rtl_file]
+        # The tiled executor is retained for standalone RTL simulations only;
+        # production Top.v uses the interleaved 512-bit executor.
+        if {$rtl_tail eq "waveform_system_top.v"} {
+            continue
+        }
         set is_bw_file [expr {$rtl_tail in {
             "TopBandwidthCore.v"
             "TopBandwidthXczu47dr.v"
@@ -190,7 +195,6 @@ if {[file exists ${src_dir}]} {
         set is_rfdc_file [expr {$rtl_tail in {
             "Top.v"
             "TopCustomXczu47dr.v"
-            "waveform_system_top.v"
             "waveform_interleaved_system_top.v"
             "dac_play_ctrl.v"
             "udp_waveform_ddr_writer.v"

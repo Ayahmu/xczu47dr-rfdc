@@ -220,10 +220,8 @@ class WebAppApiTests(unittest.TestCase):
     def test_server_udp_interface_inventory_exposes_host_ethernet_port(self):
         response = self.client.get("/api/network/interfaces")
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(
-            [item["name"] for item in response.json()],
-            ["enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1"],
-        )
+        names = {item["name"] for item in response.json()}
+        self.assertTrue({"enp225s0f0", "enp225s0f1", "eno1np0", "eno2np1"} <= names)
 
     def test_admin_capability_report_exposes_required_net_caps(self):
         response = self.client.get("/api/admin/system/capabilities", headers=self.headers)

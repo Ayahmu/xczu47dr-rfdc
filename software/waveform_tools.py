@@ -337,18 +337,18 @@ def rtl_instruction_tdata_hex(words: tuple[int, int]) -> str:
 
 def delay_seconds_to_axis_cycles(
     delay_s: float,
-    sample_rate_hz: float = host.DAC_XY_FS,
+    sample_rate_hz: float = host.DAC_IQ_SAMPLE_RATE_HZ,
     samples_per_axis_cycle: int = 8,
 ) -> int:
     axis_hz = float(sample_rate_hz) / int(samples_per_axis_cycle)
     return max(0, int(round(float(delay_s) * axis_hz)))
 
 
-def delay_ns_to_axis_cycles(delay_ns: float, axis_freq_hz: float = host.DAC_AXIS_HZ) -> int:
+def delay_ns_to_axis_cycles(delay_ns: float, axis_freq_hz: float = host.DAC_FABRIC_HZ) -> int:
     return max(0, int(round(float(delay_ns) * float(axis_freq_hz) / 1e9)))
 
 
-def delay_seconds_to_axis_cycles_by_freq(delay_s: float, axis_freq_hz: float = host.DAC_AXIS_HZ) -> int:
+def delay_seconds_to_axis_cycles_by_freq(delay_s: float, axis_freq_hz: float = host.DAC_FABRIC_HZ) -> int:
     return delay_ns_to_axis_cycles(float(delay_s) * 1e9, axis_freq_hz)
 
 
@@ -633,7 +633,7 @@ def build_metadata(
         "rfdc_interpolation": int(host.RFDC_INTERPOLATION),
         "analog_sample_rate_hz": float(sample_rate_hz) * int(host.RFDC_INTERPOLATION),
         "dac_fs_hz": float(host.DAC_TILE_FS),
-        "axis_hz": float(host.DAC_AXIS_HZ),
+        "axis_hz": float(host.DAC_FABRIC_HZ),
         "record_duration_s": record_duration_s,
         "samples_per_channel": int(host.NUM_SAMPLES),
         "bytes_per_channel": int(host.FIXED_DATA_BYTES),
@@ -682,8 +682,6 @@ def save_waveform_bundle(
     channel_delays: dict[int, int] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    _save_named_waveform(out_dir, "x", x)
-    _save_named_waveform(out_dir, "y", y)
     _save_named_waveform(out_dir, "ch1", x)
     _save_named_waveform(out_dir, "ch2", y)
     if ch3 is not None:

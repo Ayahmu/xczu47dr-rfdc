@@ -35,8 +35,9 @@ PYTHONPATH=software python your_script.py
 网卡发包。Linux 下使用它通常需要 `CAP_NET_RAW`。首次配置主机临时地址时，
 `prepare_interface()` 需要 `CAP_NET_ADMIN`。
 
-板卡身份以 `device_uid` 为准，不要用交换机端口、JTAG 序列号或 `/dev/ttyUSBx`
-作为网络身份。
+板卡发现身份使用 `(device_uid, current_mac)` 复合键。部分旧 bitstream 可能让多块
+板报告相同 UID，此时必须依赖 MAC 区分；不要用交换机端口、JTAG 序列号或
+`/dev/ttyUSBx` 代替网络身份。
 
 ### 首次部署：持久配置发现地址
 
@@ -95,9 +96,8 @@ Dr47Device(
     udp_source_ip="10.50.0.10",
     retries=2,
     batch_mode=False,
-    slot=None,
+    sync_role="slave",
     transport=None,
-    **legacy_options,
 )
 ```
 
@@ -110,9 +110,8 @@ Dr47Device(
 | `udp_source_ip` | `str` | UDP socket 绑定的源 IPv4；为空时由系统选择 |
 | `retries` | `int` | 可确认 RFCTRL2 请求的重试次数 |
 | `batch_mode` | `bool` | `True` 时暂存 RFDC/增益修改，之后由 `commit()` 一次提交 |
-| `slot` | `int \| None` | 兼容旧 ez-Q 脚本；当前 UDP 驱动不使用它 |
+| `sync_role` | `"master" \| "slave"` | 与烧写 bitstream 匹配的固定角色 |
 | `transport` | object | 可注入自定义传输对象，主要用于测试 |
-| `legacy_options` | 任意 | 旧脚本参数会保留但不参与当前 UDP 硬件控制 |
 
 属性：
 
@@ -188,7 +187,7 @@ prepare_interface("enp225s0f0", "169.254.250.10/16")
 ### `discover_boards(...) -> list[DiscoveredBoard]`
 
 向广播地址发送 RFCTRL2 `NETWORK_GET`，收集超时时间内所有板卡的回复，并按
-`device_uid` 去重。该函数是只读操作，不会修改任何板卡网络配置。
+`(device_uid, current_mac)` 去重。该函数是只读操作，不会修改任何板卡网络配置。
 
 ```python
 boards = discover_boards(
@@ -220,9 +219,9 @@ boards = discover_boards(
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `device_uid` | `str` | FPGA DNA 派生的永久身份，首要识别字段 |
+| `device_uid` | `str` | FPGA DNA 派生身份；可能与其他板重复，需结合 MAC |
 | `current_ip` | `str` | 发现时板卡正在使用的 IP |
-| `current_mac` | `str` | 发现时板卡正在使用的 MAC |
+| `current_mac` | `str` | 发现时板卡正在使用的 MAC；与 UID 组成复合身份 |
 | `build_profile` | `str` | 构建 profile，例如 `custom_xczu47dr` |
 | `revision` | `int` | 当前网络配置 revision |
 | `port` | `int` | 板卡当前 UDP 端口 |
@@ -379,12 +378,12 @@ readback = device.apply_rfdc_config(
 RFDC NCO 范围为 `-3.2 .. +3.2 GHz`。当前项目 DAC 采样率为 `6.4 GSPS`，
 具体模拟输出频率还要结合 Nyquist zone。
 
-#### `set_xy_nco_frequency(channel, frequency_ghz, slot=None) -> int`
+#### `set_xy_nco_frequency(channel, frequency_ghz) -> int`
 
 设置 XY 逻辑通道 `1..4` 对应 CH1..CH4 的 NCO。单位 GHz。非 batch 模式下
 会立即提交该物理通道；成功返回 `0`。
 
-#### `set_gain(channel_type, channel, gain=1.0, gain_type="norm", slot=None) -> int`
+#### `set_gain(channel_type, channel, gain=1.0, gain_type="norm") -> int`
 
 设置 DAC 输出电流。当前只支持 `gain_type="norm"`，`gain` 范围 `0..1`。
 `xy` 映射 CH1..CH4，`z` 映射 CH5..CH6。成功返回 `0`。
@@ -397,12 +396,12 @@ RFDC NCO 范围为 `-3.2 .. +3.2 GHz`。当前项目 DAC 采样率为 `6.4 GSPS`
 
 ### 通道开关、波形和播放
 
-#### `set_qc_on_off(channel_type, channel, on_off="on", slot=None) -> int`
+#### `set_qc_on_off(channel_type, channel, on_off="on") -> int`
 
 设置 XY 或 Z 通道的播放使能。`channel_type` 支持 `xy`、`z`；`on_off`
 必须为 `on` 或 `off`。修改的是本地通道 mask，成功返回 `0`。
 
-#### `set_qr_on_off(gen_type, channel, on_off="on", slot=None) -> int`
+#### `set_qr_on_off(gen_type, channel, on_off="on") -> int`
 
 设置 RO/QR 输出通道，RO/IFOUT 映射 CH7..CH8。`ri`/`ifin` 属于 ADC 输入，
 当前 bitstream 不支持，会抛出 `UnsupportedCapabilityError`。
@@ -443,25 +442,7 @@ RFDC NCO 范围为 `-3.2 .. +3.2 GHz`。当前项目 DAC 采样率为 `6.4 GSPS`
 
 停止/静音整板播放，状态回到 `IDLE`，成功返回 `0`。
 
-#### 兼容上传和底层指令函数
-
-| 函数 | 参数 | 功能与返回值 |
-| --- | --- | --- |
-| `download_qc_wave_seq(channel_type, channel, wave, seq, slot=None, **kwargs) -> int` | `channel_type` 为 `xy`/`z`，逻辑通道和波形/序列 | 映射到物理 CH 并上传带序列波形；成功返回 `0` |
-| `download_qr_wave_seq(gen_type, channel, wave, seq, slot=None, **kwargs) -> int` | `gen_type` 为 `ro`/`ifout` 等输出类型 | 上传 QR/RO 输出序列；成功返回 `0` |
-| `send_instructions(commands) -> int` | 四元组/五元组指令列表 | 直接发送 WAVEINS0 指令包；成功返回 `0` |
-| `upload_waveform_udp(data_int16, ddr_addr, dump_path="", dump_style="hexdump")` | int16 波形和对齐的 DDR 地址 | 直接发送 DDR 写包；返回发送的数据包数量 |
-
-这组函数主要用于兼容旧 ez-Q 脚本。新程序优先使用
-`upload_waveforms()`，因为它会统一处理格式转换、交错 DDR 布局、指令和
-发送节流。
-
-#### `run_circuit(command=1, slot=None) -> int`
-
-兼容旧 ez-Q 调用。当前只支持 `command=1`，其行为是必要时 ARM，然后执行
-本地 `trigger()`。成功返回 `0`。
-
-### 单 SYNC、外部 Trigger 与自测试旁路
+### 单 SYNC、外部 Trigger 与旁路
 
 物理连接由用户完成，三个 SMP 端口具有固定职责：
 
@@ -577,7 +558,7 @@ with Dr47Device(
 
 ### 直接 RFCTRL2 方法
 
-这些方法保留给网页后端、协议调试和需要自行管理 sequence 的程序。普通用户
+这些方法用于网页后端、协议调试和需要自行管理 sequence 的程序。普通用户
 优先使用上一节的高层方法。
 
 | 方法 | 参数重点 | 返回值 |
@@ -642,42 +623,9 @@ with Dr47Device(
 | `iter_udp_waveform_packets(wave_bytes, ddr_addr, sample_count=None)` | 生成普通 DDR 写包迭代器 | iterator |
 | `iter_tiled_udp_waveform_packets(wave_bytes, channel, base_addr=0, sample_count=None)` | 生成 tiled DDR 写包迭代器 | iterator |
 | `iter_interleaved_udp_waveform_packets(channel_waves, base_addr=0)` | 生成交错 DDR 写包迭代器 | iterator |
-| `iter_max_length_udp_batches(bytes_per_channel, base_addr=0, beats_per_datagram=4, **kwargs)` | 生成兼容的批量写包 | iterator |
+| `iter_max_length_udp_batches(bytes_per_channel, base_addr=0, beats_per_datagram=4, **kwargs)` | 生成零填充的批量写包 | iterator |
 
-### ez-Q 序列
-
-#### `PulseWave(amplitude, duration)`
-
-生成固定幅度脉冲。`duration` 单位为秒，当前内部采样率为 2 GS/s。
-
-```python
-pulse = PulseWave(amplitude=12000, duration=100e-9)
-wave = pulse.generate()       # np.ndarray[int32]
-```
-
-#### `SequenceGenerator(channel_type, time_data, event_data, mark_data=None, period=0, repeat=0, delay=0, mark_delay=0, offset=0)`
-
-生成 ez-Q 兼容波形和 4-word 控制序列。`channel_type` 可为 `XY`、`Z`、
-`RI`、`RO`；当前硬件播放主要使用 XY/Z/RO 输出。
-
-- `TriggerSeqGenerate()`：返回 `(wave_data, seq_data)`，适合一次/触发序列。
-- `ContinueSeqGenerate()`：返回连续重复的 `(wave_data, seq_data)`。
-
-`repeat` 必须为正数；`seq_data` 形状为 `(N, 4)`，dtype 为小端 `uint16`。
-
-#### `TriggerSeqGenerate(*args, **kwargs)`
-
-函数式封装：可以传入 `SequenceGenerator` 实例，也可以直接传构造参数。
-
-```python
-wave, sequence = TriggerSeqGenerate(
-    "XY",
-    time_data=[0.0],
-    event_data=[PulseWave(10000, 40e-9)],
-    period=1e-6,
-    repeat=1,
-)
-```
+### 播放序列
 
 #### `make_trigger_sequence(sample_count) -> np.ndarray`
 
@@ -705,9 +653,8 @@ with Dr47Device(ip="10.50.0.101") as device:
     device.trigger()  # 每次调用播放一条记录
 ```
 
-该 helper 是驱动公共 API，不依赖任何实板测试脚本；四类正式板级测试和上层应用
-可以共享它。若需要 ez-Q 的复杂延时、标记或有限循环，请使用
-`SequenceGenerator`，当前 PL 不支持的嵌套循环/条件跳转会明确抛出异常。
+该 helper 是驱动公共 API，不依赖任何实板测试脚本；五类正式板级测试和上层应用
+可以共享它。
 
 #### `ezq_sequence_rows(sequence) -> np.ndarray`
 
@@ -739,8 +686,6 @@ with Dr47Device(ip="10.50.0.101") as device:
 | `receive_rfresp2(expected_seq=None, expected_opcode=None)` | 接收一条匹配回复 | dict |
 | `receive_rfresp2_many(expected_seq=None, expected_opcode=None, timeout_s=1.0)` | 收集广播的多条回复 | `list[dict]` |
 | `close()` | 关闭 socket | `None` |
-
-`UDPTransport` 是 `UdpTransport` 的别名。
 
 ### `SimulatedDr47Device`
 
@@ -867,7 +812,7 @@ dr47-network status \
   --json
 ```
 
-当前两个命令都会连接并读取一次状态；`connect` 名称用于脚本语义兼容。
+当前两个命令都会连接并读取一次状态。
 
 ## 9. 完整从头到尾示例
 

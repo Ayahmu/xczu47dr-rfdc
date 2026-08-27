@@ -1,159 +1,46 @@
-# Firmware - Embedded Software
+ # 裸机固件
 
-This directory contains the embedded firmware (PS code) for the XCZU47DR RFDC project.
+ 固件运行在 XCZU47DR 的 Cortex-A53 裸机环境中。它负责上电后的平台、HMC7044、
+ RFDC、DAC MTS 和 NCO SYSREF 初始化；波形数据和运行时 RFDC 参数由 PL 的 UDP
+ 服务处理，PS 不再运行 Ethernet/lwIP 服务。
 
-## Directory Structure
+ ## 构建和烧写
 
-```
-firmware/
-├── src/                    # Source code
-│   ├── main.c              # Main application
-│   ├── main.h              # Main header
-│   ├── platform/           # Platform initialization
-│   ├── drivers/            # Custom drivers
-│   ├── modules/            # Functional modules
-│   │   ├── rf/             # RFDC and clock control
-│   │   └── dma/            # DMA stubs
-│   ├── config/             # Configuration files
-│   └── lscript.ld          # Linker script
-├── scripts/                # Build scripts
-│   ├── create_app.tcl      # Create Vitis application
-│   └── program.tcl         # Program FPGA and download ELF
-├── build.sh                # Build automation script
-└── workspace/              # Vitis workspace (gitignored)
-```
+ 先加载 Vitis 2024.2：
 
-## Prerequisites
+ ~~~bash
+ source /tools/Xilinx/Vitis/2024.2/settings64.sh
+ ~~~
 
-- Xilinx Vitis 2024.2
-- Hardware XSA and bitstream from Vivado build
+ 从仓库根目录执行：
 
-For clone users, the checked-in `artifacts/` directory already contains the
-role-matched XSA, bitstream, ELF, and `psu_init.tcl`; no Vivado synthesis,
-implementation, or Vitis workspace creation is required for `make program`.
-- ARM cross-compiler (aarch64-none-elf-gcc)
+ ~~~bash
+ make firmware TARGET=custom_xczu47dr_master
+ make firmware TARGET=custom_xczu47dr_slave
+ JTAG_CABLE_SERIAL=<序列号> TARGET=custom_xczu47dr_slave make program
+ ~~~
 
-## Quick Start
+ 也可在本目录使用 ./build.sh create|build|rebuild|program|clean。program 使用
+ artifacts/ 中与目标同名的 bitstream、XSA、ELF 和 psu_init.tcl，主从文件不能混用。
 
-### Setup Environment
+ ## 源码职责
 
-```bash
-source /tools/Xilinx/Vitis/2024.2/settings64.sh
-```
+ ~~~text
+ src/main.c                         启动流程和主循环
+ src/platform/                      平台、缓存和时钟初始化
+ src_custom/custom_xczu47dr/        定制板 RFDC 适配
+ scripts/create_app.tcl             创建 Vitis 工程
+ scripts/program.tcl                JTAG 下载 bitstream/ELF
+ ~~~
 
-### Build Commands
+ 主卡和从卡共用一套 C 源码，只由对应 XSA 和构建目标决定 XS20 方向。启动日志通过
+ 115200 波特率串口查看；串口是诊断手段，不是运行时 RFDC 配置确认手段。
 
-The formal firmware targets are `TARGET=custom_xczu47dr_master` and
-`TARGET=custom_xczu47dr_slave`; they compile one shared firmware source against
-their respective XSAs. `TARGET=custom_xczu47dr_bw` remains separate.
+ ## 启动检查
 
-```bash
-# Create application from XSA, first time
-./build.sh create
+ 应看到 HMC7044 配置完成、RFDC PLL 就绪、DAC MTS 完成和 NCO SYSREF 就绪。固件只
+ 等待 HMC7044 PL 时序器，不等待 XS20；双板同步由主机驱动在板卡启动后完成。
 
-# Build application after source changes
-./build.sh build
-
-# Rebuild from scratch
-./build.sh rebuild
-
-# Program FPGA and run
-./build.sh program
-
-# Clean workspace
-./build.sh clean
-
-# Preview create and program paths without XSCT or JTAG actions
-DRY_RUN=1 ./build.sh create
-DRY_RUN=1 ./build.sh program
-
-# Build when the XSA is present
-./build.sh create
-./build.sh build
-```
-
-## Build Flow
-
-1. **Create**: Creates Vitis platform and application from the target XSA.
-2. **Build**: Compiles source code and generates the target ELF.
-3. **Program**: Sources the generated PS init script, programs the target bitstream, downloads the ELF via JTAG, and starts Cortex-A53 #0.
-
-## Build Outputs
-
-Master/slave programming outputs use the corresponding role name, for example
-`TARGET=custom_xczu47dr_slave` publishes:
-
-- **ELF file**: `../artifacts/custom_xczu47dr_slave.elf`
-- **PS init script**: `../artifacts/custom_xczu47dr_slave_psu_init.tcl`
-
-The Vitis workspace still contains the intermediate ELF and map file, but it is
-not the programming handoff and remains ignored by Git.
-
-`TARGET=custom_xczu47dr_bw` outputs:
-
-- **ELF handoff**: `../artifacts/custom_xczu47dr_bandwidth.elf`
-- **PS init handoff**: `../artifacts/custom_xczu47dr_bandwidth_psu_init.tcl`
-- **Intermediate ELF/map**: `workspace/custom_xczu47dr_bandwidth/bandwidth_app/Debug/`
-
-## Hardware Configuration
-
-- **Processor**: ARM Cortex-A53 (psu_cortexa53_0)
-- **OS**: Standalone (bare-metal)
-- **Memory**: DDR4 @ 0x800000000
-- **UART**: 115200 baud
-
-## Source Code Overview
-
-### Main Application
-- `main.c/h`: Application entry point and main loop
-
-### Platform
-- `platform/platform_zynqmp.c`: Platform initialization (cache, clocks)
-
-### Drivers
-- Custom drivers for peripherals
-
-### Modules
-- `rf/`: RFDC control and board clock policy
-- `dma/`: DMA stubs (not used in current hardware)
-
-## Custom XCZU47DR Firmware Notes
-
-`TARGET=custom_xczu47dr_master` and `TARGET=custom_xczu47dr_slave` both build with `BOARD_CUSTOM_XCZU47DR`, sharing the same source tree. They respectively use `artifacts/custom_xczu47dr_master.xsa` or `artifacts/custom_xczu47dr_slave.xsa`, while their isolated role-specific Vitis workspace remains generated under `firmware/workspace/`.
-
-The custom hardware debug trigger output is XS18 `TRIG_1`. The hardware wrapper is `TopCustomXczu47dr`, which drives that MMCX output from package ball A6 after host configuration commit so the END timing can be checked externally or through ILA.
-
-For the current mainline custom targets, XS17 is a 10 MHz reference. The PL sequencer programs the 128 MHz DAC reference; firmware polls only the HMC7044 done bit, then continues RFDC/MTS/NCO startup independently of XS20 synchronization. The RTL drives `RESET_H7044_H_0` low as the released state for the active-high reset net; verify that polarity on the board during bring-up.
-
-The custom RFDC path uses CH1-CH8 -> DAC00/DAC02/DAC10/DAC12/DAC20/DAC22/DAC30/DAC32, with 6.4 GS/s DAC sampling, 16x interpolation, 400 MS/s complex I/Q input, and a 50 MHz RFDC fabric stream. Firmware starts enabled RFDC tiles, PLLs, and calibration and checks startup return values. After startup it does not configure NCO, NCO phase, Nyquist zone, or DAC VOP and it does not poll a DDR mailbox. Those runtime values are validated, applied, and read back entirely by the PL `RFCTRL2` UDP engine. UART output is boot diagnostics only and is not an apply acknowledgment. The PS Ethernet/lwIP server path is removed from the firmware; JTAG programming and board-level validation are still separate bring-up steps.
-
-Deferred custom-board interfaces include PCIe, QSFP, SFP, Type-C, Aurora, and extra PL DDR unless later work requests them.
-
-## Debugging
-
-### UART Console
-
-```bash
-# Linux
-screen /dev/ttyUSB0 115200
-
-# Or
-minicom -D /dev/ttyUSB0 -b 115200
-```
-
-### XSCT Debug
-
-```bash
-xsct
-xsct% connect
-xsct% targets
-xsct% mrd 0xA0010000 16    # Read memory
-xsct% mwr 0xA0010000 0x1234 # Write memory
-```
-
-## Notes
-
-- The firmware is built for bare-metal (no OS)
-- PS Ethernet/lwIP support is removed from the firmware
-- DMA functionality is stubbed (no AXI DMA in hardware)
-- RFDC and clock configuration are the main features
+ ~~~bash
+ screen /dev/ttyUSB0 115200
+ ~~~

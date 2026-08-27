@@ -23,9 +23,11 @@ from .network import (
 class BoardNetworkAssignment:
     """Network identity requested by one hardware test.
 
-    ``device_uid`` may be left empty when exactly one discovered board has the
-    requested hardware role.  Set it when multiple master or slave boards are
-    present.  ``mac`` may be left empty to preserve the DNA-derived board MAC.
+    ``device_uid`` may be left empty when the requested hardware role is unique.
+    ``match_mac`` can be supplied when a board must be selected deterministically
+    from several boards that report the same UID. ``mac`` remains the optional
+    MAC to apply during network provisioning; leave it empty to preserve the
+    discovered MAC.
     """
 
     label: str
@@ -35,6 +37,7 @@ class BoardNetworkAssignment:
     mac: str | None = None
     subnet_mask: str = "255.255.0.0"
     gateway: str = "0.0.0.0"
+    match_mac: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,15 +52,15 @@ class EnrolledBoard:
     port: int
 
 
-def _read_discovered_roles(boards: Sequence[DiscoveredBoard]) -> dict[str, str]:
-    """Connect to each temporary address and read its bitstream role."""
+def _read_discovered_roles(boards: Sequence[DiscoveredBoard]) -> dict[tuple[str, str], str]:
+    """连接每块发现的板，按复合身份读取 bitstream 声明的主从角色。"""
 
-    roles: dict[str, str] = {}
+    roles: dict[tuple[str, str], str] = {}
     for board in boards:
         device = connect_discovered(board, timeout_s=1.0, retries=2)
         try:
             role = str(device.status(refresh=False).capabilities.sync_role)
-            roles[board.device_uid] = role
+            roles[board.identity_key] = role
             print(
                 f"发现板卡：UID={board.device_uid}，临时IP={board.current_ip}，"
                 f"MAC={board.current_mac}，角色={role}"
@@ -69,30 +72,37 @@ def _read_discovered_roles(boards: Sequence[DiscoveredBoard]) -> dict[str, str]:
 
 def _select_board(
     boards: Sequence[DiscoveredBoard],
-    roles: dict[str, str],
+    roles: dict[tuple[str, str], str],
     assignment: BoardNetworkAssignment,
-    used_uids: set[str],
+    used_boards: set[tuple[str, str]],
 ) -> DiscoveredBoard:
+    """按角色、可选 UID/MAC 从发现结果中选择唯一板卡。"""
     expected_role = assignment.sync_role.strip().lower()
     expected_uid = assignment.device_uid.strip().lower()
+    expected_mac = assignment.match_mac.strip().lower()
     candidates = [
         board
         for board in boards
-        if board.device_uid not in used_uids
-        and roles.get(board.device_uid, "").lower() == expected_role
+        if board.identity_key not in used_boards
+        and roles.get(board.identity_key, "").lower() == expected_role
         and (not expected_uid or board.device_uid.lower() == expected_uid)
+        and (not expected_mac or board.current_mac.lower() == expected_mac)
     ]
     if not candidates:
-        identity = f"UID={assignment.device_uid}" if assignment.device_uid else "任意UID"
+        identity_parts = []
+        if assignment.device_uid:
+            identity_parts.append(f"UID={assignment.device_uid}")
+        if assignment.match_mac:
+            identity_parts.append(f"MAC={assignment.match_mac}")
+        identity = ", ".join(identity_parts) if identity_parts else "任意身份"
         raise DriverError(
             f"没有发现符合 {assignment.label} 的板卡：角色={expected_role}，{identity}"
         )
     if len(candidates) > 1:
-        uids = ", ".join(board.device_uid for board in candidates)
-        raise DriverError(
-            f"发现多块角色为 {expected_role} 的板卡（{uids}）；"
-            f"请在测试文件顶部填写 {assignment.label} 的 device_uid"
+        identities = ", ".join(
+            f"UID={board.device_uid}/MAC={board.current_mac}" for board in candidates
         )
+        raise DriverError(f"发现多块角色为 {expected_role} 的板卡（{identities}）；请填写 MAC")
     return candidates[0]
 
 
@@ -139,11 +149,24 @@ def discover_and_provision_boards(
     roles = _read_discovered_roles(boards)
 
     selected: list[tuple[BoardNetworkAssignment, DiscoveredBoard]] = []
-    used_uids: set[str] = set()
+    used_boards: set[tuple[str, str]] = set()
     for assignment in assignments:
-        board = _select_board(boards, roles, assignment, used_uids)
+        board = _select_board(boards, roles, assignment, used_boards)
         selected.append((assignment, board))
-        used_uids.add(board.device_uid)
+        used_boards.add(board.identity_key)
+
+    # 同一临时 IP 上的多个板无法通过普通 UDP 单播区分。继续 NETWORK_APPLY
+    # 会随机命中其中一块，必须要求用户先断开/隔离板卡，避免破坏网络身份。
+    endpoints: dict[tuple[str, int], DiscoveredBoard] = {}
+    for _, board in selected:
+        endpoint = (board.current_ip, board.port)
+        previous = endpoints.get(endpoint)
+        if previous is not None and previous.identity_key != board.identity_key:
+            raise DriverError(
+                f"板卡 {previous.current_mac} 与 {board.current_mac} 共用临时地址 "
+                f"{board.current_ip}:{board.port}；请先逐块隔离并分配唯一 IP"
+            )
+        endpoints[endpoint] = board
 
     enrolled: list[EnrolledBoard] = []
     for assignment, board in selected:

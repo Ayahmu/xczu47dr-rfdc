@@ -34,8 +34,8 @@ class VivadoBuildOptionsTests(unittest.TestCase):
     def test_makefile_exposes_project_reuse_build(self):
         makefile = MAKEFILE.read_text(encoding="utf-8", errors="ignore")
         self.assertIn("hardware-fast:", makefile)
-        self.assertIn("TARGET=$(TARGET) ./build.sh", makefile)
-        self.assertIn("TARGET=$(TARGET) ./build.sh --clean", makefile)
+        self.assertIn("TARGET=$(TARGET) ARTIFACT_DIR=", makefile)
+        self.assertIn("TARGET=$(TARGET) VIVADO_WORK_DIR=", makefile)
 
     def test_rfdc_reference_clock_is_not_overridden_after_chisel_generation(self):
         create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")

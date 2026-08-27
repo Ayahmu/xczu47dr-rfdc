@@ -5,8 +5,8 @@
 * 082 XS20 -> 081 XS20：板间同步（SYNC）链路。
 * 082 XS18 -> 081 XS19：外部触发（Trigger）链路。
 * 两块板的 XS17：接入同一个 10 MHz 参考时钟源。
-* 082 和 081 分别接主机的两个 10GbE 网口；默认使用 ``enp1s0f1`` 和
-  ``enp1s0f0``。以太网仅用于板卡发现、配置和波形上传，不代替板间同步线。
+* 主机只有一个 10GbE 网口 ``enp1s0f0`` 接交换机，两块板卡也接入同一交换机
+  VLAN。以太网仅用于板卡发现、配置和波形上传，不代替板间同步线。
 
 本例给两块板上传完全相同的有限长度 IQ 高斯包络正弦波。RF 载波由 RFDC NCO
 产生，默认 NCO 为 1 GHz、IQ 基带为 20 MHz。IQ 复采样率为 400 MS/s，因此
@@ -29,14 +29,11 @@ from ..waveforms import DAC_IQ_SAMPLE_RATE_HZ, make_iq_gaussian_sine_interleaved
 # RFCTRL2 固件的 UDP 服务端口，发现板卡与后续控制均使用此端口。
 BOARD_PORT = 1234
 
-# 主卡和从卡各自使用一个独立的 10GbE 物理接口。这里直接固定为当前服务器
-# 的实际接线：enp1s0f1 连接 082，enp1s0f0 连接 081。
-MASTER_INTERFACE = "enp1s0f1"
-MASTER_SOURCE_IP = "169.254.250.12"
-MASTER_SOURCE_CIDR = "169.254.250.12/16"
-SLAVE_INTERFACE = "enp1s0f0"
-SLAVE_SOURCE_IP = "169.254.250.11"
-SLAVE_SOURCE_CIDR = "169.254.250.11/16"
+# 交换机拓扑只需要一个主机网口和一个发现源地址。两块板卡共享同一个二层
+# 广播域，因此必须使用同一组 interface/source_ip 完成发现和后续单播控制。
+NETWORK_INTERFACE = "enp1s0f0"
+NETWORK_SOURCE_IP = "169.254.250.11"
+NETWORK_SOURCE_CIDR = "169.254.250.11/16"
 BROADCAST_IP = "169.254.255.255"
 
 # 发现板卡后写入并用于控制的目标地址。两块板必须使用不同 IP。
@@ -44,9 +41,15 @@ MASTER_TARGET_IP = "169.254.100.101"
 SLAVE_TARGET_IP = "169.254.100.102"
 SUBNET_MASK = "255.255.0.0"
 GATEWAY = "0.0.0.0"
-# 留空表示依靠独立物理网口及固件报告的 master/slave 角色识别板卡。
+# 留空表示按 bitstream 报告的 master/slave 角色选择板卡；如果多块板角色相同，
+# 可填写对应 MAC 进一步限定。MAC 比 device_uid 更可靠，因为旧 bitstream 可能
+# 让多块板报告相同 UID。
 MASTER_UID = ""
 SLAVE_UID = ""
+# 只有在多块板角色相同或 UID 重复且角色无法唯一选择时，才填写当前发现到的
+# MAC（不是烧写后的目标 MAC）。通常保持为空，让角色自动选择。
+MASTER_MATCH_MAC = ""
+SLAVE_MATCH_MAC = ""
 
 # 驱动通道从 1 开始编号，通道掩码则从 bit 0 开始，因此 CH1 对应 0x1。
 CHANNEL = 1
@@ -185,32 +188,36 @@ def run() -> int:
     master = None
     slave = None
     try:
-        # 1. 从 082 对应网口广播 NETWORK_GET，识别主卡并配置其控制 IP。
-        # 若设置了 MASTER_UID，还会用 UID 防止误把另一块板配置成主卡。
-        master_net = discover_and_provision_boards(
-            [BoardNetworkAssignment("082主卡", "master", MASTER_TARGET_IP, device_uid=MASTER_UID,
-                                    subnet_mask=SUBNET_MASK, gateway=GATEWAY)],
-            interface=MASTER_INTERFACE,
-            discovery_source_ip=MASTER_SOURCE_IP,
-            discovery_source_cidr=MASTER_SOURCE_CIDR,
-            control_source_ip=MASTER_SOURCE_IP,
+        # 1. 只广播一次 NETWORK_GET。交换机把广播复制给两块板，公共网络层按
+        # (device_uid, MAC) 保存每个响应，再按 bitstream 角色选择主卡和从卡。
+        # 这一步必须在两块板已经拥有不同临时/静态 IP 时执行；若仍共用同一
+        # 临时 IP，普通 UDP 无法可靠区分目标，公共层会明确拒绝配置。
+        enrolled = discover_and_provision_boards(
+            [
+                BoardNetworkAssignment(
+                    "082主卡", "master", MASTER_TARGET_IP,
+                    device_uid=MASTER_UID, match_mac=MASTER_MATCH_MAC,
+                    subnet_mask=SUBNET_MASK, gateway=GATEWAY,
+                ),
+                BoardNetworkAssignment(
+                    "081从卡", "slave", SLAVE_TARGET_IP,
+                    device_uid=SLAVE_UID, match_mac=SLAVE_MATCH_MAC,
+                    subnet_mask=SUBNET_MASK, gateway=GATEWAY,
+                ),
+            ],
+            interface=NETWORK_INTERFACE,
+            discovery_source_ip=NETWORK_SOURCE_IP,
+            discovery_source_cidr=NETWORK_SOURCE_CIDR,
+            control_source_ip=NETWORK_SOURCE_IP,
             broadcast_ip=BROADCAST_IP,
             port=BOARD_PORT,
-        )[0]
-        # 2. 从另一物理网口独立发现 081，并配置为从卡控制 IP。
-        slave_net = discover_and_provision_boards(
-            [BoardNetworkAssignment("081从卡", "slave", SLAVE_TARGET_IP, device_uid=SLAVE_UID,
-                                    subnet_mask=SUBNET_MASK, gateway=GATEWAY)],
-            interface=SLAVE_INTERFACE,
-            discovery_source_ip=SLAVE_SOURCE_IP,
-            discovery_source_cidr=SLAVE_SOURCE_CIDR,
-            control_source_ip=SLAVE_SOURCE_IP,
-            broadcast_ip=BROADCAST_IP,
-            port=BOARD_PORT,
-        )[0]
-        # 3. 分别建立两条 UDP 控制连接，并检查 bitstream 角色及 RFDC 初始化状态。
-        master = _new_device(master_net.ip, MASTER_INTERFACE, MASTER_SOURCE_IP)
-        slave = _new_device(slave_net.ip, SLAVE_INTERFACE, SLAVE_SOURCE_IP)
+        )
+        master_net, slave_net = enrolled
+        # 2. 两块板的控制 UDP 都绑定同一个交换机网口和源地址；目标 IP 不同，
+        # 因此正常控制阶段使用单播，不再依赖两块独立主机网口。
+        master = _new_device(master_net.ip, NETWORK_INTERFACE, NETWORK_SOURCE_IP)
+        slave = _new_device(slave_net.ip, NETWORK_INTERFACE, NETWORK_SOURCE_IP)
+        # 3. 建立两条单播控制连接，并检查 bitstream 角色及 RFDC 初始化状态。
         master.connect()
         slave.connect()
         for device, label, role in ((master, "082主卡", "master"), (slave, "081从卡", "slave")):

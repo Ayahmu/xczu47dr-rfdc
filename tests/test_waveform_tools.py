@@ -31,7 +31,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=20e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             sample_count=host.NUM_SAMPLES,
             encoding="signed",
         )
@@ -39,7 +39,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=80e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             sample_count=host.NUM_SAMPLES,
             encoding="signed",
         )
@@ -55,7 +55,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=20e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             sample_count=host.NUM_SAMPLES,
             encoding="signed",
         )
@@ -63,7 +63,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=20e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS / 2.0,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ / 2.0,
             sample_count=host.NUM_SAMPLES,
             encoding="signed",
         )
@@ -75,7 +75,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=80e6,
             phase_rad=0.0,
             amplitude=24000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=120e-9,
             delay_s=80e-9,
             sample_count=host.NUM_SAMPLES,
@@ -90,7 +90,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=80e6,
             phase_rad=0.0,
             amplitude=24000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=120e-9,
             delay_s=0.0,
             sample_count=host.NUM_SAMPLES,
@@ -99,7 +99,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=80e6,
             phase_rad=0.0,
             amplitude=24000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=120e-9,
             delay_s=200e-9,
             sample_count=host.NUM_SAMPLES,
@@ -321,14 +321,14 @@ class WaveformToolTests(unittest.TestCase):
     def test_waveform_metadata_uses_explicit_units(self):
         metadata = waveform_tools.build_metadata(
             mode="sine",
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             x_freq_hz=20e6,
             y_freq_hz=40e6,
             encoding="signed",
             loop=True,
         )
 
-        self.assertEqual(metadata["sample_rate_hz"], host.DAC_XY_FS)
+        self.assertEqual(metadata["sample_rate_hz"], host.DAC_IQ_SAMPLE_RATE_HZ)
         self.assertEqual(metadata["layout"], host.DEFAULT_DDR_LAYOUT)
         self.assertEqual(metadata["tile_bytes"], host.DDR_TILE_BYTES)
         self.assertEqual(metadata["superblock_bytes"], host.DDR_SUPERBLOCK_BYTES)
@@ -407,7 +407,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=70e6,
             phase_rad=0.0,
             amplitude=16000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
         )
 
         self.assertEqual(wave.dtype, np.int16)
@@ -423,7 +423,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=100e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=60e-9,
         )
 
@@ -442,7 +442,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=0.0,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=60e-9,
             hls_xy_drag=True,
         )
@@ -450,7 +450,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=0.0,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=60e-9,
             hls_xy_drag=False,
         )
@@ -465,7 +465,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=80e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=120e-9,
         )
         z, z_metadata = waveform_tools.make_pypulse_tile_waveform(
@@ -473,7 +473,7 @@ class WaveformToolTests(unittest.TestCase):
             freq_hz=80e6,
             phase_rad=0.0,
             amplitude=20000,
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             duration_s=120e-9,
         )
 
@@ -488,7 +488,7 @@ class WaveformToolTests(unittest.TestCase):
 
     def test_pypulse_waveform_bundle_preserves_upload_contract(self):
         *waves, metadata = waveform_tools.make_pypulse_waveform_bundle(
-            sample_rate_hz=host.DAC_XY_FS,
+            sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
             loop=True,
             amplitude=21000,
             duration_s=120e-9,

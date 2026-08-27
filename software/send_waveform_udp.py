@@ -125,8 +125,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/opencode/rfsoc_waveform_send"))
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument("--post-upload-sleep-s", type=float, default=0.5)
-    parser.add_argument("--sample-rate-hz", "--sample-rate", dest="sample_rate_hz", type=float, default=host.DAC_XY_FS, help="RFDC input I/Q sample rate used for waveform synthesis")
-    parser.add_argument("--axis-freq-hz", type=float, default=host.DAC_AXIS_HZ, help="DAC AXIS clock used to convert hardware delay ns to cycles")
+    parser.add_argument("--sample-rate-hz", type=float, default=host.DAC_IQ_SAMPLE_RATE_HZ, help="RFDC input I/Q sample rate used for waveform synthesis")
+    parser.add_argument("--axis-freq-hz", type=float, default=host.DAC_FABRIC_HZ, help="DAC AXIS clock used to convert hardware delay ns to cycles")
     parser.add_argument("--loop", action="store_true", help="Replay the uploaded waveform continuously")
     parser.add_argument("--wait-for-trigger", action="store_true", help="Do not auto-start; wait for PS/external trigger")
     parser.add_argument("--dry-run", action="store_true", help="Only generate local waveform files; do not send UDP packets")
@@ -154,10 +154,6 @@ def add_channel_sine_args(parser: argparse.ArgumentParser) -> None:
         defaults = CHANNEL_DEFAULTS[channel]
         parser.add_argument(f"--ch{channel}-freq-hz", type=float, default=defaults["freq_hz"], help=f"CH{channel} sine frequency")
         parser.add_argument(f"--ch{channel}-phase-rad", type=float, default=defaults["phase_rad"], help=f"CH{channel} phase in radians")
-    parser.add_argument("--x-freq-hz", type=float, default=None, help="Legacy alias for --ch1-freq-hz")
-    parser.add_argument("--y-freq-hz", type=float, default=None, help="Legacy alias for --ch2-freq-hz")
-    parser.add_argument("--x-phase-rad", type=float, default=None, help="Legacy alias for --ch1-phase-rad")
-    parser.add_argument("--y-phase-rad", type=float, default=None, help="Legacy alias for --ch2-phase-rad")
 
 
 def add_channel_burst_args(parser: argparse.ArgumentParser) -> None:
@@ -166,19 +162,11 @@ def add_channel_burst_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(f"--ch{channel}-freq-hz", type=float, default=defaults["freq_hz"], help=f"CH{channel} carrier frequency")
         parser.add_argument(f"--ch{channel}-phase-rad", type=float, default=defaults["phase_rad"])
         parser.add_argument(f"--ch{channel}-delay-s", type=float, default=defaults["delay_s"])
-    parser.add_argument("--x-freq-hz", type=float, default=None, help="Legacy alias for --ch1-freq-hz")
-    parser.add_argument("--y-freq-hz", type=float, default=None, help="Legacy alias for --ch2-freq-hz")
-    parser.add_argument("--x-phase-rad", type=float, default=None, help="Legacy alias for --ch1-phase-rad")
-    parser.add_argument("--y-phase-rad", type=float, default=None, help="Legacy alias for --ch2-phase-rad")
-    parser.add_argument("--x-delay-s", type=float, default=None, help="Legacy alias for --ch1-delay-s")
-    parser.add_argument("--y-delay-s", type=float, default=None, help="Legacy alias for --ch2-delay-s")
 
 
 def add_channel_golden_args(parser: argparse.ArgumentParser) -> None:
     for channel in range(1, 9):
         parser.add_argument(f"--ch{channel}-start", type=int, default=CHANNEL_DEFAULTS[channel]["start"])
-    parser.add_argument("--x-start", type=int, default=None, help="Legacy alias for --ch1-start")
-    parser.add_argument("--y-start", type=int, default=None, help="Legacy alias for --ch2-start")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -247,7 +235,6 @@ def build_parser() -> argparse.ArgumentParser:
     max_length.add_argument("--no-waveform-cache", action="store_true", help="Generate max-length payload in memory while sending")
     max_length.add_argument("--force-waveform-cache", action="store_true", help="Regenerate the waveform cache before sending")
     max_length.add_argument("--generate-cache-only", action="store_true", help="Generate/reuse the waveform cache and exit without uploading")
-    max_length.add_argument("--no-full-dump", action="store_true", help="Compatibility option; max-length mode never writes a full hex dump")
 
     rv_ping = subparsers.add_parser("rvctrl-ping", help="send one RVCTRL0 PING command to the PL control CPU path")
     add_common_args(rv_ping)
@@ -335,14 +322,6 @@ def _arg(args: argparse.Namespace, name: str) -> float | int:
 
 
 def _channel_value(args: argparse.Namespace, base_name: str, channel: int) -> float | int:
-    if channel == 1:
-        legacy = getattr(args, f"x_{base_name}", None)
-        if legacy is not None:
-            return legacy
-    if channel == 2:
-        legacy = getattr(args, f"y_{base_name}", None)
-        if legacy is not None:
-            return legacy
     return _arg(args, f"ch{channel}_{base_name}")
 
 
@@ -557,8 +536,8 @@ def max_length_metadata(args: argparse.Namespace) -> dict[str, object]:
         "complex_samples_per_channel": bytes_per_channel // 4,
         "expected_rfdc_beats_per_channel": bytes_per_channel // host.BEAT_BYTES,
         "expected_datamover_beats": total_bytes // host.DDR_INTERLEAVED_BEAT_BYTES,
-        "expected_duration_s": bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
-        "axis_hz": host.DAC_AXIS_HZ,
+        "expected_duration_s": bytes_per_channel / (host.DAC_FABRIC_HZ * host.BEAT_BYTES),
+        "axis_hz": host.DAC_FABRIC_HZ,
         "bytes_per_axis_beat": host.BEAT_BYTES,
         "marker_bytes_per_channel": int(args.marker_bytes_per_channel),
         "sine_freq_hz": float(args.sine_freq_hz),

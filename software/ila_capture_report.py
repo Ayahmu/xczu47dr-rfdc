@@ -448,7 +448,7 @@ def send_max_length_to_board(args: argparse.Namespace) -> None:
         "physical_ddr_bytes": total_bytes,
         "expected_rfdc_beats_per_channel": bytes_per_channel // host.BEAT_BYTES,
         "expected_datamover_beats": total_bytes // host.DDR_INTERLEAVED_BEAT_BYTES,
-        "expected_duration_s": bytes_per_channel / (host.DAC_AXIS_HZ * host.BEAT_BYTES),
+        "expected_duration_s": bytes_per_channel / (host.DAC_FABRIC_HZ * host.BEAT_BYTES),
         "marker_bytes_per_channel": 4096,
         "trigger_event": args.trigger_event,
     }
@@ -696,11 +696,6 @@ def load_waveform(artifact_dir: Path, channel: int) -> np.ndarray:
                 except ValueError:
                     continue
         return np.asarray(values, dtype=np.int16)
-    legacy = "x_waveform" if channel == 1 else "y_waveform" if channel == 2 else stem
-    for suffix in (".npy", ".bin", ".csv"):
-        path = artifact_dir / f"{legacy}{suffix}"
-        if path.exists():
-            return load_waveform_file(path)
     raise FileNotFoundError(f"No waveform artifact found for CH{channel} in {artifact_dir}")
 
 
@@ -724,13 +719,9 @@ def load_waveform_file(path: Path) -> np.ndarray:
 def available_waveform_channels(artifact_dir: Path) -> set[int]:
     found: set[int] = set()
     for channel in CHANNELS:
-        stems = [artifact_dir / f"ch{channel}_waveform"]
-        if channel == 1:
-            stems.append(artifact_dir / "x_waveform")
-        if channel == 2:
-            stems.append(artifact_dir / "y_waveform")
-        for stem in stems:
-            if stem.with_suffix(".npy").exists() or stem.with_suffix(".bin").exists() or stem.with_suffix(".csv").exists():
+        stem = artifact_dir / f"ch{channel}_waveform"
+        for suffix in (".npy", ".bin", ".csv"):
+            if (stem.with_suffix(suffix)).exists():
                 found.add(channel)
                 break
     return found
@@ -748,7 +739,7 @@ def generate_default_artifacts(args: argparse.Namespace) -> None:
     ch8 = waveform_tools.make_incrementing_pattern(start=0x7000)
     metadata = waveform_tools.build_metadata(
         mode="ila-golden",
-        sample_rate_hz=host.DAC_XY_FS,
+        sample_rate_hz=host.DAC_IQ_SAMPLE_RATE_HZ,
         encoding="signed",
         loop=args.loop,
         generated_by="ila_capture_report.py",

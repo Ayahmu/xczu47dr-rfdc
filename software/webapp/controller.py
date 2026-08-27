@@ -15,9 +15,6 @@ if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
 import dr47 as driver  # noqa: E402
-# Keep the local name used throughout this mature module while sourcing all
-# protocol/constants/control objects from the distributable package.
-host = driver
 import waveform_model as gui_model  # noqa: E402
 
 from .models import (
@@ -112,8 +109,8 @@ class BoardGateway:
                         hmc_locked=True if self.simulation else None,
                         rfdc_ready=True if self.simulation else None,
                         rfdc_capabilities=(
-                            host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG |
-                            host.RF2_CAP_DAC_MTS | host.RF2_CAP_NCO_SYNC
+                            driver.RF2_CAP_PL_RFDC_CONFIG | driver.RF2_CAP_RFDC_GET_CONFIG |
+                            driver.RF2_CAP_DAC_MTS | driver.RF2_CAP_NCO_SYNC
                             if self.simulation else 0
                         ),
                         rfdc_config_valid_mask=0xFF if self.simulation else 0,
@@ -182,8 +179,8 @@ class BoardGateway:
                 hmc_locked=True,
                 rfdc_ready=True,
                 rfdc_capabilities=(
-                    host.RF2_CAP_PL_RFDC_CONFIG | host.RF2_CAP_RFDC_GET_CONFIG |
-                    host.RF2_CAP_DAC_MTS | host.RF2_CAP_NCO_SYNC
+                    driver.RF2_CAP_PL_RFDC_CONFIG | driver.RF2_CAP_RFDC_GET_CONFIG |
+                    driver.RF2_CAP_DAC_MTS | driver.RF2_CAP_NCO_SYNC
                 ),
                 rfdc_config_valid_mask=int(simulated.get("config_valid_mask", 0xFF)),
                 dac_mts_required=True,
@@ -254,7 +251,7 @@ class BoardGateway:
                     raise last_error or TimeoutError("RFCTRL2 status timeout")
             if int(response.get("status", 1)) != 0:
                 raise RuntimeError(f"RFCTRL2 status returned 0x{int(response['status']):04X}")
-            decoded = host.parse_rfctrl2_status_payload(response)
+            decoded = driver.parse_rfctrl2_status_payload(response)
             network_response = None
             recovered_ip = board.active_ip or board.ip
             recovered_mac = board.active_mac or board.mac
@@ -269,7 +266,7 @@ class BoardGateway:
             )
             if used_bootstrap:
                 network_response = self._network_get_at(board, board.bootstrap_ip)
-                if int(network_response.get("status", 1)) != host.RF2_STATUS_OK:
+                if int(network_response.get("status", 1)) != driver.RF2_STATUS_OK:
                     raise RuntimeError(
                         f"NETWORK_GET returned 0x{int(network_response.get('status', 1)):04X}"
                     )
@@ -351,7 +348,7 @@ class BoardGateway:
                     else "RFCTRL2 online; RFDC tiles are not ready"
                     if not decoded["rfdc_ready"]
                     else "RFCTRL2 PL RFDC control ready"
-                    if int(decoded["capabilities"]) & host.RF2_CAP_PL_RFDC_CONFIG
+                    if int(decoded["capabilities"]) & driver.RF2_CAP_PL_RFDC_CONFIG
                     else "RFCTRL2 online; bitstream does not advertise PL RFDC configuration"
                 ),
             )
@@ -423,7 +420,7 @@ class BoardGateway:
             status = self.refresh(board_id)
             if status.playback_armed or status.playback_running:
                 raise RuntimeError("board is already armed; ABORT_MUTE before re-arming")
-            if not status.rfdc_capabilities & host.RF2_CAP_PL_RFDC_CONFIG:
+            if not status.rfdc_capabilities & driver.RF2_CAP_PL_RFDC_CONFIG:
                 raise RuntimeError("installed bitstream does not support PL RFDC runtime configuration")
             if not status.dac_mts_required or not status.dac_mts_ready or status.dac_mts_failed:
                 raise RuntimeError(
@@ -449,7 +446,7 @@ class BoardGateway:
                 while time.monotonic() < deadline:
                     status_response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
                     self._require_ok(status_response, "STATUS after ARM")
-                    decoded = host.parse_rfctrl2_status_payload(status_response)
+                    decoded = driver.parse_rfctrl2_status_payload(status_response)
                     prepared_status = decoded
                     self._set_status(
                         board_id,
@@ -556,7 +553,7 @@ class BoardGateway:
                 while time.monotonic() < deadline:
                     status_response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
                     self._require_ok(status_response, "STATUS after TRIGGER")
-                    decoded = host.parse_rfctrl2_status_payload(status_response)
+                    decoded = driver.parse_rfctrl2_status_payload(status_response)
                     running_status = decoded
                     trigger_seen = trigger_seen or self._trigger_progress_observed(
                         decoded,
@@ -722,7 +719,7 @@ class BoardGateway:
                     }))
                     continue
                 nco_word = (int(round(item.nco_hz)) * (1 << 48) // 6_400_000_000) & ((1 << 48) - 1)
-                phase_mdeg = host.normalize_rfdc_phase_mdeg(item.nco_phase_deg)
+                phase_mdeg = driver.normalize_rfdc_phase_mdeg(item.nco_phase_deg)
                 phase_word = (phase_mdeg * (1 << 17) // 180_000) & ((1 << 18) - 1)
                 vop_code = max(0, int((item.dac_output_current_ma * 1000.0 - 1400.0) / 43.75))
                 actual_current_ua = int(round(1400.0 + vop_code * 43.75))
@@ -741,8 +738,8 @@ class BoardGateway:
                 })
             valid_mask = int(previous.get("config_valid_mask", 0)) | channel_mask
             result = {
-                "version": host.RFCTRL2_VERSION,
-                "status": host.RF2_STATUS_OK,
+                "version": driver.RFCTRL2_VERSION,
+                "status": driver.RF2_STATUS_OK,
                 "revision": revision,
                 "applied_mask": channel_mask,
                 "error_mask": 0,
@@ -750,7 +747,7 @@ class BoardGateway:
                 "failure_stage": 0,
                 "failure_address": 0,
                 "axi_response": 0,
-                "state_flags": host.RF2_STATUS_RFDC_READY,
+                "state_flags": driver.RF2_STATUS_RFDC_READY,
                 "channels": response_channels,
             }
             self._simulated_rfdc[board_id] = result
@@ -763,7 +760,7 @@ class BoardGateway:
             return result
         with self._board_control_lock(board_id):
             status = self.refresh(board_id)
-            if not status.rfdc_capabilities & host.RF2_CAP_PL_RFDC_CONFIG:
+            if not status.rfdc_capabilities & driver.RF2_CAP_PL_RFDC_CONFIG:
                 raise RuntimeError("installed bitstream does not support PL RFDC runtime configuration")
             controller = self._controller(board, timeout_s=1.0)
             try:
@@ -785,8 +782,8 @@ class BoardGateway:
         board = self.profile(board_id)
         if self.simulation:
             return self._simulated_rfdc.get(board_id, {
-                "version": host.RFCTRL2_VERSION,
-                "status": host.RF2_STATUS_OK,
+                "version": driver.RFCTRL2_VERSION,
+                "status": driver.RF2_STATUS_OK,
                 "revision": 0,
                 "applied_mask": 0,
                 "error_mask": 0,
@@ -798,7 +795,7 @@ class BoardGateway:
             })
         with self._board_control_lock(board_id):
             status = self.refresh(board_id)
-            if not status.rfdc_capabilities & host.RF2_CAP_RFDC_GET_CONFIG:
+            if not status.rfdc_capabilities & driver.RF2_CAP_RFDC_GET_CONFIG:
                 raise RuntimeError("installed bitstream does not support PL RFDC configuration readback")
             controller = self._controller(board, timeout_s=1.0)
             try:
@@ -888,7 +885,7 @@ class BoardGateway:
         while time.monotonic() < deadline:
             try:
                 response = self._network_get_at(board, address)
-                if int(response.get("status", 1)) == host.RF2_STATUS_OK:
+                if int(response.get("status", 1)) == driver.RF2_STATUS_OK:
                     return response
             except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
                 last_error = exc
@@ -899,15 +896,15 @@ class BoardGateway:
         board = self.profile(board_id)
         if self.simulation:
             return {
-                "version": host.RFCTRL2_VERSION,
-                "status": host.RF2_STATUS_OK,
+                "version": driver.RFCTRL2_VERSION,
+                "status": driver.RF2_STATUS_OK,
                 "device_uid": board.device_uid or board_id,
                 "current_ip": board.active_ip or board.ip,
                 "current_mac": board.active_mac or board.mac,
                 "bootstrap_ip": board.bootstrap_ip,
                 "revision": board.network_revision,
                 "port": board.port,
-                "capabilities": host.RF2_CAP_NETWORK_CONFIG,
+                "capabilities": driver.RF2_CAP_NETWORK_CONFIG,
                 "hmc_done": True,
                 "sync_done": True,
             }
@@ -926,15 +923,15 @@ class BoardGateway:
     def network_get_profile(self, board: BoardProfile, address: str) -> dict:
         if self.simulation:
             return {
-                "version": host.RFCTRL2_VERSION,
-                "status": host.RF2_STATUS_OK,
+                "version": driver.RFCTRL2_VERSION,
+                "status": driver.RF2_STATUS_OK,
                 "device_uid": board.device_uid or board.id,
                 "current_ip": board.active_ip or board.ip,
                 "current_mac": board.active_mac or board.mac,
                 "bootstrap_ip": board.bootstrap_ip,
                 "revision": board.network_revision,
                 "port": board.port,
-                "capabilities": host.RF2_CAP_NETWORK_CONFIG,
+                "capabilities": driver.RF2_CAP_NETWORK_CONFIG,
                 "hmc_done": True,
                 "sync_done": True,
             }
@@ -1101,9 +1098,6 @@ class BoardGateway:
     @staticmethod
     def _controller(board: BoardProfile, timeout_s: float = 1.0, address: str | None = None):
         # All live board I/O goes through the distributable driver package.
-        # ``host`` remains imported above only for legacy status constants and
-        # waveform-model compatibility; it is no longer a second protocol
-        # implementation in this gateway.
         return driver.Dr47Device(
             address or board.active_ip or board.ip,
             port=board.port,
@@ -1117,7 +1111,7 @@ class BoardGateway:
     def _require_ok(response: object, operation: str) -> None:
         if not isinstance(response, dict):
             raise RuntimeError(f"RFCTRL2 {operation} returned no response")
-        if int(response.get("version", 0)) != host.RFCTRL2_VERSION:
+        if int(response.get("version", 0)) != driver.RFCTRL2_VERSION:
             raise RuntimeError(f"RFCTRL2 {operation} returned an incompatible protocol version")
         if int(response.get("status", 1)) != 0:
             raise RuntimeError(f"RFCTRL2 {operation} failed with status 0x{int(response['status']):04X}")
@@ -1506,7 +1500,7 @@ class RunCoordinator:
         result = self.boards.rfdc_apply(job.board_id, channels, job.rfdc_config.revision, channel_mask)
         status = int(result.get("status", 1))
         error_mask = int(result.get("error_mask", 0))
-        if status != host.RF2_STATUS_OK or error_mask != 0:
+        if status != driver.RF2_STATUS_OK or error_mask != 0:
             raise RuntimeError(
                 f"{job.board_id}: RFDC_APPLY failed status=0x{status:04X} "
                 f"error_mask=0x{error_mask & 0xFF:02X}"

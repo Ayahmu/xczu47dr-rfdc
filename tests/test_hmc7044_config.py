@@ -80,7 +80,7 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertIn("Align_DAC_NCO_To_SYSREF", firmware)
         self.assertIn("FW_STATUS_NCO_SYNC_READY", firmware)
         self.assertIn("Publish_DAC_NCO_Sync_Ready", firmware)
-        self.assertIn("HMC_SYNC_DONE_MASK", firmware)
+        self.assertIn("HMC7044_DONE_MASK", firmware)
         self.assertIn("rfctrl2_sync_epoch_pulse", top)
         self.assertIn(".sync_done", top)
         self.assertIn("firmware_nco_sync_ready", top)
