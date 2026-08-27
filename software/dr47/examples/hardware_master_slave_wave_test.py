@@ -28,7 +28,6 @@ RF 频率、幅度、相位和同步精度仍必须用示波器/频谱仪测量�
 
 from __future__ import annotations
 
-import os
 import time
 
 import numpy as np
@@ -44,22 +43,16 @@ from ..sequence import make_trigger_sequence
 from ..sync_group import SyncGroup
 
 
-# 所有网络配置都集中在这里。主机网卡必须已经拥有对应的发现地址。
-# 主从可以位于同一个交换机端口域，也可以各自直连独立的 10G 网口。
-# 若改用 10.50.0.x 等正式网段，请先给主机网卡增加同网段地址，并同步修改
-# 两组 CONTROL_SOURCE_IP、TARGET_SUBNET_MASK 和 TARGET_GATEWAY。
+# 所有网络配置都集中在这里。主机通过一个交换机端口同时连接两块板卡，
+# 因此主从使用同一个 10G 网口和同一发现源地址，广播发现后按 bitstream
+# 上报的主从角色自动区分。若改用 10.50.0.x 等正式网段，请先给主机网卡增加
+# 同网段地址，并同步修改 CONTROL_SOURCE_IP、TARGET_SUBNET_MASK 和 TARGET_GATEWAY。
 BOARD_PORT = 1234
-MASTER_UDP_INTERFACE = os.environ.get("RFSOC_MASTER_UDP_INTERFACE", "enp1s0f0")
-MASTER_DISCOVERY_SOURCE_IP = os.environ.get("RFSOC_MASTER_DISCOVERY_SOURCE_IP", "169.254.250.11")
-MASTER_DISCOVERY_SOURCE_CIDR = os.environ.get("RFSOC_MASTER_DISCOVERY_SOURCE_CIDR", "169.254.250.11/16")
-MASTER_CONTROL_SOURCE_IP = os.environ.get("RFSOC_MASTER_CONTROL_SOURCE_IP", MASTER_DISCOVERY_SOURCE_IP)
-
-SLAVE_UDP_INTERFACE = os.environ.get("RFSOC_SLAVE_UDP_INTERFACE", "enp1s0f1")
-SLAVE_DISCOVERY_SOURCE_IP = os.environ.get("RFSOC_SLAVE_DISCOVERY_SOURCE_IP", "169.254.250.12")
-SLAVE_DISCOVERY_SOURCE_CIDR = os.environ.get("RFSOC_SLAVE_DISCOVERY_SOURCE_CIDR", "169.254.250.12/16")
-SLAVE_CONTROL_SOURCE_IP = os.environ.get("RFSOC_SLAVE_CONTROL_SOURCE_IP", SLAVE_DISCOVERY_SOURCE_IP)
-
-DISCOVERY_BROADCAST_IP = os.environ.get("RFSOC_DISCOVERY_BROADCAST_IP", "169.254.255.255")
+NETWORK_INTERFACE = "enp1s0f0"
+DISCOVERY_SOURCE_IP = "169.254.250.11"
+DISCOVERY_SOURCE_CIDR = "169.254.250.11/16"
+CONTROL_SOURCE_IP = "169.254.250.11"
+DISCOVERY_BROADCAST_IP = "169.254.255.255"
 
 MASTER_TARGET_IP = "169.254.100.101"
 SLAVE_TARGET_IP = "169.254.100.102"
@@ -72,6 +65,9 @@ SLAVE_DEVICE_UID = ""
 # None 表示保留 DNA 派生 MAC；也可以改成唯一的自定义单播 MAC。
 MASTER_TARGET_MAC = None
 SLAVE_TARGET_MAC = None
+# 交换机上若接入额外同角色板卡，填写对应 MAC 才能避免误选。
+MASTER_MATCH_MAC = ""
+SLAVE_MATCH_MAC = ""
 
 NCO_GHZ = 0.1
 GAIN = 0.2
@@ -176,14 +172,14 @@ def _arm_after_sync(device: Dr47Device, label: str) -> None:
     _wait_state(device, PlaybackState.PREPARED, f"{label} ARM 后等待 PREPARED")
 
 
-def _new_device(ip: str, interface: str, source_ip: str) -> Dr47Device:
+def _new_device(ip: str) -> Dr47Device:
     """创建统一网络参数的板卡对象。"""
 
     return Dr47Device(
         ip=ip,
         port=BOARD_PORT,
-        udp_interface=interface,
-        udp_source_ip=source_ip,
+        udp_interface=NETWORK_INTERFACE,
+        udp_source_ip=CONTROL_SOURCE_IP,
         timeout_s=1.0,
         retries=2,
         batch_mode=True,
@@ -199,7 +195,7 @@ def run() -> int:
     master = None
     slave = None
     try:
-        master_enrolled = discover_and_provision_boards(
+        enrolled = discover_and_provision_boards(
             [
                 BoardNetworkAssignment(
                     label="主卡",
@@ -207,44 +203,36 @@ def run() -> int:
                     ip=MASTER_TARGET_IP,
                     device_uid=MASTER_DEVICE_UID,
                     mac=MASTER_TARGET_MAC,
+                    match_mac=MASTER_MATCH_MAC,
                     subnet_mask=TARGET_SUBNET_MASK,
                     gateway=TARGET_GATEWAY,
-                )
-            ],
-            interface=MASTER_UDP_INTERFACE,
-            discovery_source_ip=MASTER_DISCOVERY_SOURCE_IP,
-            discovery_source_cidr=MASTER_DISCOVERY_SOURCE_CIDR,
-            control_source_ip=MASTER_CONTROL_SOURCE_IP,
-            broadcast_ip=DISCOVERY_BROADCAST_IP,
-            port=BOARD_PORT,
-        )
-        slave_enrolled = discover_and_provision_boards(
-            [
+                ),
                 BoardNetworkAssignment(
                     label="从卡",
                     sync_role="slave",
                     ip=SLAVE_TARGET_IP,
                     device_uid=SLAVE_DEVICE_UID,
                     mac=SLAVE_TARGET_MAC,
+                    match_mac=SLAVE_MATCH_MAC,
                     subnet_mask=TARGET_SUBNET_MASK,
                     gateway=TARGET_GATEWAY,
-                )
+                ),
             ],
-            interface=SLAVE_UDP_INTERFACE,
-            discovery_source_ip=SLAVE_DISCOVERY_SOURCE_IP,
-            discovery_source_cidr=SLAVE_DISCOVERY_SOURCE_CIDR,
-            control_source_ip=SLAVE_CONTROL_SOURCE_IP,
+            interface=NETWORK_INTERFACE,
+            discovery_source_ip=DISCOVERY_SOURCE_IP,
+            discovery_source_cidr=DISCOVERY_SOURCE_CIDR,
+            control_source_ip=CONTROL_SOURCE_IP,
             broadcast_ip=DISCOVERY_BROADCAST_IP,
             port=BOARD_PORT,
         )
-        master_net = master_enrolled[0]
-        slave_net = slave_enrolled[0]
-        master = _new_device(master_net.ip, MASTER_UDP_INTERFACE, MASTER_CONTROL_SOURCE_IP)
-        slave = _new_device(slave_net.ip, SLAVE_UDP_INTERFACE, SLAVE_CONTROL_SOURCE_IP)
+        enrolled_by_role = {item.sync_role: item for item in enrolled}
+        master_net = enrolled_by_role["master"]
+        slave_net = enrolled_by_role["slave"]
+        master = _new_device(master_net.ip)
+        slave = _new_device(slave_net.ip)
         print(
             f"连接主卡 {master_net.ip}（{master_net.device_uid}）和从卡 "
-            f"{slave_net.ip}（{slave_net.device_uid}），网卡 "
-            f"{MASTER_UDP_INTERFACE}/{SLAVE_UDP_INTERFACE}"
+            f"{slave_net.ip}（{slave_net.device_uid}），网卡 {NETWORK_INTERFACE}"
         )
         master.connect()
         slave.connect()

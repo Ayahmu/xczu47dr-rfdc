@@ -124,7 +124,12 @@ def _new_device(ip: str) -> Dr47Device:
 
 
 def _wait_rfdc_ready(device: Dr47Device, label: str) -> None:
-    """Wait for firmware RFDC/MTS/NCO startup before sending configuration."""
+    """等待固件完成 RFDC、DAC MTS、NCO SYSREF 启动初始化。
+
+    烧写后固件会先配置 HMC7044，再初始化 RFDC，并完成一次 DAC MTS 与
+    NCO SYSREF 对齐。只有这三个状态都置位后才能安全下发 RFDC 配置；
+    若 MTS 失败则直接抛出带错误码的断言，而不是继续静默等待。
+    """
 
     deadline = time.monotonic() + 30.0
     last = None
@@ -148,7 +153,11 @@ def _wait_rfdc_ready(device: Dr47Device, label: str) -> None:
 
 
 def _wait_prepared(device: Dr47Device, label: str) -> None:
-    """Wait until ARM has reached the DAC-domain PREPARED state."""
+    """等待 ARM 命令穿透到 DAC 时钟域并进入 PREPARED 状态。
+
+    ARM 和 TRIGGER 都要跨越 DDR/DAC 两个时钟域，状态回读有几毫秒抖动；
+    这里轮询真实硬件状态，而不是只相信命令 ACK。
+    """
 
     deadline = time.monotonic() + 5.0
     last = None
@@ -162,7 +171,12 @@ def _wait_prepared(device: Dr47Device, label: str) -> None:
 
 
 def _wait_waveform_config(device: Dr47Device, label: str) -> None:
-    """Wait until the DDR executor has accepted and prefetched the frame."""
+    """等待 DDR 波形执行器接收 PLAY/END 并完成预取。
+
+    上传波形后，执行器需要先校验播放指令、把数据预取进内部 FIFO，并把
+    ``play_pending_valid`` 和 ``play_prefill_ready`` 拉高。这里同时检查
+    ``play_bad_instr_count``，避免无效指令被静默忽略后继续测试。
+    """
 
     deadline = time.monotonic() + 10.0
     last = None
@@ -191,7 +205,7 @@ def _wait_waveform_config(device: Dr47Device, label: str) -> None:
 
 
 def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) -> None:
-    """Configure CH1, upload the frame, and wait for DDR prefill."""
+    """配置 CH1、上传等待 Trigger 的波形并等待 DDR 预取完成。"""
 
     device.set_xy_nco_frequency(1, RF_NCO_GHZ)
     device.set_gain("xy", 1, GAIN, gain_type="norm")
@@ -210,7 +224,7 @@ def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) ->
 
 
 def _arm_after_sync(device: Dr47Device, label: str) -> None:
-    """Arm only after SYNC so the prepared frame survives the alignment."""
+    """同步完成后才 ARM，避免对齐事务清掉或竞争播放准备状态。"""
 
     device.arm(channel_mask=CHANNEL_MASK)
     status = device.status(refresh=True)

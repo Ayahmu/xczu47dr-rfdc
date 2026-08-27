@@ -68,6 +68,7 @@ software/waveform_out/
 software/webui/node_modules/
 software/webui/dist/
 software/ila_reports*/
+ila_gaussian_reports/
 logs/
 
 # IDE

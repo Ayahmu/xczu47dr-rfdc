@@ -769,6 +769,14 @@ class Dr47Device:
         return 0
 
     def trigger(self) -> int:
+        """Start local playback via RFCTRL2 TRIGGER.
+
+        On a master, this is the atomic launch event: in the same DDR clock
+        domain it starts local playback and asserts an XS18 pulse for the
+        slave. On a slave, it starts local playback only and is still gated
+        by external XS20 synchronization or the explicit bypass.
+        """
+
         self._require_connected()
         trigger_response = self.rfctrl2_trigger(wait_response=True)
         self._check_response(trigger_response, "TRIGGER")

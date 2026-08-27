@@ -36,7 +36,7 @@ from ..hardware_test_network import (
 # 所有网络参数都直接写在这里。目标 IP 改到其他子网时，还要给主机网卡增加
 # 对应网段地址，并修改 CONTROL_SOURCE_IP、TARGET_SUBNET_MASK 和 TARGET_GATEWAY。
 BOARD_PORT = 1234
-UDP_INTERFACE = os.environ.get("RFSOC_UDP_INTERFACE", "enp11s0")
+UDP_INTERFACE = os.environ.get("RFSOC_UDP_INTERFACE", "enp1s0f0")
 DISCOVERY_SOURCE_IP = os.environ.get("RFSOC_DISCOVERY_SOURCE_IP", "169.254.250.11")
 DISCOVERY_SOURCE_CIDR = os.environ.get("RFSOC_DISCOVERY_SOURCE_CIDR", "169.254.250.11/16")
 DISCOVERY_BROADCAST_IP = os.environ.get("RFSOC_DISCOVERY_BROADCAST_IP", "169.254.255.255")

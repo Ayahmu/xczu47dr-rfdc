@@ -49,6 +49,13 @@ CHANNEL_MASK = 0x01  # CH1 -> vout00
 
 
 def _make_gaussian_record() -> np.ndarray:
+    """生成带前置延迟的 1 GHz 高斯正弦 IQ 记录。
+
+    上传数据是 I0,Q0,I1,Q1,... 的 int16 复基带。RFDC NCO 负责产生 1 GHz
+    射频载波，软件记录使用 0 Hz 基带高斯包络；记录开头预留 100 ns 的零值
+    延迟，方便示波器/ILA 定位波形起点。
+    """
+
     duration_s = PULSE_DURATION_NS * 1e-9
     active_count = iq_duration_to_interleaved_sample_count(duration_s, SAMPLE_RATE_HZ)
     active = make_iq_gaussian_sine_interleaved(
@@ -70,6 +77,8 @@ def _make_gaussian_record() -> np.ndarray:
 
 
 def _new_device(ip: str) -> Dr47Device:
+    """创建绑定到指定 10G 网口与控制源地址的板卡驱动对象。"""
+
     return Dr47Device(
         ip=ip,
         port=BOARD_PORT,
@@ -82,6 +91,8 @@ def _new_device(ip: str) -> Dr47Device:
 
 
 def _wait_rfdc_ready(device: Dr47Device, label: str) -> None:
+    """等待固件完成 RFDC / DAC MTS / NCO SYSREF 启动初始化。"""
+
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
         caps = device.status(refresh=True).capabilities
@@ -94,6 +105,8 @@ def _wait_rfdc_ready(device: Dr47Device, label: str) -> None:
 
 
 def _wait_prepared(device: Dr47Device, label: str) -> None:
+    """等待板卡进入 PREPARED，而不是只相信 ARM 命令 ACK。"""
+
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
         if device.status(refresh=True).state is PlaybackState.PREPARED:
@@ -103,6 +116,8 @@ def _wait_prepared(device: Dr47Device, label: str) -> None:
 
 
 def _wait_waveform_config(device: Dr47Device, label: str) -> None:
+    """等待 DDR 执行器接收 PLAY/END 并完成波形预取。"""
+
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         raw = device.status(refresh=True).capabilities.raw
@@ -116,6 +131,8 @@ def _wait_waveform_config(device: Dr47Device, label: str) -> None:
 
 
 def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) -> None:
+    """配置 CH1、上传等待 Trigger 的波形并等待 DDR 预取。"""
+
     device.set_xy_nco_frequency(1, RF_NCO_GHZ)
     device.set_gain("xy", 1, GAIN, gain_type="norm")
     device.set_qc_on_off("xy", 1, "on")
@@ -133,6 +150,8 @@ def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) ->
 
 
 def _snapshot(device: Dr47Device, label: str) -> str:
+    """刷新并格式化一块板卡的播放与同步状态，便于打印对照。"""
+
     caps = device.status(refresh=True).capabilities
     return (
         f"{label}: state={caps.playback_state.value}, "
@@ -143,6 +162,8 @@ def _snapshot(device: Dr47Device, label: str) -> str:
 
 
 def run() -> int:
+    """执行主卡单次触发、从卡同步发波的最简验收流程。"""
+
     record = _make_gaussian_record()
     master = _new_device(MASTER_TARGET_IP)
     slave = _new_device(SLAVE_TARGET_IP)

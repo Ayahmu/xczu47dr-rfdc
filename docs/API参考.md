@@ -438,8 +438,14 @@ RFDC NCO 范围为 `-3.2 .. +3.2 GHz`。当前项目 DAC 采样率为 `6.4 GSPS`
 
 #### `trigger() -> int`
 
-通过 UDP 发送本地播放 Trigger，成功返回 `0`，状态变为 `RUNNING`。它是本机
-软件触发，不会在 XS18 上输出外部 Trigger。
+通过 UDP 发送 RFCTRL2 `TRIGGER`，成功返回 `0`，状态变为 `RUNNING`。
+它的实际行为由板卡同步角色决定：
+
+- **主卡**：这是原子启动事件。在同一 DDR 时钟域内，它会同时启动主卡本地
+  播放，并在 XS18 上产生一个 Trigger 脉冲（等价于把“本地启动 + XS18 输出”
+  合并成一个事件），用于驱动从卡 XS19。
+- **从卡**：只启动本板本地播放，不驱动 XS18；是否允许播放仍受 XS20 同步
+  门控或 `bypass` 旁路控制。
 
 #### `abort_mute() -> int`
 
@@ -520,12 +526,13 @@ with Dr47Device(ip="10.50.0.101", sync_role="master") as master, \
      Dr47Device(ip="10.50.0.102", sync_role="slave") as slave:
     master.require_external_sync()
     slave.require_external_sync()
-    # 波形上传和 RFDC 配置可在此之前完成；同步会自动停止已 ARM 的播放。
-    result = SyncGroup(master, slave, timeout_s=5.0).sync(epoch=1)
+    # abort_before_sync=False 要求两块板此刻都处于 IDLE 且未 ARM，并保留
+    # 之前上传的波形配置；默认 True 会 ABORT_MUTE 并清空 executor，需要重传。
+    result = SyncGroup(master, slave, timeout_s=5.0).sync(epoch=1, abort_before_sync=False)
     print(result.master_alignment_epoch, result.slave_alignment_epoch)
     master.arm(channel_mask=0x01)
     slave.arm(channel_mask=0x01)
-    master.trigger()
+    master.trigger()  # 主卡原子启动：本地播放 + XS18 输出
 ```
 
 `SyncAlignmentResult` 的两个 alignment epoch 是固件完成本次
@@ -541,10 +548,13 @@ with Dr47Device(ip="10.50.0.101", sync_role="master") as master, \
 
 #### `trigger() -> int` 与 `emit_trigger() -> int`
 
-`trigger()` 是本机 UDP 软件 Trigger，直接作用于本机播放控制，不驱动 XS18。
-`emit_trigger()` 是 XS18 物理 Trigger 输出，只有在电缆将其接至某个 XS19
-输入时才会触发对应输入路径。外部 Trigger 测试不应把 `trigger()` 作为
-`emit_trigger()` 的替代。
+`trigger()` 是 RFCTRL2 `TRIGGER`。主卡上它是原子启动（同时本地播放并输出
+XS18 脉冲）；从卡上它只启动本板本地播放。`emit_trigger()` 是独立的 XS18
+物理 Trigger 输出，只有当电缆把 XS18 接到某个 XS19 输入时才会触发对应输入
+路径，且不会启动本机播放。
+
+双板正式联调优先使用 `SyncGroup.sync()` 对齐后，再由主卡调用一次
+`trigger()` 完成原子启动；`emit_trigger()` 保留给诊断和单板回环场景。
 
 #### 外部 SYNC 从板示例
 
@@ -855,7 +865,8 @@ dr47-network status \
 - 两块板卡烧写完成后都使用 DNA 派生的 `169.254.x.y/16` 地址；
 - 正式控制网段为 `10.50.0.0/24`；
 - 主卡 XS20 接从卡 XS20，主卡 XS18 接从卡 XS19；
-- 两块板卡已接入同一个 250 MHz 参考时钟，并由各自 HMC7044/RFDC 完成时钟初始化。
+- 两块板卡已接入同一个 10 MHz 参考时钟（XS17），并由各自 HMC7044/RFDC 完成
+  时钟初始化。
 
 ```python
 #!/usr/bin/env python3
@@ -867,6 +878,7 @@ import numpy as np
 
 from dr47 import (
     Dr47Device,
+    SyncGroup,
     discover_boards,
     prepare_interface,
     provision_board,
@@ -990,17 +1002,23 @@ def main() -> None:
         master.set_qc_on_off("xy", 1, "on")
         slave.set_qc_on_off("xy", 1, "on")
 
-        # 12. 主卡发出一次外部 SYNC epoch。
-        #     这要求 XS20 物理线和参考时钟已经正确连接。
-        master.sync(epoch=1)
+        # 12. 双板严格同步：SyncGroup 会让主卡在 XS20 发出一次 SYNC，从卡
+        #     收到后两侧各自重新完成 DAC MTS 与 NCO SYSREF 对齐，并等待对齐
+        #     完成。这要求 XS20 物理线和参考时钟已经正确连接。
+        # abort_before_sync=False 是因为第 11 步已上传波形且板卡仍为 IDLE；
+        # 这样同步不会清空 executor 配置，第 13 步直接 ARM 即可。
+        sync_result = SyncGroup(master, slave, timeout_s=5.0).sync(
+            epoch=1, abort_before_sync=False
+        )
+        print(sync_result.master_alignment_epoch, sync_result.slave_alignment_epoch)
 
         # 13. 两块板卡都 ARM，进入等待 Trigger 状态。
         master.arm(channel_mask=0x01, run_id=1001)
         slave.arm(channel_mask=0x01, run_id=1001)
 
-        # 14. 主卡在 XS18 输出 Trigger，经物理线到从卡 XS19。
-        #     这不是 master.trigger()；master.trigger() 只启动主卡本地播放。
-        master.emit_trigger()
+        # 14. 主卡原子 Trigger：同时启动主卡本地播放，并在 XS18 输出一个
+        #     Trigger 脉冲，经物理线到从卡 XS19，从而同时启动从卡播放。
+        master.trigger()
 
         # 15. 读取状态，确认两块板卡均已进入播放或至少接受 Trigger。
         master_status = master.status()
@@ -1063,7 +1081,8 @@ except DriverError as exc:
 
 - 当前驱动主要控制 DAC/RFDC 播放；DAQ、ADC 输入、demod 和 pump 接口会明确
   抛出 `UnsupportedCapabilityError`，不会伪造成功。
-- `trigger()` 是本机软件 Trigger；`emit_trigger()` 是 XS18 外部 Trigger 输出。
+- 主卡 `trigger()` 是原子启动（本地播放 + XS18 输出）；从卡 `trigger()` 只启动
+  本机播放；`emit_trigger()` 只输出 XS18 脉冲，不启动本机播放。
 - `bypass_sync()` 只用于明确的本地运行旁路，不等同于跨板同步。
 - 多块板卡共用一条主机 10G 上联时，控制包和同步包正常，但同时上传大波形
   会竞争该 10G 链路；应降低并发或增加上联带宽。
