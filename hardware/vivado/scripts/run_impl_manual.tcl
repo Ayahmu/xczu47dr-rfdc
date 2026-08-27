@@ -79,16 +79,48 @@ if {${marker_at} < 0} {
 set base_script "[string range ${generated_script} 0 [expr {${marker_at} - 1}]]${link_injection}[string range ${generated_script} ${marker_at} end]"
 
 proc profile_script {base_script profile} {
+    set place_opt ""
+    set phys_opt ""
+    set route_opt ""
     if {$profile eq "default"} {
-        return ${base_script}
-    }
-    if {$profile ne "aggressive"} {
-        error "Unsupported manual implementation profile: ${profile}"
+        # 使用 Vivado 默认布局/物理优化/布线策略
+    } elseif {$profile eq "aggressive"} {
+            set place_opt "-directive ExtraNetDelay_high"
+            set phys_opt "-directive AggressiveExplore"
+            set route_opt "-directive AggressiveExplore"
+    } elseif {$profile eq "skew"} {
+            # DDR UI 时钟(mmcm_clkout0, 300MHz)偶尔出现 1~3ps setup 违例，
+            # 主要由 -0.3~0.4ns 时钟 skew 引起。使用 AdvancedSkewModeling
+            # 让布线器在整个布线阶段采用更精确的 skew 建模。
+            set place_opt "-directive ExtraNetDelay_high"
+            set phys_opt "-directive AggressiveExplore"
+            set route_opt "-directive AdvancedSkewModeling"
+    } elseif {$profile eq "retime"} {
+            # 对组合逻辑过深的写数据通路做寄存器重定时，均衡逻辑级数。
+            set place_opt "-directive ExtraNetDelay_high"
+            set phys_opt "-directive AggressiveExplore -retime"
+            set route_opt "-directive AggressiveExplore"
+    } else {
+            error "Unsupported manual implementation profile: ${profile}"
     }
     set script ${base_script}
-    set script [string map {"  place_design \n" "  place_design -directive ExtraNetDelay_high\n"} ${script}]
-    set script [string map {"  phys_opt_design \n" "  phys_opt_design -directive AggressiveExplore\n"} ${script}]
-    set script [string map {"  route_design \n" "  route_design -directive AggressiveExplore\n"} ${script}]
+    if {${place_opt} ne ""} {
+        set script [string map [list "  place_design \n" "  place_design ${place_opt}\n"] ${script}]
+    }
+    if {${phys_opt} ne ""} {
+        set script [string map [list "  phys_opt_design \n" "  phys_opt_design ${phys_opt}\n"] ${script}]
+    }
+    if {${route_opt} ne ""} {
+        set script [string map [list "  route_design \n" "  route_design ${route_opt}\n"] ${script}]
+    }
+    # 在 route_design 之后追加一次后布线物理优化，专门收敛路由主导的
+    # 微小 setup 违例（如 DDR UI mmcm_clkout0 上 1~3ps 的余量缺口）。
+    # 该步骤会重新布局关键路径单元并重布线受影响网络，不改变网表功能。
+    set postroute_physopt {
+  phys_opt_design -directive AggressiveExplore
+  write_checkpoint -force TopCustomXczu47dr_postroute_physopt.dcp
+}
+    set script [string map [list "  write_checkpoint -force TopCustomXczu47dr_routed.dcp\n" "  write_checkpoint -force TopCustomXczu47dr_routed.dcp\n${postroute_physopt}\n"] ${script}]
     return ${script}
 }
 
@@ -136,8 +168,14 @@ switch -- ${impl_mode} {
     aggressive {
         set impl_profiles {aggressive}
     }
+    skew {
+        set impl_profiles {skew}
+    }
+    retime {
+        set impl_profiles {retime}
+    }
     default {
-        error "Unsupported IMPL_MODE=${impl_mode}; use auto, default, fast, or aggressive"
+        error "Unsupported IMPL_MODE=${impl_mode}; use auto, default, fast, aggressive, skew, or retime"
     }
 }
 puts "INFO: Manual implementation profiles: [join ${impl_profiles} { -> }]"
