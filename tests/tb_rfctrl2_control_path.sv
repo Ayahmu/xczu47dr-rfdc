@@ -24,7 +24,7 @@ module tb_rfctrl2_control_path;
   wire        rvresp_tlast;
   wire [15:0] rvresp_word_count;
 
-  reg [63:0] responses [0:11];
+  reg [63:0] responses [0:31];
   integer response_count = 0;
 
   udp_waveform_ddr_writer writer (
@@ -231,7 +231,7 @@ module tb_rfctrl2_control_path;
     integer timeout_cycles;
     begin
       timeout_cycles = 0;
-      while ((response_count < 15) && (timeout_cycles < 64)) begin
+      while ((response_count < 17) && (timeout_cycles < 80)) begin
         @(negedge clk);
         timeout_cycles = timeout_cycles + 1;
       end
@@ -247,11 +247,11 @@ module tb_rfctrl2_control_path;
     send_status_packet();
     wait_for_status_response();
 
-    check_condition(response_count == 15, "STATUS must produce fifteen RFRESP2 words");
+    check_condition(response_count == 17, "STATUS must produce seventeen RFRESP2 words");
     check_condition(rvresp_word_count == 0, "response word count must clear after the final handshake");
     check_condition(responses[0] == RFRESP2_MAGIC, "response magic mismatch");
     check_condition(responses[1] == 64'h0000000200000002, "response STATUS header mismatch");
-    check_condition(responses[2] == 64'h0000006000510002, "response sequence mismatch");
+    check_condition(responses[2] == 64'h0000007000510002, "response sequence mismatch");
     check_condition(responses[3][32] == 1'b1, "RFDC ready flag must be present in STATUS");
     check_condition(responses[4] == 64'h12345678000000FF, "RFDC revision and valid mask mismatch");
     check_condition(responses[7] == 64'h0000000200000003, "playback config/fifo-valid debug mismatch");

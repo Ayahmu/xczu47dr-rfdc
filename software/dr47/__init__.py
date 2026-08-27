@@ -20,6 +20,7 @@ from .errors import __all__ as _error_exports
 from .protocol import *  # noqa: F401,F403
 from .sequence import make_trigger_sequence
 from .simulator import SimulatedDr47Device
+from .sync_group import SyncAlignmentResult, SyncGroup
 from .transport import UdpTransport
 from .network import (
     DiscoveredBoard,
@@ -38,7 +39,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "Dr47Device", "connect", "SimulatedDr47Device", "MagicMock",
-    "make_trigger_sequence",
+    "SyncGroup", "SyncAlignmentResult", "make_trigger_sequence",
     "DeviceCapabilities", "DeviceStatus", "PlaybackState", "RfdcChannelReadback",
     "UdpTransport", "rfdc_nco_plan_for_target",
     "DiscoveredBoard", "ProvisionedBoard", "DiscoveryError", "ProvisionError",

@@ -50,6 +50,12 @@ class DeviceCapabilities:
     sync_mode: str = "external"
     sync_seen: bool = False
     sync_link_ready: bool = False
+    # Runtime strict-alignment state.  These fields are zero/default when a
+    # legacy board returns the pre-alignment (96-byte) STATUS payload.
+    sync_align_busy: bool = False
+    sync_align_failed: bool = False
+    sync_alignment_epoch: int = 0
+    sync_alignment_error: int = 0
     trigger_input_count: int = 0
     trigger_accepted_count: int = 0
     trigger_output_count: int = 0

@@ -7,12 +7,14 @@
 * XS17 分别接入两块板卡要求的同一参考时钟；参考频率必须与 bitstream 匹配；
 * 主卡 XS20 输出连接从卡 XS20 输入；
 * 主卡 XS18（TRIG_1）连接从卡 XS19（TRIG_2）；
-* 两块板卡都设置为 ``external``，主卡调用一次 ``sync()``；
-* 主卡使用 UDP ``trigger()`` 本地播放，同时用 ``emit_trigger()``
-  通过 XS18/XS19 启动从卡播放。
+* 两块板卡都设置为 ``external``，使用 ``SyncGroup.sync()``；
+* ``SyncGroup.sync()`` 会自动 ABORT/MUTE、发出 XS20 SYNC，并等待两卡重新完成
+  DAC MTS/NCO 对齐；成功后脚本重新 ARM；
+* 主卡只使用一次 UDP ``trigger()``；主卡 RTL 同时通过 XS18/XS19
+  启动本地和从卡播放。
 
-这两个 Trigger 是两个明确的协议动作，脚本用它们分别验证主卡本地播放和
-从卡物理输入播放；它不宣称两块 DAC 的 RF 相位或时间偏差已经达到某个数值。
+这个 Trigger 是一个明确的 FPGA/DDR 时钟域事件，脚本用主卡输出计数和从卡
+输入/接受计数验证两条硬件路径；它不宣称两块 DAC 的 RF 相位或时间偏差已经达到某个数值。
 RF 频率、幅度、相位和同步精度仍必须用示波器/频谱仪测量。
 
 运行：
@@ -39,6 +41,7 @@ from ..hardware_test_network import (
     discover_and_provision_boards,
 )
 from ..sequence import make_trigger_sequence
+from ..sync_group import SyncGroup
 
 
 # 所有网络配置都集中在这里。主机网卡必须已经拥有对应的发现地址。
@@ -237,28 +240,37 @@ def run() -> int:
         _configure_and_upload(slave, iq)
 
         # 主卡 XS20 输出一个同步边沿；从卡 XS20 输入收到后打开 Trigger 门控。
-        master.sync(epoch=1)
-        _wait_slave_sync(slave)
-        _status(slave, "从卡收到 XS20 SYNC")
+        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(epoch=1)
+        print(
+            f"严格同步完成：master alignment_epoch={alignment.master_alignment_epoch}, "
+            f"slave alignment_epoch={alignment.slave_alignment_epoch}, "
+            f"elapsed={alignment.elapsed_s:.3f}s"
+        )
+        # SyncGroup 自动 ABORT/MUTE 两卡；波形保留，但同步成功后必须重新 ARM。
+        master.arm(channel_mask=CHANNEL_MASK)
+        slave.arm(channel_mask=CHANNEL_MASK)
+        _wait_state(master, PlaybackState.PREPARED, "严格同步后主卡重新 ARM")
+        _wait_state(slave, PlaybackState.PREPARED, "严格同步后从卡重新 ARM")
 
-        # 主卡本地 UDP Trigger 只启动主卡自己的播放路径。
+        # 记录一次触发前的计数。主卡只发送一个 RFCTRL2 TRIGGER；新的 RTL
+        # 会在同一个 DDR 时钟域同时启动本地播放并产生 XS18 脉冲。
+        master_before = master.status(refresh=True).capabilities
+        slave_before = slave.status(refresh=True).capabilities
         master.trigger()
         _wait_state(master, PlaybackState.RUNNING, "主卡本地 UDP Trigger")
-        _status(master, "主卡本地播放")
-
-        # 主卡 XS18 输出物理 Trigger，经电缆到从卡 XS19，启动从卡的等待序列。
-        slave_before = slave.status(refresh=True).capabilities
-        master.emit_trigger()
         _wait_state(slave, PlaybackState.RUNNING, "从卡 XS19 Trigger")
-        slave_after = _status(slave, "从卡物理 Trigger 播放")
+        master_after = _status(master, "主卡本地播放和 XS18 输出")
+        slave_after = _status(slave, "从卡 XS19 物理 Trigger 播放")
+        if master_after.capabilities.trigger_output_count <= master_before.trigger_output_count:
+            raise AssertionError("主卡 XS18 输出计数没有增加")
         if slave_after.capabilities.trigger_input_count <= slave_before.trigger_input_count:
             raise AssertionError("从卡 XS19 输入计数没有增加")
         if slave_after.capabilities.trigger_accepted_count <= slave_before.trigger_accepted_count:
             raise AssertionError("从卡没有接受主卡发出的 Trigger")
 
         print(
-            "PASS: 主卡 XS20->从卡 XS20 SYNC、主卡本地 UDP 发波、"
-            "以及主卡 XS18->从卡 XS19 物理 Trigger 发波均已通过。"
+            "PASS: 主卡 XS20->从卡 XS20 SYNC，以及一次主卡 RFCTRL2 TRIGGER"
+            "同时启动主卡本地播放和 XS18->XS19 从卡播放均已通过。"
         )
         print("提示：两块板卡的 RF 频率、幅度和相位关系仍需仪器实测。")
         return 0

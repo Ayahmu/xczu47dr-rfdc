@@ -66,6 +66,10 @@ module pl_riscv_control_v1 #(
     input  wire         sync_bypass,
     input  wire         sync_seen,
     input  wire         sync_link_ready,
+    input  wire         sync_align_busy,
+    input  wire         sync_align_failed,
+    input  wire [5:0]   sync_alignment_epoch,
+    input  wire [15:0]  sync_alignment_error,
     input  wire [31:0]  trigger_input_count,
     input  wire [31:0]  trigger_accepted_count,
     input  wire [31:0]  trigger_output_count,
@@ -479,7 +483,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd96, 64'd0, 64'd0);
+      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd112, 64'd0, 64'd0);
     end
   endtask
 
@@ -549,9 +553,14 @@ module pl_riscv_control_v1 #(
                             sync_link_ready, sync_seen};
         resp_words[13] <= {trigger_accepted_count, trigger_input_count};
         resp_words[14] <= {32'd0, trigger_output_count};
-        resp_count <= 6'd15;
+        // Appended strict-alignment state.  The low six bits are the
+        // acknowledged hardware epoch; bits 22/23 are busy/failed.
+        resp_words[15] <= {32'd0, 8'd0, sync_align_failed, sync_align_busy,
+                           16'd0, sync_alignment_epoch};
+        resp_words[16] <= {48'd0, sync_alignment_error};
+        resp_count <= 6'd17;
         resp_index <= 6'd0;
-        rvresp_word_count <= 16'd15;
+        rvresp_word_count <= 16'd17;
         rvresp_tdata <= resp_request_magic;
         rvresp_tvalid <= 1'b1;
         rvresp_tlast <= 1'b0;
@@ -1079,7 +1088,8 @@ module pl_riscv_control_v1 #(
                 dbg_status <= 32'hBAD2_0003;
                 dbg_error_pending <= 1'b1;
                 queue_resp0(RF2_OP_RFDC_APPLY, 16'h0003, cmd_seq);
-              end else if (!rfdc_ready || !dac_mts_ready || dac_mts_failed) begin
+              end else if (!rfdc_ready || !dac_mts_ready || dac_mts_failed ||
+                           sync_align_busy || sync_align_failed) begin
                 dbg_status <= 32'hBAD2_2003;
                 queue_resp0(RF2_OP_RFDC_APPLY, 16'h0005, cmd_seq);
               end else if (rfdc_apply_busy) begin
@@ -1108,7 +1118,8 @@ module pl_riscv_control_v1 #(
               queue_rfdc_response(RF2_OP_RFDC_GET_CONFIG, cmd_seq);
             end
             DEC_RF2_ARM: begin
-              if (!rfdc_ready || !dac_mts_ready || dac_mts_failed || !nco_sync_ready) begin
+              if (!rfdc_ready || !dac_mts_ready || dac_mts_failed || !nco_sync_ready ||
+                  sync_align_busy || sync_align_failed) begin
                 dbg_status <= 32'hBAD2_2006;
                 queue_resp0(RF2_OP_ARM, 16'h0005, cmd_seq);
               end else if ((cmd_payload_bytes != 32'd8) ||
@@ -1126,16 +1137,25 @@ module pl_riscv_control_v1 #(
               end
             end
             DEC_RF2_SYNC_EPOCH: begin
-              rfctrl2_epoch <= {payload_words[5], payload_words[4]};
-              rfctrl2_sync_epoch_pulse <= 1'b1;
-              dbg_status <= 32'h2000_0007;
-              queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
+              if ((cmd_payload_bytes != 32'd8) || !sync_role_master || sync_bypass) begin
+                dbg_status <= 32'hBAD2_0007;
+                queue_resp0(RF2_OP_SYNC_EPOCH, 16'h0006, cmd_seq);
+              end else if (sync_align_busy && !sync_align_failed) begin
+                dbg_status <= 32'hBAD2_1007;
+                queue_resp0(RF2_OP_SYNC_EPOCH, 16'h0004, cmd_seq);
+              end else begin
+                rfctrl2_epoch <= {payload_words[5], payload_words[4]};
+                rfctrl2_sync_epoch_pulse <= 1'b1;
+                dbg_status <= 32'h2000_0007;
+                queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
+              end
             end
             DEC_RF2_SET_SYNC_ROLE: begin
               if ((cmd_payload_bytes != 32'd8) ||
                   (payload_words[4] > 32'd1) || (payload_words[5] > 32'd1) ||
                   (payload_words[4][0] != sync_role_master) ||
-                  playback_armed || playback_prepared || playback_running) begin
+                  playback_armed || playback_prepared || playback_running ||
+                  sync_align_busy || sync_align_failed) begin
                 dbg_status <= 32'hBAD2_000F;
                 queue_resp0(RF2_OP_SET_SYNC_ROLE, 16'h0003, cmd_seq);
               end else begin
@@ -1150,6 +1170,9 @@ module pl_riscv_control_v1 #(
               if (cmd_payload_bytes != 32'd0) begin
                 dbg_status <= 32'hBAD2_0010;
                 queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0003, cmd_seq);
+              end else if (sync_align_busy || sync_align_failed) begin
+                dbg_status <= 32'hBAD2_1010;
+                queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0006, cmd_seq);
               end else begin
                 rfctrl2_emit_trigger_pulse <= 1'b1;
                 dbg_status <= 32'h2000_0010;
@@ -1163,7 +1186,7 @@ module pl_riscv_control_v1 #(
               queue_resp1(RF2_OP_START_AT, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
             end
             DEC_RF2_TRIGGER: begin
-              if (!playback_prepared || !sync_link_ready) begin
+              if (!playback_prepared || !sync_link_ready || sync_align_busy || sync_align_failed) begin
                 dbg_status <= 32'hBAD2_0009;
                 queue_resp0(RF2_OP_TRIGGER, 16'h0006, cmd_seq);
               end else begin

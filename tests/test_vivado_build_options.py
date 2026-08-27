@@ -34,8 +34,12 @@ class VivadoBuildOptionsTests(unittest.TestCase):
     def test_makefile_exposes_project_reuse_build(self):
         makefile = MAKEFILE.read_text(encoding="utf-8", errors="ignore")
         self.assertIn("hardware-fast:", makefile)
-        self.assertIn("TARGET=$(TARGET) ARTIFACT_DIR=", makefile)
-        self.assertIn("TARGET=$(TARGET) VIVADO_WORK_DIR=", makefile)
+        self.assertIn("TARGET=$(TARGET) ./build.sh", makefile)
+        # The current entry also passes ARTIFACT_DIR/Vivado isolation variables
+        # between TARGET and the script; check the behavior rather than an
+        # exact command-line ordering.
+        self.assertIn("TARGET=$(TARGET)", makefile)
+        self.assertIn("./build.sh --clean", makefile)
 
     def test_rfdc_reference_clock_is_not_overridden_after_chisel_generation(self):
         create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
@@ -58,6 +62,20 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
         self.assertIn("create_fileset -blockset xxv_ethernet", create_project)
         self.assertIn("add_files -fileset ${xxv_fileset} -norecurse ${xxv_xci}", create_project)
+
+    def test_master_trigger_launch_is_atomic_with_xs18_request(self):
+        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertIn("wire rfctrl2_master_launch_pulse", top)
+        self.assertIn("sync_link_ready_ddr &&", top)
+        self.assertIn("sync_role_master_ddr;", top)
+        self.assertIn(
+            ".trigger_request_ddr(rfctrl2_emit_trigger_pulse |\n"
+            "                           rfctrl2_master_launch_pulse)",
+            top,
+        )
+        self.assertNotIn("        ch4.\n", top)
 
 
 if __name__ == "__main__":
