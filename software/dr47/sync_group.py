@@ -44,7 +44,7 @@ def _next_epoch(previous: int) -> int:
 class SyncGroup:
     """Coordinate strict runtime alignment for one master and one slave."""
 
-    def __init__(self, master, slave, timeout_s: float = 5.0, poll_interval_s: float = 0.01) -> None:
+    def __init__(self, master, slave, timeout_s: float = 15.0, poll_interval_s: float = 0.01) -> None:
         self.master = master
         self.slave = slave
         self.timeout_s = float(timeout_s)
@@ -57,6 +57,16 @@ class SyncGroup:
 
     def sync(self, epoch: int = 1, *, abort_before_sync: bool = True) -> SyncAlignmentResult:
         """Emit XS20 SYNC and wait for both boards to re-align.
+
+        The board firmware waits five seconds after the deterministic HMC7044
+        SYNC event, resets/restarts RFDC, restores the firmware DAC baseline,
+        and then runs DAC MTS/NCO alignment.  The default timeout includes margin
+        for that holdoff and the reset/alignment work.
+
+        RFDC reset discards settings previously written by ``RFDC_APPLY``.
+        Callers must apply their runtime NCO/Nyquist/phase/current configuration
+        after this method returns.  DDR waveform data is independent of RFDC
+        reset and may still be retained when ``abort_before_sync=False``.
 
         ``abort_before_sync=True`` is the safe default for an already active
         player.  The hardware ABORT_MUTE path clears the waveform executor's

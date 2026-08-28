@@ -220,7 +220,7 @@ def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) ->
         instruction_repeats=1,
     )
     _wait_waveform_config(device, label)
-    print(f"{label}波形已上传并完成 DDR 预取，等待 SYNC")
+    print(f"{label}波形已上传并完成 DDR 预取，等待 Trigger")
 
 
 def _arm_after_sync(device: Dr47Device, label: str) -> None:
@@ -302,17 +302,17 @@ def run() -> int:
             )
         _wait_rfdc_ready(master, "082 主卡")
         _wait_rfdc_ready(slave, "081 从卡")
-        _configure_and_upload(master, record, "082 主卡")
-        _configure_and_upload(slave, record, "081 从卡")
 
-        # 两卡仍为空闲状态，保留已预取的 PLAY/END 配置进行 XS20 同步。
-        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(
-            epoch=1, abort_before_sync=False
+        # 先完成 XS20 同步及 RFDC reset/MTS/NCO，再提交运行参数和波形。
+        alignment = SyncGroup(master, slave, timeout_s=15.0, poll_interval_s=0.01).sync(
+            epoch=1, abort_before_sync=True
         )
         print(
             f"SYNC 完成：master_epoch={alignment.master_alignment_epoch}，"
             f"slave_epoch={alignment.slave_alignment_epoch}"
         )
+        _configure_and_upload(master, record, "082 主卡")
+        _configure_and_upload(slave, record, "081 从卡")
         _arm_after_sync(master, "082 主卡同步后")
         _arm_after_sync(slave, "081 从卡同步后")
         master_before = master.status(refresh=True).capabilities

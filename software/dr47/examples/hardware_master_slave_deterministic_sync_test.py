@@ -257,12 +257,12 @@ def run() -> int:
 
         print(f"开始连续 {SYNC_ROUNDS} 轮同步发波验证（每轮重新上传波形）")
 
-        group = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01)
+        group = SyncGroup(master, slave, timeout_s=15.0, poll_interval_s=0.01)
         prev_master_epoch = master.status(refresh=True).capabilities.sync_alignment_epoch
         prev_slave_epoch = slave.status(refresh=True).capabilities.sync_alignment_epoch
 
         for round_no in range(1, SYNC_ROUNDS + 1):
-            # 第 1 步：发出 XS20 SYNC 并等待两块板重新完成 DAC MTS / NCO 对齐。
+            # 第 1 步：发出 XS20 SYNC；固件等待 5 秒后重新完成 DAC MTS / NCO 对齐。
             # 这里使用默认的 abort_before_sync=True：它会先停止上一轮播放，并
             # 清空波形 executor 配置，因此本步骤之后必须重新上传波形。
             alignment = group.sync(epoch=1, abort_before_sync=True)

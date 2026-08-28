@@ -9,6 +9,7 @@ TOP_VERILOG = REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v"
 TARGET_CONFIG = REPO_ROOT / "hardware" / "vivado" / "scripts" / "target_config.tcl"
 FIRMWARE_MAIN = REPO_ROOT / "firmware" / "src" / "main.c"
 RFCTRL2_RTL = REPO_ROOT / "hardware" / "vivado" / "src" / "pl_riscv_control_v1.v"
+SYNC_ROLE_CONTROL = REPO_ROOT / "hardware" / "vivado" / "src" / "sync_role_control.v"
 HOST_SOFTWARE = REPO_ROOT / "software" / "host.py"
 VCXO_HZ = 100_000_000.0
 
@@ -83,6 +84,10 @@ class Hmc7044ConfigTests(unittest.TestCase):
         # 启动阶段不再等待 XS20；运行时由 PL epoch 触发 MTS/NCO 重对齐。
         self.assertIn("SYNC_EVENT_EPOCH_MASK", firmware)
         self.assertIn("SYNC_ALIGNMENT_SETTLE_US", firmware)
+        self.assertRegex(
+            firmware,
+            r"#define\s+SYNC_ALIGNMENT_SETTLE_US\s+5000000U",
+        )
         self.assertIn("Read_Sync_Event_Epoch", firmware)
         self.assertIn("rfctrl2_sync_epoch_pulse", top)
         self.assertIn(".sync_done", top)
@@ -92,6 +97,41 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertIn("dac_mts", host.lower())
         self.assertIn("RF2_NET_STATUS_HMC_DONE", host)
         self.assertIn("rfctrl2_sync_epoch", host)
+
+    def test_slave_xs20_bypasses_fpga_mclk_retiming(self):
+        rtl = SYNC_ROLE_CONTROL.read_text(encoding="utf-8", errors="ignore")
+        regs = _hmc7044_registers()
+
+        self.assertIn(
+            "assign hmc_sync = role_master_mclk ? sync_pulse_mclk : sync_in;",
+            rtl,
+        )
+        self.assertNotIn("sync_in_mclk_sync", rtl)
+        self.assertEqual(regs[0x005B], 0x06)
+
+    def test_every_dac_mts_is_wrapped_by_rfdc_reset_and_baseline_restore(self):
+        firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
+
+        self.assertRegex(
+            firmware,
+            r"static int Reset_RFDC_And_Run_DAC_MTS\(void\)"
+            r"[\s\S]*?rfdcStartup\(\)"
+            r"[\s\S]*?Configure_Custom_DAC_Nyquist\(\)"
+            r"[\s\S]*?Configure_Custom_DAC_NCO\(\)"
+            r"[\s\S]*?Configure_DAC_Output_Current\(\)"
+            r"[\s\S]*?return Configure_DAC_MTS\(\);",
+        )
+        self.assertEqual(firmware.count("Configure_DAC_MTS();"), 1)
+        self.assertEqual(
+            len(re.findall(r"Reset_RFDC_And_Run_DAC_MTS\(\)", firmware)),
+            2,
+        )
+        self.assertRegex(
+            firmware,
+            r"usleep\(SYNC_ALIGNMENT_SETTLE_US\);"
+            r"[\s\S]*?Status = Reset_RFDC_And_Run_DAC_MTS\(\);"
+            r"[\s\S]*?Status = Align_DAC_NCO_To_SYSREF\(\);",
+        )
 
     def test_dac_refclk_registers_generate_exact_128_mhz_with_supported_divider(self):
         regs = _hmc7044_registers()

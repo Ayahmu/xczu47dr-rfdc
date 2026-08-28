@@ -259,16 +259,17 @@ def run() -> int:
         slave.require_external_sync()
         _wait_rfdc_ready(master, "082 主卡")
         _wait_rfdc_ready(slave, "081 从卡")
-        _configure_and_upload(master, record, "082 主卡")
-        _configure_and_upload(slave, record, "081 从卡")
 
-        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(
-            epoch=1, abort_before_sync=False
+        alignment = SyncGroup(master, slave, timeout_s=15.0, poll_interval_s=0.01).sync(
+            epoch=1, abort_before_sync=True
         )
         print(
             f"SYNC 完成：master_epoch={alignment.master_alignment_epoch}，"
             f"slave_epoch={alignment.slave_alignment_epoch}"
         )
+        # SYNC 中的 RFDC reset 会恢复固件基线；运行参数和波形必须在同步后提交。
+        _configure_and_upload(master, record, "082 主卡")
+        _configure_and_upload(slave, record, "081 从卡")
         master.arm(channel_mask=CHANNEL_MASK)
         slave.arm(channel_mask=CHANNEL_MASK)
         _wait_prepared(master, "082 主卡")

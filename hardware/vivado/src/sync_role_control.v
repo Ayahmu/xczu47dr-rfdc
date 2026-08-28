@@ -2,12 +2,11 @@
 
 // Single-pulse board synchronization sequencer.
 //
-// SYNC is generated (master) or forwarded (slave) in the mclk clock domain.
-// mclk is the HMC7044 10 MHz monitor clock returned to the FPGA; it is
-// phase-deterministic relative to the HMC7044 VCXO/VCO.  Re-timing the SYNC
-// rising edge to mclk places the HMC7044 "multichip synchronization" divider
-// re-seed at a repeatable VCO phase instead of the random integer-VCO-cycle
-// offset produced by the asynchronous pl_clk domain.
+// Master SYNC is generated in the mclk clock domain.  mclk is the HMC7044
+// 10 MHz monitor clock returned to the FPGA and is phase-deterministic relative
+// to the HMC7044 VCXO/VCO.  Slave XS20 bypasses FPGA mclk re-timing and is
+// forwarded asynchronously to the HMC7044, whose internal SYNC re-timing is
+// enabled by register 0x005B.
 //
 // clk (pl_clk) is retained only for the request CDC input and the sync_done
 // status return path.  role_master is fixed by the selected master/slave
@@ -45,10 +44,9 @@ module sync_role_control #(
   reg done_toggle_clk_seen;
   reg sync_done_pulse;
 
-  // ===== mclk domain: deterministic SYNC pulse generation/forwarding =====
+  // ===== mclk domain: deterministic master SYNC pulse generation =====
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] request_toggle_mclk_sync;
   reg request_toggle_mclk_seen;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_in_mclk_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] role_master_mclk_sync;
   reg [1:0] state;
   reg [31:0] count;
@@ -108,7 +106,6 @@ module sync_role_control #(
     if (!rst_n) begin
       request_toggle_mclk_sync <= 2'b00;
       request_toggle_mclk_seen <= 1'b0;
-      sync_in_mclk_sync <= 2'b00;
       role_master_mclk_sync <= IS_MASTER ? 2'b11 : 2'b00;
       state <= IS_MASTER ? ST_IDLE : ST_DONE;
       count <= 32'd0;
@@ -117,7 +114,6 @@ module sync_role_control #(
     end else begin
       request_toggle_mclk_sync <= {request_toggle_mclk_sync[0], request_toggle_clk};
       request_toggle_mclk_seen <= request_toggle_mclk_sync[1];
-      sync_in_mclk_sync <= {sync_in_mclk_sync[0], sync_in};
       role_master_mclk_sync <= {role_master_mclk_sync[0], role_master_selected};
 
       if (!role_master_mclk) begin
@@ -170,9 +166,9 @@ module sync_role_control #(
   end
 
   // Master drives its own HMC7044 SYNC and the XS20 output with the same
-  // deterministic pulse.  Slave forwards the received XS20, re-timed to mclk,
-  // to its own HMC7044.
-  assign hmc_sync = role_master_mclk ? sync_pulse_mclk : sync_in_mclk_sync[1];
+  // deterministic pulse.  Slave forwards XS20 directly to its own HMC7044;
+  // there is no FPGA mclk edge or latency in the slave HMC7044 path.
+  assign hmc_sync = role_master_mclk ? sync_pulse_mclk : sync_in;
   assign slave_sync = role_master_mclk ? sync_pulse_mclk : 1'b0;
   assign sync_done = sync_done_pulse;
 

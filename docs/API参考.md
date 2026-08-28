@@ -510,14 +510,17 @@ XS20 断开
 `SynchronizationError`。它不是播放 Trigger：在已经完成该 epoch 后，随后
 多次 Trigger 不需要再次调用它。
 
-#### `SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01)`
+#### `SyncGroup(master, slave, timeout_s=15.0, poll_interval_s=0.01)`
 
 双板正式应用应使用 `SyncGroup.sync()`，而不是自行组合底层 `sync()` 和状态轮询。
 它会先对主卡、从卡执行 `abort_mute()`，记录同步前 alignment epoch，调用主卡发出
-XS20 SYNC，然后等待从卡收到真实 XS20 事件、两侧 `sync_align_busy=False`、
+XS20 SYNC。板卡固件在 HMC7044 SYNC 完成后等待 5 秒，重置并启动 RFDC、恢复
+固件 DAC 基线配置，再执行 MTS/NCO 对齐；随后
+驱动等待从卡收到真实 XS20 事件、两侧 `sync_align_busy=False`、
 alignment epoch 都递增，并同时确认 DAC MTS、NCO SYSREF 和 `sync_link_ready` 已就绪。
-成功返回 `SyncAlignmentResult`；同步成功后波形仍保留，但两块板卡都必须重新
-`arm()` 才能 Trigger。
+成功返回 `SyncAlignmentResult`。RFDC reset 会清除同步前通过 `RFDC_APPLY` 写入的
+NCO、Nyquist、相位和输出电流，因此这些运行参数必须在 `sync()` 返回后重新提交。
+DDR 波形是否保留仍由 `abort_before_sync` 决定；两块板卡最后都必须重新 `arm()`。
 
 ```python
 from dr47 import Dr47Device, SyncGroup
@@ -527,9 +530,15 @@ with Dr47Device(ip="10.50.0.101", sync_role="master") as master, \
     master.require_external_sync()
     slave.require_external_sync()
     # abort_before_sync=False 要求两块板此刻都处于 IDLE 且未 ARM，并保留
-    # 之前上传的波形配置；默认 True 会 ABORT_MUTE 并清空 executor，需要重传。
-    result = SyncGroup(master, slave, timeout_s=5.0).sync(epoch=1, abort_before_sync=False)
+    # 之前上传的波形配置；RFDC 参数无论如何都要在同步完成后重新提交。
+    result = SyncGroup(master, slave, timeout_s=15.0).sync(epoch=1, abort_before_sync=False)
     print(result.master_alignment_epoch, result.slave_alignment_epoch)
+    for device in (master, slave):
+        device.apply_rfdc_config(
+            nco_ghz={1: 1.0}, nyquist_zone={1: 1},
+            phase_deg={1: 0.0}, output_current_ma={1: 20.0},
+            channel_mask=0x01,
+        )
     master.arm(channel_mask=0x01)
     slave.arm(channel_mask=0x01)
     master.trigger()  # 主卡原子启动：本地播放 + XS18 输出
@@ -964,8 +973,8 @@ def main() -> None:
         master.set_sync_role("master")
         slave.set_sync_role("slave")
 
-        # 9. 为两块板卡配置相同的 DAC NCO 和相位。
-        #    高层单位是 GHz/degree/mA；batch_mode=True 时最后统一 commit。
+        # 9. 准备两块板卡共用的 DAC NCO 和相位参数。
+        #    RFDC reset 会清除运行时配置，所以第 12 步同步完成后再提交。
         rfdc = {
             "nco_ghz": {1: 1.0},
             "nyquist_zone": {1: 1},
@@ -973,11 +982,6 @@ def main() -> None:
             "output_current_ma": {1: 20.0},
             "channel_mask": 0x01,
         }
-        master.apply_rfdc_config(**rfdc, revision=1)
-        slave.apply_rfdc_config(**rfdc, revision=1)
-        master.commit()
-        slave.commit()
-
         # 10. 准备一个很短的 DC-IQ 波形。
         #    DC 复基带 + 1 GHz NCO = 1 GHz 模拟输出；I/Q 交错为 I0,Q0,I1,Q1...
         samples = 1024
@@ -1006,11 +1010,15 @@ def main() -> None:
         #     收到后两侧各自重新完成 DAC MTS 与 NCO SYSREF 对齐，并等待对齐
         #     完成。这要求 XS20 物理线和参考时钟已经正确连接。
         # abort_before_sync=False 是因为第 11 步已上传波形且板卡仍为 IDLE；
-        # 这样同步不会清空 executor 配置，第 13 步直接 ARM 即可。
-        sync_result = SyncGroup(master, slave, timeout_s=5.0).sync(
+        # 这样同步不会清空 executor 配置；RFDC 参数仍需在 ARM 前重新提交。
+        sync_result = SyncGroup(master, slave, timeout_s=15.0).sync(
             epoch=1, abort_before_sync=False
         )
         print(sync_result.master_alignment_epoch, sync_result.slave_alignment_epoch)
+
+        # RFDC reset 已恢复固件基线；现在重新提交本次实验的运行参数。
+        master.apply_rfdc_config(**rfdc, revision=1)
+        slave.apply_rfdc_config(**rfdc, revision=1)
 
         # 13. 两块板卡都 ARM，进入等待 Trigger 状态。
         master.arm(channel_mask=0x01, run_id=1001)

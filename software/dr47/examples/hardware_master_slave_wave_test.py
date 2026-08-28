@@ -7,9 +7,9 @@
 * XS17 分别接入两块板卡要求的同一参考时钟；参考频率必须与 bitstream 匹配；
 * 主卡 XS20 输出连接从卡 XS20 输入；
 * 主卡 XS18（TRIG_1）连接从卡 XS19（TRIG_2）；
-* 两块板卡都设置为 ``external``，使用 ``SyncGroup.sync(abort_before_sync=False)``；
-* 两卡先完成波形上传和 DDR 预取，再由 ``SyncGroup`` 发出 XS20 SYNC 并等待
-  两卡重新完成 DAC MTS/NCO 对齐；成功后脚本才 ARM；
+* 两块板卡都设置为 ``external``，使用 ``SyncGroup.sync()``；
+* ``SyncGroup`` 先发出 XS20 SYNC，等待两卡完成 RFDC reset、DAC MTS 和 NCO
+  对齐；随后脚本重新提交 RFDC 参数、上传波形并 ARM；
 * 主卡只使用一次 UDP ``trigger()``；主卡 RTL 同时通过 XS18/XS19
   启动本地和从卡播放。
 
@@ -257,19 +257,17 @@ def run() -> int:
         _status(master, "主卡 external 模式")
         _status(slave, "从卡 external 模式，等待 XS20")
 
-        # 两卡先上传并预取，但保持 IDLE；同步事务不会清空这份配置。
-        _configure_and_upload(master, iq, "主卡")
-        _configure_and_upload(slave, iq, "从卡")
-
-        # 主卡 XS20 输出一个同步边沿；从卡 XS20 输入收到后打开 Trigger 门控。
-        alignment = SyncGroup(master, slave, timeout_s=5.0, poll_interval_s=0.01).sync(
-            epoch=1, abort_before_sync=False
+        # 主卡 XS20 输出一个同步边沿；两卡完成 RFDC reset/MTS/NCO 后再配置发波。
+        alignment = SyncGroup(master, slave, timeout_s=15.0, poll_interval_s=0.01).sync(
+            epoch=1, abort_before_sync=True
         )
         print(
             f"严格同步完成：master alignment_epoch={alignment.master_alignment_epoch}, "
             f"slave alignment_epoch={alignment.slave_alignment_epoch}, "
             f"elapsed={alignment.elapsed_s:.3f}s"
         )
+        _configure_and_upload(master, iq, "主卡")
+        _configure_and_upload(slave, iq, "从卡")
         _arm_after_sync(master, "严格同步后主卡")
         _arm_after_sync(slave, "严格同步后从卡")
 

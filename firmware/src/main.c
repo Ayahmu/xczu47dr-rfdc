@@ -97,8 +97,8 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define FW_STATUS_SYNC_ACK_MASK (0x3FU << FW_STATUS_SYNC_ACK_SHIFT)
 #define SYNC_EVENT_EPOCH_MASK 0x3FU
 #define SYNC_EVENT_POLL_INTERVAL_US 10000U
-/* Allow the HMC7044 SYNC/SYSREF event to settle before re-running RFDC MTS. */
-#define SYNC_ALIGNMENT_SETTLE_US 1000U
+/* Hold the playback gate closed for five seconds after HMC7044 SYNC before MTS. */
+#define SYNC_ALIGNMENT_SETTLE_US 5000000U
 
 static u32 DacMtsStatus;
 static u32 SyncAckStatus;
@@ -467,7 +467,38 @@ int Configure_DAC_MTS(void)
 	Publish_DAC_MTS_Status(1U, 0U, 0U);
 	xil_printf("DAC MTS ready: tiles=0x%lx reference_tile=%u\r\n",
 		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
-	return XST_SUCCESS;
+        return XST_SUCCESS;
+}
+
+/* RFDC reset restores the generated IP configuration, so restore the board
+ * baseline before every DAC MTS transaction.  Keeping the reset and MTS in one
+ * wrapper prevents future call sites from accidentally running MTS on stale
+ * converter state. */
+static int Reset_RFDC_And_Run_DAC_MTS(void)
+{
+        int Status;
+
+        xil_printf("Resetting and starting RFDC before DAC MTS.\r\n");
+        Status = rfdcStartup();
+        if (Status != XST_SUCCESS)
+        {
+                xil_printf("ERROR: RFDC reset/startup failed before DAC MTS, status=%d\r\n", Status);
+                return Status;
+        }
+        if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
+        {
+                return XST_FAILURE;
+        }
+        if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
+        {
+                return XST_FAILURE;
+        }
+        if (Configure_DAC_Output_Current() != XST_SUCCESS)
+        {
+                return XST_FAILURE;
+        }
+
+        return Configure_DAC_MTS();
 }
 
 int Align_DAC_NCO_To_SYSREF(void)
@@ -524,21 +555,23 @@ static int Realign_DAC_For_Sync_Epoch(u32 Epoch)
 {
 	int Status;
 
-	xil_printf("SYNC alignment epoch %lu: stopping DAC readiness and rerunning MTS/NCO.\r\n",
-		   (unsigned long)Epoch);
+        xil_printf("SYNC alignment epoch %lu: HMC7044 SYNC complete; waiting 5 seconds before RFDC reset/MTS/NCO.\r\n",
+                   (unsigned long)Epoch);
 	DacMtsStatus &= ~(FW_STATUS_MTS_READY | FW_STATUS_MTS_FAILED |
 				  FW_STATUS_NCO_SYNC_READY);
 	Publish_DAC_MTS_Status(0U, 0U, 0U);
 	usleep(SYNC_ALIGNMENT_SETTLE_US);
 
-	Status = Configure_DAC_MTS();
-	if (Status != XST_SUCCESS)
-	{
-		u32 MtsError = (DacMtsStatus >> FW_STATUS_MTS_ERROR_SHIFT) & 0xFFFFU;
-		Publish_Sync_Alignment_Failure(Epoch, MtsError);
-		xil_printf("SYNC alignment epoch %lu: DAC MTS failed; playback remains muted.\r\n",
-			   (unsigned long)Epoch);
-		return XST_FAILURE;
+        Status = Reset_RFDC_And_Run_DAC_MTS();
+        if (Status != XST_SUCCESS)
+        {
+                u32 MtsError = (DacMtsStatus >> FW_STATUS_MTS_ERROR_SHIFT) & 0xFFFFU;
+                if (MtsError == 0U)
+                        MtsError = (u32)Status & 0xFFFFU;
+                Publish_Sync_Alignment_Failure(Epoch, MtsError);
+                xil_printf("SYNC alignment epoch %lu: RFDC reset/startup or DAC MTS failed; playback remains muted.\r\n",
+                           (unsigned long)Epoch);
+                return XST_FAILURE;
 	}
 	Status = Align_DAC_NCO_To_SYSREF();
 	if (Status != XST_SUCCESS)
@@ -667,31 +700,12 @@ int main(void)
 	{
 		xil_printf("The RFDC controller is initialized.\r\n");
 	}
-	// Display and verify the Power-on Status
-	Status = rfdcStartup();
-	if (Status != XST_SUCCESS)
-	{
-		return Status;
-	}
-	Report_Custom_DAC_Status("after startup");
-	Report_Custom_DAC_Clock_Status("after startup");
-	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
-	{
-		return XST_FAILURE;
-	}
-	if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
-	{
-		return XST_FAILURE;
-	}
-	if (Configure_DAC_Output_Current() != XST_SUCCESS)
-	{
-		return XST_FAILURE;
-	}
-	if (Configure_DAC_MTS() != XST_SUCCESS)
-	{
-		xil_printf("RF output remains blocked because DAC MTS is not ready.\r\n");
-		while (1)
-			usleep(1000000);
+        // Reset/start the converters, restore the board baseline, then run MTS.
+        if (Reset_RFDC_And_Run_DAC_MTS() != XST_SUCCESS)
+        {
+                xil_printf("RF output remains blocked because RFDC reset/startup or DAC MTS failed.\r\n");
+                while (1)
+                        usleep(1000000);
 	}
 	if (Align_DAC_NCO_To_SYSREF() != XST_SUCCESS)
 	{

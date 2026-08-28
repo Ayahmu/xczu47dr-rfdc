@@ -163,6 +163,16 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: runtime roles generate and receive a single-pulse sync sequence",
         )
 
+    def test_slave_sync_is_asynchronous_hmc7044_passthrough(self):
+        self.run_sim(
+            "tb_sync_slave_passthrough",
+            [
+                ROOT / "hardware/vivado/src/sync_role_control.v",
+                ROOT / "tests/tb_sync_slave_passthrough.sv",
+            ],
+            "PASS: slave XS20 reaches HMC7044 without FPGA mclk re-timing",
+        )
+
     def test_sync_trigger_link_cdc_and_post_sync_trigger(self):
         self.run_sim(
             "tb_sync_trigger_link",
