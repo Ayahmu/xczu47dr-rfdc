@@ -11,6 +11,8 @@
  - custom_xczu47dr_bw：独立带宽测试顶层，不包含正常 RFDC 播放角色。
  - XS18 (TRIG_1) 为 Trigger 输出，XS19 (TRIG_2) 为 Trigger 输入。
  - RFDC 为 6.4 GS/s、16 倍插值、400 MS/s IQ、50 MHz AXIS。
+ - XS17 提供两板共同 10 MHz 参考；HMC7044 输出约 96 MHz `PL_CLK` 作为 SYNC/Trigger
+   事件时间基准，PS `pl_clk` 不参与物理事件捕获。
 
  主从方向是综合时固定的宏定义，软件不能切换。主从接线和仪器检查见
  [硬件验收](../../docs/硬件验收.md)。
@@ -43,3 +45,8 @@
  实现后先看时序报告中的 WNS/TNS、WHS/THS，再用 ILA 检查 UDP 接收、DDR 512 位
  交错数据、8 路打包器和 RFDC AXIS。Vivado DRC 警告需要按规则逐项判断，不能把所有
  警告都当成时序失败。
+
+ `ila_hmc_event` 观察 HMC `PL_CLK` 域的 `sync_xs20_in/out`、`sync_hmc`、XS18/XS19
+ Trigger、`hmc_event_tick`、`sync_event_tick`、`trigger_capture_tick` 和
+ `trigger_launch_tick`。它与 `ila_dac_axis` 配合使用，才能区分物理事件时刻和 DAC
+ AXIS 数据有效时刻。

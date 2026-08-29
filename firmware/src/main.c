@@ -37,6 +37,7 @@ int Configure_Custom_DAC_Nyquist(void);
 int Configure_Custom_DAC_NCO(void);
 int Configure_DAC_MTS(void);
 int Align_DAC_NCO_To_SYSREF(void);
+int Reinitialize_RFDC_For_Sync(void);
 int Report_Custom_DAC_Status(const char *Stage);
 int Report_Custom_DAC_Clock_Status(const char *Stage);
 
@@ -97,8 +98,11 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define FW_STATUS_SYNC_ACK_MASK (0x3FU << FW_STATUS_SYNC_ACK_SHIFT)
 #define SYNC_EVENT_EPOCH_MASK 0x3FU
 #define SYNC_EVENT_POLL_INTERVAL_US 10000U
-/* Allow the HMC7044 SYNC/SYSREF event to settle before re-running RFDC MTS. */
-#define SYNC_ALIGNMENT_SETTLE_US 1000U
+/* HMC7044 processes a SYNC rising edge in its VCXO-domain FSM over
+ * 16 x 6 x tPD2.  With PLL2 R2=25 and VCXO=100 MHz, tPD2=250 ns, so the
+ * divider/SYSREF reseed completes in 96 x 250 ns = 24 us.  Wait 1 ms for
+ * margin before reinitializing the RFDC datapath and re-running MTS. */
+#define HMC7044_SYNC_SETTLE_US 1000U
 
 static u32 DacMtsStatus;
 static u32 SyncAckStatus;
@@ -517,6 +521,65 @@ int Align_DAC_NCO_To_SYSREF(void)
 	return XST_SUCCESS;
 }
 
+/* Reinitialize the RFDC datapath before each runtime MTS.  A master reset
+ * clears the DAC mixer (NCO), nyquist-zone and output-current settings, so
+ * the startup sequence and the baseline DAC configuration are re-applied
+ * before the new MTS/NCO alignment.  The RFDC tile clock/PLL then re-locks
+ * to the freshly re-seeded HMC7044 SYSREF and clock outputs. */
+int Reinitialize_RFDC_For_Sync(void)
+{
+	int Tile_Id;
+	int Status;
+	XRFdc *RFdcInstPtr = &RFdcInst;
+	XRFdc_IPStatus ipStatus;
+	u32 val;
+
+	xil_printf("SYNC alignment: reinitializing RFDC (master reset + DAC startup).\r\n");
+
+	/* Master Reset the RFDC IP, then re-run the DAC power-on/startup
+	 * sequence for every enabled DAC tile. */
+	Xil_Out32(RFDC_BASE + 0x0004, 1);
+	sleep(1);
+
+	XRFdc_GetIPStatus(RFdcInstPtr, &ipStatus);
+	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
+	{
+		if (ipStatus.DACTileStatus[Tile_Id].IsEnabled != 1)
+			continue;
+
+		val = XRFdc_ReadReg16(RFdcInstPtr,
+				      XRFDC_DAC_TILE_CTRL_STATS_ADDR(Tile_Id),
+				      XRFDC_ADC_DEBUG_RST_OFFSET);
+		if (val & XRFDC_DBG_RST_CAL_MASK)
+		{
+			xil_printf("SYNC alignment: DAC Tile%d not ready after reset.\r\n",
+				   Tile_Id);
+			return XST_FAILURE;
+		}
+
+		Status = XRFdc_StartUp(RFdcInstPtr, 1, Tile_Id);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("SYNC alignment: XRFdc_StartUp failed for DAC Tile%d status=%d.\r\n",
+				   Tile_Id, Status);
+			return XST_FAILURE;
+		}
+		usleep(200000);
+	}
+
+	/* A master reset clears the DAC mixer/nyquist/output settings, so
+	 * restore the baseline configuration before the runtime MTS. */
+	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
+		return XST_FAILURE;
+	if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
+		return XST_FAILURE;
+	if (Configure_DAC_Output_Current() != XST_SUCCESS)
+		return XST_FAILURE;
+
+	xil_printf("SYNC alignment: RFDC reinitialization complete.\r\n");
+	return XST_SUCCESS;
+}
+
 /* Re-run the complete runtime alignment transaction for one real PL SYNC
  * event.  The PL playback gate is already closed while this function runs;
  * only the matching epoch ACK below can reopen it. */
@@ -524,12 +587,24 @@ static int Realign_DAC_For_Sync_Epoch(u32 Epoch)
 {
 	int Status;
 
-	xil_printf("SYNC alignment epoch %lu: stopping DAC readiness and rerunning MTS/NCO.\r\n",
+	xil_printf("SYNC alignment epoch %lu: waiting HMC7044 sync, reinitializing RFDC, rerunning MTS/NCO.\r\n",
 		   (unsigned long)Epoch);
 	DacMtsStatus &= ~(FW_STATUS_MTS_READY | FW_STATUS_MTS_FAILED |
 				  FW_STATUS_NCO_SYNC_READY);
 	Publish_DAC_MTS_Status(0U, 0U, 0U);
-	usleep(SYNC_ALIGNMENT_SETTLE_US);
+
+	/* Wait for the HMC7044 VCXO-domain FSM to finish reseeding its output
+	 * dividers/SYSREF timer before touching the RFDC datapath. */
+	usleep(HMC7044_SYNC_SETTLE_US);
+
+	Status = Reinitialize_RFDC_For_Sync();
+	if (Status != XST_SUCCESS)
+	{
+		Publish_Sync_Alignment_Failure(Epoch, XST_FAILURE);
+		xil_printf("SYNC alignment epoch %lu: RFDC reinitialization failed; playback remains muted.\r\n",
+			   (unsigned long)Epoch);
+		return XST_FAILURE;
+	}
 
 	Status = Configure_DAC_MTS();
 	if (Status != XST_SUCCESS)

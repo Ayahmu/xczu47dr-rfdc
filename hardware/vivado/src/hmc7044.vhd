@@ -134,13 +134,13 @@ H7044_SDATA <=HMC7044_SDIO;
 														                                               --10 --pulse generator.request a pulse generator stream from any channels configured for dynamic startup.this behaves in the same way as a gpi requested pulse generator
                                                                                          --11 causes sync if alarm exits,otherwise causes pulse generator
 
-				if USE_EXTERNAL_XS17 = '1' then
-					config_reg <= x"0005" & x"5A"; -- CLKIN1 plus EXT_SYNC
-				else
-					config_reg <= x"0005" & x"56"; -- existing CLKIN2 plus EXT_SYNC
-				end if;
+			if USE_EXTERNAL_XS17 = '1' then
+				config_reg <= x"0005" & x"5A"; -- CLKIN1 plus EXT_SYNC (XS17 reference)
+			else
+				config_reg <= x"0005" & x"56"; -- existing CLKIN2 plus EXT_SYNC
+			end if;
 
-				--config_reg <= x"0005" & x"41";
+			--config_reg <= x"0005" & x"41";
 
 				when x"008" =>
 					config_reg <= x"0006" & x"00";	--
@@ -158,8 +158,8 @@ H7044_SDATA <=HMC7044_SDIO;
 					config_reg <= x"000D" & x"10";	--	                                        bit3---enable high-z input mode
 				when x"00F" =>
 					config_reg <= x"000E" & x"07";	--	       A-E FOR CLKINX AND OSCIN INPUT BUFFER CONTROL    oscin
-				when x"010" =>
-					config_reg <= x"0014" & x"36";	--      input clk priority
+			when x"010" =>
+				config_reg <= x"0014" & x"36";	--      input clk priority (CLKIN1)
 
 				when x"011" =>
 					config_reg <= x"0015" & x"03";	        --los validation[2:0]
@@ -299,10 +299,10 @@ H7044_SDATA <=HMC7044_SDIO;
 					config_reg <= x"0054" & x"03";	--bit[0] sdata enable  bit[1] sdata mode, 0 for open drain mode 1 for cmos mode
 				when x"037" =>
 					config_reg <= x"005A" & x"01";	--bit[2:0] pulse generator mode selection
-				when x"038" =>
-					config_reg <= x"005B" & x"06";	--bit[0] sync polarity 0 for positive 1 for negative ,if not using clkin0 as input,must be 0
-					                                 --bit[1]	 sync through pll2
-																--bit[2]	 sync retime  0 for bypass the retime(if using sync path with onchip vco),1 for retime the external sync from reference 0
+			when x"038" =>
+				config_reg <= x"005B" & x"06";	--bit[0] sync polarity 0 = positive
+				                                 --bit[1] sync through pll2 = 1
+																	--bit[2] sync retime
 
 				when x"039" =>
 					config_reg <= x"005C" & x"00";	 --sysref timer[7:0]

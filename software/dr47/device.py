@@ -454,9 +454,16 @@ class Dr47Device:
         )
         return 0
 
-    def rfctrl2_sync_epoch(self, epoch: int, seq: int | None = None, wait_response: bool = True):
+    def rfctrl2_sync_epoch(self, epoch: int, seq: int | None = None, wait_response: bool = True,
+                           retries: int = 0):
         sequence = self._next_sequence() if seq is None else int(seq)
-        return self._request(pack_rfctrl2_sync_epoch(epoch, sequence), RF2_OP_SYNC_EPOCH, sequence, wait_response=wait_response)
+        # SYNC_EPOCH is non-idempotent: the PL decoder does not deduplicate the
+        # command by sequence number, so blindly re-sending it after a lost ACK
+        # would emit a second XS20 pulse and start a second MTS/NCO alignment
+        # epoch.  Never auto-retry here; SyncGroup verifies the real slave
+        # event before deciding whether a re-send is actually required.
+        return self._request(pack_rfctrl2_sync_epoch(epoch, sequence), RF2_OP_SYNC_EPOCH,
+                             sequence, wait_response=wait_response, retries=retries)
 
     def rfctrl2_start_at(self, start_tick: int, seq: int | None = None, wait_response: bool = True):
         sequence = self._next_sequence() if seq is None else int(seq)

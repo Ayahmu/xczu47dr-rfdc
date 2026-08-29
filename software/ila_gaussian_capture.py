@@ -57,7 +57,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from dr47.device import Dr47Device  # noqa: E402
-from dr47.sequence import make_trigger_sequence  # noqa: E402
+from dr47.sequence import make_single_trigger_sequence  # noqa: E402
 from dr47.waveforms import (  # noqa: E402
     iq_duration_to_interleaved_sample_count,
     make_iq_gaussian_sine_interleaved,
@@ -322,7 +322,7 @@ def _play_gaussian() -> None:
         print("上传高斯包络并等待 DDR 预取。", flush=True)
         device.upload_waveforms(
             {1: record},
-            channel_sequences={1: make_trigger_sequence(int(record.size // 2))},
+        channel_sequences={1: make_single_trigger_sequence(int(record.size // 2))},
             wave_formats={1: "interleaved_iq"},
             auto_start=False,
             loop=False,

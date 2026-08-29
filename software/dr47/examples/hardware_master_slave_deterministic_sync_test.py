@@ -46,7 +46,7 @@ import numpy as np
 from ..capabilities import PlaybackState
 from ..device import Dr47Device
 from ..errors import DriverError
-from ..sequence import make_trigger_sequence
+from ..sequence import make_single_trigger_sequence
 from ..sync_group import SyncGroup
 from ..waveforms import (
     iq_duration_to_interleaved_sample_count,
@@ -207,7 +207,7 @@ def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) ->
     device.commit()
     device.upload_waveforms(
         {1: record},
-        channel_sequences={1: make_trigger_sequence(int(record.size // 2))},
+        channel_sequences={1: make_single_trigger_sequence(int(record.size // 2))},
         wave_formats={1: "interleaved_iq"},
         auto_start=False,
         loop=False,

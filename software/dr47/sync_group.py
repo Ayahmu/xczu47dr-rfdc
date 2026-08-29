@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from .errors import SynchronizationError
+from .errors import SynchronizationError, TransportTimeout
 from .protocol import (
     RF2_CAP_DAC_MTS,
     RF2_CAP_NCO_SYNC,
@@ -113,6 +113,12 @@ class SyncGroup:
             )
         try:
             self.master.sync(epoch=int(epoch))
+        except TransportTimeout:
+            # SYNC_EPOCH is non-idempotent and therefore no longer auto-retried.
+            # A lost ACK does not prove the pulse was lost, so do not fail here:
+            # the poll loop below decides success by observing the real hardware
+            # alignment epoch on both boards.
+            pass
         except Exception as exc:
             raise SynchronizationError(f"master did not emit SYNC: {exc}") from exc
 

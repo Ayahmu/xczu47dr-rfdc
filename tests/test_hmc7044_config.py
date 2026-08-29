@@ -69,6 +69,24 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertEqual(10_000_000 / r1, 10_000_000)
         self.assertEqual((10_000_000 / r1) * n1, VCXO_HZ)
 
+    def test_sync_uses_xs17_clkin1_reference(self):
+        # XS17(10MHz) 接 CLKIN1；SYNC 通过 PLL2 重播种输出分频器。
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+        regs = _hmc7044_registers()
+
+        # 0x0005 有一个历史注释值，解析器会误读；这里直接检查活动写入。
+        self.assertIn('config_reg <= x"0005" & x"5A"', text)
+        self.assertEqual((0x5A >> 6) & 0x3, 0x1)  # SYNC through PLL2
+        self.assertEqual((0x5A >> 1) & 0x1, 1)    # CLKIN1 enabled
+
+        # 0x005B: positive polarity, through PLL2.
+        self.assertEqual(regs[0x005B], 0x06)
+        self.assertEqual((regs[0x005B] >> 0) & 0x1, 0)  # positive polarity
+        self.assertEqual((regs[0x005B] >> 1) & 0x1, 1)  # through PLL2
+
+        # 0x0014: input clock priority restored to the XS17 baseline.
+        self.assertEqual(regs[0x0014], 0x36)
+
     def test_two_board_sync_requires_mts_and_software_sync_gate(self):
         firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
@@ -82,7 +100,8 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertIn("Publish_DAC_NCO_Sync_Ready", firmware)
         # 启动阶段不再等待 XS20；运行时由 PL epoch 触发 MTS/NCO 重对齐。
         self.assertIn("SYNC_EVENT_EPOCH_MASK", firmware)
-        self.assertIn("SYNC_ALIGNMENT_SETTLE_US", firmware)
+        self.assertIn("HMC7044_SYNC_SETTLE_US", firmware)
+        self.assertIn("Reinitialize_RFDC_For_Sync", firmware)
         self.assertIn("Read_Sync_Event_Epoch", firmware)
         self.assertIn("rfctrl2_sync_epoch_pulse", top)
         self.assertIn(".sync_done", top)
@@ -92,6 +111,24 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertIn("dac_mts", host.lower())
         self.assertIn("RF2_NET_STATUS_HMC_DONE", host)
         self.assertIn("rfctrl2_sync_epoch", host)
+
+    def test_physical_sync_and_trigger_use_hmc_pl_clk_domain(self):
+        top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
+        sync_link = (REPO_ROOT / "hardware" / "vivado" / "src" / "sync_trigger_link.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertIn("IBUFDS", top)
+        self.assertIn("hmc_pl_clk", top)
+        self.assertIn(".hmc_pl_clk", top)
+        self.assertIn("input  wire hmc_pl_clk", sync_link)
+        self.assertIn(".clk         (hmc_pl_clk)", sync_link)
+        self.assertNotIn("trigger_in_pl_sync", sync_link)
+
+    def test_hmc_pl_clk_constraint_matches_96mhz_output(self):
+        xdc = (REPO_ROOT / "hardware" / "vivado" / "xdc" / "custom_xczu47dr_minimal.xdc").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertIn("create_clock -name PL_CLK_P_0 -period 10.416667", xdc)
 
     def test_dac_refclk_registers_generate_exact_128_mhz_with_supported_divider(self):
         regs = _hmc7044_registers()

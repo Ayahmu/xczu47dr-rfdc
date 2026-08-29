@@ -1,21 +1,18 @@
 `timescale 1ns/1ps
 
-// Verifies that the master SYNC rising edge is registered to the HMC7044
-// 10 MHz monitor clock (mclk).  Because mclk is phase-deterministic relative
-// to the HMC7044 VCXO, this alignment makes the HMC7044 multichip-sync
-// divider re-seed deterministic across repeated sync() requests instead of a
-// random integer-VCO-cycle offset.  Two requests are issued at different
-// pl_clk phases and both SYNC edges must land on mclk rising edges.
+// Verifies that the master SYNC sequencer emits one clean single pulse in the
+// pl_clk domain and drives it directly to the HMC7044 SYNC pin.  The old
+// FPGA-side mclk re-timing was removed: SYNC is no longer re-timed to the
+// HMC7044 monitor clock, so the sequencer simply waits WAIT_CYCLES, asserts
+// hmc_sync for HIGH_CYCLES, deasserts it, and emits one sync_done pulse.
 module tb_sync_deterministic;
   reg clk = 1'b0;   // pl_clk, 100 MHz (10 ns period)
-  reg mclk = 1'b0;  // HMC7044 monitor, 10 MHz (100 ns period)
   reg rst_n = 1'b0;
   reg request = 1'b0;
   wire hmc_sync;
   wire sync_done;
 
   always #5 clk = ~clk;
-  always #50 mclk = ~mclk;
 
   sync_role_control #(
       .IS_MASTER(1),
@@ -23,7 +20,6 @@ module tb_sync_deterministic;
       .HIGH_CYCLES(2)
   ) dut (
       .clk(clk),
-      .mclk(mclk),
       .rst_n(rst_n),
       .sync_request(request),
       .sync_in(1'b0),
@@ -35,14 +31,23 @@ module tb_sync_deterministic;
   );
 
   integer rise_count = 0;
-  integer rise_time [0:3];
+  integer fall_count = 0;
+  integer done_count = 0;
+  integer high_cycles = 0;
   reg hmc_d = 1'b0;
-  always @(posedge mclk) begin
+  reg done_d = 1'b0;
+
+  always @(posedge clk) begin
     hmc_d <= hmc_sync;
-    if (hmc_sync && !hmc_d) begin
-      rise_time[rise_count] = $time;
+    done_d <= sync_done;
+    if (hmc_sync && !hmc_d)
       rise_count <= rise_count + 1;
-    end
+    if (!hmc_sync && hmc_d)
+      fall_count <= fall_count + 1;
+    if (sync_done && !done_d)
+      done_count <= done_count + 1;
+    if (hmc_sync)
+      high_cycles <= high_cycles + 1;
   end
 
   initial begin
@@ -50,30 +55,31 @@ module tb_sync_deterministic;
     rst_n = 1'b1;
     repeat (2) @(posedge clk);
 
-    // First request at an arbitrary pl_clk phase.
-    request = 1'b1;
-    @(posedge clk);
-    request = 1'b0;
-    while (rise_count < 1) @(posedge mclk);
+    request <= 1'b1;
+    repeat (2) @(posedge clk);
+    request <= 1'b0;
 
-    // Second request shifted by half a monitor-clock period.
-    repeat (5) @(posedge clk);
-    request = 1'b1;
-    @(posedge clk);
-    request = 1'b0;
-    while (rise_count < 2) @(posedge mclk);
+    // WAIT_CYCLES=3 followed by HIGH_CYCLES=2, plus margin.
+    repeat (20) @(posedge clk);
 
-    repeat (2) @(posedge mclk);
-
-    // mclk rising edges occur at 50, 150, 250, ... ns.  A registered SYNC
-    // edge therefore must satisfy (t - 50) % 100 == 0.
-    if (((rise_time[0] - 50) % 100) != 0 ||
-        ((rise_time[1] - 50) % 100) != 0) begin
-      $display("FAIL: SYNC edges not aligned to monitor clock: t0=%0d t1=%0d",
-               rise_time[0], rise_time[1]);
+    if (rise_count != 1) begin
+      $display("FAIL: master generated %0d sync pulses, expected 1", rise_count);
       $finish;
     end
-    $display("PASS: deterministic SYNC edges are registered to the HMC7044 monitor clock");
+    if (fall_count != 1) begin
+      $display("FAIL: master sync fall count=%0d, expected 1", fall_count);
+      $finish;
+    end
+    if (done_count != 1) begin
+      $display("FAIL: master sync_done pulses=%0d, expected 1", done_count);
+      $finish;
+    end
+    if (high_cycles != 2) begin
+      $display("FAIL: master sync high cycles=%0d, expected 2", high_cycles);
+      $finish;
+    end
+
+    $display("PASS: master emits one clean single-pulse SYNC directly to HMC7044");
     $finish;
   end
 endmodule

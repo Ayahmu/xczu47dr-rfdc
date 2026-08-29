@@ -126,7 +126,7 @@ add_files -norecurse $xxv_preflight_stub
 set_property USED_IN_SYNTHESIS true [get_files $xxv_preflight_stub]
 lappend preflight_stub_files $xxv_preflight_stub
 
-foreach ip_name {ila_s_axi_01 ila_udp_ddr ila_dac_axis} {
+foreach ip_name {ila_s_axi_01 ila_udp_ddr ila_dac_axis ila_hmc_event} {
     set ip [get_ips -quiet $ip_name]
     if {[llength $ip] == 0} {
         error "Missing required ILA IP: ${ip_name}"

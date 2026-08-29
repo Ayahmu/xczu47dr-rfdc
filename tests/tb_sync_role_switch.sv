@@ -2,7 +2,6 @@
 
 module tb_sync_role_switch;
   reg clk = 1'b0;   // pl_clk, 100 MHz (period 10 ns)
-  reg mclk = 1'b0;  // HMC7044 monitor, 10 MHz (period 100 ns)
   reg rst_n = 1'b0;
   reg master_request = 1'b0;
   reg master_role = 1'b1;
@@ -14,7 +13,6 @@ module tb_sync_role_switch;
   wire slave_sync_done;
 
   always #5 clk = ~clk;
-  always #50 mclk = ~mclk;
 
   sync_role_control #(
       .IS_MASTER(1),
@@ -22,7 +20,6 @@ module tb_sync_role_switch;
       .HIGH_CYCLES(2)
   ) master_i (
       .clk(clk),
-      .mclk(mclk),
       .rst_n(rst_n),
       .sync_request(master_request),
       .sync_in(1'b0),
@@ -38,7 +35,6 @@ module tb_sync_role_switch;
       .HIGH_CYCLES(2)
   ) slave_i (
       .clk(clk),
-      .mclk(mclk),
       .rst_n(rst_n),
       .sync_request(1'b0),
       .sync_in(master_slave_sync),
@@ -52,6 +48,7 @@ module tb_sync_role_switch;
   integer slave_rises = 0;
   integer master_done_pulses = 0;
   integer slave_done_pulses = 0;
+  integer passthrough_mismatches = 0;
   reg master_hmc_d = 1'b0;
   reg slave_hmc_d = 1'b0;
   reg master_done_d = 1'b0;
@@ -70,18 +67,21 @@ module tb_sync_role_switch;
       master_done_pulses <= master_done_pulses + 1;
     if (slave_sync_done && !slave_done_d)
       slave_done_pulses <= slave_done_pulses + 1;
+    if (slave_hmc_sync !== master_slave_sync)
+      passthrough_mismatches <= passthrough_mismatches + 1;
   end
 
   initial begin
     repeat (3) @(negedge clk);
     rst_n = 1'b1;
     repeat (2) @(posedge clk);
-    master_request = 1'b1;
-    @(posedge clk);
-    master_request = 1'b0;
+    master_request <= 1'b1;
+    repeat (2) @(posedge clk);
+    master_request <= 1'b0;
 
-    // mclk is 10x slower than clk; the WAIT/HIGH states are mclk-domain
-    // cycles, so allow enough time for CDC plus the 5-cycle pulse sequence.
+    // The sequencer now runs entirely in the pl_clk domain and drives
+    // SYNC directly to the HMC7044 pin, so a modest number of clk cycles
+    // is enough to cover WAIT/HIGH and the slave CDC synchronizer.
     repeat (400) @(posedge clk);
     if (master_rises != 1) begin
       $display("FAIL: master generated %0d sync pulses, expected 1", master_rises);
@@ -97,6 +97,10 @@ module tb_sync_role_switch;
     end
     if (slave_done_pulses != 1) begin
       $display("FAIL: slave sync_done pulses=%0d, expected 1", slave_done_pulses);
+      $finish;
+    end
+    if (passthrough_mismatches != 0) begin
+      $display("FAIL: slave HMC SYNC is not a combinational copy of the received XS20 signal");
       $finish;
     end
 

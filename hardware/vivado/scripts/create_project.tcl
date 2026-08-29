@@ -382,10 +382,18 @@ if {!$is_bandwidth_target && [file exists ${ila_udp_ddr_script}]} {
 
 set ila_dac_axis_script "${script_path}/ila_dac_axis.tcl"
 if {!$is_bandwidth_target && [file exists ${ila_dac_axis_script}]} {
-    source ${ila_dac_axis_script}
-    puts "INFO: DAC-domain RFDC AXIS ILA IP created"
+  source ${ila_dac_axis_script}
+  puts "INFO: DAC-domain RFDC AXIS ILA IP created"
 } else {
     puts "WARN: DAC-domain ILA script not found: ${ila_dac_axis_script}"
+}
+
+set ila_hmc_event_script "${script_path}/ila_hmc_event.tcl"
+if {!$is_bandwidth_target && [file exists ${ila_hmc_event_script}]} {
+    source ${ila_hmc_event_script}
+    puts "INFO: HMC PL_CLK event ILA IP created"
+} else {
+    puts "WARN: HMC PL_CLK event ILA script not found: ${ila_hmc_event_script}"
 }
 
 set ila_s_axi_01_script "${script_path}/ila_s_axi_01.tcl"

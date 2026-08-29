@@ -28,6 +28,7 @@ from dr47 import (  # noqa: E402
     RFDC_NCO_MIN_GHZ,
     SimulatedDr47Device,
     make_trigger_sequence,
+    make_single_trigger_sequence,
     SynchronizationError,
     DeviceStatusError,
     UDP_RFCTRL2_MAGIC,
@@ -536,6 +537,16 @@ class DriverTests(unittest.TestCase):
         # The web manual waveform uses negative-Q complex convention.
         self.assertEqual(int(record[int(start) + 1]), 0)
         self.assertEqual(int(record[int(start) + 3]), 0)
+
+    def test_single_trigger_sequence_is_finite(self):
+        sequence = make_single_trigger_sequence(24)
+        commands, meta = __import__("dr47.waveforms", fromlist=["sequence_to_play_commands"]).sequence_to_play_commands(
+            sequence, channel=1, wave_format="interleaved_iq"
+        )
+        self.assertTrue(meta["wait_for_trigger"])
+        self.assertFalse(meta["loop"])
+        self.assertEqual(commands[-1][0], 3)
+        self.assertEqual(commands[-1][4], 0)
 
     def test_driver_record_is_byte_identical_to_web_manual_xy(self):
         """检查同一波形在驱动工具和网页模型中逐字节一致。"""

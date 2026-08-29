@@ -1,7 +1,7 @@
 """082 主卡单次触发 / 081 从卡同步发波的最简测试（只发一次 trigger）。
 
 和持续触发脚本的唯一区别：这里只调用一次 ``master.trigger()``，随后把两块板
-保持在 RUNNING 状态，便于在示波器上观察两路的 1 GHz 高斯正弦波形。
+保持在 RUNNING 状态，便于在示波器上观察两路的 5 GHz 高斯正弦波形。
 
 loop 波形一次 trigger 之后会由 FPGA 自行循环播放，不再需要上位机参与，所以
 脚本触发并确认状态后直接退出，**不发送 ABORT_MUTE**，板卡会一直播下去。停止
@@ -19,9 +19,9 @@ import time
 import numpy as np
 
 from ..capabilities import PlaybackState
-from ..device import Dr47Device
+from ..device import Dr47Device, rfdc_nco_plan_for_target
 from ..errors import DeviceStatusError, DriverError
-from ..sequence import make_trigger_sequence
+from ..sequence import make_single_trigger_sequence
 from ..sync_group import SyncGroup
 from ..waveforms import (
     iq_duration_to_interleaved_sample_count,
@@ -38,7 +38,7 @@ MASTER_TARGET_IP = "169.254.100.101"
 SLAVE_TARGET_IP = "169.254.100.102"
 
 SAMPLE_RATE_HZ = 400_000_000.0
-RF_NCO_GHZ = 1.0
+RF_TARGET_GHZ = 5.0
 BASEBAND_GHZ = 0.0
 PULSE_DURATION_NS = 60.0
 PULSE_DELAY_NS = 100.0
@@ -133,13 +133,18 @@ def _wait_waveform_config(device: Dr47Device, label: str) -> None:
 def _configure_and_upload(device: Dr47Device, record: np.ndarray, label: str) -> None:
     """配置 CH1、上传等待 Trigger 的波形并等待 DDR 预取。"""
 
-    device.set_xy_nco_frequency(1, RF_NCO_GHZ)
+    plan = rfdc_nco_plan_for_target(RF_TARGET_GHZ)
+    device.set_xy_nco_frequency(1, plan["nco_ghz"])
     device.set_gain("xy", 1, GAIN, gain_type="norm")
     device.set_qc_on_off("xy", 1, "on")
     device.commit()
+    device.apply_rfdc_config(
+        nyquist_zone={1: plan["nyquist_zone"]},
+        channel_mask=CHANNEL_MASK,
+    )
     device.upload_waveforms(
         {1: record},
-        channel_sequences={1: make_trigger_sequence(int(record.size // 2))},
+        channel_sequences={1: make_single_trigger_sequence(int(record.size // 2))},
         wave_formats={1: "interleaved_iq"},
         auto_start=False,
         loop=False,

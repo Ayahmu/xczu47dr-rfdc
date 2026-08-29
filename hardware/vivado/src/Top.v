@@ -15,10 +15,6 @@ module Top #(
     input  PL_SYSREF_P_0,
     input  PL_SYSREF_N_0,
 
-    // HMC7044 10MHz output returned to the FPGA (differential).
-    input  mclk_10m_p,
-    input  mclk_10m_n,
-
     // X3 differential external-sync output after the on-board NB6N11 buffer.
     input  EXT_TRIGGER_P,
     input  EXT_TRIGGER_N,
@@ -96,6 +92,32 @@ module Top #(
 
   assign pl_ps_irq = 1'b0;
 
+  // HMC7044 PL_CLK is the common board-event timebase.  Both boards derive
+  // this clock from the same XS17 reference and reseed its divider on XS20
+  // SYNC.  PS pl_clk remains an unrelated AXI/control clock.
+  wire hmc_pl_clk_ibuf;
+  wire hmc_pl_clk;
+  IBUFDS #(
+      .DIFF_TERM("FALSE"),
+      .IBUF_LOW_PWR("FALSE")
+  ) hmc_pl_clk_ibufds_i (
+      .I  (PL_CLK_P_0),
+      .IB (PL_CLK_N_0),
+      .O  (hmc_pl_clk_ibuf)
+  );
+  BUFG hmc_pl_clk_bufg_i (
+      .I(hmc_pl_clk_ibuf),
+      .O(hmc_pl_clk)
+  );
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] hmc_pl_reset_sync;
+  always @(posedge hmc_pl_clk or negedge pl_resetn0) begin
+    if (!pl_resetn0)
+      hmc_pl_reset_sync <= 3'b000;
+    else
+      hmc_pl_reset_sync <= {hmc_pl_reset_sync[1:0], 1'b1};
+  end
+  wire hmc_pl_rst_n = hmc_pl_reset_sync[2];
+
   assign dac_axis_clk = clk_dac2;
   ChiselProcSysReset u_pl_reset (
     .io_slowest_sync_clk(pl_clk),
@@ -123,8 +145,8 @@ module Top #(
 
 
   wire        hmc7044_set_finish;
-  // Temporary XS17 profile: a 10 MHz reference drives CLKIN1. HMC7044 R1=1
-  // creates a 10 MHz PLL1 PFD; only the SYNC/trigger roles differ.
+  // External 10 MHz reference profile: XS17 drives CLKIN1.  The SYNC/trigger
+  // roles differ between master and slave bitstreams.
   wire        hmc_use_external_xs17 = 1'b1;
 
   hmc7044 hmc7044_i (
@@ -146,10 +168,9 @@ module Top #(
   wire sync_xs20_oe;
   wire trigger_xs18_out;
   wire trigger_link_out;
+  wire trigger_event_toggle_hmc;
   wire sync_hmc;
   wire sync_link_out;
-  wire mclk_10m;
-  wire mclk_10m_bufg;
   wire sync_link_ready;
   wire role_trigger_raw;
   wire sync_done_pl;
@@ -160,6 +181,10 @@ module Top #(
   wire [31:0] trigger_input_count;
   wire [31:0] trigger_accepted_count;
   wire [31:0] trigger_output_count;
+  wire [63:0] hmc_event_tick;
+  wire [63:0] sync_event_tick;
+  wire [63:0] trigger_capture_tick;
+  wire [63:0] trigger_launch_tick;
   wire [31:0] gpio_out_reg;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_meta;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
@@ -201,21 +226,6 @@ module Top #(
   assign trigger_xs18_out = trigger_link_out;
   assign TRIG_1 = trigger_xs18_out;
 
-  // HMC7044 10 MHz monitor clock returned to the FPGA.  It is phase-locked
-  // to the HMC7044 VCXO, so the deterministic SYNC sequencer uses it to
-  // re-seed the HMC7044 output dividers at a repeatable phase.
-  IBUFDS #(
-      .IBUF_LOW_PWR("FALSE")
-  ) mclk_10m_ibufds_i (
-      .I (mclk_10m_p),
-      .IB(mclk_10m_n),
-      .O (mclk_10m)
-  );
-  BUFG mclk_10m_bufg_i (
-      .I (mclk_10m),
-      .O (mclk_10m_bufg)
-  );
-
   // VIO is generated only for the master project. It is a local debug source;
   // physical synchronization is carried only by the XS20 IOBUF.
 `ifdef CUSTOM_XCZU47DR_MASTER
@@ -236,10 +246,11 @@ module Top #(
       .ddr_rst_n           (ddr4_ui_aresetn),
       .pl_clk              (pl_clk),
       .pl_rst_n            (pl_aresetn),
-      .mclk                (mclk_10m_bufg),
+      .hmc_pl_clk          (hmc_pl_clk),
+      .hmc_pl_rst_n        (hmc_pl_rst_n),
       .sync_request_ddr   (rfctrl2_sync_epoch_pulse),
-      .trigger_request_ddr(rfctrl2_emit_trigger_pulse |
-                           rfctrl2_master_launch_pulse),
+      .trigger_request_ddr(rfctrl2_master_launch_pulse),
+      .emit_trigger_request_ddr(rfctrl2_emit_trigger_pulse),
       .sync_request_vio_pl(vio_sync_request),
       .sync_in            (sync_xs20_in),
       .trigger_in         (TRIG_2),
@@ -252,6 +263,7 @@ module Top #(
       .sync_link_out      (sync_link_out),
       .trigger_link_out   (trigger_link_out),
       .role_trigger_raw   (role_trigger_raw),
+      .trigger_event_toggle(trigger_event_toggle_hmc),
       .sync_done          (sync_done_pl),
       .sync_seen          (sync_seen),
       .sync_link_ready    (sync_link_ready),
@@ -264,7 +276,11 @@ module Top #(
       .trigger_output_active(trigger_output_active),
       .trigger_input_count(trigger_input_count),
       .trigger_accepted_count(trigger_accepted_count),
-      .trigger_output_count(trigger_output_count)
+      .trigger_output_count(trigger_output_count),
+      .hmc_event_tick     (hmc_event_tick),
+      .sync_event_tick    (sync_event_tick),
+      .trigger_capture_tick(trigger_capture_tick),
+      .trigger_launch_tick(trigger_launch_tick)
   );
 
   assign sync_xs20_out = sync_link_out;
@@ -1189,24 +1205,22 @@ module Top #(
   // XS18/XS19 carry the independent playback Trigger. The sync_trigger_link
   // module gates both the dedicated input and the legacy fallback behind the
   // external XS20 SYNC state (or the explicit runtime bypass).
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_ddr_sync_ff;
-  // XS19 is asynchronous to the DAC fabric. Transfer its accepted event with
-  // a toggle rather than a one-cycle level: a short input pulse can be seen
-  // and counted in pl_clk yet still be missed by an unrelated DAC clock.
-  reg role_trigger_toggle_pl;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_event_ddr_sync_ff;
+  reg role_trigger_event_ddr_seen;
+  // The physical Trigger event is created in HMC PL_CLK. Transfer that event
+  // toggle directly to the DAC domain; PS pl_clk is not in this path.
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_toggle_sync_ff;
   reg role_trigger_dac_toggle_seen;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if(!ddr4_ui_aresetn)
-      role_trigger_ddr_sync_ff <= 3'b000;
-    else
-      role_trigger_ddr_sync_ff <= {role_trigger_ddr_sync_ff[1:0], role_trigger_raw};
-  end
-  always @(posedge pl_clk or negedge pl_aresetn) begin
-    if(!pl_aresetn)
-      role_trigger_toggle_pl <= 1'b0;
-    else if(role_trigger_raw)
-      role_trigger_toggle_pl <= ~role_trigger_toggle_pl;
+    if(!ddr4_ui_aresetn) begin
+      role_trigger_event_ddr_sync_ff <= 3'b000;
+      role_trigger_event_ddr_seen <= 1'b0;
+    end else begin
+      role_trigger_event_ddr_sync_ff <= {
+          role_trigger_event_ddr_sync_ff[1:0], trigger_event_toggle_hmc
+      };
+      role_trigger_event_ddr_seen <= role_trigger_event_ddr_sync_ff[2];
+    end
   end
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
     if(!clk104_aresetn) begin
@@ -1214,12 +1228,13 @@ module Top #(
       role_trigger_dac_toggle_seen <= 1'b0;
     end else begin
       role_trigger_dac_toggle_sync_ff <= {
-          role_trigger_dac_toggle_sync_ff[1:0], role_trigger_toggle_pl
+          role_trigger_dac_toggle_sync_ff[1:0], trigger_event_toggle_hmc
       };
       role_trigger_dac_toggle_seen <= role_trigger_dac_toggle_sync_ff[2];
     end
   end
-  wire role_trigger_ddr_sync = role_trigger_ddr_sync_ff[2];
+  wire hmc_trigger_event_ddr =
+      role_trigger_event_ddr_sync_ff[2] != role_trigger_event_ddr_seen;
   wire role_trigger_dac_pulse =
       role_trigger_dac_toggle_sync_ff[2] != role_trigger_dac_toggle_seen;
 
@@ -1230,7 +1245,7 @@ module Top #(
   end
   wire ps_trigger_ddr_sync = ps_trigger_ddr_sync_ff[2] |
                               udp_trigger_stretched |
-                              role_trigger_ddr_sync;
+                              hmc_trigger_event_ddr;
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] udp_trigger_dac_sync_ff;
@@ -1349,7 +1364,7 @@ module Top #(
     .aclk(ddr4_ui_clk),
     .aresetn(ddr4_ui_aresetn),
     // ARM only prepares/prefills playback. A real trigger releases output.
-    .trigger(ps_trigger_ddr_sync | (rfctrl2_trigger_pulse && sync_link_ready_ddr)),
+    .trigger(ps_trigger_ddr_sync),
     .abort_clear(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
 
     .s_axis_instr_tdata(instr_tdata),
@@ -1467,7 +1482,7 @@ module Top #(
   wire rfctrl2_play_trigger;
   wire rfctrl2_play_prepare;
   wire rfctrl2_play_abort;
-  wire dac_hw_rfctrl2_trigger = rfctrl2_play_trigger | role_trigger_dac_pulse;
+  wire dac_hw_rfctrl2_trigger = role_trigger_dac_pulse;
   wire unused_single_board_inputs = EXT_TRIGGER_P | EXT_TRIGGER_N |
       rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1496,7 +1511,7 @@ module Top #(
     .ddr_clk                 (ddr4_ui_clk),
     .ddr_rst_n               (ddr4_ui_aresetn),
     .rfctrl2_arm_pulse       (rfctrl2_arm_pulse),
-    .rfctrl2_trigger_pulse   (rfctrl2_trigger_pulse && sync_link_ready_ddr),
+    .rfctrl2_trigger_pulse   (1'b0),
     .rfctrl2_abort_mute_pulse(rfctrl2_abort_mute_pulse | rfdc_force_mute_pulse),
     .dac_clk                 (dac_axis_clk),
     .dac_rst_n               (dac_rst_n),
@@ -2967,5 +2982,32 @@ module Top #(
               ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac}),
     .probe11({pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count,
               pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count})
+  );
+
+  ila_hmc_event u_ila_hmc_event (
+    .clk(hmc_pl_clk),
+    .probe0({
+      112'd0,
+      hmc_pl_rst_n,
+      sync_xs20_in,
+      sync_xs20_out,
+      sync_xs20_oe,
+      sync_hmc,
+      trigger_xs18_out,
+      TRIG_2,
+      trigger_event_toggle_hmc,
+      trigger_in_seen,
+      trigger_accepted,
+      trigger_output_active,
+      sync_done_pl,
+      sync_seen,
+      sync_link_ready,
+      sync_align_busy,
+      sync_align_failed
+    }),
+    .probe1(hmc_event_tick),
+    .probe2(sync_event_tick),
+    .probe3(trigger_capture_tick),
+    .probe4(trigger_launch_tick)
   );
 endmodule

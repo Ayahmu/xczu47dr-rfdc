@@ -34,26 +34,23 @@ set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
 # TRIG_1 is an asynchronous external observability/control output.
 set_false_path -to [get_ports TRIG_1]
 set_false_path -from [get_ports TRIG_2]
-set_false_path -from [get_ports TRIG_3]
 set_false_path -to [get_ports TRIG_3]
+# XS20/TRIG_3 is a combinational passthrough to HMC7044 SYNC on the slave;
+# that bounded path is constrained in custom_xczu47dr_slave.xdc.  The first
+# synchronizer stage still crosses reference/pl domains and is deliberately
+# false-pathed for metastability.
+set_false_path -to [get_pins -quiet top_i/sync_trigger_link_i/sync_role_i/sync_in_sync_reg[0]/D]
 
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_N_0]
-create_clock -name PL_CLK_P_0 -period 20 [get_ports PL_CLK_P_0]
+create_clock -name PL_CLK_P_0 -period 10.416667 [get_ports PL_CLK_P_0]
 
 set_property PACKAGE_PIN C8 [get_ports PL_SYSREF_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_P_0]
 set_property PACKAGE_PIN C7 [get_ports PL_SYSREF_N_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_N_0]
-
-# HMC7044 CLKOUT2 10 MHz monitor clock returned to the FPGA.
-set_property PACKAGE_PIN B8 [get_ports mclk_10m_p]
-set_property IOSTANDARD LVDS_25 [get_ports mclk_10m_p]
-set_property PACKAGE_PIN B7 [get_ports mclk_10m_n]
-set_property IOSTANDARD LVDS_25 [get_ports mclk_10m_n]
-create_clock -name HMC_10M -period 100 [get_ports mclk_10m_p]
 
 # X3 -> NB6N11 differential outputs.  This net also feeds HMC7044 EXT_SYNC.
 # The electrical standard must be reconfirmed during board qualification.
@@ -94,6 +91,11 @@ set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_ddr_sync_ff_reg[0]
 set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_dac_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_epoch_pl_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_toggle_pl_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_request_hmc_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_vio_hmc_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_request_hmc_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/emit_trigger_hmc_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_in_hmc_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_ddr_sync_reg[0]/D]
@@ -241,4 +243,4 @@ set_clock_groups -quiet -asynchronous \
 # phase-related.
 set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet PL_CLK_P_0] \
-    -group [get_clocks -quiet {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6}]
+    -group [get_clocks -quiet {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 RFDAC2_CLK clk_out1_design_1_clk_wiz_dac_axis_0_0}]
