@@ -2,7 +2,7 @@ import struct
 import unittest
 
 from software.dr47 import SimulatedDr47Device, SyncGroup
-from software.dr47.errors import SynchronizationError
+from software.dr47.errors import SynchronizationError, TransportTimeout
 from software.dr47.protocol import parse_rfctrl2_status_payload
 
 
@@ -65,6 +65,39 @@ class RuntimeSyncAlignmentTests(unittest.TestCase):
         slave.connect()
         with self.assertRaisesRegex(SynchronizationError, "slave DAC alignment failed"):
             SyncGroup(master, slave, timeout_s=0.05, poll_interval_s=0.001).sync()
+
+    def test_sync_group_tolerates_transient_status_timeouts_during_rfdc_realign(self):
+        """SYNC 后 RFDC 重初始化期间漏一次 STATUS 不能中止整个对齐事务。
+
+        真正硬件上，从卡收到 XS20 SYNC 后会暂时重置/启动 DAC tile；在此窗口
+        内 UDP STATUS 回复可能短暂缺失。SyncGroup 必须在自身总超时内继续轮询，
+        而不是把第一帧 STATUS 超时误判为同步失败。
+        """
+
+        class TransientlySilentSlave(SimulatedDr47Device):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._status_timeouts_after_sync = 0
+
+            def _simulate_external_sync(self, epoch=1):
+                super()._simulate_external_sync(epoch)
+                self._status_timeouts_after_sync = 2
+
+            def status(self, refresh=True):
+                if refresh and self._status_timeouts_after_sync:
+                    self._status_timeouts_after_sync -= 1
+                    raise TransportTimeout("simulated RFRESP2 loss during RFDC realignment")
+                return super().status(refresh=refresh)
+
+        master = SimulatedDr47Device(sync_role="master")
+        slave = TransientlySilentSlave(sync_role="slave")
+        master.connect()
+        slave.connect()
+
+        result = SyncGroup(master, slave, timeout_s=0.2, poll_interval_s=0.001).sync(epoch=1)
+
+        self.assertEqual(result.master_alignment_epoch, 1)
+        self.assertEqual(result.slave_alignment_epoch, 1)
 
     def test_sync_group_rejects_skipped_alignment_epoch(self):
         class SkippedEpochSlave(SimulatedDr47Device):

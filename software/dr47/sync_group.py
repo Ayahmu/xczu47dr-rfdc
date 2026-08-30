@@ -132,8 +132,21 @@ class SyncGroup:
         last_master = master_caps
         last_slave = slave_caps
         while time.monotonic() < deadline:
-            last_master = self._status(self.master)
-            last_slave = self._status(self.slave)
+            # A real XS20 event makes firmware reset and restart the DAC
+            # tiles before runtime MTS.  During that bounded board-local
+            # interval a STATUS RFRESP2 can be lost even though the board is
+            # still performing the required alignment.  Do not mistake one
+            # such transport timeout for a failed synchronization transaction:
+            # retain the last valid snapshot and keep polling until the
+            # transaction-wide deadline.  The final success condition below
+            # still requires fresh, matching MTS/NCO/epoch/link state from
+            # both boards.
+            try:
+                last_master = self._status(self.master)
+                last_slave = self._status(self.slave)
+            except TransportTimeout:
+                time.sleep(self.poll_interval_s)
+                continue
             if last_master.sync_align_failed:
                 raise SynchronizationError(
                     f"master DAC alignment failed: error=0x{last_master.sync_alignment_error:04X}"

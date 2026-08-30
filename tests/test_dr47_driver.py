@@ -46,7 +46,7 @@ from dr47 import (  # noqa: E402
     place_interleaved_iq_in_record,
 )
 from dr47.transport import UdpTransport  # noqa: E402
-from dr47.errors import DriverError  # noqa: E402
+from dr47.errors import DriverError, TransportTimeout  # noqa: E402
 import waveform_model  # noqa: E402
 import waveform_tools  # noqa: E402
 from dr47 import hardware_test_network  # noqa: E402
@@ -120,6 +120,31 @@ class _CaptureTransport:
         pass
 
 
+class _TransientHandshakeTransport:
+    """首个握手请求超时、随后正常回复的最小板端模型。"""
+
+    def __init__(self):
+        self.requests: list[tuple[int, int]] = []
+        self._first_request = True
+
+    def request(self, _packet, *, seq, opcode, **_kwargs):
+        self.requests.append((int(opcode), int(seq)))
+        if self._first_request:
+            self._first_request = False
+            raise TransportTimeout("simulated initial RFRESP2 loss")
+        return {
+            "version": RFCTRL2_VERSION,
+            "status": 0,
+            "opcode": int(opcode),
+            "seq": int(seq),
+            "payload_bytes": 0,
+            "payload": b"",
+        }
+
+    def close(self):
+        pass
+
+
 class DriverTests(unittest.TestCase):
     """按协议层、状态机层和波形层组织的驱动回归测试。"""
 
@@ -142,6 +167,32 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(response["seq"], 7)
         self.assertEqual(len(sock.sent), 2)
         self.assertEqual(sock.sent[0][0], sock.sent[1][0])
+
+    @patch("software.dr47.transport.time.sleep")
+    def test_transport_backoff_prevents_immediate_retry_collision(self, sleep_mock):
+        """重试前应有短暂退避，避免撞上板端上一帧响应发送窗口。"""
+
+        sock = _RetrySocket()
+        transport = UdpTransport("192.168.1.128", sock=sock, timeout_s=0.01)
+        packet = struct.pack("<QQQ", UDP_RFCTRL2_MAGIC, (RF2_OP_STATUS << 32) | RFCTRL2_VERSION, 7)
+        transport.request(packet, seq=7, opcode=RF2_OP_STATUS, retries=1)
+        sleep_mock.assert_called_once()
+        self.assertGreaterEqual(float(sleep_mock.call_args.args[0]), 0.001)
+
+    def test_connect_retries_the_entire_hello_status_handshake_after_transient_timeout(self):
+        """首个 HELLO 漏回包时，connect 必须退避后重新开始完整握手。"""
+
+        transport = _TransientHandshakeTransport()
+        device = Dr47Device(
+            ip="169.254.214.189",
+            timeout_s=0.01,
+            retries=0,
+            transport=transport,
+        )
+
+        self.assertEqual(device.connect(), 0)
+        self.assertTrue(device.connected)
+        self.assertEqual([opcode for opcode, _ in transport.requests], [1, 1, RF2_OP_STATUS])
 
     def test_transport_collects_all_broadcast_responses(self):
         """检查一次广播请求可以收集不同板卡的多个响应源地址。"""

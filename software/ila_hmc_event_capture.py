@@ -179,7 +179,8 @@ def drive_once() -> None:
 
 def parse_csv() -> None:
     with CSV_PATH.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        rows = [row for row in reader if row.get("Sample in Buffer", "").strip().isdigit()]
     if not rows:
         raise RuntimeError("HMC event ILA CSV is empty")
     names = (
@@ -193,7 +194,7 @@ def parse_csv() -> None:
         for row in rows:
             raw = row.get(name)
             if raw:
-                values.append(int(raw.strip().strip('"').replace("_", ""), 0))
+                values.append(int(raw.strip().strip('"').replace("_", ""), 16))
         if values:
             print(f"{name}: first={values[0]} last={values[-1]} unique={len(set(values))}")
         else:

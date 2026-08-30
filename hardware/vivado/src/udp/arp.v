@@ -267,6 +267,15 @@ assign arp_response_valid = arp_response_valid_reg;
 assign arp_response_error = arp_response_error_reg;
 assign arp_response_mac = arp_response_mac_reg;
 
+// The board is commonly connected to a switch port that also carries a busy
+// corporate VLAN.  Learning every observed ARP sender into the direct-mapped
+// cache lets unrelated broadcasts evict the control host's link-local entry.
+// Only retain peers reachable directly in this board's subnet, plus the
+// configured gateway which is the only valid off-subnet L2 next hop.
+wire incoming_arp_sender_is_reachable =
+    (((incoming_arp_spa ^ local_ip) & subnet_mask) == 32'd0) ||
+    (incoming_arp_spa == gateway_ip);
+
 always @* begin
     incoming_frame_ready = 1'b0;
 
@@ -296,10 +305,14 @@ always @* begin
     incoming_frame_ready = outgoing_frame_ready;
     if (incoming_frame_valid && incoming_frame_ready) begin
         if (incoming_eth_type == 16'h0806 && incoming_arp_htype == 16'h0001 && incoming_arp_ptype == 16'h0800) begin
-            // store sender addresses in cache
-            cache_write_request_valid_next = 1'b1;
-            cache_write_request_ip_next = incoming_arp_spa;
-            cache_write_request_mac_next = incoming_arp_sha;
+            // Do not let unrelated ARP broadcasts evict the control host's
+            // direct-mapped cache entry.  ARP replies remain correct because
+            // a valid reply is either from the local subnet or from gateway.
+            if (incoming_arp_sender_is_reachable) begin
+                cache_write_request_valid_next = 1'b1;
+                cache_write_request_ip_next = incoming_arp_spa;
+                cache_write_request_mac_next = incoming_arp_sha;
+            end
             if (incoming_arp_oper == ARP_OPER_ARP_REQUEST) begin
                 // ARP request
                 if (incoming_arp_tpa == local_ip) begin

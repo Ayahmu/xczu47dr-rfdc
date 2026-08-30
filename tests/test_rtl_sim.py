@@ -103,6 +103,20 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: RFCTRL2 UDP response TX locks the exact requester and honors AXIS backpressure",
         )
 
+    def test_arp_cache_ignores_off_subnet_broadcast_senders(self):
+        self.run_sim(
+            "tb_arp_local_subnet_filter",
+            [
+                ROOT / "hardware/vivado/src/udp/lfsr.v",
+                ROOT / "hardware/vivado/src/udp/arp_cache.v",
+                ROOT / "hardware/vivado/src/udp/arp_eth_rx.v",
+                ROOT / "hardware/vivado/src/udp/arp_eth_tx.v",
+                ROOT / "hardware/vivado/src/udp/arp.v",
+                ROOT / "tests/tb_arp_local_subnet_filter.sv",
+            ],
+            "PASS: ARP cache learns only local-subnet senders",
+        )
+
     def test_pl_riscv_control_v1_emits_play_and_trigger(self):
         self.run_sim(
             "tb_pl_riscv_control_v1",
@@ -194,6 +208,17 @@ class RtlSimulationTests(unittest.TestCase):
             ],
             "PASS: bypass accepts XS19 trigger without XS20 SYNC",
         )
+
+    def test_dac_trigger_scheduler_waits_for_sysref_boundary(self):
+        self.run_sim(
+            "tb_dac_trigger_scheduler",
+            [
+                ROOT / "hardware/vivado/src/dac_trigger_scheduler.v",
+                ROOT / "tests/tb_dac_trigger_scheduler.sv",
+            ],
+            "PASS: DAC trigger uses a fixed DAC-domain launch delay independent of SYSREF",
+        )
+
 
     def test_axilite_arbiter_locks_complete_transactions(self):
         self.run_sim(

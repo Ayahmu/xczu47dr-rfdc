@@ -1238,6 +1238,26 @@ module Top #(
   wire role_trigger_dac_pulse =
       role_trigger_dac_toggle_sync_ff[2] != role_trigger_dac_toggle_seen;
 
+  // Do not launch on the first DAC clock that happens to observe the HMC
+  // event.  Wait for the next SYSREF boundary so both boards use the same
+  // MTS-restored phase marker and the former 20 ns CDC ambiguity disappears.
+  wire dac_trigger_launch;
+  wire [15:0] dac_sysref_epoch;
+  wire [15:0] dac_trigger_target_epoch;
+  wire dac_trigger_pending;
+  wire rfctrl2_play_abort;
+  dac_trigger_scheduler dac_trigger_scheduler_i (
+      .clk(dac_axis_clk),
+      .rst_n(clk104_aresetn),
+      .sysref_in(pl_sysref_dac),
+      .trigger_request(role_trigger_dac_pulse),
+      .clear_pending(rfctrl2_play_abort | rfdc_force_mute_pulse),
+      .trigger_launch(dac_trigger_launch),
+      .sysref_epoch(dac_sysref_epoch),
+      .trigger_target_epoch(dac_trigger_target_epoch),
+      .trigger_pending(dac_trigger_pending)
+  );
+
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn) ps_trigger_ddr_sync_ff <= 3'b000;
@@ -1481,8 +1501,7 @@ module Top #(
 
   wire rfctrl2_play_trigger;
   wire rfctrl2_play_prepare;
-  wire rfctrl2_play_abort;
-  wire dac_hw_rfctrl2_trigger = role_trigger_dac_pulse;
+  wire dac_hw_rfctrl2_trigger = dac_trigger_launch;
   wire unused_single_board_inputs = EXT_TRIGGER_P | EXT_TRIGGER_N |
       rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin

@@ -287,17 +287,43 @@ class Dr47Device:
             if self._closed:
                 raise ConnectionStateError("cannot connect a closed Dr47Device")
             try:
-                hello_seq = self._next_sequence()
-                hello = self._request(pack_rfctrl2_hello(hello_seq), RF2_OP_HELLO, hello_seq, retries=self.retries)
-                self._check_response(hello, "HELLO")
-                self._connected = True
-                self._update_from_status(hello)
-                # STATUS is authoritative when a board returns a short HELLO.
-                status_seq = self._next_sequence()
-                status = self._request(pack_rfctrl2_status(status_seq), RF2_OP_STATUS, status_seq, retries=self.retries)
-                self._check_response(status, "STATUS")
-                self._update_from_status(status)
-                return 0
+                # A board can transiently miss one RFRESP2 while its PL UDP
+                # response path is recovering from a prior RFDC alignment.
+                # Retrying only the current packet is insufficient when that
+                # lost reply was HELLO: the next STATUS must be paired with a
+                # fresh, confirmed handshake.  Retry the *whole* HELLO then
+                # STATUS transaction once, with new sequence numbers.  This
+                # path is safe because HELLO and STATUS are read-only.
+                for handshake_attempt in range(2):
+                    try:
+                        hello_seq = self._next_sequence()
+                        hello = self._request(
+                            pack_rfctrl2_hello(hello_seq),
+                            RF2_OP_HELLO,
+                            hello_seq,
+                            retries=self.retries,
+                        )
+                        self._check_response(hello, "HELLO")
+                        self._connected = True
+                        self._update_from_status(hello)
+                        # STATUS is authoritative when a board returns a
+                        # short HELLO.
+                        status_seq = self._next_sequence()
+                        status = self._request(
+                            pack_rfctrl2_status(status_seq),
+                            RF2_OP_STATUS,
+                            status_seq,
+                            retries=self.retries,
+                        )
+                        self._check_response(status, "STATUS")
+                        self._update_from_status(status)
+                        return 0
+                    except TransportTimeout:
+                        self._connected = False
+                        if handshake_attempt == 0:
+                            time.sleep(0.05)
+                            continue
+                        raise
             except Exception as exc:
                 self._connected = False
                 self._status = DeviceStatus(False, self.ip, self.port, PlaybackState.FAULT, self._capabilities, str(exc))
