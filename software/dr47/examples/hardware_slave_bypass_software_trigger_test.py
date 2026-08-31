@@ -3,7 +3,7 @@
 本测试只检查用户当前关心的最短路径：
 
 1. 板卡必须烧写正式的 ``custom_xczu47dr_slave`` bitstream 和配套固件；
-2. XS17 接入与 bitstream 匹配的参考时钟（10 MHz 和 250 MHz bitstream 不可混用）；
+2. XS17 接入与本分支 bitstream 匹配的 250 MHz 参考时钟；
 3. XS20 保持悬空，不提供外部 SYNC；
 4. 驱动显式调用 ``bypass_sync()``，只绕过从卡的同步门控；
 5. 驱动调用 ``trigger()`` 发送本地 UDP 软件 Trigger，使本板进入 RUNNING。

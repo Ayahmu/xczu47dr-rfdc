@@ -4,7 +4,7 @@
 
 * 082（``210512180082``）烧写 master bitstream；
 * 081（``210512180081``）烧写 slave bitstream；
-* 两块板的 XS17 共享 10 MHz 参考时钟；
+* 两块板的 XS17 共享 250 MHz 参考时钟；
 * 082 XS20 -> 081 XS20；082 XS18 -> 081 XS19；
 * Python 只向主卡发送一次 RFCTRL2 ``TRIGGER``。
 

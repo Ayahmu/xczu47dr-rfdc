@@ -1,5 +1,9 @@
  # 可烧写文件
 
+ 本分支对应 XS17=250 MHz。当前仓库不携带从 10 MHz 主线继承的旧工件；首次使用前
+ 必须在本分支执行 `make bitstream-dual` 和 `make firmware` 生成新的 artifacts，
+ 确认时钟方案后再执行 `make program`。
+
  artifacts/ 是 make program 的唯一输入目录。这里的文件是构建后的交付物，
  不是源码；修改硬件或固件后应由构建命令重新生成，并和对应源码一起提交。
 

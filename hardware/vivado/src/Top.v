@@ -145,9 +145,10 @@ module Top #(
 
 
   wire        hmc7044_set_finish;
-  // External 10 MHz reference profile: XS17 drives CLKIN1.  The SYNC/trigger
-  // roles differ between master and slave bitstreams.
-  wire        hmc_use_external_xs17 = 1'b1;
+  // External 250 MHz reference profile: XS17 drives CLKIN1. HMC7044 divides
+  // it by 25 to obtain the 10 MHz PLL1 PFD; SYNC/Trigger logic is shared with
+  // the 10 MHz build and only the reference-clock policy differs.
+  wire        hmc_use_external_250mhz = 1'b1;
 
   hmc7044 hmc7044_i (
       .clk(pl_clk),
@@ -156,7 +157,7 @@ module Top #(
       .H7044_SCLK(H7044_SCLK_0),
       .H7044_SDATA(H7044_SDATA_0),
       .SET_FINISH(hmc7044_set_finish),
-      .USE_EXTERNAL_XS17(hmc_use_external_xs17),
+      .USE_EXTERNAL_250MHZ(hmc_use_external_250mhz),
       .IS_MASTER(IS_MASTER ? 1'b1 : 1'b0)
   );
 

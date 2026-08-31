@@ -17886,7 +17886,8 @@
                                 "nets": [
                                     {
                                         "name": "top_i/ddr4_ui_aresetn",
-                                        "isBus": false
+                                        "isBus": false,
+                                        "parentNetId": 4265
                                     }
                                 ]
                             },
@@ -25269,6 +25270,37 @@
                                     {
                                         "name": "ST_PREFILL",
                                         "val": "01"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 4265,
+                        "name": "top_i/u_ddr4_ui_reset/io_peripheral_aresetn",
+                        "state_reg": [
+                            {
+                                "name": "top_i/pl_rfdc_axil_arbiter_i/FSM_onehot_grant_reg[1]",
+                                "states": [
+                                    {
+                                        "name": "IDLE",
+                                        "val": "00001"
+                                    },
+                                    {
+                                        "name": "S0_WRITE",
+                                        "val": "10000"
+                                    },
+                                    {
+                                        "name": "S0_READ",
+                                        "val": "01000"
+                                    },
+                                    {
+                                        "name": "S1_READ",
+                                        "val": "00010"
+                                    },
+                                    {
+                                        "name": "S1_WRITE",
+                                        "val": "00100"
                                     }
                                 ]
                             }

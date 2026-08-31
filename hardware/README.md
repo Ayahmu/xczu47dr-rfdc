@@ -11,8 +11,10 @@
  | custom_xczu47dr_slave | 正常 RFDC 播放从卡 | 输入 SYNC |
  | custom_xczu47dr_bw | DDR 带宽压力测试 | 不用于同步播放 |
 
- 主线时钟为 XS17 外部 10 MHz，HMC7044 输出 128 MHz DAC 参考。XS18 是 Trigger
- 输出，XS19 是 Trigger 输入。主从同步接线和验收项目见[硬件验收](../docs/硬件验收.md)。
+ 本分支时钟为 XS17 外部 250 MHz，HMC7044 通过 R1=25 产生 10 MHz PLL1 PFD，
+ 并继续输出 128 MHz DAC 参考。XS18 是 Trigger 输出，XS19 是 Trigger 输入。
+ 主从同步 RTL、驱动和协议与 10 MHz 主线保持一致；主从同步接线和验收项目见
+ [硬件验收](../docs/硬件验收.md)。
 
  ## 构建
 

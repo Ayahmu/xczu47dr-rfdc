@@ -11,7 +11,8 @@
  - custom_xczu47dr_bw：独立带宽测试顶层，不包含正常 RFDC 播放角色。
  - XS18 (TRIG_1) 为 Trigger 输出，XS19 (TRIG_2) 为 Trigger 输入。
  - RFDC 为 6.4 GS/s、16 倍插值、400 MS/s IQ、50 MHz AXIS。
- - XS17 提供两板共同 10 MHz 参考；HMC7044 输出约 96 MHz `PL_CLK` 作为 SYNC/Trigger
+ - XS17 提供两板共同 250 MHz 参考；HMC7044 通过 R1=25 产生 10 MHz PLL1 PFD，
+   并输出约 96 MHz `PL_CLK` 作为 SYNC/Trigger
    事件时间基准，PS `pl_clk` 不参与物理事件捕获。
 
  主从方向是综合时固定的宏定义，软件不能切换。主从接线和仪器检查见

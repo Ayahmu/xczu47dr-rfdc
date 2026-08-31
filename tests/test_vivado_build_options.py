@@ -71,8 +71,11 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertIn("sync_link_ready_ddr &&", top)
         self.assertIn("sync_role_master_ddr;", top)
         self.assertIn(
-            ".trigger_request_ddr(rfctrl2_emit_trigger_pulse |\n"
-            "                           rfctrl2_master_launch_pulse)",
+            ".trigger_request_ddr(rfctrl2_master_launch_pulse),",
+            top,
+        )
+        self.assertIn(
+            ".emit_trigger_request_ddr(rfctrl2_emit_trigger_pulse),",
             top,
         )
         self.assertNotIn("        ch4.\n", top)

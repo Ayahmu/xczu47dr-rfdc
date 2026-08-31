@@ -8,6 +8,7 @@ HMC7044_VHDL = REPO_ROOT / "hardware" / "vivado" / "src" / "hmc7044.vhd"
 TOP_VERILOG = REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v"
 TARGET_CONFIG = REPO_ROOT / "hardware" / "vivado" / "scripts" / "target_config.tcl"
 FIRMWARE_MAIN = REPO_ROOT / "firmware" / "src" / "main.c"
+FIRMWARE_MAIN_H = REPO_ROOT / "firmware" / "src" / "main.h"
 RFCTRL2_RTL = REPO_ROOT / "hardware" / "vivado" / "src" / "pl_riscv_control_v1.v"
 HOST_SOFTWARE = REPO_ROOT / "software" / "host.py"
 VCXO_HZ = 100_000_000.0
@@ -24,26 +25,38 @@ def _reg12(registers: dict[int, int], low_addr: int, high_addr: int) -> int:
 
 
 class Hmc7044ConfigTests(unittest.TestCase):
-    def test_targets_use_the_temporary_external_10mhz_xs17_profile(self):
+    def test_targets_use_the_external_250mhz_xs17_profile(self):
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
 
-        self.assertRegex(top, r"hmc_use_external_xs17\s*=\s*1'b1")
-        self.assertIn("clock_policy external_10mhz_xs17", target_config)
+        self.assertRegex(top, r"hmc_use_external_250mhz\s*=\s*1'b1")
+        self.assertIn("clock_policy external_250mhz_xs17", target_config)
 
-    def test_external_10mhz_register_branch_uses_clkin1_and_divide_by_one(self):
+    def test_firmware_clock_constants_match_250mhz_profile(self):
+        text = FIRMWARE_MAIN_H.read_text(encoding="utf-8", errors="ignore")
+        self.assertRegex(text, r"#define HMC7044_INPUT_REF_HZ\s+250000000U")
+        self.assertRegex(text, r"#define HMC7044_PLL1_PFD_HZ\s+10000000U")
+        self.assertRegex(text, r"#define HMC7044_DAC_REFCLK_HZ\s+128000000U")
+
+    def test_firmware_psu_init_paths_match_vitis_output_layout(self):
+        text = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
+        self.assertIn("custom_xczu47dr_master/hw_platform/hw/psu_init.tcl", text)
+        self.assertIn("custom_xczu47dr_slave/hw_platform/hw/psu_init.tcl", text)
+        self.assertNotIn("hw_platform/export/hw_platform/hw/psu_init.tcl", text)
+
+    def test_external_250mhz_register_branch_uses_clkin1_and_divide_by_25(self):
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
 
         expected_writes = (
             'x"0003" & x"2F"',
             'x"0005" & x"5A"',
-            'x"0021" & x"01"',
+            'x"0021" & x"19"',
             'x"0026" & x"0A"',
         )
         for write in expected_writes:
             self.assertIn(write, text)
 
-    def test_external_10mhz_selects_high_vco_core_for_3072_ghz(self):
+    def test_external_250mhz_selects_high_vco_core_for_3072_ghz(self):
         regs = _hmc7044_registers()
 
         self.assertEqual(regs[0x0003], 0x2F)
@@ -51,26 +64,26 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertNotEqual((regs[0x0003] >> 3) & 0x3, 0x3)
         self.assertTrue(regs[0x0003] & 0x07 == 0x07)
 
-    def test_external_10mhz_r1_divider_creates_10mhz_pll1_pfd(self):
+    def test_external_250mhz_r1_divider_creates_10mhz_pll1_pfd(self):
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
         self.assertRegex(
             text,
-            r'if\s+USE_EXTERNAL_XS17\s*=\s*\'1\'\s+then\s*'
-            r'config_reg\s*<=\s*x"0021"\s*&\s*x"01"',
+            r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then\s*'
+            r'config_reg\s*<=\s*x"0021"\s*&\s*x"19"',
         )
         self.assertRegex(
             text,
-            r'if\s+USE_EXTERNAL_XS17\s*=\s*\'1\'\s+then[\s\S]*?'
+            r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then[\s\S]*?'
             r'config_reg\s*<=\s*x"0026"\s*&\s*x"0A"',
         )
 
-        r1 = 0x01
+        r1 = 0x19
         n1 = 0x0A
-        self.assertEqual(10_000_000 / r1, 10_000_000)
-        self.assertEqual((10_000_000 / r1) * n1, VCXO_HZ)
+        self.assertEqual(250_000_000 / r1, 10_000_000)
+        self.assertEqual((250_000_000 / r1) * n1, VCXO_HZ)
 
     def test_sync_uses_xs17_clkin1_reference(self):
-        # XS17(10MHz) 接 CLKIN1；SYNC 通过 PLL2 重播种输出分频器。
+        # XS17(250MHz) 接 CLKIN1；R1=25 产生 10MHz PLL1 PFD。
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
         regs = _hmc7044_registers()
 
