@@ -303,6 +303,20 @@ module pl_riscv_control_v1 #(
   reg [31:0] resp_request_payload_bytes;
   reg [63:0] resp_request_payload0;
   reg [63:0] resp_request_payload1;
+  // Two-entry response request FIFO.  The UDP response TX path can be
+  // temporarily occupied by ARP or a previous RFRESP2 frame; retaining one
+  // additional decoded response prevents a back-to-back STATUS/HELLO request
+  // from being silently discarded at this boundary.
+  reg        resp_request_valid2;
+  reg [2:0]  resp_request_kind2;
+  reg [63:0] resp_request_magic2;
+  reg [15:0] resp_request_version2;
+  reg [31:0] resp_request_opcode2;
+  reg [15:0] resp_request_status2;
+  reg [31:0] resp_request_sequence2;
+  reg [31:0] resp_request_payload_bytes2;
+  reg [63:0] resp_request_payload02;
+  reg [63:0] resp_request_payload12;
   reg        dbg_error_pending;
 
   wire instr_fire = m_instr_tvalid && m_instr_tready;
@@ -441,6 +455,17 @@ module pl_riscv_control_v1 #(
         resp_request_payload_bytes <= payload_bytes;
         resp_request_payload0 <= payload0;
         resp_request_payload1 <= payload1;
+      end else if (!resp_request_valid2) begin
+        resp_request_valid2 <= 1'b1;
+        resp_request_kind2 <= kind;
+        resp_request_magic2 <= magic;
+        resp_request_version2 <= version;
+        resp_request_opcode2 <= opcode;
+        resp_request_status2 <= status_code;
+        resp_request_sequence2 <= resp_seq;
+        resp_request_payload_bytes2 <= payload_bytes;
+        resp_request_payload02 <= payload0;
+        resp_request_payload12 <= payload1;
       end else begin
         dbg_error_pending <= 1'b1;
       end
@@ -837,6 +862,16 @@ module pl_riscv_control_v1 #(
       resp_request_payload_bytes <= 32'd0;
       resp_request_payload0 <= 64'd0;
       resp_request_payload1 <= 64'd0;
+      resp_request_valid2 <= 1'b0;
+      resp_request_kind2 <= RESP_REQ_NONE;
+      resp_request_magic2 <= 64'd0;
+      resp_request_version2 <= 16'd0;
+      resp_request_opcode2 <= 32'd0;
+      resp_request_status2 <= 16'd0;
+      resp_request_sequence2 <= 32'd0;
+      resp_request_payload_bytes2 <= 32'd0;
+      resp_request_payload02 <= 64'd0;
+      resp_request_payload12 <= 64'd0;
       for (i = 0; i < MAX_PAYLOAD_WORDS; i = i + 1) begin
         payload_words[i] <= 32'd0;
       end
@@ -897,8 +932,22 @@ module pl_riscv_control_v1 #(
             dbg_error_pending <= 1'b1;
           end
         endcase
-        resp_request_valid <= 1'b0;
-        resp_request_kind <= RESP_REQ_NONE;
+        if (resp_request_valid2) begin
+          resp_request_kind <= resp_request_kind2;
+          resp_request_magic <= resp_request_magic2;
+          resp_request_version <= resp_request_version2;
+          resp_request_opcode <= resp_request_opcode2;
+          resp_request_status <= resp_request_status2;
+          resp_request_sequence <= resp_request_sequence2;
+          resp_request_payload_bytes <= resp_request_payload_bytes2;
+          resp_request_payload0 <= resp_request_payload02;
+          resp_request_payload1 <= resp_request_payload12;
+          resp_request_valid2 <= 1'b0;
+          resp_request_valid <= 1'b1;
+        end else begin
+          resp_request_valid <= 1'b0;
+          resp_request_kind <= RESP_REQ_NONE;
+        end
       end
 
       if (rfdc_response_pending && rfdc_apply_done) begin

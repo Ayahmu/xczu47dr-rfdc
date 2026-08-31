@@ -63,6 +63,7 @@ tests/*.pyc
 software/.pytest_cache/
 software/venv/
 software/.venv/
+.venv/
 software/output/
 software/waveform_out/
 software/webui/node_modules/

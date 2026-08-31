@@ -209,14 +209,14 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: bypass accepts XS19 trigger without XS20 SYNC",
         )
 
-    def test_dac_trigger_scheduler_waits_for_sysref_boundary(self):
+    def test_dac_trigger_scheduler_uses_fixed_delay_without_sysref_gating(self):
         self.run_sim(
             "tb_dac_trigger_scheduler",
             [
                 ROOT / "hardware/vivado/src/dac_trigger_scheduler.v",
                 ROOT / "tests/tb_dac_trigger_scheduler.sv",
             ],
-            "PASS: DAC trigger uses a fixed DAC-domain launch delay independent of SYSREF",
+            "PASS: DAC trigger uses a fixed DAC delay without SYSREF launch gating",
         )
 
 

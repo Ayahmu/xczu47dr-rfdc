@@ -90,6 +90,7 @@ module tb_pl_riscv_control_v1;
   reg [31:0] mmio_write_data = 32'd0;
   reg [17:0] mmio_read_addr = 18'd0;
   reg [31:0] mmio_write_events = 32'd0;
+  integer response_packet_count = 0;
   reg [63:0] resp_words [0:47];
   reg [5:0] resp_count = 6'd0;
   reg signed [63:0] request_nco [0:7];
@@ -231,6 +232,8 @@ module tb_pl_riscv_control_v1;
         resp_words[resp_count] <= rvresp_tdata;
         resp_count <= resp_count + 6'd1;
       end
+      if (rvresp_tvalid && rvresp_tready && rvresp_tlast)
+        response_packet_count <= response_packet_count + 1;
       if (trigger_pulse) begin
         trigger_seen <= 1'b1;
       end
@@ -312,7 +315,7 @@ module tb_pl_riscv_control_v1;
   endtask
 
   initial begin
-    repeat (4) @(negedge clk);
+    repeat (20) @(negedge clk);
     rst_n = 1'b1;
     repeat (2) @(negedge clk);
 
@@ -329,7 +332,7 @@ module tb_pl_riscv_control_v1;
     check_condition(instrs[8] == 128'h000000000000000000000000000000F3, "auto-start END instruction mismatch");
 
     send_rv_beat(64'h0000006600000003, 1'b1, 1'b1, 32'd2);
-    repeat (4) @(negedge clk);
+    repeat (20) @(negedge clk);
     check_condition(trigger_seen == 1'b1, "TRIGGER command should create a trigger pulse");
     check_condition(dbg_trigger_count == 32'd1, "TRIGGER command was not counted");
 
@@ -541,6 +544,25 @@ module tb_pl_riscv_control_v1;
     end
     repeat (4) @(negedge clk);
     check_condition(dut.dbg_ping_count == 32'd1, "65-word packet must be dropped without index wrap");
+
+    // Hold the first response under backpressure and issue a second STATUS.
+    // The second response must be retained in the response FIFO rather than
+    // being silently discarded while the first packet is still stalled.
+    resp_count = 6'd0;
+    response_packet_count = 0;
+    rvresp_tready = 1'b0;
+    send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h000000000000AA01, 1'b0, 1'b1, 32'hA0000004);
+    repeat (20) @(negedge clk);
+    send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h000000000000AA02, 1'b0, 1'b1, 32'hA0000004);
+    repeat (20) @(negedge clk);
+    check_condition(dut.resp_request_valid || dut.resp_request_valid2,
+                    "second STATUS response must be retained while first is stalled");
+    rvresp_tready = 1'b1;
+    repeat (100) @(negedge clk);
+    check_condition(response_packet_count == 2,
+                    "both queued STATUS responses must be transmitted");
 
     $display("PASS: PL control shim emits legacy commands plus RFCTRL2 ARM, RFDC_APPLY, and SYNC_EPOCH");
     $finish;

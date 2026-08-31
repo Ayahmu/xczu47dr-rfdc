@@ -232,7 +232,6 @@ module sync_trigger_link #(
 
       if (trigger_in_rise_hmc)
         trigger_input_count_hmc <= trigger_input_count_hmc + 1'b1;
-
       if (any_trigger_accept_hmc) begin
         trigger_capture_tick_hmc <= hmc_tick_hmc;
         trigger_accepted_hmc <= 1'b1;
