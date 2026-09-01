@@ -17,11 +17,9 @@
  正式脚本全部位于 dr47/examples/，网络参数直接写在脚本顶部：
 
  ~~~bash
- PYTHONPATH=software python -m dr47.examples.hardware_master_standalone_wave_test
- PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_software_trigger_test
- PYTHONPATH=software python -m dr47.examples.hardware_slave_external_trigger_test
- PYTHONPATH=software python -m dr47.examples.hardware_master_slave_wave_test
- PYTHONPATH=software python -m dr47.examples.hardware_master_slave_gaussian_sine_test
+ PYTHONPATH=software python -m dr47.examples.hardware_slave_wait_sync_trigger_test
+ PYTHONPATH=software python -m dr47.examples.hardware_master_slave_sync_trigger_test
+ PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_trigger_test
  ~~~
 
  双板交换机测试使用一个主机 10G 口：主机和两板在同一 Access VLAN，先配置

@@ -28,6 +28,8 @@ module tb_sync_trigger_link;
   reg [5:0] slave_ack_epoch = 6'd0;
   reg master_firmware_failed = 1'b0;
   reg slave_firmware_failed = 1'b0;
+  reg master_playback_prepared = 1'b1;
+  reg slave_playback_prepared = 1'b1;
 
   always #5 ddr_clk = ~ddr_clk;
   always #7 pl_clk = ~pl_clk;
@@ -46,6 +48,7 @@ module tb_sync_trigger_link;
       .emit_trigger_request_ddr(1'b0),
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
       .trigger_in(1'b0), .role_master(1'b1), .sync_bypass(1'b0),
+      .playback_prepared(master_playback_prepared),
       .firmware_ack_epoch(master_ack_epoch), .firmware_align_failed(master_firmware_failed),
       .dac_trigger_start(1'b0),
       .hmc_sync(master_hmc_sync), .sync_link_out(master_sync_link),
@@ -71,6 +74,7 @@ module tb_sync_trigger_link;
       .emit_trigger_request_ddr(1'b0),
       .sync_request_vio_pl(1'b0), .sync_in(master_sync_link),
       .trigger_in(master_trigger_link), .role_master(1'b0), .sync_bypass(1'b0),
+      .playback_prepared(slave_playback_prepared),
       .firmware_ack_epoch(slave_ack_epoch), .firmware_align_failed(slave_firmware_failed),
       .dac_trigger_start(1'b0),
       .hmc_sync(slave_hmc_sync), .sync_link_out(), .trigger_link_out(),
@@ -184,6 +188,37 @@ module tb_sync_trigger_link;
     end
     if (master_launch_tick != slave_launch_tick) begin
       $display("FAIL: HMC launch ticks master=%0d slave=%0d", master_launch_tick, slave_launch_tick);
+      $finish;
+    end
+
+    // A frame is consumed after one accepted Trigger.  Before the DAC player
+    // advertises PREPARED again, a second edge must not create another launch
+    // toggle that could be lost by the DAC CDC.
+    @(negedge ddr_clk);
+    trigger_request_ddr = 1'b1;
+    @(negedge ddr_clk);
+    trigger_request_ddr = 1'b0;
+    repeat (32) @(posedge hmc_pl_clk);
+    if (slave_trigger_rises != 1) begin
+      $display("FAIL: Trigger was accepted again before playback rearm, rises=%0d", slave_trigger_rises);
+      $finish;
+    end
+
+    // Model the DAC player consuming the first record and re-entering
+    // PREPARED after the executor has refilled the same finite frame.
+    master_playback_prepared = 1'b0;
+    slave_playback_prepared = 1'b0;
+    repeat (8) @(posedge hmc_pl_clk);
+    master_playback_prepared = 1'b1;
+    slave_playback_prepared = 1'b1;
+    repeat (8) @(posedge hmc_pl_clk);
+    @(negedge ddr_clk);
+    trigger_request_ddr = 1'b1;
+    @(negedge ddr_clk);
+    trigger_request_ddr = 1'b0;
+    repeat (32) @(posedge hmc_pl_clk);
+    if (slave_trigger_rises != 2) begin
+      $display("FAIL: Trigger did not launch after playback rearm, rises=%0d", slave_trigger_rises);
       $finish;
     end
     $display("PASS: single-pulse XS20 SYNC and independent XS18->XS19 trigger link");

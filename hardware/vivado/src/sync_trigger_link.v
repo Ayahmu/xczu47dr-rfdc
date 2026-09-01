@@ -29,6 +29,7 @@ module sync_trigger_link #(
     input  wire dac_trigger_start,
     input  wire role_master,
     input  wire sync_bypass,
+    input  wire playback_prepared,
     input  wire [5:0] firmware_ack_epoch,
     input  wire firmware_align_failed,
     output wire hmc_sync,
@@ -101,11 +102,14 @@ module sync_trigger_link #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] emit_trigger_hmc_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] bypass_hmc_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] ready_hmc_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] playback_prepared_hmc_sync;
   reg sync_request_hmc_seen;
   reg sync_vio_hmc_seen;
   reg trigger_request_hmc_seen;
   reg emit_trigger_hmc_seen;
   reg sync_link_ready_reg;
+  reg trigger_wait_rearm_hmc;
+  reg trigger_seen_unprepared_hmc;
 
   wire sync_request_hmc_pulse =
       (sync_request_hmc_sync[1] != sync_request_hmc_seen) ||
@@ -114,7 +118,10 @@ module sync_trigger_link #(
       trigger_request_hmc_sync[1] != trigger_request_hmc_seen;
   wire emit_trigger_hmc_pulse =
       emit_trigger_hmc_sync[1] != emit_trigger_hmc_seen;
-  wire trigger_allowed_hmc = role_master || bypass_hmc_sync[1] || ready_hmc_sync[1];
+  wire sync_trigger_allowed_hmc = role_master || bypass_hmc_sync[1] || ready_hmc_sync[1];
+  wire trigger_allowed_hmc = sync_trigger_allowed_hmc &&
+                             playback_prepared_hmc_sync[1] &&
+                             !trigger_wait_rearm_hmc;
 
   wire sync_done_hmc;
   wire sync_hmc_internal;
@@ -159,7 +166,12 @@ module sync_trigger_link #(
   reg sync_done_toggle_hmc;
 
   wire trigger_in_rise_hmc = trigger_in_hmc_sync[2] && !trigger_in_hmc_prev;
-  wire local_trigger_accept_hmc = role_master && trigger_request_hmc_pulse && trigger_allowed_hmc;
+  // A local RFCTRL2 Trigger is valid on the master, or on a slave only when
+  // the firmware explicitly selected bypass mode.  In external mode a slave
+  // must remain driven by XS19, so a host Trigger command is rejected.
+  wire local_trigger_accept_hmc =
+      (role_master || bypass_hmc_sync[1]) &&
+      trigger_request_hmc_pulse && trigger_allowed_hmc;
   wire external_trigger_accept_hmc = !role_master && trigger_in_rise_hmc && trigger_allowed_hmc;
   wire any_trigger_accept_hmc = local_trigger_accept_hmc || external_trigger_accept_hmc ||
                                 (dac_trigger_start && trigger_allowed_hmc);
@@ -172,6 +184,7 @@ module sync_trigger_link #(
       emit_trigger_hmc_sync <= 2'b00;
       bypass_hmc_sync <= 2'b00;
       ready_hmc_sync <= 2'b00;
+      playback_prepared_hmc_sync <= 2'b00;
       sync_request_hmc_seen <= 1'b0;
       sync_vio_hmc_seen <= 1'b0;
       trigger_request_hmc_seen <= 1'b0;
@@ -195,6 +208,8 @@ module sync_trigger_link #(
       trigger_capture_tick_hmc <= 64'd0;
       trigger_launch_tick_hmc <= 64'd0;
       sync_done_toggle_hmc <= 1'b0;
+      trigger_wait_rearm_hmc <= 1'b0;
+      trigger_seen_unprepared_hmc <= 1'b0;
     end else begin
       sync_request_hmc_sync <= {sync_request_hmc_sync[0], sync_request_toggle_ddr};
       sync_vio_hmc_sync <= {sync_vio_hmc_sync[0], sync_vio_toggle_pl};
@@ -202,12 +217,25 @@ module sync_trigger_link #(
       emit_trigger_hmc_sync <= {emit_trigger_hmc_sync[0], emit_trigger_toggle_ddr};
       bypass_hmc_sync <= {bypass_hmc_sync[0], sync_bypass};
       ready_hmc_sync <= {ready_hmc_sync[0], sync_link_ready_reg};
+      playback_prepared_hmc_sync <= {playback_prepared_hmc_sync[0], playback_prepared};
       trigger_in_hmc_sync <= {trigger_in_hmc_sync[1:0], trigger_in};
       trigger_in_hmc_prev <= trigger_in_hmc_sync[2];
       hmc_tick_hmc <= hmc_tick_hmc + 1'b1;
       trigger_event_pulse_hmc <= 1'b0;
       trigger_in_seen_hmc <= trigger_in_rise_hmc;
       trigger_accepted_hmc <= 1'b0;
+
+      // Consume at most one Trigger per PREPARED interval. The finite-frame
+      // executor drops PREPARED while refilling and raises it again when the
+      // same DDR record is ready for the next external Trigger.
+      if (trigger_wait_rearm_hmc) begin
+        if (!playback_prepared_hmc_sync[1]) begin
+          trigger_seen_unprepared_hmc <= 1'b1;
+        end else if (trigger_seen_unprepared_hmc) begin
+          trigger_wait_rearm_hmc <= 1'b0;
+          trigger_seen_unprepared_hmc <= 1'b0;
+        end
+      end
 
       if (sync_request_hmc_pulse) begin
         sync_request_hmc_seen <= sync_request_hmc_sync[1];
@@ -237,6 +265,8 @@ module sync_trigger_link #(
         trigger_accepted_hmc <= 1'b1;
         trigger_accepted_count_hmc <= trigger_accepted_count_hmc + 1'b1;
         launch_pending_hmc <= 1'b1;
+        trigger_wait_rearm_hmc <= 1'b1;
+        trigger_seen_unprepared_hmc <= 1'b0;
         launch_count <= role_master ? MASTER_LAUNCH_DELAY_CYCLES : SLAVE_LAUNCH_DELAY_CYCLES;
         if (role_master) begin
           trigger_link_hmc <= 1'b1;
@@ -245,7 +275,7 @@ module sync_trigger_link #(
         end
       end
 
-      if (emit_trigger_hmc_pulse && role_master && trigger_allowed_hmc) begin
+      if (emit_trigger_hmc_pulse && role_master && sync_trigger_allowed_hmc) begin
         trigger_link_hmc <= 1'b1;
         trigger_high_count <= TRIGGER_HIGH_CYCLES;
         trigger_output_count_hmc <= trigger_output_count_hmc + 1'b1;

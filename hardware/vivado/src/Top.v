@@ -193,6 +193,9 @@ module Top #(
   wire sync_align_busy;
   wire sync_align_failed;
   wire [5:0] sync_alignment_epoch;
+  // The HMC event domain accepts one external Trigger per DAC PREPARED
+  // interval; declare this before the sync_trigger_link instance.
+  wire rfctrl2_prepared_dac;
   wire rfctrl2_sync_epoch_pulse;
   wire rfctrl2_trigger_pulse;
   wire rfctrl2_set_sync_role_pulse;
@@ -258,6 +261,7 @@ module Top #(
       .dac_trigger_start  (dac_trigger_start),
       .role_master        (sync_role_master_pl),
       .sync_bypass       (sync_bypass_pl),
+      .playback_prepared (rfctrl2_prepared_dac),
       .firmware_ack_epoch (firmware_ack_epoch_pl),
       .firmware_align_failed(firmware_align_failed_pl),
       .hmc_sync           (sync_hmc),
@@ -305,12 +309,12 @@ module Top #(
   wire sync_link_ready_ddr = sync_ready_ddr_sync[1];
   wire sync_align_busy_ddr = sync_align_busy_ddr_sync[1];
   wire sync_align_failed_ddr = sync_align_failed_ddr_sync[1];
-  // One RFCTRL2 TRIGGER is the master launch event: it starts the local
-  // player and, in the same DDR clock domain, requests the XS18 pulse.
-  // EMIT_TRIGGER remains a separate diagnostic-only physical trigger.
+  // RFCTRL2 TRIGGER is a local launch request on every role.  The link module
+  // applies the role policy in the HMC event domain: master accepts it and
+  // mirrors it to XS18, while a slave accepts it only in explicit bypass
+  // mode and never drives XS18.  External-mode slaves remain gated.
   assign rfctrl2_master_launch_pulse = rfctrl2_trigger_pulse &&
-                                       sync_link_ready_ddr &&
-                                       sync_role_master_ddr;
+                                       sync_link_ready_ddr;
 
   assign H7044_SYNC_0 = sync_hmc;
 
@@ -385,7 +389,6 @@ module Top #(
   wire         rfctrl2_start_valid;
   wire [63:0]  rfctrl2_start_tick;
   wire         rfctrl2_armed_dac;
-  wire         rfctrl2_prepared_dac;
   wire         rfctrl2_start_pending_dac;
   wire         pc_started;
   reg          rfctrl2_armed_meta;

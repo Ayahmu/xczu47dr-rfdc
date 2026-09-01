@@ -206,7 +206,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/sync_trigger_link.v",
                 ROOT / "tests/tb_sync_bypass.sv",
             ],
-            "PASS: bypass accepts XS19 trigger without XS20 SYNC",
+            "PASS: bypass accepts XS19 and local RFCTRL2 Trigger without XS20 SYNC",
         )
 
     def test_dac_trigger_scheduler_uses_fixed_delay_without_sysref_gating(self):

@@ -68,8 +68,8 @@ class VivadoBuildOptionsTests(unittest.TestCase):
             encoding="utf-8", errors="ignore"
         )
         self.assertIn("wire rfctrl2_master_launch_pulse", top)
-        self.assertIn("sync_link_ready_ddr &&", top)
-        self.assertIn("sync_role_master_ddr;", top)
+        self.assertIn("rfctrl2_trigger_pulse &&", top)
+        self.assertIn("wire sync_role_master_ddr = IS_MASTER ? 1'b1 : 1'b0;", top)
         self.assertIn(
             ".trigger_request_ddr(rfctrl2_master_launch_pulse),",
             top,

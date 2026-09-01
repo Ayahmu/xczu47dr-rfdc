@@ -96,6 +96,7 @@ set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_vio_hm
 set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_request_hmc_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/emit_trigger_hmc_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_in_hmc_sync_reg[0]/D]
+set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/playback_prepared_hmc_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_ddr_sync_reg[0]/D]

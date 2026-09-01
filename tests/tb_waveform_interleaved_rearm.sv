@@ -231,6 +231,40 @@ module tb_waveform_interleaved_rearm;
 
     check_condition(last_cmd_addr == DDR_BASE, "new interleaved frame should issue a fresh DDR read from the base address");
 
+    // A finite Trigger-wait frame must not discard its source configuration
+    // after the first playback. It must refill from DDR and return to
+    // WAITTRIG, so the next physical Trigger launches exactly one new frame.
+    @(negedge clk); rst_n = 1'b0;
+    repeat(4) @(negedge clk);
+    rst_n = 1'b1;
+    repeat(4) @(negedge clk);
+    cmd_count = 0;
+    send_instr({64'd0, 32'd32, 32'h00000412});
+    send_instr({96'd0, 32'h00000003});
+    wait(cmd_count == 1);
+    for(integer first_single_beat = 0; first_single_beat < 4; first_single_beat = first_single_beat + 1)
+      send_dm_beat({480'd0, first_single_beat[31:0]});
+    wait(dbg_st == 3'd2);
+    pulse_trigger();
+    wait(dbg_st == 3'd3);
+    fork
+      begin
+        wait(cmd_count == 2);
+      end
+      begin
+        repeat(100) @(negedge clk);
+        check_condition(1'b0,
+                        "finite Trigger frame must refill and issue a second DDR read after playback");
+      end
+    join_any
+    disable fork;
+    for(integer second_single_beat = 0; second_single_beat < 4; second_single_beat = second_single_beat + 1)
+      send_dm_beat({480'd0, second_single_beat[31:0]});
+    wait(dbg_st == 3'd2);
+    pulse_trigger();
+    check_condition(dbg_st == 3'd3,
+                    "second physical Trigger must start exactly one refilled finite frame");
+
     // A loop frame refills from DDR immediately and auto-enters PLAYING after
     // the refill completes. Only the first iteration needs a Trigger pulse.
     @(negedge clk); rst_n = 1'b0;

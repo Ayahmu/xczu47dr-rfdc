@@ -473,7 +473,7 @@ class DriverTests(unittest.TestCase):
     def test_slave_bypass_accepts_software_trigger_without_physical_io(self):
         """检查从卡 bypass 后的 UDP Trigger 不伪造 XS20，也不计入 XS18/XS19。
 
-        这对应 ``hardware_slave_bypass_software_trigger_test.py`` 的核心路径：
+        这对应 ``hardware_slave_bypass_trigger_test.py`` 的软件 Trigger 模式核心路径：
         模拟器只验证数字状态机，真实 RF 输出仍需上板和仪器确认。
         """
 

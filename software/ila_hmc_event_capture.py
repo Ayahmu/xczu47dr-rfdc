@@ -162,11 +162,10 @@ def drive_once() -> None:
         else:
             # The slave ILA is armed first, then the normal dual-board test
             # sends SYNC and one master Trigger through XS18 -> XS19.
-            import dr47.examples.hardware_master_slave_deterministic_sync_test as dual_test
-            dual_test.MASTER_TARGET_IP = "169.254.21.60"
-            dual_test.SLAVE_TARGET_IP = BOARD_IP
-            dual_test.SYNC_ROUNDS = 1
-            dual_test.RF_NCO_GHZ = 1.0
+            import dr47.examples.hardware_master_slave_sync_trigger_test as dual_test
+            dual_test.common.MASTER_TARGET_IP = "169.254.21.60"
+            dual_test.common.SLAVE_TARGET_IP = BOARD_IP
+            dual_test.TRIGGER_COUNT = 1
             dual_test.run()
         time.sleep(0.5)
     finally:
