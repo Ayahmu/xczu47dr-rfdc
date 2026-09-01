@@ -16,8 +16,10 @@
      print(board.status())
  ~~~
 
- 高层频率单位是 GHz；RFDC 输入为 400 MS/s 复数 IQ。高于 200 MHz 的射频载波通常
- 由 NCO 产生，上传的 IQ 只放低频包络。
+ 高层频率单位是 GHz；RFDC 输入为 400 MS/s 复数 IQ。设置最终模拟频率时优先使用
+ `set_xy_target_frequency()`：例如 4 GHz 会自动映射为 NCO=-2.4 GHz、Nyquist
+ zone=2；上传的 IQ 只放低频包络。`set_xy_nco_frequency()` 仅用于直接设置
+ `-3.2..+3.2 GHz` 的 RFDC NCO。
 
  ## 正式板级入口
 

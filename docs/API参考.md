@@ -386,6 +386,38 @@ RFDC NCO 范围为 `-3.2 .. +3.2 GHz`。当前项目 DAC 采样率为 `6.4 GSPS`
 设置 XY 逻辑通道 `1..4` 对应 CH1..CH4 的 NCO。单位 GHz。非 batch 模式下
 会立即提交该物理通道；成功返回 `0`。
 
+该接口设置的是 **RFDC 内部 NCO**，不是最终模拟输出频率，因此当前 NCO 范围为
+`-3.2..+3.2 GHz`。如果目标模拟频率大于 `3.2 GHz`，请使用下面的目标频率接口，
+它会自动选择第二 Nyquist 区。例如目标 `4.0 GHz` 会配置为 `NCO=-2.4 GHz`、
+`nyquist_zone=2`。
+
+#### `set_xy_target_frequency(channel, target_rf_ghz, dac_fs_ghz=6.4) -> dict`
+
+按最终模拟目标频率配置 XY 通道，并自动返回并写入 RFDC 所需的 NCO 与 Nyquist zone。
+
+返回字典包含：
+
+```python
+{
+    "target_rf_ghz": 4.0,
+    "nco_ghz": -2.4,
+    "nyquist_zone": 2,
+    "image": "zone2",
+}
+```
+
+示例：
+
+```python
+plan = device.set_xy_target_frequency(1, 4.0)
+print(plan)
+# 4 GHz 目标 -> NCO=-2.4 GHz, Nyquist zone=2
+```
+
+当前 `6.4 GSPS` DAC 的可用目标范围为 `0..6.4 GHz`。目标频率超过该范围会抛出
+`ParameterRangeError`。上传的 IQ 仍应使用 `400 MS/s` 复基带，RF 载波由 RFDC NCO
+和 Nyquist zone 共同产生。
+
 #### `set_gain(channel_type, channel, gain=1.0, gain_type="norm") -> int`
 
 设置 DAC 输出电流。当前只支持 `gain_type="norm"`，`gain` 范围 `0..1`。

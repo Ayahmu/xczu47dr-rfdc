@@ -58,8 +58,8 @@ BASEBAND_GHZ = 0.0
 PULSE_DURATION_NS = 60.0
 PULSE_DELAY_NS = 100.0
 RECORD_DURATION_NS = 10_000.0
-AMPLITUDE = 0.20
-GAIN = 0.20
+AMPLITUDE = 1.0
+GAIN = 1.0
 CHANNEL_MASK = 0x01
 POLL_INTERVAL_S = 0.02
 
@@ -234,7 +234,11 @@ def configure_and_arm(
         f"{label} 上传有限波形：RF NCO={rf_nco_frequency_ghz:g} GHz，"
         f"记录={len(record) // 2} 个 IQ 样本，loop=False"
     )
-    device.set_xy_nco_frequency(1, rf_nco_frequency_ghz)
+    plan = device.set_xy_target_frequency(1, rf_nco_frequency_ghz)
+    print(
+        f"{label} RF 目标={plan['target_rf_ghz']:g} GHz，"
+        f"NCO={plan['nco_ghz']:g} GHz，Nyquist zone={plan['nyquist_zone']}"
+    )
     device.set_gain("xy", 1, gain, gain_type="norm")
     device.set_qc_on_off("xy", 1, "on")
     device.commit()
