@@ -22,6 +22,9 @@ if {[llength [get_ips -quiet ${ila_name}]] == 0} {
   create_ip -name ila -vendor xilinx.com -library ip -module_name ${ila_name}
 }
 
+# ILA capture depth.  1024 is the IP's minimum legal value (valid set is
+# 1024, 2048, 4096, ...), so depth is not a lever for cutting BRAM here -
+# probe width is.  Override with ILA_DEPTH=<n> in the env.
 set ila_data_depth [build_option_get ILA_DEPTH 1024]
 
 set_property -dict [list \

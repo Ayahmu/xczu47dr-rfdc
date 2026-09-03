@@ -67,7 +67,7 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -91,6 +91,9 @@ help:
 	@echo "  make bitstream        Generate/copy bitstream and debug probes"
 	@echo "  make bitstream-master Build the master bitstream in an isolated Vivado tree"
 	@echo "  make bitstream-slave  Build the slave bitstream in an isolated Vivado tree"
+	@echo "  make bitstream-slave-trigout  XS20 as a second Trigger output (bench measurement, bypass only)"
+	@echo "  make bitstream-slave-both     Both slave variants in parallel"
+	@echo "  make xdc-check        Verify XDC get_pins constraints against the synthesized netlist"
 	@echo "  make bitstream-dual   Build master and slave bitstreams in parallel"
 	@echo "  make xsa              Export XSA"
 	@echo "  make xsa-master       Export XSA from the isolated master project"
@@ -162,7 +165,25 @@ preflight: vivado-project
 synth: vivado-project
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)
 
-impl: synth
+# Verify every "get_pins -quiet" XDC constraint still matches the synthesized
+# netlist.  Six of them had silently rotted after signal renames - including the
+# hmc_pl_clk -> dac_axis_clk Trigger CDC - because -quiet makes an empty match
+# indistinguishable from success.  Fails the build by default; set
+# XDC_CHECK_STRICT=0 to downgrade it to a warning.
+xdc-check: synth
+	@log=$$(mktemp); cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" vivado -mode batch -notrace \
+	  -source scripts/check_xdc_pins.tcl -tclargs $(TARGET) > $$log 2>&1; rc=$$?; \
+	grep -E "XDC pin check:|dead XDC pin pattern|unparsable XDC" $$log || true; \
+	if [ $$rc -ne 0 ]; then \
+	  if [ "$(XDC_CHECK_STRICT)" = "0" ]; then \
+	    echo "WARNING: dead XDC constraints present (XDC_CHECK_STRICT=0, continuing)"; \
+	  else \
+	    echo "ERROR: dead XDC constraints - fix them, or rebuild with XDC_CHECK_STRICT=0"; \
+	    echo "       full log: $$log"; exit 1; \
+	  fi; \
+	fi; rm -f $$log
+
+impl: xdc-check
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_impl_manual.tcl -tclargs $(TARGET)
 
 bitstream: impl

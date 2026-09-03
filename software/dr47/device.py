@@ -655,6 +655,28 @@ class Dr47Device:
             self._apply_pending(1 << (physical - 1))
         return 0
 
+    def set_xy_target_frequency(
+        self,
+        channel: int,
+        target_rf_ghz: float,
+        dac_fs_ghz: float = 6.4,
+    ) -> dict[str, float | int | str]:
+        """Set an XY channel for an analog RF target, including Nyquist zone.
+
+        The RFDC NCO itself is limited to ``[-3.2, 3.2]`` GHz for the current
+        6.4 GS/s DAC.  Targets above 3.2 GHz are represented by the second
+        Nyquist image, for example 4.0 GHz becomes NCO=-2.4 GHz with zone 2.
+        The returned plan is useful for logging and measurement records.
+        """
+
+        plan = rfdc_nco_plan_for_target(float(target_rf_ghz), float(dac_fs_ghz))
+        physical = self._map_channel("xy", channel)
+        self._pending_nco[physical] = ghz_to_hz(float(plan["nco_ghz"]))
+        self._pending_zone[physical] = int(plan["nyquist_zone"])
+        if not self.batch_mode:
+            self._apply_pending(1 << (physical - 1))
+        return plan
+
     def set_gain(self, channel_type: Literal["xy", "z"], channel: int, gain: float = 1.0,
                  gain_type: Literal["norm", "dbm", "code", "volt"] = "norm") -> int:
         physical = self._map_channel(channel_type, channel)

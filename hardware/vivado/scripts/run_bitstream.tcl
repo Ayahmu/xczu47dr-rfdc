@@ -4,6 +4,7 @@ set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
+source "${script_path}/build_options.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -115,6 +116,29 @@ if {![file exists ${timing_rpt}]} {
 if {[file exists ${timing_rpt}]} {
     file copy -force ${timing_rpt} ${output_dir}/${output_basename}_timing.rpt
     puts "INFO: Timing report copied to ${output_dir}/${output_basename}_timing.rpt"
+}
+
+# Timing gate.  This design routes at level-5 congestion with only ~20% LUT use,
+# so WNS swings across builds and has landed anywhere from -0.070 ns to
+# +0.107 ns.  Nothing downstream checked it, which meant a bitstream that misses
+# timing could be written into artifacts/ and flashed without anyone noticing.
+# Abort instead, unless TIMING_GATE=0 is set in the environment.
+set timing_gate [build_option_get TIMING_GATE 1]
+set routed_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_routed.rpt"
+if {${timing_gate} && [file exists ${routed_rpt}]} {
+    set fh [open ${routed_rpt} r]
+    set body [read ${fh}]
+    close ${fh}
+    if {[regexp {Timing constraints are not met} ${body}]} {
+        set wns "?"
+        if {[regexp -line {^\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+\d+\s+\d+} ${body} -> wns tns]} {}
+        puts "ERROR: implementation does not meet timing (WNS=${wns} ns)."
+        puts "       Refusing to publish ${output_basename}.bit - re-run implementation,"
+        puts "       reduce ILA probe width/count, or override with TIMING_GATE=0."
+        close_project
+        exit 1
+    }
+    puts "INFO: Timing gate passed (all user specified timing constraints are met)"
 }
 
 puts "INFO: Bitstream generation complete"
