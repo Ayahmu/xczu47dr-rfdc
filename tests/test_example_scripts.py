@@ -21,6 +21,14 @@ FORMAL = {
     "hardware_slave_bypass_trigger_test.py",
 }
 
+# Bench diagnostics, deliberately kept out of FORMAL: they target one specific
+# measurement setup rather than a supported operating mode, so they are allowed
+# to exist but must be listed here explicitly.  That keeps the "no silent
+# regrowth of contradictory entrypoints" guarantee intact.
+BENCH = {
+    "hardware_slave_xs18_loopback_trigger_test.py",
+}
+
 OLD_DUPLICATES = {
     "hardware_dual_slave_external_trigger_test.py",
     "hardware_master_slave_continuous_trigger_test.py",
@@ -50,7 +58,7 @@ class ExampleScriptTests(unittest.TestCase):
             for path in EXAMPLES.glob("*.py")
             if path.name != "__init__.py" and not path.name.startswith("_")
         }
-        self.assertEqual(actual, FORMAL)
+        self.assertEqual(actual, FORMAL | BENCH)
         self.assertFalse(OLD_DUPLICATES & actual)
 
     def test_slave_external_waits_sync_then_uploads_and_never_triggers(self):

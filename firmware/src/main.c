@@ -3,6 +3,7 @@
 
 /***************************** Include Files *********************************/
 #include <stdio.h>
+#include <string.h>
 #include <stdarg.h>
 #include "main.h"
 #include "xparameters.h"
@@ -79,6 +80,24 @@ static const CustomDacChannel CustomDacChannels[] = {
 	{1, 2, "CH4", "XY", -1.9, XRFDC_EVEN_NYQUIST_ZONE},
 	{2, 0, "CH5", "Z", 0.0, XRFDC_ODD_NYQUIST_ZONE},
 	{2, 2, "CH6", "Z", 0.0, XRFDC_ODD_NYQUIST_ZONE},
+	/* Readout targets 5.8 / 6.2 GHz, i.e. u = f/fs = 0.906 / 0.969 at
+	 * fs = 6.4 GS/s.  Both are a bad place to be: Mix-Mode puts them at
+	 * -24.6 / -44.0 dB and their zone-1 images at 0.6 / 0.2 GHz come out
+	 * 19.7 / 29.8 dB STRONGER than the wanted output.
+	 *
+	 * Switching these two blocks to ODD (NRZ, MC_CFG0 MIX_MODE cleared)
+	 * would recover 4.7 dB on CH7 and 14.2 dB on CH8, because Mix-Mode only
+	 * beats NRZ for 1/6 < u < 5/6 (1.07 to 5.33 GHz at this fs) -
+	 * H_mix(u) = H_nrz(u) * 2*sin(pi*u).  The NCO register would not need
+	 * touching either: XRFdc_SetMixerSettings only applies its zone
+	 * negation when |Freq| > fs/2, and -600 / -200 MHz are well inside
+	 * +/-3200 MHz.
+	 *
+	 * Deliberately NOT changed yet - the readout chain is being left alone
+	 * until its architecture is settled (independent sample rate on a tile
+	 * that has a reference clock, or a low-IF plus external upconversion).
+	 * Recovering 4.7 / 14.2 dB does not fix a block that is 24 to 44 dB
+	 * down with its own image on top of it. */
 	{3, 0, "CH7", "Readout", -0.6, XRFDC_EVEN_NYQUIST_ZONE},
 	{3, 2, "CH8", "Readout", -0.2, XRFDC_EVEN_NYQUIST_ZONE},
 };
@@ -88,10 +107,24 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define HMC7044_POLL_COUNT 50
 #define HMC7044_POLL_INTERVAL_US 100000
 #define DAC_MTS_TILE_MASK 0x0FU
-/* -1 = let the driver keep this run's measured latency (not reproducible
- * across power cycles / boards).  Set to a fixed value once the achieved
- * latency_t1 has been read from the MTS log; see Configure_DAC_MTS(). */
+/* MTS target latency, in RF-DAC samples.
+ *
+ * XRFdc_MultiConverter_Init leaves Target_Latency at -1, which makes the driver
+ * adopt whatever latency that particular run achieved.  The absolute DAC
+ * datapath latency is then not reproducible across power cycles, across boards,
+ * or across a re-run triggered by a SYNC epoch.
+ *
+ * -1 here selects the two-pass auto-latch in Configure_DAC_MTS(): pass one
+ * measures, the result is rounded up onto a coarse grid, and pass two pins that
+ * value.  The rounding is what makes it repeatable - run-to-run variation
+ * smaller than the grid lands on the same target every boot.  Set this to a
+ * positive constant to hard-pin a value measured in the lab instead. */
 #define DAC_MTS_TARGET_LATENCY (-1)
+/* Rounding grid and headroom for the auto-latched target, in DAC samples.
+ * The grid must exceed the run-to-run spread of the measured latency; the
+ * margin must leave room for the driver to pad every tile up to the target. */
+#define DAC_MTS_LATENCY_GRID 64
+#define DAC_MTS_LATENCY_MARGIN 64
 #define FW_STATUS_MTS_REQUIRED (1U << 1)
 #define FW_STATUS_MTS_READY (1U << 2)
 #define FW_STATUS_MTS_FAILED (1U << 3)
@@ -110,6 +143,10 @@ static const CustomDacChannel CustomDacChannels[] = {
 
 static u32 DacMtsStatus;
 static u32 SyncAckStatus;
+/* Kept in globals rather than locals so they survive Configure_DAC_MTS() and can
+ * be read over JTAG (mrd on the symbol address) when the UART is unavailable. */
+static volatile int DacMtsMeasuredLatency = -1;
+static volatile int DacMtsAppliedTarget = -1;
 
 static u32 Read_Sync_Event_Epoch(void)
 {
@@ -372,8 +409,42 @@ int Configure_Custom_DAC_Nyquist(void)
 			return XST_FAILURE;
 		}
 
-		xil_printf("Success: DAC Tile%d Block%d Nyquist zone set to %u\r\n",
-			   Tile_Id, Block_Id, (unsigned int)NyquistZone);
+		/* Inverse-sinc FIR pre-emphasises the digital datapath by ~1/sinc so
+		 * the DAC's zero-order-hold rolloff comes out flat.  Gen 3 takes a
+		 * zone argument: 1 for the first Nyquist zone, 2 for the second.
+		 * Passing 1 for a zone-2 block would tilt the band the wrong way, so
+		 * the mode has to follow NyquistZone.  Z channels sit at DC where
+		 * sinc is flat, so they get 0 (disabled) and keep full headroom -
+		 * the FIR costs dynamic range because boosting the top of the band
+		 * means backing the overall amplitude off. */
+		u16 InvSincMode;
+		const char *Role = CustomDacChannels[i].Role;
+		if (strcmp(Role, "Z") == 0) {
+			/* Z sits at DC where sinc is flat; leave it off so the
+			 * channel keeps full headroom. */
+			InvSincMode = 0U;
+		} else if (strcmp(Role, "Readout") == 0) {
+			/* Readout is parked pending its architecture decision.  At
+			 * u = 0.906 / 0.969 the envelope is already near the null,
+			 * so pre-emphasis would spend headroom for almost no gain. */
+			InvSincMode = 0U;
+		} else if (NyquistZone == XRFDC_EVEN_NYQUIST_ZONE) {
+			InvSincMode = 2U;
+		} else {
+			InvSincMode = 1U;
+		}
+
+		Status = XRFdc_SetInvSincFIR(&RFdcInst, Tile_Id, Block_Id, InvSincMode);
+		if (Status != XST_SUCCESS)
+		{
+			xil_printf("XRFdc_SetInvSincFIR mode%u failed for DAC Tile%d Block%d status=%d\r\n",
+				   (unsigned int)InvSincMode, Tile_Id, Block_Id, Status);
+			return XST_FAILURE;
+		}
+
+		xil_printf("Success: DAC Tile%d Block%d Nyquist zone set to %u, inv-sinc mode %u\r\n",
+			   Tile_Id, Block_Id, (unsigned int)NyquistZone,
+			   (unsigned int)InvSincMode);
 	}
 
 	return XST_SUCCESS;
@@ -430,12 +501,15 @@ int Configure_Custom_DAC_NCO(void)
 	return XST_SUCCESS;
 }
 
-int Configure_DAC_MTS(void)
+/* One MTS pass.  Returns XRFDC_MTS_OK and fills *MaxLatencyPtr with the largest
+ * per-tile latency the driver reported. */
+static u32 Run_DAC_MTS_Pass(int TargetLatency, int *MaxLatencyPtr)
 {
 	XRFdc_MultiConverter_Sync_Config DacSyncConfig;
 	u32 Status;
 	u32 Tile;
 	u32 InterpolationFactor;
+	int MaxLatency = -1;
 
 	/* CH1 is DAC Tile 0 / Block 0, so use Tile 0 as the stable phase
 	 * reference for MTS diagnostics and the host-side calibration workflow. */
@@ -443,32 +517,21 @@ int Configure_DAC_MTS(void)
 	if (Status != XRFDC_MTS_OK)
 	{
 		xil_printf("ERROR: DAC MTS init failed, status=0x%08lx\r\n", (unsigned long)Status);
-		Publish_DAC_MTS_Status(0U, 1U, Status);
-		return XST_FAILURE;
+		return Status;
 	}
 
 	DacSyncConfig.Tiles = DAC_MTS_TILE_MASK;
 	DacSyncConfig.SysRef_Enable = 1;
-	/* XRFdc_MultiConverter_Init leaves Target_Latency at -1, which tells the
-	 * driver to adopt whatever latency this particular run happened to
-	 * achieve.  The absolute DAC datapath latency is then not reproducible
-	 * across power cycles, across boards, or across a re-run triggered by a
-	 * SYNC epoch.  It does not add jitter inside one session - MTS runs once
-	 * unless a SYNC arrives - but it does move the baseline between sessions.
-	 *
-	 * To pin it: read the "latency_t1" values printed below, take the largest
-	 * across both boards, round up with margin, and set DAC_MTS_TARGET_LATENCY
-	 * to that constant.  Leaving it at -1 keeps the previous behaviour. */
-	DacSyncConfig.Target_Latency = DAC_MTS_TARGET_LATENCY;
+	DacSyncConfig.Target_Latency = TargetLatency;
 	xil_printf("Running DAC MTS: tiles=0x%lx reference_tile=%u target_latency=%d\r\n",
 		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0,
-		   DacSyncConfig.Target_Latency);
+		   TargetLatency);
 	Status = XRFdc_MultiConverter_Sync(&RFdcInst, XRFDC_DAC_TILE, &DacSyncConfig);
 	if (Status != XRFDC_MTS_OK)
 	{
-		xil_printf("ERROR: DAC MTS failed, status=0x%08lx\r\n", (unsigned long)Status);
-		Publish_DAC_MTS_Status(0U, 1U, Status);
-		return XST_FAILURE;
+		xil_printf("ERROR: DAC MTS failed, status=0x%08lx target_latency=%d\r\n",
+			   (unsigned long)Status, TargetLatency);
+		return Status;
 	}
 
 	for (Tile = 0U; Tile < NUM_TILES; Tile++)
@@ -482,11 +545,55 @@ int Configure_DAC_MTS(void)
 			   DacSyncConfig.Latency[Tile],
 			   (unsigned long)InterpolationFactor,
 			   DacSyncConfig.Offset[Tile]);
+		if (DacSyncConfig.Latency[Tile] > MaxLatency)
+			MaxLatency = DacSyncConfig.Latency[Tile];
 	}
 
+	if (MaxLatencyPtr != NULL)
+		*MaxLatencyPtr = MaxLatency;
+	return XRFDC_MTS_OK;
+}
+
+int Configure_DAC_MTS(void)
+{
+	u32 Status;
+	int MaxLatency = -1;
+	int Target = DAC_MTS_TARGET_LATENCY;
+
+	if (Target < 0)
+	{
+		/* Pass one: let the driver report what this run can reach. */
+		Status = Run_DAC_MTS_Pass(-1, &MaxLatency);
+		if (Status != XRFDC_MTS_OK)
+		{
+			Publish_DAC_MTS_Status(0U, 1U, Status);
+			return XST_FAILURE;
+		}
+		DacMtsMeasuredLatency = MaxLatency;
+
+		/* Round up onto a coarse grid so the same target is chosen on every
+		 * boot even though the raw measurement moves a little. */
+		Target = MaxLatency + DAC_MTS_LATENCY_MARGIN;
+		Target = ((Target + DAC_MTS_LATENCY_GRID - 1) / DAC_MTS_LATENCY_GRID) *
+			 DAC_MTS_LATENCY_GRID;
+		xil_printf("DAC MTS: measured max latency=%d -> latching target=%d "
+			   "(grid=%d margin=%d)\r\n",
+			   MaxLatency, Target, DAC_MTS_LATENCY_GRID, DAC_MTS_LATENCY_MARGIN);
+	}
+
+	/* Pass two pins the target so the absolute latency is reproducible. */
+	Status = Run_DAC_MTS_Pass(Target, &MaxLatency);
+	if (Status != XRFDC_MTS_OK)
+	{
+		Publish_DAC_MTS_Status(0U, 1U, Status);
+		return XST_FAILURE;
+	}
+	DacMtsAppliedTarget = Target;
+
 	Publish_DAC_MTS_Status(1U, 0U, 0U);
-	xil_printf("DAC MTS ready: tiles=0x%lx reference_tile=%u\r\n",
-		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
+	xil_printf("DAC MTS ready: tiles=0x%x reference_tile=%u measured=%d applied_target=%d\r\n",
+		   (unsigned int)DAC_MTS_TILE_MASK, (unsigned int)XRFDC_TILE_ID0,
+		   DacMtsMeasuredLatency, DacMtsAppliedTarget);
 	return XST_SUCCESS;
 }
 

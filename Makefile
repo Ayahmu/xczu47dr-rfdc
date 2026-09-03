@@ -67,7 +67,13 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
+# The docs tell you to install the test dependencies into ./.venv, but every
+# Python target used a bare python3, so a correctly set up repo still ran the
+# tests against the system interpreter - where matplotlib/fastapi are missing
+# and 13 test modules die on import.  Prefer the repo venv when it exists.
+PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
+
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -91,6 +97,9 @@ help:
 	@echo "  make bitstream        Generate/copy bitstream and debug probes"
 	@echo "  make bitstream-master Build the master bitstream in an isolated Vivado tree"
 	@echo "  make bitstream-slave  Build the slave bitstream in an isolated Vivado tree"
+	@echo "  make bitstream-slave-trigout  XS20 as a second Trigger output (bench measurement, bypass only)"
+	@echo "  make bitstream-slave-both     Both slave variants in parallel"
+	@echo "  make xdc-check        Verify XDC get_pins constraints against the synthesized netlist"
 	@echo "  make bitstream-dual   Build master and slave bitstreams in parallel"
 	@echo "  make xsa              Export XSA"
 	@echo "  make xsa-master       Export XSA from the isolated master project"
@@ -132,18 +141,22 @@ help:
 all: hardware firmware artifacts
 
 test:
-	python3 -m unittest discover -s tests
+	@$(PYTHON) -c "import numpy, matplotlib, fastapi" 2>/dev/null || { \
+	  echo "ERROR: 测试依赖缺失（numpy / matplotlib / fastapi）。"; \
+	  echo "       先执行: $(PYTHON) -m pip install -r software/requirements.txt"; \
+	  echo "       当前解释器: $(PYTHON)"; exit 1; }
+	$(PYTHON) -m unittest discover -s tests
 	bash -n software/capture_uart.sh
 	bash -n firmware/build.sh
 
 driver-test:
-	python3 -m unittest tests.test_dr47_driver
+	$(PYTHON) -m unittest tests.test_dr47_driver
 
 driver-wheel:
-	python3 -m pip wheel --no-deps -w "$(ROOT)/dist" "$(SOFTWARE_DIR)/dr47"
+	$(PYTHON) -m pip wheel --no-deps -w "$(ROOT)/dist" "$(SOFTWARE_DIR)/dr47"
 
 driver-smoke: driver-wheel
-	python3 -c "import sys; sys.path.insert(0, '$(SOFTWARE_DIR)'); import dr47 as d; print(d.__version__)"
+	$(PYTHON) -c "import sys; sys.path.insert(0, '$(SOFTWARE_DIR)'); import dr47 as d; print(d.__version__)"
 
 check-tools:
 	@command -v vivado >/dev/null || { echo "ERROR: vivado not found. Source Vivado settings first."; exit 1; }
@@ -162,7 +175,25 @@ preflight: vivado-project
 synth: vivado-project
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)
 
-impl: synth
+# Verify every "get_pins -quiet" XDC constraint still matches the synthesized
+# netlist.  Six of them had silently rotted after signal renames - including the
+# hmc_pl_clk -> dac_axis_clk Trigger CDC - because -quiet makes an empty match
+# indistinguishable from success.  Fails the build by default; set
+# XDC_CHECK_STRICT=0 to downgrade it to a warning.
+xdc-check: synth
+	@log=$$(mktemp); cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" vivado -mode batch -notrace \
+	  -source scripts/check_xdc_pins.tcl -tclargs $(TARGET) > $$log 2>&1; rc=$$?; \
+	grep -E "XDC pin check:|dead XDC pin pattern|unparsable XDC" $$log || true; \
+	if [ $$rc -ne 0 ]; then \
+	  if [ "$(XDC_CHECK_STRICT)" = "0" ]; then \
+	    echo "WARNING: dead XDC constraints present (XDC_CHECK_STRICT=0, continuing)"; \
+	  else \
+	    echo "ERROR: dead XDC constraints - fix them, or rebuild with XDC_CHECK_STRICT=0"; \
+	    echo "       full log: $$log"; exit 1; \
+	  fi; \
+	fi; rm -f $$log
+
+impl: xdc-check
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_impl_manual.tcl -tclargs $(TARGET)
 
 bitstream: impl
@@ -303,9 +334,9 @@ $(RUN_ARGS):
 	@:
 
 host:
-	cd $(SOFTWARE_DIR) && python3 host.py --ip "$(IP)" --port "$(PORT)" --timeout "$(TIMEOUT)" --output-dir "$(HOST_OUTPUT_DIR)"
+	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --ip "$(IP)" --port "$(PORT)" --timeout "$(TIMEOUT)" --output-dir "$(HOST_OUTPUT_DIR)"
 
 host-dry-run:
-	cd $(SOFTWARE_DIR) && python3 host.py --dry-run --output-dir "$(HOST_OUTPUT_DIR)"
+	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --dry-run --output-dir "$(HOST_OUTPUT_DIR)"
 
 clean: firmware-clean hardware-clean chisel-clean

@@ -16,10 +16,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import host
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "software"))
+
+# software/ has to be on sys.path first, so this import cannot move above the
+# insert above - otherwise `python -m unittest tests.test_dr47_driver` from the
+# repo root fails with ModuleNotFoundError: No module named 'host'.
+import host  # type: ignore[import-not-found]  # noqa: E402
 
 from dr47 import (  # noqa: E402
     Dr47Device,

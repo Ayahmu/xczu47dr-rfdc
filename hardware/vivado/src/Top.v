@@ -3003,7 +3003,7 @@ module Top #(
        udp_wave_align_error_count[3:0]} // 3:0
     }),
     .probe1(udp64_rcv_dat),
-    .probe2(M_AXI_WAVE_wdata),
+    .probe2(M_AXI_WAVE_wdata[63:0]),
     .probe3({
       rv_dbg_state,                    // 127:124
       rv_dbg_status,                   // 123:92
@@ -3016,7 +3016,7 @@ module Top #(
     }),
     .probe4(instr_tdata),
     .probe5(dm_cmd_tdata),
-    .probe6(dm_data_tdata),
+    .probe6(dm_data_tdata[63:0]),
     .probe7({
       rvresp64_word_count[10:0],       // 127:117
       rvresp64_tlast,                  // 116
@@ -3040,9 +3040,9 @@ module Top #(
       RV_AXI_RFDC_rdata                // 31:0
     }),
     .probe8({rvresp64_tdata, ex_dbg_ch1_bytes_left}),
-    .probe9(ch1_wave_tdata),
-    .probe10(ch2_wave_tdata),
-    .probe11(udp_wave_last_wdata)
+    .probe9(ch1_wave_tdata[63:0]),
+    .probe10(ch2_wave_tdata[63:0]),
+    .probe11(udp_wave_last_wdata[63:0])
   );
 
   ila_dac_axis u_ila_dac_axis (
@@ -3120,14 +3120,14 @@ module Top #(
       dac_rst_n
     }),
     // These are the exact data buses connected to RFDC sXX_axis_tdata.
-    .probe1(rfdc_ch1_tdata),
-    .probe2(rfdc_ch2_tdata),
-    .probe3(rfdc_ch3_tdata),
-    .probe4(rfdc_ch4_tdata),
-    .probe5(rfdc_ch5_tdata),
-    .probe6(rfdc_ch6_tdata),
-    .probe7(rfdc_ch7_tdata),
-    .probe8(rfdc_ch8_tdata),
+    .probe1(rfdc_ch1_tdata[31:0]),
+    .probe2(rfdc_ch2_tdata[31:0]),
+    .probe3(rfdc_ch3_tdata[31:0]),
+    .probe4(rfdc_ch4_tdata[31:0]),
+    .probe5(rfdc_ch5_tdata[31:0]),
+    .probe6(rfdc_ch6_tdata[31:0]),
+    .probe7(rfdc_ch7_tdata[31:0]),
+    .probe8(rfdc_ch8_tdata[31:0]),
     .probe9({ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count,
              ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count}),
     .probe10({ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,

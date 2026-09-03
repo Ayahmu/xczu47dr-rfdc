@@ -5,10 +5,38 @@ USE IEEE.STD_LOGIC_UNSIGNED.ALL;
 USE IEEE.STD_LOGIC_ARITH.ALL;
 
 ------------------------------------------------------------------------------------------------------------
-----���ֲ�����ʽ��˵��
--- �����                 �Ĵ���03----->27    �Ĵ���05----->66
--- ����ʱ��100MHz         �Ĵ���03----->37    �Ĵ���05----->56   �Ĵ���26---->01
----�ⲿ�ο�ʱ��250MHz     �Ĵ���03----->2F    �Ĵ���05----->5A   R1=25, N1=10
+-- HMC7044 register-configuration sequence.
+--
+-- The original Chinese comments in this header were lost to a GBK->UTF-8
+-- mis-decode (every character became U+FFFD); this block is reconstructed from
+-- the register writes below plus the HMC7044 datasheet.  Only the ASCII values
+-- survived, and they are preserved verbatim.
+--
+-- Reference-clock profiles.  0x03[4:3] selects the VCO core and 0x05 selects the
+-- PLL1 reference path; 0x21/0x22 hold the 16-bit R1 divider:
+--
+--   profile              reg 0x03   reg 0x05   R1        PLL1 PFD
+--   internal VCXO only      0x27      0x66      -         -
+--   CLKIN2 100 MHz          0x37      0x56      1         100 MHz   (reg 0x26 = 0x01)
+--   CLKIN1 / XS17 250 MHz   0x2F      0x5A      25        10 MHz
+--   CLKIN1 / XS17 10 MHz    0x2F      0x5A      1         10 MHz
+--
+-- This file is the 250 MHz build: USE_EXTERNAL_* selects the XS17 path and the
+-- R1 divider is programmed to 25, so PLL1 always closes on a 10 MHz PFD.
+--
+-- PLL2 runs the High VCO core at 3.072 GHz (0x03[4:3] = 01; the "11" setting at
+-- 0x37 is reserved and must not be used).  That single VCO frequency is what
+-- makes the rest of the clock plan integer:
+--
+--   3072 / 24   = 128 MHz  -> RFDC DAC tile 2 reference (x50 -> 6.4 GS/s)
+--   3072 / 32   =  96 MHz  -> PL_CLK  (hmc_pl_clk)
+--   3072 / 1536 =   2 MHz  -> PL_SYSREF
+--
+-- Consequence worth knowing: 96 MHz and the 50 MHz DAC AXIS clock (6400/128)
+-- have period ratio 25:48, so their relative phase repeats every 500 ns on a
+-- gcd(20, 125/12) = 5/12 ns lattice.  Anything timed in PL_CLK and consumed in
+-- dac_axis_clk therefore inherits up to 19.583 ns of quantization - see
+-- docs/使用与测试指南.md, section on 同步时钟域.
 --  ****************************************************************************/
 entity hmc7044 is
 
