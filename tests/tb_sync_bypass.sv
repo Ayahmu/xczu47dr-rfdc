@@ -27,6 +27,7 @@ module tb_sync_bypass;
       .sync_request_vio_pl(1'b0), .sync_in(1'b0),
       .trigger_in(trigger_in), .dac_trigger_start(1'b0),
       .role_master(1'b0), .sync_bypass(sync_bypass),
+      .playback_prepared(1'b1),
       .hmc_sync(), .sync_link_out(), .trigger_link_out(),
       .role_trigger_raw(role_trigger), .trigger_event_toggle(), .sync_done(),
       .sync_seen(sync_seen), .sync_link_ready(sync_ready),

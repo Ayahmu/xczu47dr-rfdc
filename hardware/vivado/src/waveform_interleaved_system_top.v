@@ -580,17 +580,15 @@ module Waveform_Interleaved_System_Top #(
               prefill_auto_start <= 1'b1;
               st <= ST_PREFILL;
             end else begin
-              st <= ST_BUILD;
-              active_valid <= 1'b0;
-              pending_valid <= 1'b0;
+              // One-shot external Trigger mode: retain the programmed frame,
+              // refill the channel FIFOs from the same DDR record, then
+              // return to WAITTRIG.  The following physical Trigger starts
+              // exactly one new record without a host upload or ARM command.
+              inter_bytes_left <= inter_total_bytes;
+              inter_rd_addr <= inter_base_addr;
+              prefill_beats_written <= 32'd0;
               prefill_auto_start <= 1'b0;
-              loop_enable <= 1'b0;
-              cfg_loop <= 1'b0;
-              max_ch_bytes <= 32'd0;
-              inter_total_bytes <= 64'd0;
-              inter_bytes_left <= 64'd0;
-              ch1_arm <= 1'b0; ch2_arm <= 1'b0; ch3_arm <= 1'b0; ch4_arm <= 1'b0;
-              ch5_arm <= 1'b0; ch6_arm <= 1'b0; ch7_arm <= 1'b0; ch8_arm <= 1'b0;
+              st <= ST_PREFILL;
             end
           end
         end
