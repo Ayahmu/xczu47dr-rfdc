@@ -1,5 +1,12 @@
 module TopCustomXczu47dr #(
-    parameter integer IS_MASTER = 1
+    parameter integer IS_MASTER = 1,
+    // Bench-measurement variant: XS20/TRIG_3 mirrors the XS18 Trigger output so
+    // a single board can loop XS18->XS19 and still give the scope a Trigger
+    // time reference.  No SYNC input in that build; bypass mode only.
+    parameter integer XS20_TRIG_OUT = 0,
+    // 1 = emit the XS18/XS20 pulse from dac_axis_clk (same domain as the RF
+    // launch) so a single-board loopback measures ~0 jitter.
+    parameter integer TRIG_EMIT_DAC = 0
 ) (
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
@@ -75,7 +82,9 @@ module TopCustomXczu47dr #(
 
 
   Top #(
-      .IS_MASTER(IS_MASTER)
+      .IS_MASTER(IS_MASTER),
+      .XS20_TRIG_OUT(XS20_TRIG_OUT),
+      .TRIG_EMIT_DAC(TRIG_EMIT_DAC)
   ) top_i (
       .TRIG_1(TRIG_1),
       .TRIG_2(TRIG_2),

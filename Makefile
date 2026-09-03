@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 TARGET ?= custom_xczu47dr_master
-ALLOWED_TARGETS := custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_bw
+ALLOWED_TARGETS := custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_slave_trigout custom_xczu47dr_bw
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -67,7 +67,7 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -181,6 +181,15 @@ bitstream-master:
 bitstream-slave:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
 	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: slave debug probes missing: $$ltx"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "SLAVE LTX: $$ltx"
+
+bitstream-slave-trigout:
+	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave_trigout VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave-trigout" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave-trigout" bitstream
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave_trigout.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave_trigout.ltx"; test -s "$$bit" || { echo "ERROR: slave-trigout bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: slave-trigout debug probes missing: $$ltx"; exit 1; }; echo "SLAVE-TRIGOUT BIT: $$bit"; echo "SLAVE-TRIGOUT SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE-TRIGOUT SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "SLAVE-TRIGOUT LTX: $$ltx"
+
+# Both slave variants at once: XS20 as SYNC input, and XS20 as a second Trigger
+# output for the single-board scope measurement.
+bitstream-slave-both: chisel
+	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-slave bitstream-slave-trigout
 
 xsa-master:
 	@test -f "$(VIVADO_DIR)/work-dual/master/custom_xczu47dr_master_rfdc.xpr" || { echo "ERROR: isolated master project is missing; run make bitstream-master first"; exit 1; }

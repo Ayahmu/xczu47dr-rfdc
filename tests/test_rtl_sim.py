@@ -188,6 +188,39 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: single-pulse XS20 SYNC and independent XS18->XS19 trigger link",
         )
 
+    def test_dac_direct_external_trigger_capture_and_latency_probe(self):
+        self.run_sim(
+            "tb_dac_direct_trigger",
+            [
+                ROOT / "hardware/vivado/src/dac_ext_trigger_capture.v",
+                ROOT / "hardware/vivado/src/dac_trigger_latency_probe.v",
+                ROOT / "tests/tb_dac_direct_trigger.sv",
+            ],
+            "PASS: DAC direct trigger capture and latency probe behave as specified",
+        )
+
+    def test_hmc_detour_spreads_launch_and_direct_capture_removes_it(self):
+        self.run_sim(
+            "tb_trigger_launch_phase_sweep",
+            [
+                ROOT / "hardware/vivado/src/sync_role_control.v",
+                ROOT / "hardware/vivado/src/sync_trigger_link.v",
+                ROOT / "hardware/vivado/src/dac_ext_trigger_capture.v",
+                ROOT / "tests/tb_trigger_launch_phase_sweep.sv",
+            ],
+            "PASS: hmc_pl_clk detour spreads launch over",
+        )
+
+    def test_dac_domain_trigger_emitter(self):
+        self.run_sim(
+            "tb_dac_trigger_emitter",
+            [
+                ROOT / "hardware/vivado/src/dac_trigger_emitter.v",
+                ROOT / "tests/tb_dac_trigger_emitter.sv",
+            ],
+            "PASS: dac_trigger_emitter emits one gated DAC-domain pulse per request",
+        )
+
     def test_sync_role_control_master_emits_single_clean_pulse(self):
         self.run_sim(
             "tb_sync_deterministic",

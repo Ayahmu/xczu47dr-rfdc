@@ -37,6 +37,11 @@ module sync_trigger_link #(
     output wire trigger_link_out,
     output wire role_trigger_raw,
     output wire trigger_event_toggle,
+    // Asserted while trigger_event_toggle describes an XS19 (external) event
+    // rather than a host command.  Updated at accept time, several hmc_pl_clk
+    // cycles before the toggle flips, so a receiver that samples both with the
+    // same synchronizer always pairs the toggle with settled data.
+    output wire trigger_event_external,
     output wire sync_done,
     output wire sync_seen,
     output wire sync_link_ready,
@@ -148,6 +153,7 @@ module sync_trigger_link #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] trigger_in_hmc_sync;
   reg trigger_in_hmc_prev;
   reg trigger_event_toggle_hmc;
+  reg trigger_event_external_hmc;
   reg trigger_event_pulse_hmc;
   reg trigger_in_seen_hmc;
   reg trigger_accepted_hmc;
@@ -192,6 +198,7 @@ module sync_trigger_link #(
       trigger_in_hmc_sync <= 3'b000;
       trigger_in_hmc_prev <= 1'b0;
       trigger_event_toggle_hmc <= 1'b0;
+      trigger_event_external_hmc <= 1'b0;
       trigger_event_pulse_hmc <= 1'b0;
       trigger_in_seen_hmc <= 1'b0;
       trigger_accepted_hmc <= 1'b0;
@@ -265,6 +272,7 @@ module sync_trigger_link #(
         trigger_accepted_hmc <= 1'b1;
         trigger_accepted_count_hmc <= trigger_accepted_count_hmc + 1'b1;
         launch_pending_hmc <= 1'b1;
+        trigger_event_external_hmc <= external_trigger_accept_hmc;
         trigger_wait_rearm_hmc <= 1'b1;
         trigger_seen_unprepared_hmc <= 1'b0;
         launch_count <= role_master ? MASTER_LAUNCH_DELAY_CYCLES : SLAVE_LAUNCH_DELAY_CYCLES;
@@ -275,7 +283,11 @@ module sync_trigger_link #(
         end
       end
 
-      if (emit_trigger_hmc_pulse && role_master && sync_trigger_allowed_hmc) begin
+      // EMIT_TRIGGER is an explicit host request, so honour it on a slave too:
+      // that is what lets a single board loop XS18 back into XS19 and trigger
+      // itself.  The automatic forward above stays master-only, because that is
+      // the master->slave path and a slave must not echo XS19 back out.
+      if (emit_trigger_hmc_pulse && sync_trigger_allowed_hmc) begin
         trigger_link_hmc <= 1'b1;
         trigger_high_count <= TRIGGER_HIGH_CYCLES;
         trigger_output_count_hmc <= trigger_output_count_hmc + 1'b1;
@@ -385,6 +397,7 @@ module sync_trigger_link #(
   assign trigger_link_out = trigger_link_hmc;
   assign role_trigger_raw = trigger_event_pulse_hmc;
   assign trigger_event_toggle = trigger_event_toggle_hmc;
+  assign trigger_event_external = trigger_event_external_hmc;
   assign sync_done = sync_done_pl_pulse;
   assign sync_seen = sync_seen_reg;
   assign sync_link_ready = sync_link_ready_reg;

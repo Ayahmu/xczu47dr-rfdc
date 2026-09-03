@@ -1,7 +1,8 @@
 # Vivado target matrix for supported builds.
 
 proc target_config_allowed_targets {} {
-    return [list custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_bw]
+    return [list custom_xczu47dr_master custom_xczu47dr_slave \
+                 custom_xczu47dr_slave_trigout custom_xczu47dr_bw]
 }
 
 proc target_config_exists {target} {
@@ -53,6 +54,30 @@ proc target_config_load {target} {
                 workspace_psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/hw/psu_init.tcl \
                 clock_policy external_250mhz_xs17 \
                 generics {IS_MASTER=0}]
+        }
+        custom_xczu47dr_slave_trigout {
+            # Bench-measurement variant of the slave: XS20/TRIG_3 mirrors the
+            # XS18 Trigger output instead of carrying SYNC, so one board can
+            # loop XS18->XS19 and still give the scope a Trigger reference.
+            # Bypass mode only - this build has no SYNC input.
+            # PS side is identical to the plain slave, so it reuses that
+            # firmware workspace, ELF and psu_init; only the PL differs.
+            return [dict create \
+                target custom_xczu47dr_slave_trigout \
+                project_basename custom_xczu47dr_slave_trigout_rfdc \
+                part xczu47dr-ffvg1517-2-i \
+                part_query *xczu47dr*ffvg1517* \
+                board_part {} \
+                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_slave_trigout.xdc] \
+                top_module TopCustomXczu47dr \
+                output_basename custom_xczu47dr_slave_trigout \
+                firmware_workspace firmware/workspace/custom_xczu47dr_slave \
+                firmware_app rfdc_app \
+                firmware_elf artifacts/custom_xczu47dr_slave.elf \
+                psu_init artifacts/custom_xczu47dr_slave_psu_init.tcl \
+                workspace_psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/export/hw_platform/hw/psu_init.tcl \
+                clock_policy external_250mhz_xs17 \
+                generics {IS_MASTER=0 XS20_TRIG_OUT=1 TRIG_EMIT_DAC=1}]
         }
         custom_xczu47dr_bw {
             return [dict create \

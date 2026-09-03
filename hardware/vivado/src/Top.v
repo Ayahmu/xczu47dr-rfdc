@@ -1,5 +1,13 @@
 module Top #(
-    parameter integer IS_MASTER = 1
+    parameter integer IS_MASTER = 1,
+    // 1 = XS20/TRIG_3 mirrors the XS18 Trigger output instead of carrying SYNC.
+    // Bench-measurement builds only; see the assign near sync_xs20_out.
+    parameter integer XS20_TRIG_OUT = 0,
+    // 1 = generate the XS18/XS20 pulse in dac_axis_clk instead of hmc_pl_clk.
+    // Puts the scope reference and the RF launch in one clock domain so a
+    // single-board XS18->XS19 loopback measures ~0 jitter; see
+    // dac_trigger_emitter.v.
+    parameter integer TRIG_EMIT_DAC = 0
 ) (
 
     // HMC7044 clock chip control (SPI interface)
@@ -165,11 +173,15 @@ module Top #(
 
   wire vio_sync_request;
   wire sync_xs20_in;
+  // In the XS20-as-Trigger-output build the pad is driven by us, so never feed
+  // it back into the SYNC state machine or HMC7044 SYNC.
+  wire sync_xs20_in_gated = XS20_TRIG_OUT ? 1'b0 : sync_xs20_in;
   wire sync_xs20_out;
   wire sync_xs20_oe;
   wire trigger_xs18_out;
   wire trigger_link_out;
   wire trigger_event_toggle_hmc;
+  wire trigger_event_external_hmc;
   wire sync_hmc;
   wire sync_link_out;
   wire sync_link_ready;
@@ -227,7 +239,14 @@ module Top #(
       .O  (sync_xs20_in),
       .IO (TRIG_3)
   );
-  assign trigger_xs18_out = trigger_link_out;
+  // Trigger pulse source for XS18/XS20.  TRIG_EMIT_DAC moves generation into
+  // dac_axis_clk so the outgoing pulse and the RF launch share a clock.  The
+  // emitter itself sits further down with the other DAC-domain trigger logic.
+  wire trigger_emit_dac_pulse;
+  wire [31:0] trigger_emit_dac_count;
+  wire trigger_out_selected = TRIG_EMIT_DAC ? trigger_emit_dac_pulse
+                                            : trigger_link_out;
+  assign trigger_xs18_out = trigger_out_selected;
   assign TRIG_1 = trigger_xs18_out;
 
   // VIO is generated only for the master project. It is a local debug source;
@@ -256,7 +275,7 @@ module Top #(
       .trigger_request_ddr(rfctrl2_master_launch_pulse),
       .emit_trigger_request_ddr(rfctrl2_emit_trigger_pulse),
       .sync_request_vio_pl(vio_sync_request),
-      .sync_in            (sync_xs20_in),
+      .sync_in            (sync_xs20_in_gated),
       .trigger_in         (TRIG_2),
       .dac_trigger_start  (dac_trigger_start),
       .role_master        (sync_role_master_pl),
@@ -269,6 +288,7 @@ module Top #(
       .trigger_link_out   (trigger_link_out),
       .role_trigger_raw   (role_trigger_raw),
       .trigger_event_toggle(trigger_event_toggle_hmc),
+      .trigger_event_external(trigger_event_external_hmc),
       .sync_done          (sync_done_pl),
       .sync_seen          (sync_seen),
       .sync_link_ready    (sync_link_ready),
@@ -288,8 +308,13 @@ module Top #(
       .trigger_launch_tick(trigger_launch_tick)
   );
 
-  assign sync_xs20_out = sync_link_out;
-  assign sync_xs20_oe = sync_role_master_pl;
+  // XS20/TRIG_3 normally carries SYNC: driven on a master, sampled on a slave.
+  // XS20_TRIG_OUT=1 repurposes it as a second Trigger output mirroring XS18, so
+  // one board can loop XS18->XS19 and still hand the scope a time reference.
+  // XS18 and XS20 come from the same register, so residual skew is IO + PCB
+  // only: a constant offset, not jitter.
+  assign sync_xs20_out = XS20_TRIG_OUT ? trigger_out_selected : sync_link_out;
+  assign sync_xs20_oe  = XS20_TRIG_OUT ? 1'b1 : sync_role_master_pl;
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_seen_ddr_sync;
@@ -1242,18 +1267,122 @@ module Top #(
   wire role_trigger_dac_pulse =
       role_trigger_dac_toggle_sync_ff[2] != role_trigger_dac_toggle_seen;
 
+  // ---- Direct DAC-domain capture of the external Trigger (XS19/TRIG_2) ----
+  // The hmc_pl_clk detour above is kept alive as a measurement reference, but
+  // on a slave it no longer launches playback for an external Trigger: both
+  // clocks come from the same HMC7044 VCO with a 25:48 period ratio, so the
+  // hmc->dac toggle lands at one of 48 phases inside the 20 ns DAC period and
+  // spreads the launch over ~19.6 ns regardless of how clean XS19 is.
+  //
+  // Host-command Triggers still take the hmc_pl_clk path; the external flag
+  // below is what keeps the two from launching the same event twice.
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] trig_event_ext_dac_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_bypass_dac_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_ready_dac_sync_ff;
+  reg pc_started_dac_prev;
+  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
+    if(!clk104_aresetn) begin
+      trig_event_ext_dac_sync_ff <= 3'b000;
+      sync_bypass_dac_sync_ff <= 3'b000;
+      sync_ready_dac_sync_ff <= 3'b000;
+      pc_started_dac_prev <= 1'b0;
+    end else begin
+      trig_event_ext_dac_sync_ff <= {trig_event_ext_dac_sync_ff[1:0], trigger_event_external_hmc};
+      sync_bypass_dac_sync_ff <= {sync_bypass_dac_sync_ff[1:0], sync_bypass_ddr};
+      sync_ready_dac_sync_ff <= {sync_ready_dac_sync_ff[1:0], sync_link_ready};
+      pc_started_dac_prev <= pc_started;
+    end
+  end
+  wire legacy_event_is_external_dac = trig_event_ext_dac_sync_ff[2];
+  wire pc_started_pulse_dac = pc_started && !pc_started_dac_prev;
+
+  // Same admission rule as the hmc_pl_clk path, evaluated on the clock that
+  // actually gates the samples.  PREPARED is native to this domain, so the
+  // one-Trigger-per-PREPARED interlock cannot miss a short PREPARED gap.
+  wire dac_ext_trigger_gate =
+      (sync_bypass_dac_sync_ff[2] || sync_ready_dac_sync_ff[2]) && rfctrl2_prepared_dac;
+
+  // XS18/XS20 emitter, in this clock domain so the outgoing pulse and the RF
+  // launch share a clock (see dac_trigger_emitter.v).
+  dac_trigger_emitter dac_trigger_emitter_i (
+      .ddr_clk         (ddr4_ui_clk),
+      .ddr_rst_n       (ddr4_ui_aresetn),
+      .emit_request_ddr(rfctrl2_emit_trigger_pulse),
+      .dac_clk         (dac_axis_clk),
+      .dac_rst_n       (clk104_aresetn),
+      .emit_allowed    (sync_bypass_dac_sync_ff[2] || sync_ready_dac_sync_ff[2]),
+      .pulse_out       (trigger_emit_dac_pulse),
+      .pulse_count     (trigger_emit_dac_count)
+  );
+
+  wire        dac_direct_trigger_pulse;
+  wire        dac_direct_trigger_edge;
+  wire        dac_direct_trigger_sync;
+  wire        dac_direct_trigger_latched;
+  wire [31:0] dac_direct_input_count;
+  wire [31:0] dac_direct_accept_count;
+  wire rfctrl2_play_abort;
+
+  dac_ext_trigger_capture dac_ext_trigger_capture_i (
+      .clk             (dac_axis_clk),
+      .rst_n           (clk104_aresetn),
+      .trigger_in      (TRIG_2),
+      .gate_open       (dac_ext_trigger_gate),
+      .clear           (rfctrl2_play_abort | rfdc_force_mute_pulse),
+      .trigger_pulse   (dac_direct_trigger_pulse),
+      .trigger_edge_raw(dac_direct_trigger_edge),
+      .input_count     (dac_direct_input_count),
+      .accept_count    (dac_direct_accept_count),
+      .trigger_in_sync (dac_direct_trigger_sync),
+      .trigger_latched (dac_direct_trigger_latched)
+  );
+
+  // On the master XS19 is unused, so keep the original source untouched.
+  // On a slave the external event comes from the direct capture and everything
+  // else (host RFCTRL2 TRIGGER, EMIT) still arrives over hmc_pl_clk.
+  wire dac_trigger_request =
+      IS_MASTER ? role_trigger_dac_pulse
+                : (dac_direct_trigger_pulse |
+                   (role_trigger_dac_pulse && !legacy_event_is_external_dac));
+
   // SYSREF remains dedicated to RFDC MTS/NCO alignment.  Playback is released
   // after a fixed DAC-clock delay, never by a board-local SYSREF frame.
   wire dac_trigger_launch;
   wire dac_trigger_pending;
-  wire rfctrl2_play_abort;
   dac_trigger_scheduler dac_trigger_scheduler_i (
       .clk(dac_axis_clk),
       .rst_n(clk104_aresetn),
-      .trigger_request(role_trigger_dac_pulse),
+      .trigger_request(dac_trigger_request),
       .clear_pending(rfctrl2_play_abort | rfdc_force_mute_pulse),
       .trigger_launch(dac_trigger_launch),
       .trigger_pending(dac_trigger_pending)
+  );
+
+  // Measures, per Trigger, how many DAC cycles the hmc_pl_clk detour adds.
+  // trig_lat_delta_max - trig_lat_delta_min is the launch jitter that path was
+  // contributing; it is the direct evidence for or against the 48-phase model.
+  wire [31:0] trig_lat_tick;
+  wire [15:0] trig_lat_delta_last;
+  wire [15:0] trig_lat_delta_min;
+  wire [15:0] trig_lat_delta_max;
+  wire [15:0] trig_lat_start_delta;
+  wire [31:0] trig_lat_pair_count;
+  wire [31:0] trig_lat_orphan_count;
+  wire        trig_lat_pending;
+  dac_trigger_latency_probe dac_trigger_latency_probe_i (
+      .clk             (dac_axis_clk),
+      .rst_n           (clk104_aresetn),
+      .direct_pulse    (dac_direct_trigger_pulse),
+      .legacy_pulse    (role_trigger_dac_pulse && legacy_event_is_external_dac),
+      .started_pulse   (pc_started_pulse_dac),
+      .tick            (trig_lat_tick),
+      .delta_last      (trig_lat_delta_last),
+      .delta_min       (trig_lat_delta_min),
+      .delta_max       (trig_lat_delta_max),
+      .start_delta_last(trig_lat_start_delta),
+      .pair_count      (trig_lat_pair_count),
+      .orphan_count    (trig_lat_orphan_count),
+      .pair_pending    (trig_lat_pending)
   );
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
@@ -2920,7 +3049,13 @@ module Top #(
     .clk(dac_axis_clk),
     .probe0({
       // bit0: DAC-domain reset; bit1: final RFDC output permission.
-      6'd0,
+      // Top 6 bits: the DAC-domain external Trigger path under test.
+      dac_ext_trigger_gate,
+      role_trigger_dac_pulse,
+      dac_trigger_pending,
+      dac_trigger_launch,
+      dac_direct_trigger_sync,
+      dac_direct_trigger_pulse,
       rfctrl2_play_prepare,
       rfctrl2_play_trigger,
       rfctrl2_play_abort,
@@ -2998,7 +3133,15 @@ module Top #(
     .probe10({ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,
               ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac}),
     .probe11({pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count,
-              pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count})
+              pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count}),
+    // Trigger-latency instrumentation, all in dac_axis_clk.
+    .probe12(trig_lat_tick),
+    .probe13({trig_lat_delta_last, trig_lat_delta_min,
+              trig_lat_delta_max, trig_lat_start_delta}),
+    .probe14({trig_lat_pair_count, trig_lat_orphan_count}),
+    .probe15({dac_direct_input_count, dac_direct_accept_count}),
+    .probe16({trig_lat_pending, dac_direct_trigger_edge,
+              dac_direct_trigger_latched, rfctrl2_prepared_dac})
   );
 
   ila_hmc_event u_ila_hmc_event (
