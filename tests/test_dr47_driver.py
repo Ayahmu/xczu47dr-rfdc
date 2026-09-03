@@ -16,10 +16,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import host
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "software"))
+
+# software/ has to be on sys.path first, so this import cannot move above the
+# insert above - otherwise `python -m unittest tests.test_dr47_driver` from the
+# repo root fails with ModuleNotFoundError: No module named 'host'.
+import host  # type: ignore[import-not-found]  # noqa: E402
 
 from dr47 import (  # noqa: E402
     Dr47Device,
@@ -546,6 +550,17 @@ class DriverTests(unittest.TestCase):
         zone2 = rfdc_nco_plan_for_target(4.5)
         self.assertEqual(zone2["nco_ghz"], -1.9)
         self.assertEqual(zone2["nyquist_zone"], 2)
+
+    def test_set_xy_target_frequency_maps_above_3_2ghz_to_zone2(self):
+        """目标 RF=4 GHz 时，驱动应自动设置 NCO=-2.4 GHz、Nyquist zone=2。"""
+        device = SimulatedDr47Device(batch_mode=True)
+        device.connect()
+        plan = device.set_xy_target_frequency(1, 4.0)
+        self.assertEqual(plan["target_rf_ghz"], 4.0)
+        self.assertEqual(plan["nco_ghz"], -2.4)
+        self.assertEqual(plan["nyquist_zone"], 2)
+        self.assertEqual(device._pending_nco[1], -2_400_000_000.0)
+        self.assertEqual(device._pending_zone[1], 2)
 
     def test_public_waveform_helpers_and_trigger_sequence(self):
         """检查正式驱动的 IQ 波形、记录延迟和等待 Trigger 指令。"""

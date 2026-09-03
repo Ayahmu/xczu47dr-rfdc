@@ -12,6 +12,16 @@ from .protocol import parse_rfresp2_packet
 
 SO_BINDTODEVICE = getattr(socket, "SO_BINDTODEVICE", 25)
 
+# Retransmitting the instant a receive times out can land while the board is
+# still driving the response to the previous attempt.  That late reply carries
+# our sequence number, so it is not filtered out - it gets consumed as the
+# answer to the *next* request and desynchronizes every request/response pair
+# after it.  Wait the board's send window out before resending.  Scales with
+# the configured timeout and is clamped so a 5 s default does not stall a retry
+# for seconds.
+RETRY_BACKOFF_MIN_S = 0.002
+RETRY_BACKOFF_MAX_S = 0.050
+
 
 class UdpTransport:
     """Small, deterministic UDP transport used by :class:`Dr47Device`.
@@ -181,6 +191,11 @@ class UdpTransport:
             except TransportTimeout:
                 if attempt + 1 >= attempts:
                     raise
+                time.sleep(self.retry_backoff_s())
         raise AssertionError("unreachable UDP retry state")
+
+    def retry_backoff_s(self) -> float:
+        """Delay inserted before a retransmit; see RETRY_BACKOFF_* above."""
+        return min(RETRY_BACKOFF_MAX_S, max(RETRY_BACKOFF_MIN_S, self.timeout_s))
 
 __all__ = ["UdpTransport", "SO_BINDTODEVICE"]

@@ -343,12 +343,15 @@ module Top #(
   wire sync_link_ready_ddr = sync_ready_ddr_sync[1];
   wire sync_align_busy_ddr = sync_align_busy_ddr_sync[1];
   wire sync_align_failed_ddr = sync_align_failed_ddr_sync[1];
-  // One RFCTRL2 TRIGGER is the master launch event: it starts the local
-  // player and, in the same DDR clock domain, requests the XS18 pulse.
-  // EMIT_TRIGGER remains a separate diagnostic-only physical trigger.
+  // RFCTRL2 TRIGGER is a local launch request on every role.  The role policy
+  // lives in sync_trigger_link's HMC event domain (local_trigger_accept_hmc):
+  // a master accepts it and mirrors it to XS18, a slave accepts it only in
+  // explicit bypass mode, and an external-mode slave stays gated.  Do NOT
+  // re-gate it with sync_role_master_ddr here - that kept the toggle from ever
+  // flipping on a slave, so the link module's bypass term was unreachable and
+  // a bypass slave could not be launched by a host trigger() at all.
   assign rfctrl2_master_launch_pulse = rfctrl2_trigger_pulse &&
-                                       sync_link_ready_ddr &&
-                                       sync_role_master_ddr;
+                                       sync_link_ready_ddr;
 
   assign H7044_SYNC_0 = sync_hmc;
 

@@ -67,6 +67,12 @@ PORT ?= 7
 TIMEOUT ?= 5
 HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 
+# The docs tell you to install the test dependencies into ./.venv, but every
+# Python target used a bare python3, so a correctly set up repo still ran the
+# tests against the system interpreter - where matplotlib/fastapi are missing
+# and 13 test modules die on import.  Prefer the repo venv when it exists.
+PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
+
 .PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
@@ -135,18 +141,22 @@ help:
 all: hardware firmware artifacts
 
 test:
-	python3 -m unittest discover -s tests
+	@$(PYTHON) -c "import numpy, matplotlib, fastapi" 2>/dev/null || { \
+	  echo "ERROR: 测试依赖缺失（numpy / matplotlib / fastapi）。"; \
+	  echo "       先执行: $(PYTHON) -m pip install -r software/requirements.txt"; \
+	  echo "       当前解释器: $(PYTHON)"; exit 1; }
+	$(PYTHON) -m unittest discover -s tests
 	bash -n software/capture_uart.sh
 	bash -n firmware/build.sh
 
 driver-test:
-	python3 -m unittest tests.test_dr47_driver
+	$(PYTHON) -m unittest tests.test_dr47_driver
 
 driver-wheel:
-	python3 -m pip wheel --no-deps -w "$(ROOT)/dist" "$(SOFTWARE_DIR)/dr47"
+	$(PYTHON) -m pip wheel --no-deps -w "$(ROOT)/dist" "$(SOFTWARE_DIR)/dr47"
 
 driver-smoke: driver-wheel
-	python3 -c "import sys; sys.path.insert(0, '$(SOFTWARE_DIR)'); import dr47 as d; print(d.__version__)"
+	$(PYTHON) -c "import sys; sys.path.insert(0, '$(SOFTWARE_DIR)'); import dr47 as d; print(d.__version__)"
 
 check-tools:
 	@command -v vivado >/dev/null || { echo "ERROR: vivado not found. Source Vivado settings first."; exit 1; }
@@ -324,9 +334,9 @@ $(RUN_ARGS):
 	@:
 
 host:
-	cd $(SOFTWARE_DIR) && python3 host.py --ip "$(IP)" --port "$(PORT)" --timeout "$(TIMEOUT)" --output-dir "$(HOST_OUTPUT_DIR)"
+	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --ip "$(IP)" --port "$(PORT)" --timeout "$(TIMEOUT)" --output-dir "$(HOST_OUTPUT_DIR)"
 
 host-dry-run:
-	cd $(SOFTWARE_DIR) && python3 host.py --dry-run --output-dir "$(HOST_OUTPUT_DIR)"
+	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --dry-run --output-dir "$(HOST_OUTPUT_DIR)"
 
 clean: firmware-clean hardware-clean chisel-clean
