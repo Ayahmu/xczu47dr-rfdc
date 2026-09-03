@@ -94,10 +94,37 @@ static const CustomDacChannel CustomDacChannels[] = {
 	 * +/-3200 MHz.
 	 *
 	 * Deliberately NOT changed yet - the readout chain is being left alone
-	 * until its architecture is settled (independent sample rate on a tile
-	 * that has a reference clock, or a low-IF plus external upconversion).
-	 * Recovering 4.7 / 14.2 dB does not fix a block that is 24 to 44 dB
-	 * down with its own image on top of it. */
+	 * until its architecture is settled.  Recovering 4.7 / 14.2 dB does not fix
+	 * a block that is 24 to 44 dB down with its own image on top of it.
+	 *
+	 * The architecture options were checked against the RFDC IP itself
+	 * (usp_rf_data_converter v2.6, part xczu47dr-ffvg1517-2-i) rather than
+	 * assumed, and two of them are dead:
+	 *
+	 *   - Raising fs to 7.68 GS/s is illegal.  The IP reports the DAC sampling
+	 *     rate range as (0.5, 7.0) GS/s on this part; the highest rate it
+	 *     accepts from the 128 MHz reference is 6.656 GS/s.
+	 *   - Giving THIS tile its own rate is impossible.  DAC3_Clock_Source
+	 *     reports valid values {6} only, and the IP says "DAC228 or DAC230 must
+	 *     distribute a clock that can be used by DAC231".  Only DAC228 (tile 0)
+	 *     and DAC230 (tile 2) can be their own clock source; tiles 1 and 3 are
+	 *     permanently distribution sinks.
+	 *
+	 * What does work: move readout to tile 0 and run that tile from its own
+	 * PLL at fs = 4.48 GS/s (128 MHz x 35, fabric 35 MHz, PL_Clock_Freq 70).
+	 * 5.8 / 6.2 GHz then sit at u = 1.295 / 1.384, i.e. mid-zone instead of in
+	 * the null, giving -10.1 / -7.9 dB - a gain of 14.5 / 36.1 dB - while the
+	 * nearest comparable image stays 1.84 / 1.04 GHz away, so a 5-6.5 GHz
+	 * band-pass is realistic.  The 128 MHz reference for bank 228 already
+	 * exists and is already programmed (HMC7044 channel 4, "dac refclk 0",
+	 * 3072/24), so no board or clock-chip change is needed.  The costs are the
+	 * RF cable swap (readout onto tile 0's connectors, two XY channels onto
+	 * tile 3's), a second AXIS clock domain in the PL, and MTS splitting into
+	 * two groups so readout is no longer sample-aligned with XY/Z.
+	 *
+	 * A GLOBAL rate change cannot substitute for the split: fs = 6.4 is near
+	 * optimal for the 3-5 GHz XY band, and at fs = 4.48 the XY tone at 4.5 GHz
+	 * lands in the null instead (-47 dB NRZ, -78 dB Mix-Mode). */
 	{3, 0, "CH7", "Readout", -0.6, XRFDC_EVEN_NYQUIST_ZONE},
 	{3, 2, "CH8", "Readout", -0.2, XRFDC_EVEN_NYQUIST_ZONE},
 };
