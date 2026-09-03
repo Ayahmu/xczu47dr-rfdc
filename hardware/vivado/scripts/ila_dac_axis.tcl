@@ -25,7 +25,7 @@ if {[llength [get_ips -quiet ${ila_name}]] == 0} {
 set ila_data_depth [build_option_get ILA_DEPTH 1024]
 
 set_property -dict [list \
-  CONFIG.C_NUM_OF_PROBES {12} \
+  CONFIG.C_NUM_OF_PROBES {17} \
   CONFIG.C_DATA_DEPTH ${ila_data_depth} \
   CONFIG.C_PROBE0_WIDTH {128} \
   CONFIG.C_PROBE1_WIDTH {256} \
@@ -39,6 +39,11 @@ set_property -dict [list \
   CONFIG.C_PROBE9_WIDTH {256} \
   CONFIG.C_PROBE10_WIDTH {256} \
   CONFIG.C_PROBE11_WIDTH {256} \
+  CONFIG.C_PROBE12_WIDTH {32} \
+  CONFIG.C_PROBE13_WIDTH {64} \
+  CONFIG.C_PROBE14_WIDTH {64} \
+  CONFIG.C_PROBE15_WIDTH {64} \
+  CONFIG.C_PROBE16_WIDTH {4} \
 ] [get_ips ${ila_name}]
 
 generate_target all [get_ips ${ila_name}]

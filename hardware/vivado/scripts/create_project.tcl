@@ -24,6 +24,11 @@ set target_top_module [target_config_get $target top_module]
 set target_generics [target_config_get $target generics]
 set is_bandwidth_target [expr {$target eq "custom_xczu47dr_bw"}]
 set is_master_target [expr {$target eq "custom_xczu47dr_master"}]
+# Every slave variant, including custom_xczu47dr_slave_trigout.  Matching the
+# plain name exactly used to drop variants into the master branch below, which
+# defined CUSTOM_XCZU47DR_MASTER and made Top.v instantiate a vio_0 that was
+# never generated for a non-master target.
+set is_slave_target [expr {[string match "custom_xczu47dr_slave*" $target]}]
 
 puts "INFO: Creating Vivado project..."
 puts "INFO: Target: ${target}"
@@ -64,7 +69,7 @@ set_property simulator_language Mixed [current_project]
 puts "INFO: Enabling target Verilog define"
 if {$is_bandwidth_target} {
     set_property verilog_define {CUSTOM_XCZU47DR_BW} [current_fileset]
-} elseif {$target eq "custom_xczu47dr_slave"} {
+} elseif {$is_slave_target} {
     set_property verilog_define {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_SLAVE} [current_fileset]
 } else {
     set_property verilog_define {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_MASTER} [current_fileset]

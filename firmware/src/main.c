@@ -88,6 +88,10 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define HMC7044_POLL_COUNT 50
 #define HMC7044_POLL_INTERVAL_US 100000
 #define DAC_MTS_TILE_MASK 0x0FU
+/* -1 = let the driver keep this run's measured latency (not reproducible
+ * across power cycles / boards).  Set to a fixed value once the achieved
+ * latency_t1 has been read from the MTS log; see Configure_DAC_MTS(). */
+#define DAC_MTS_TARGET_LATENCY (-1)
 #define FW_STATUS_MTS_REQUIRED (1U << 1)
 #define FW_STATUS_MTS_READY (1U << 2)
 #define FW_STATUS_MTS_FAILED (1U << 3)
@@ -445,8 +449,20 @@ int Configure_DAC_MTS(void)
 
 	DacSyncConfig.Tiles = DAC_MTS_TILE_MASK;
 	DacSyncConfig.SysRef_Enable = 1;
-	xil_printf("Running DAC MTS: tiles=0x%lx reference_tile=%u\r\n",
-		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0);
+	/* XRFdc_MultiConverter_Init leaves Target_Latency at -1, which tells the
+	 * driver to adopt whatever latency this particular run happened to
+	 * achieve.  The absolute DAC datapath latency is then not reproducible
+	 * across power cycles, across boards, or across a re-run triggered by a
+	 * SYNC epoch.  It does not add jitter inside one session - MTS runs once
+	 * unless a SYNC arrives - but it does move the baseline between sessions.
+	 *
+	 * To pin it: read the "latency_t1" values printed below, take the largest
+	 * across both boards, round up with margin, and set DAC_MTS_TARGET_LATENCY
+	 * to that constant.  Leaving it at -1 keeps the previous behaviour. */
+	DacSyncConfig.Target_Latency = DAC_MTS_TARGET_LATENCY;
+	xil_printf("Running DAC MTS: tiles=0x%lx reference_tile=%u target_latency=%d\r\n",
+		   (unsigned long)DacSyncConfig.Tiles, (unsigned int)XRFDC_TILE_ID0,
+		   DacSyncConfig.Target_Latency);
 	Status = XRFdc_MultiConverter_Sync(&RFdcInst, XRFDC_DAC_TILE, &DacSyncConfig);
 	if (Status != XRFDC_MTS_OK)
 	{
