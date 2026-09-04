@@ -44,12 +44,20 @@ APP_SRC_DIR="${WORKSPACE_DIR}/${APP_NAME}/src"
 ARTIFACT_DIR="${ARTIFACT_DIR:-${PROJECT_ROOT}/artifacts}"
 XSA_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.xsa"
 BIT_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.bit"
-ELF_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.elf"
-PSU_INIT_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}_psu_init.tcl"
+# The ELF and PS init script come from the target's own firmware_elf/psu_init
+# keys, NOT from output_basename.  A variant target can have its own bitstream
+# while sharing another target's firmware: custom_xczu47dr_slave_trigout differs
+# from custom_xczu47dr_slave only in PL generics (XS20 as a second Trigger output),
+# so it has its own .bit but reuses the slave's workspace, ELF and psu_init.
+# Deriving these from output_basename pointed at custom_xczu47dr_slave_trigout.elf
+# and ..._psu_init.tcl, which are never produced.  Only the basename is taken so
+# an ARTIFACT_DIR override still works.
+ELF_FILE="${ARTIFACT_DIR}/$(basename "${ELF_RELATIVE}")"
+PSU_INIT_FILE="${ARTIFACT_DIR}/$(basename "${PSU_INIT_RELATIVE}")"
 WORKSPACE_PSU_INIT_FILE="${PROJECT_ROOT}/${WORKSPACE_PSU_INIT_RELATIVE}"
 
 case "${TARGET}" in
-    custom_xczu47dr_master|custom_xczu47dr_slave)
+    custom_xczu47dr_master|custom_xczu47dr_slave|custom_xczu47dr_slave_trigout)
         BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR"
         ;;
     custom_xczu47dr_bw)
