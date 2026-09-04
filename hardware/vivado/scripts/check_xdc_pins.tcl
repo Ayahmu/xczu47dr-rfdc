@@ -85,9 +85,12 @@ foreach xdc ${xdc_files} {
 
     # --- get_clocks ---
     # Collect the braced-list form first, then the bare-name form.  The bare
-    # form excludes a leading "{" so a list is never mistaken for one name, and
-    # is greedy up to the closing bracket so a name that itself contains
-    # brackets (pll_clk[0]) survives instead of being cut at the first "]".
+    # form rejects a leading open-brace so a list is never mistaken for one
+    # name, and is greedy up to the closing bracket so a name that itself
+    # contains brackets (pll_clk[0]) survives instead of being cut at the first
+    # "]".  Note: do not write a lone open-brace in a comment inside a braced
+    # body - Tcl counts braces in comments too, and an unbalanced one makes the
+    # whole enclosing foreach fail to parse.
     set clock_names [list]
     foreach {whole inner} [regexp -all -inline \
         {get_clocks\s+-quiet\s+\{([^\}]*)\}} ${trimmed}] {

@@ -175,16 +175,19 @@ preflight: vivado-project
 synth: vivado-project
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_synth.tcl -tclargs $(TARGET)
 
-# Verify every "get_pins -quiet" XDC constraint still matches the synthesized
-# netlist.  Six of them had silently rotted after signal renames - including the
-# hmc_pl_clk -> dac_axis_clk Trigger CDC - because -quiet makes an empty match
+# Verify every "-quiet" XDC object query (get_pins and get_clocks) still matches
+# the synthesized netlist.  Six get_pins constraints had silently rotted after
+# signal renames - including the hmc_pl_clk -> dac_axis_clk Trigger CDC - and one
+# get_clocks name outlived its clk_wiz, because -quiet makes an empty match
 # indistinguishable from success.  Fails the build by default; set
 # XDC_CHECK_STRICT=0 to downgrade it to a warning.
 xdc-check: synth
 	@log=$$(mktemp); cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" vivado -mode batch -notrace \
 	  -source scripts/check_xdc_pins.tcl -tclargs $(TARGET) > $$log 2>&1; rc=$$?; \
-	grep -E "XDC pin check:|dead XDC pin pattern|unparsable XDC" $$log || true; \
+	grep -E "XDC (pin|clock) check:|dead XDC (pin pattern|clock name)|unparsable XDC" $$log || true; \
 	if [ $$rc -ne 0 ]; then \
+	  echo "--- last lines of the check log (a Tcl error shows up here) ---"; \
+	  tail -5 $$log; \
 	  if [ "$(XDC_CHECK_STRICT)" = "0" ]; then \
 	    echo "WARNING: dead XDC constraints present (XDC_CHECK_STRICT=0, continuing)"; \
 	  else \
