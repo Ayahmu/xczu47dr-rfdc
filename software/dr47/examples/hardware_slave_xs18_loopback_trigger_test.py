@@ -28,10 +28,54 @@ import time
 from ..device import Dr47Device
 from ..errors import DriverError
 from ..capabilities import PlaybackState
-from .hardware_slave_bypass_software_trigger_test import (
-    _prepare_gaussian_waveform,
-    _wait_for_state,
-)
+from ._common import configure_and_arm, make_gaussian_record
+
+
+def _prepare_gaussian_waveform(
+    device: Dr47Device,
+    *,
+    rf_nco_frequency_ghz: float,
+    baseband_frequency_ghz: float,
+    duration_ns: float,
+    delay_ns: float,
+    record_duration_ns: float,
+    amplitude: float,
+    gain: float,
+    loop: bool,
+    sample_rate_hz: float = 400_000_000.0,
+    phase_rad: float = 0.0,
+    label: str = "loopback",
+) -> None:
+    """配置 CH1、上传延迟高斯记录并 ARM。
+
+    这个分支把示例脚本的公共逻辑收进了 _common，记录生成
+    (make_gaussian_record) 和设备侧配置 (configure_and_arm) 是分开的两步；
+    10 MHz 主线上则是一个 _prepare_gaussian_waveform 一把做完。本文件是从
+    10 MHz 主线同步过来的，两个调用点按那边的签名写的，所以这里保留同名薄封装，
+    避免为了适配而改动被测流程本身。
+    """
+
+    if loop:
+        raise ValueError(
+            "configure_and_arm 固定 loop=False；本测试每个 Trigger 播放一次有限波形"
+        )
+    record = make_gaussian_record(
+        rf_nco_frequency_ghz=rf_nco_frequency_ghz,
+        baseband_frequency_ghz=baseband_frequency_ghz,
+        duration_ns=duration_ns,
+        delay_ns=delay_ns,
+        record_duration_ns=record_duration_ns,
+        amplitude=amplitude,
+        sample_rate_hz=sample_rate_hz,
+        phase_rad=phase_rad,
+    )
+    configure_and_arm(
+        device,
+        record,
+        label=label,
+        rf_nco_frequency_ghz=rf_nco_frequency_ghz,
+        gain=gain,
+    )
 
 
 BOARD_IP = os.environ.get("RFSOC_BOARD_IP", "169.254.100.101")
