@@ -78,9 +78,17 @@ print(f"  sync_xs20_oe = {vals}   (1 = trigout / XS20 drives Trigger, 0 = plain 
 PY
 
 echo "== 2/3 downloading ELF (PL preserved) =="
+ELF_LOG="$WORK/elf-download.log"
+set +e
 ( cd "$REPO/firmware" && JTAG_CABLE_SERIAL="$CABLE" DOWNLOAD_ELF_ONLY=1 \
-    xsct scripts/program.tcl "$BIT" "$ELF" "$PSU" 2>&1 \
-    | grep -E "preserving|Starting|complete|ERROR" ) || fail "ELF download failed"
+    xsct scripts/program.tcl "$BIT" "$ELF" "$PSU" >"$ELF_LOG" 2>&1 )
+ELF_STATUS=$?
+grep -E "preserving|Starting|complete|ERROR|WARNING|failed|Failed" "$ELF_LOG" || true
+if [ "$ELF_STATUS" -ne 0 ]; then
+  echo "XSCT exited with status $ELF_STATUS; full diagnostic follows:" >&2
+  sed -n '1,240p' "$ELF_LOG" >&2
+  fail "ELF download failed (XSCT status $ELF_STATUS)"
+fi
 
 echo "== 3/3 discovering board IP (changes with the bitstream) =="
 sleep 10
