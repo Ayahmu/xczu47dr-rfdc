@@ -1,11 +1,21 @@
-# Verify that every "get_pins -quiet <pattern>" in the role XDC still matches
+# Verify that every "-quiet" object query in the role XDC still matches
 # something in the synthesized netlist.
 #
 # XDC files only accept a whitelisted subset of Tcl - no foreach/if/puts - so a
-# renamed synchronizer silently turns its "-quiet" constraint into a no-op.  Six
+# renamed object silently turns its "-quiet" constraint into a no-op.  Six
 # constraints in custom_xczu47dr_minimal.xdc had rotted that way, including the
 # hmc_pl_clk -> dac_axis_clk Trigger CDC.  This runs as a normal Tcl script,
 # where the loop is allowed.
+#
+# Two kinds of query are checked:
+#
+#   get_pins -quiet <pattern>       one pattern per query
+#   get_clocks -quiet <name>        one name, or a braced list of names
+#
+# The clock check inspects every name in a braced list SEPARATELY.  That is the
+# whole point: "get_clocks -quiet {RFDAC2_CLK some_clock_that_no_longer_exists}"
+# returns a non-empty collection, so the surviving name masks the dead one and
+# neither Vivado nor a naive check notices.
 #
 # Usage (after synthesis, from hardware/vivado):
 #   vivado -mode batch -notrace -source scripts/check_xdc_pins.tcl \
@@ -44,33 +54,68 @@ foreach rel [target_config_get $target xdc_files] {
 
 set dead 0
 set live 0
+set dead_clocks 0
+set live_clocks 0
+
 foreach xdc ${xdc_files} {
   if {![file exists ${xdc}]} { continue }
   set fh [open ${xdc} r]
   set body [read ${fh}]
   close ${fh}
+  set tail [file tail ${xdc}]
   foreach line [split ${body} "\n"] {
     set trimmed [string trim ${line}]
     if {[string index ${trimmed} 0] eq "#"} { continue }
+
+    # --- get_pins ---
     # Greedy \S+ followed by the closing bracket, so a pattern that itself
     # contains brackets (foo_reg[0]/D) is captured whole instead of being cut at
     # the first "]".
-    if {![regexp {get_pins\s+-quiet\s+(\S+)\]} ${trimmed} -> pattern]} { continue }
-    if {[catch {llength [get_pins -quiet ${pattern}]} count]} {
-      puts "CRITICAL WARNING: unparsable XDC pin pattern in [file tail ${xdc}]: ${pattern}"
-      incr dead
-    } elseif {${count} == 0} {
-      puts "CRITICAL WARNING: dead XDC pin pattern in [file tail ${xdc}]: ${pattern}"
-      incr dead
-    } else {
-      incr live
+    if {[regexp {get_pins\s+-quiet\s+(\S+)\]} ${trimmed} -> pattern]} {
+      if {[catch {llength [get_pins -quiet ${pattern}]} count]} {
+        puts "CRITICAL WARNING: unparsable XDC pin pattern in ${tail}: ${pattern}"
+        incr dead
+      } elseif {${count} == 0} {
+        puts "CRITICAL WARNING: dead XDC pin pattern in ${tail}: ${pattern}"
+        incr dead
+      } else {
+        incr live
+      }
+    }
+
+    # --- get_clocks ---
+    # Collect the braced-list form first, then the bare-name form.  The bare
+    # form excludes a leading "{" so a list is never mistaken for one name, and
+    # is greedy up to the closing bracket so a name that itself contains
+    # brackets (pll_clk[0]) survives instead of being cut at the first "]".
+    set clock_names [list]
+    foreach {whole inner} [regexp -all -inline \
+        {get_clocks\s+-quiet\s+\{([^\}]*)\}} ${trimmed}] {
+      foreach name ${inner} { lappend clock_names ${name} }
+    }
+    foreach {whole inner} [regexp -all -inline \
+        {get_clocks\s+-quiet\s+([^\s\{]\S*)\]} ${trimmed}] {
+      lappend clock_names ${inner}
+    }
+    foreach name ${clock_names} {
+      if {[catch {llength [get_clocks -quiet ${name}]} count]} {
+        puts "CRITICAL WARNING: unparsable XDC clock name in ${tail}: ${name}"
+        incr dead_clocks
+      } elseif {${count} == 0} {
+        puts "CRITICAL WARNING: dead XDC clock name in ${tail}: ${name}"
+        incr dead_clocks
+      } else {
+        incr live_clocks
+      }
     }
   }
 }
 
 puts "XDC pin check: ${live} live, ${dead} dead"
-if {${dead} > 0} {
-  puts "ERROR: ${dead} XDC constraint(s) match nothing and are silently inactive"
+puts "XDC clock check: ${live_clocks} live, ${dead_clocks} dead"
+set total_dead [expr {${dead} + ${dead_clocks}}]
+if {${total_dead} > 0} {
+  puts "ERROR: ${total_dead} XDC constraint object(s) match nothing and are silently inactive"
   exit 1
 }
 exit 0
