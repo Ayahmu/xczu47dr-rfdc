@@ -255,14 +255,22 @@ set_property PACKAGE_PIN AF19 [get_ports {c0_ddr4_dq[63]}]
 # The PS PL clock, DDR UI clock, and RFDC DAC fabric clock are independent
 # domains. Keep these as asynchronous clock groups for the custom target so
 # async FIFO/CDC crossings are not timed as synchronous paths.
+#
+# The DAC fabric clock is RFDAC2_CLK: Top.v ties dac_axis_clk straight to
+# clk_dac2 out of the RFDC. An earlier revision took it from a clk_wiz in the
+# block design, and the name clk_out1_design_1_clk_wiz_dac_axis_0_0 was still
+# listed here long after that clk_wiz was gone. Because the same braced list
+# also contains a name that does exist, get_clocks returned a non-empty
+# collection and nothing flagged the dead one - scripts/check_xdc_pins.tcl now
+# checks every name in a list separately.
 set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet clk_pl_0] \
     -group [get_clocks -quiet mmcm_clkout0] \
-    -group [get_clocks -quiet {RFDAC2_CLK clk_out1_design_1_clk_wiz_dac_axis_0_0}]
+    -group [get_clocks -quiet RFDAC2_CLK]
 
 # HMC PL_CLK_P_0 is retained as an external phase reference. It is independent
 # from the PS PL and DDR UI/MMCM clocks, so do not time these domains as
 # phase-related.
 set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet PL_CLK_P_0] \
-    -group [get_clocks -quiet {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 RFDAC2_CLK clk_out1_design_1_clk_wiz_dac_axis_0_0}]
+    -group [get_clocks -quiet {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 RFDAC2_CLK}]
