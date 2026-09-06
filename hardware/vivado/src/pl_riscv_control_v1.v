@@ -73,6 +73,8 @@ module pl_riscv_control_v1 #(
     input  wire [31:0]  trigger_input_count,
     input  wire [31:0]  trigger_accepted_count,
     input  wire [31:0]  trigger_output_count,
+    input  wire [2:0]   ext_trigger_phase_slot,
+    input  wire         ext_trigger_phase_valid,
     input  wire [511:0] rfdc_actual_nco_hz,
     input  wire [15:0]  rfdc_actual_nyquist_zone,
     input  wire [255:0] rfdc_actual_phase_mdeg,
@@ -583,9 +585,10 @@ module pl_riscv_control_v1 #(
         resp_words[15] <= {32'd0, 8'd0, sync_align_failed, sync_align_busy,
                            16'd0, sync_alignment_epoch};
         resp_words[16] <= {48'd0, sync_alignment_error};
-        resp_count <= 6'd17;
+        resp_words[17] <= {32'd0, 28'd0, ext_trigger_phase_valid, ext_trigger_phase_slot};
+        resp_count <= 6'd18;
         resp_index <= 6'd0;
-        rvresp_word_count <= 16'd17;
+        rvresp_word_count <= 16'd18;
         rvresp_tdata <= resp_request_magic;
         rvresp_tvalid <= 1'b1;
         rvresp_tlast <= 1'b0;

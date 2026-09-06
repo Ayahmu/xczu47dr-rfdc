@@ -2,11 +2,24 @@
 # Load a bitstream onto the XCZU47DR and verify what actually ended up in the PL.
 #
 # Why not "make program" / firmware/scripts/program.tcl:
-#   That script does "rst -system" before programming the PL.  On this board a
-#   system reset re-runs the BootROM, the FSBL reloads a bitstream from QSPI, and
-#   it races the JTAG download.  The script prints "Programming complete!" either
-#   way, so a failed load is silent.  Programming through hw_manager (no PS
-#   reset) and then downloading the ELF with DOWNLOAD_ELF_ONLY=1 is reliable.
+#   That script does "rst -system" before programming the PL.  On a board that
+#   boots from QSPI a system reset re-runs the BootROM, the FSBL reloads a
+#   bitstream from QSPI, and it races the JTAG download.  The script prints
+#   "Programming complete!" either way, so a failed load is silent.  Programming
+#   through hw_manager (no PS reset) and then downloading the ELF with
+#   DOWNLOAD_ELF_ONLY=1 is reliable.
+#
+# Why there is a psu_init step anyway:
+#   DOWNLOAD_ELF_ONLY=1 also skips psu_init, and psu_init is what brings up the
+#   PS DDR controller.  The application ELF links its sections at 0x0, i.e. in
+#   DDR, so on a board where nothing else has run psu_init this cycle the
+#   download dies with
+#       Memory write error at 0x0. Blocked address 0x0. DDR controller is not initialized
+#   A board strapped for JTAG boot (BOOT_MODE_USER at 0xFF5E0200 reads 0) has no
+#   FSBL at all, so DDR is uninitialized after every power cycle and after every
+#   PS reset - the failure comes back every time.  Step 1 therefore reads the
+#   DDRC status register and runs psu_init only when DDR is not already in normal
+#   operating mode, still without "rst -system".
 #
 # Why the verification step matters:
 #   custom_xczu47dr_slave and custom_xczu47dr_slave_trigout both have 4 ILAs, 0
@@ -15,6 +28,8 @@
 #   as a Trigger output), 0 in the plain slave (XS20 is a SYNC input).
 #
 # Usage:  ./software/load_and_verify.sh [slave_trigout|slave]
+#   SKIP_PSU_INIT=1  never run psu_init, even if DDR looks uninitialized
+#   FORCE_PSU_INIT=1 run psu_init unconditionally
 set -uo pipefail
 
 ROLE=${1:-slave_trigout}
@@ -35,6 +50,67 @@ for f in "$BIT" "$LTX" "$ELF" "$PSU"; do
 done
 echo "role   : $ROLE"
 echo "bit    : $(sha256sum "$BIT" | cut -c1-16)  $(wc -c <"$BIT") bytes"
+
+# ---------------------------------------------------------------- psu_init ----
+# DDRC STAT is at 0xFD070004; bits [2:0] are the operating mode.  1 = normal,
+# 0 = still in init.  Anything other than normal means the ELF download to 0x0
+# would fail, so bring DDR up first.  psu_init is run WITHOUT "rst -system" so
+# the BootROM is not re-entered.  It runs before the PL is programmed, because
+# psu_init also drives PS-PL isolation and resets - doing it afterwards would
+# disturb a bitstream that was just loaded.
+echo "== 1/4 checking PS DDR controller =="
+if [ "${SKIP_PSU_INIT:-0}" = "1" ]; then
+  echo "  SKIP_PSU_INIT=1; not touching the PS"
+else
+  cat > "$WORK/ddrstat.tcl" <<TCL
+connect -url tcp:127.0.0.1:3121
+if {[catch {targets -set -filter {name =~ "PSU"}} e]} { puts "===DDRSTAT=no_psu_target==="; exit 0 }
+if {[catch {set raw [mrd -force 0xFD070004]} e]} { puts "===DDRSTAT=unreadable==="; exit 0 }
+set hex [lindex [split [string trim \$raw]] end]
+puts "===DDRSTAT=[expr {("0x\$hex" & 0x7)}] raw=\$hex==="
+TCL
+  DDRSTAT=$(xsct "$WORK/ddrstat.tcl" 2>/dev/null | sed -n 's/^===DDRSTAT=\([^ =]*\).*$/\1/p' | tail -1)
+  echo "  DDRC STAT operating mode = ${DDRSTAT:-unknown}  (1 = normal, 0 = still in init)"
+  # A missing PSU target is a different failure from "DDR not up yet": the PS
+  # itself is unreachable over JTAG, usually a wedged AXI-AP (DAP status
+  # 0x3xxxxxxx) after something read an address that never answers.  psu_init
+  # cannot run without that target and no amount of PL programming brings it
+  # back, so say what actually clears it instead of failing obscurely.  This
+  # script will not issue the reset itself: "rst -srst" also wipes the PL
+  # configuration, and on a QSPI-boot board "rst -system" re-enters the BootROM.
+  if [ "$DDRSTAT" = "no_psu_target" ] || [ "$DDRSTAT" = "unreadable" ]; then
+    echo "  available JTAG targets:" >&2
+    printf 'connect -url tcp:127.0.0.1:3121\ntargets\n' > "$WORK/t.tcl"
+    xsct "$WORK/t.tcl" 2>/dev/null | sed -n '/^ *[0-9]\+ /p' | sed 's/^/    /' >&2 || true
+    fail "PS is not reachable over JTAG (${DDRSTAT}); power-cycle the board, then run
+        make program TARGET=custom_xczu47dr_${ROLE}
+       once to run psu_init, after which this script can be used for iterations"
+  fi
+  if [ "${FORCE_PSU_INIT:-0}" = "1" ] || [ "$DDRSTAT" != "1" ]; then
+    echo "  running psu_init (no rst -system) to bring up DDR"
+    cat > "$WORK/psuinit.tcl" <<TCL
+connect -url tcp:127.0.0.1:3121
+targets -set -filter {name =~ "PSU"}
+source ${PSU}
+psu_init
+after 500
+psu_ps_pl_isolation_removal
+psu_ps_pl_reset_config
+set raw [mrd -force 0xFD070004]
+set hex [lindex [split [string trim \$raw]] end]
+puts "===DDRSTAT_AFTER=[expr {("0x\$hex" & 0x7)}]==="
+TCL
+    xsct "$WORK/psuinit.tcl" > "$WORK/psuinit.log" 2>&1
+    AFTER=$(sed -n 's/^===DDRSTAT_AFTER=\([0-9]*\).*$/\1/p' "$WORK/psuinit.log" | tail -1)
+    echo "  DDRC STAT after psu_init = ${AFTER:-unknown}"
+    if [ "$AFTER" != "1" ]; then
+      sed -n '1,80p' "$WORK/psuinit.log" >&2
+      fail "psu_init did not bring DDR to normal mode (STAT=${AFTER:-unknown}); the ELF download would fail at 0x0"
+    fi
+  else
+    echo "  DDR already initialized; skipping psu_init"
+  fi
+fi
 
 cat > "$WORK/prog.tcl" <<TCL
 open_hw_manager
@@ -63,7 +139,7 @@ puts "===LATPROBE=[llength [get_hw_probes -quiet *trig_lat_delta_max* -of_object
 close_hw_manager
 TCL
 
-echo "== 1/3 programming PL (no PS reset) =="
+echo "== 2/4 programming PL (no PS reset) =="
 vivado -mode batch -notrace -source "$WORK/prog.tcl" 2>&1 | grep -E "^===|^ERROR" || true
 
 python3 - "$WORK/v.csv" <<'PY'
@@ -77,7 +153,7 @@ vals = sorted({r[col].strip() for r in rows}) if col else []
 print(f"  sync_xs20_oe = {vals}   (1 = trigout / XS20 drives Trigger, 0 = plain slave)")
 PY
 
-echo "== 2/3 downloading ELF (PL preserved) =="
+echo "== 3/4 downloading ELF (PL preserved) =="
 ELF_LOG="$WORK/elf-download.log"
 set +e
 ( cd "$REPO/firmware" && JTAG_CABLE_SERIAL="$CABLE" DOWNLOAD_ELF_ONLY=1 \
@@ -90,7 +166,7 @@ if [ "$ELF_STATUS" -ne 0 ]; then
   fail "ELF download failed (XSCT status $ELF_STATUS)"
 fi
 
-echo "== 3/3 discovering board IP (changes with the bitstream) =="
+echo "== 4/4 discovering board IP (changes with the bitstream) =="
 sleep 10
 PYTHONPATH="$REPO/software" python3 - <<'PY'
 from dr47.network import discover_boards

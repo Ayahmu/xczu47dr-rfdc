@@ -409,6 +409,15 @@ if {!$is_bandwidth_target && [file exists ${ila_s_axi_01_script}]} {
     puts "WARN: S_AXI_01 ILA script not found: ${ila_s_axi_01_script}"
 }
 
+# Create 200 MHz clock generator for external trigger phase detection
+set clk_200mhz_script "${script_path}/clk_gen_200mhz.tcl"
+if {!$is_bandwidth_target && [file exists ${clk_200mhz_script}]} {
+    source ${clk_200mhz_script}
+    puts "INFO: 200 MHz clock generator IP created"
+} else {
+    puts "WARN: 200 MHz clock generator script not found: ${clk_200mhz_script}"
+}
+
 # Create and configure Block Design
 puts "INFO: Creating Block Design..."
 set bd_script "${vivado_dir}/bd/design_1.tcl"
