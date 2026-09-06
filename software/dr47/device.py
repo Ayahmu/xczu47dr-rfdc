@@ -270,6 +270,8 @@ class Dr47Device:
             trigger_input_count=int(decoded.get("trigger_input_count", 0)) & 0xFFFFFFFF,
             trigger_accepted_count=int(decoded.get("trigger_accepted_count", 0)) & 0xFFFFFFFF,
             trigger_output_count=int(decoded.get("trigger_output_count", 0)) & 0xFFFFFFFF,
+            ext_trigger_phase_slot=int(decoded.get("ext_trigger_phase_slot", 0)) & 0x7,
+            ext_trigger_phase_valid=bool(decoded.get("ext_trigger_phase_valid", False)),
             config_valid_mask=int(decoded.get("config_valid_mask", 0)) & 0xFF,
             playback_state=state,
             playback_armed=bool(decoded.get("armed")),

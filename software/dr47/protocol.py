@@ -395,6 +395,10 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["sync_align_failed"] = bool((alignment_word >> 23) & 1)
     if len(payload) >= 112:
         result["sync_alignment_error"] = struct.unpack_from("<I", payload, 104)[0] & 0xFFFF
+    if len(payload) >= 120:
+        phase_word = struct.unpack_from("<Q", payload, 112)[0]
+        result["ext_trigger_phase_slot"] = phase_word & 0x7
+        result["ext_trigger_phase_valid"] = bool((phase_word >> 3) & 1)
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)

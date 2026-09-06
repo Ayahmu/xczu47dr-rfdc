@@ -923,6 +923,8 @@ module Top #(
       .trigger_input_count (trigger_input_count_ddr),
       .trigger_accepted_count(trigger_accepted_count_ddr),
       .trigger_output_count(trigger_output_count_ddr),
+      .ext_trigger_phase_slot(ext_trig_slot_sync_ddr[2]),
+      .ext_trigger_phase_valid(ext_trig_valid_sync_ddr[2]),
       .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
       .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
       .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
@@ -1355,7 +1357,7 @@ module Top #(
   // else (host RFCTRL2 TRIGGER, EMIT) still arrives over hmc_pl_clk.
   wire dac_trigger_request =
       IS_MASTER ? role_trigger_dac_pulse
-                : (dac_direct_trigger_pulse |
+                : (dac_direct_trigger_compensated |
                    (role_trigger_dac_pulse && !legacy_event_is_external_dac));
 
   // SYSREF remains dedicated to RFDC MTS/NCO alignment.  Playback is released
@@ -1398,6 +1400,46 @@ module Top #(
       .pair_pending    (trig_lat_pending)
   );
 
+  // ========== External Trigger Phase Detector (Scheme B) ==========
+  // 200 MHz fast clock generation for sub-20ns phase measurement
+  wire clk_200mhz, clk_200mhz_locked;
+  clk_gen_200mhz clk_gen_200mhz_i (
+      .clk_in1  (clk104_clk),
+      .clk_out1 (clk_200mhz),
+      .locked   (clk_200mhz_locked),
+      .reset    (1'b0)
+  );
+
+  // Phase detector output (200 MHz domain)
+  wire [2:0] ext_trig_slot_200m;
+  wire       ext_trig_valid_200m;
+
+  ext_trigger_phase_detector ext_trigger_phase_detector_i (
+      .clk_200mhz      (clk_200mhz),
+      .rst_n           (clk_200mhz_locked),
+      .dac_axis_clk    (dac_axis_clk),
+      .ext_trigger_in  (trigger_xs19_in),
+      .phase_slot      (ext_trig_slot_200m),
+      .phase_valid     (ext_trig_valid_200m)
+  );
+
+  // CDC: 200 MHz -> DDR domain for status readback
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_slot_sync_ddr [2:0];
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_valid_sync_ddr;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      ext_trig_slot_sync_ddr[0] <= 3'b0;
+      ext_trig_slot_sync_ddr[1] <= 3'b0;
+      ext_trig_slot_sync_ddr[2] <= 3'b0;
+      ext_trig_valid_sync_ddr   <= 3'b0;
+    end else begin
+      ext_trig_slot_sync_ddr[0] <= {ext_trig_slot_sync_ddr[0][1:0], ext_trig_slot_200m[0]};
+      ext_trig_slot_sync_ddr[1] <= {ext_trig_slot_sync_ddr[1][1:0], ext_trig_slot_200m[1]};
+      ext_trig_slot_sync_ddr[2] <= {ext_trig_slot_sync_ddr[2][1:0], ext_trig_slot_200m[2]};
+      ext_trig_valid_sync_ddr   <= {ext_trig_valid_sync_ddr[1:0], ext_trig_valid_200m};
+    end
+  end
+
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn) ps_trigger_ddr_sync_ff <= 3'b000;
@@ -1420,6 +1462,41 @@ module Top #(
   end
   wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] |
                               udp_trigger_dac_sync_ff[2];
+
+  // CDC: 200 MHz phase info -> fabric 400 MHz domain for compensation
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_slot_sync_fab [2:0];
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_valid_sync_fab;
+  always @(posedge clk_fabric or negedge clk104_aresetn) begin
+    if (!clk104_aresetn) begin
+      ext_trig_slot_sync_fab[0] <= 3'b0;
+      ext_trig_slot_sync_fab[1] <= 3'b0;
+      ext_trig_slot_sync_fab[2] <= 3'b0;
+      ext_trig_valid_sync_fab   <= 3'b0;
+    end else begin
+      ext_trig_slot_sync_fab[0] <= {ext_trig_slot_sync_fab[0][1:0], ext_trig_slot_200m[0]};
+      ext_trig_slot_sync_fab[1] <= {ext_trig_slot_sync_fab[1][1:0], ext_trig_slot_200m[1]};
+      ext_trig_slot_sync_fab[2] <= {ext_trig_slot_sync_fab[2][1:0], ext_trig_slot_200m[2]};
+      ext_trig_valid_sync_fab   <= {ext_trig_valid_sync_fab[1:0], ext_trig_valid_200m};
+    end
+  end
+  wire [2:0] ext_trig_slot_fab  = {ext_trig_slot_sync_fab[2][2],
+                                    ext_trig_slot_sync_fab[1][2],
+                                    ext_trig_slot_sync_fab[0][2]};
+  wire       ext_trig_valid_fab = ext_trig_valid_sync_fab[2];
+
+  // Phase compensator: adds programmable delay in fabric domain to achieve
+  // fixed trigger-to-RF timing regardless of external trigger phase
+  wire dac_direct_trigger_compensated;
+  ext_trigger_phase_compensator #(
+      .MAX_DELAY_CYCLES(7)
+  ) ext_trigger_phase_compensator_i (
+      .clk_fabric   (clk_fabric),
+      .rst_n        (clk104_aresetn),
+      .trigger_in   (dac_direct_trigger_pulse),
+      .phase_slot   (ext_trig_slot_fab),
+      .phase_valid  (ext_trig_valid_fab),
+      .trigger_out  (dac_direct_trigger_compensated)
+  );
 
 
   // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========

@@ -59,6 +59,8 @@ class DeviceCapabilities:
     trigger_input_count: int = 0
     trigger_accepted_count: int = 0
     trigger_output_count: int = 0
+    ext_trigger_phase_slot: int = 0
+    ext_trigger_phase_valid: bool = False
     config_valid_mask: int = 0
     playback_state: PlaybackState = PlaybackState.IDLE
     playback_armed: bool = False
