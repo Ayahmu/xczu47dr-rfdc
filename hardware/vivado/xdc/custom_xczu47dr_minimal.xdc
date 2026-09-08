@@ -71,6 +71,7 @@ set_property PACKAGE_PIN P35 [get_ports sfp_txp]
 set_property PACKAGE_PIN P36 [get_ports sfp_txn]
 set_property PACKAGE_PIN W33 [get_ports sfp_refclkp]
 set_property PACKAGE_PIN W34 [get_ports sfp_refclkn]
+create_clock -name sfp_refclkp -period 6.400 [get_ports sfp_refclkp]
 set_property PACKAGE_PIN AK19 [get_ports SFP_TX_DIS]
 set_property IOSTANDARD LVCMOS12 [get_ports SFP_TX_DIS]
 
@@ -266,11 +267,11 @@ set_property PACKAGE_PIN AF19 [get_ports {c0_ddr4_dq[63]}]
 set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet clk_pl_0] \
     -group [get_clocks -quiet mmcm_clkout0] \
-    -group [get_clocks -quiet RFDAC2_CLK]
+    -group [get_clocks -quiet -include_generated_clocks RFDAC2_CLK]
 
 # HMC PL_CLK_P_0 is retained as an external phase reference. It is independent
 # from the PS PL and DDR UI/MMCM clocks, so do not time these domains as
 # phase-related.
 set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet PL_CLK_P_0] \
-    -group [get_clocks -quiet {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 RFDAC2_CLK}]
+    -group [get_clocks -quiet -include_generated_clocks {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 RFDAC2_CLK}]

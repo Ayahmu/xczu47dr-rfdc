@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import socket
 import struct
+import operator
 from typing import Iterable, Mapping, Sequence
 
 from .errors import ParameterRangeError, ProtocolError, ProtocolVersionError
@@ -33,6 +34,7 @@ RF2_OP_NETWORK_APPLY = 0x0D
 RF2_OP_NETWORK_RESTART = 0x0E
 RF2_OP_SET_SYNC_ROLE = 0x0F
 RF2_OP_EMIT_TRIGGER = 0x10
+RF2_OP_TDC_REG = 0x11
 
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
@@ -203,6 +205,33 @@ def pack_rfctrl2_emit_trigger(seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_EMIT_TRIGGER, seq=seq)
 
 
+def pack_rfctrl2_tdc_register(address: int, *, write: bool = False, data: int = 0, seq: int = 1) -> bytes:
+    """Access an aligned 32-bit TDC register; addresses are byte offsets."""
+    try:
+        address_value = operator.index(address)
+        data_value = operator.index(data)
+        write_value = operator.index(write)
+    except TypeError as exc:
+        raise ParameterRangeError("TDC address, data and write flag must be integers") from exc
+    if not 0 <= address_value <= 0xFFFF or address_value & 3:
+        raise ParameterRangeError("TDC register address must be aligned and in 0x0000..0xFFFC")
+    if not 0 <= data_value <= 0xFFFFFFFF or write_value not in (0, 1):
+        raise ParameterRangeError("TDC data must be unsigned 32-bit and write must be 0 or 1")
+    return pack_rfctrl2_packet(
+        RF2_OP_TDC_REG, struct.pack("<IIII", write_value, address_value, data_value, 0), seq=seq
+    )
+
+
+def parse_rfctrl2_tdc_register_response(response: Mapping, address: int) -> int:
+    payload = bytes(response.get("payload", b""))
+    if len(payload) != 8:
+        raise ProtocolError("TDC register response must contain exactly 8 payload bytes")
+    returned_address, data = struct.unpack("<II", payload)
+    if returned_address != address:
+        raise ProtocolError(f"TDC register response address 0x{returned_address:X} does not match 0x{address:X}")
+    return data
+
+
 def _channel_value(mapping: Mapping | Sequence, channel: int, default):
     if isinstance(mapping, Mapping):
         return mapping.get(channel, mapping.get(f"ch{channel}", default))
@@ -351,6 +380,10 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         "sync_alignment_epoch": 0, "sync_alignment_error": 0,
         "trigger_input_count": 0, "trigger_accepted_count": 0,
         "trigger_output_count": 0,
+        "ext_trigger_phase_slot": 0, "ext_trigger_phase_valid": False,
+        "ext_trigger_phase_overflow": False,
+        "ext_trigger_phase_metastable": False,
+        "ext_trigger_tap_index": 0, "ext_trigger_phase_ps_x10": 0,
     })
     if len(payload) >= 32:
         (
@@ -399,6 +432,10 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         phase_word = struct.unpack_from("<Q", payload, 112)[0]
         result["ext_trigger_phase_slot"] = phase_word & 0x7
         result["ext_trigger_phase_valid"] = bool((phase_word >> 3) & 1)
+        result["ext_trigger_phase_overflow"] = bool((phase_word >> 4) & 1)
+        result["ext_trigger_phase_metastable"] = bool((phase_word >> 5) & 1)
+        result["ext_trigger_tap_index"] = (phase_word >> 8) & 0xFF
+        result["ext_trigger_phase_ps_x10"] = (phase_word >> 16) & 0xFFFF
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)

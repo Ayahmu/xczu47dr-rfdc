@@ -272,6 +272,10 @@ class Dr47Device:
             trigger_output_count=int(decoded.get("trigger_output_count", 0)) & 0xFFFFFFFF,
             ext_trigger_phase_slot=int(decoded.get("ext_trigger_phase_slot", 0)) & 0x7,
             ext_trigger_phase_valid=bool(decoded.get("ext_trigger_phase_valid", False)),
+            ext_trigger_phase_overflow=bool(decoded.get("ext_trigger_phase_overflow", False)),
+            ext_trigger_phase_metastable=bool(decoded.get("ext_trigger_phase_metastable", False)),
+            ext_trigger_tap_index=int(decoded.get("ext_trigger_tap_index", 0)) & 0xFF,
+            ext_trigger_phase_ps_x10=int(decoded.get("ext_trigger_phase_ps_x10", 0)) & 0xFFFF,
             config_valid_mask=int(decoded.get("config_valid_mask", 0)) & 0xFF,
             playback_state=state,
             playback_armed=bool(decoded.get("armed")),
@@ -403,6 +407,23 @@ class Dr47Device:
         if wait_response:
             self._check_response(response, "ABORT_MUTE")
         return response
+
+    def _tdc_register(self, address: int, *, write: bool = False, data: int = 0) -> int:
+        self._require_connected()
+        sequence = self._next_sequence()
+        packet = pack_rfctrl2_tdc_register(address, write=write, data=data, seq=sequence)
+        # Some writes clear counters or commit calibration, so never replay a timed-out write.
+        response = self._request(packet, RF2_OP_TDC_REG, sequence, retries=0 if write else None)
+        self._check_response(response, "TDC_REG")
+        return parse_rfctrl2_tdc_register_response(response, address)
+
+    def read_tdc_register(self, address: int) -> int:
+        """Read a 32-bit TDC register at its aligned byte address."""
+        return self._tdc_register(address)
+
+    def write_tdc_register(self, address: int, data: int) -> int:
+        """Write a TDC register and return its controller acknowledgement value."""
+        return self._tdc_register(address, write=True, data=data)
 
     def set_sync_role(self, role: str) -> int:
         """Validate the role fixed into this bitstream; it cannot be changed."""

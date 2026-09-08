@@ -416,6 +416,7 @@ module Top #(
   wire         rfctrl2_armed_dac;
   wire         rfctrl2_start_pending_dac;
   wire         pc_started;
+  wire         pc_source_started;
   reg          rfctrl2_armed_meta;
   reg          rfctrl2_armed_ddr;
   reg          rfctrl2_prepared_meta;
@@ -843,6 +844,15 @@ module Top #(
   wire        ex_dbg_prefill_ready, ex_dbg_pending_valid, ex_dbg_active_valid;
   wire [31:0] ex_dbg_run_delay_cnt;
   wire [31:0] ex_dbg_bad_instr_count;
+  reg [2:0]   ext_trig_slot_ddr;
+  reg         ext_trig_valid_ddr;
+  reg         ext_trig_overflow_ddr;
+  reg         ext_trig_metastable_ddr;
+  reg [7:0]   ext_trig_tap_index_ddr;
+  reg [15:0]  ext_trig_phase_ps_x10_ddr;
+  wire tdc_reg_valid, tdc_reg_write, tdc_reg_ready;
+  wire [15:0] tdc_reg_addr, tdc_reg_error;
+  wire [31:0] tdc_reg_wdata, tdc_reg_rdata;
 
   pl_riscv_control_v1 #(
       .ENABLE_UNSAFE_RFDC_MMIO(0),
@@ -911,8 +921,16 @@ module Top #(
       .trigger_input_count (trigger_input_count_ddr),
       .trigger_accepted_count(trigger_accepted_count_ddr),
       .trigger_output_count(trigger_output_count_ddr),
-      .ext_trigger_phase_slot(ext_trig_slot_sync_ddr[2]),
-      .ext_trigger_phase_valid(ext_trig_valid_sync_ddr[2]),
+      .ext_trigger_phase_slot(ext_trig_slot_ddr),
+      .ext_trigger_phase_valid(ext_trig_valid_ddr),
+      .ext_trigger_phase_overflow(ext_trig_overflow_ddr),
+      .ext_trigger_phase_metastable(ext_trig_metastable_ddr),
+      .ext_trigger_tap_index(ext_trig_tap_index_ddr),
+      .ext_trigger_phase_ps_x10(ext_trig_phase_ps_x10_ddr),
+      .tdc_reg_valid(tdc_reg_valid), .tdc_reg_write(tdc_reg_write),
+      .tdc_reg_addr(tdc_reg_addr), .tdc_reg_wdata(tdc_reg_wdata),
+      .tdc_reg_ready(tdc_reg_ready), .tdc_reg_rdata(tdc_reg_rdata),
+      .tdc_reg_error(tdc_reg_error),
       .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
       .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
       .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
@@ -1292,11 +1310,11 @@ module Top #(
       trig_event_ext_dac_sync_ff <= {trig_event_ext_dac_sync_ff[1:0], trigger_event_external_hmc};
       sync_bypass_dac_sync_ff <= {sync_bypass_dac_sync_ff[1:0], sync_bypass_ddr};
       sync_ready_dac_sync_ff <= {sync_ready_dac_sync_ff[1:0], sync_link_ready};
-      pc_started_dac_prev <= pc_started;
+      pc_started_dac_prev <= pc_source_started;
     end
   end
   wire legacy_event_is_external_dac = trig_event_ext_dac_sync_ff[2];
-  wire pc_started_pulse_dac = pc_started && !pc_started_dac_prev;
+  wire pc_started_pulse_dac = pc_source_started && !pc_started_dac_prev;
 
   // Same admission rule as the hmc_pl_clk path, evaluated on the clock that
   // actually gates the samples.  PREPARED is native to this domain, so the
@@ -1324,6 +1342,8 @@ module Top #(
   wire [31:0] dac_direct_input_count;
   wire [31:0] dac_direct_accept_count;
   wire rfctrl2_play_abort;
+  wire rfctrl2_play_prepare;
+  reg tdc_mode_dac;
 
   dac_ext_trigger_capture dac_ext_trigger_capture_i (
       .clk             (dac_axis_clk),
@@ -1343,8 +1363,8 @@ module Top #(
   // On a slave the external event comes from the direct capture and everything
   // else (host RFCTRL2 TRIGGER, EMIT) still arrives over hmc_pl_clk.
   wire dac_trigger_request =
-      IS_MASTER ? role_trigger_dac_pulse
-                : (dac_direct_trigger_compensated |
+      tdc_mode_dac ? 1'b0 : IS_MASTER ? role_trigger_dac_pulse
+                : (dac_direct_trigger_pulse |
                    (role_trigger_dac_pulse && !legacy_event_is_external_dac));
 
   // SYSREF remains dedicated to RFDC MTS/NCO alignment.  Playback is released
@@ -1387,53 +1407,243 @@ module Top #(
       .pair_pending    (trig_lat_pending)
   );
 
-  // ========== External Trigger Phase Detector (250 MHz grid alignment) ==========
-  // Oversamples XS19 at 200 MHz to detect which 4 ns slot the external trigger
-  // edge falls into within our 20 ns fabric beat, enabling software compensation.
+  // ========== Calibrated event timestamps and eight-channel compensation ==========
   wire       clk_200mhz;
   wire       clk_200mhz_locked;
-  wire [2:0] ext_trig_phase_slot;
-  wire       ext_trig_phase_valid;
-
-  clk_gen_200mhz clk_gen_200mhz_i (
+  wire dac_rst_n;
+  wire pc_done_pulse;
+  reg cfg_loop_dac;
+  tdc_clk_gen_200mhz tdc_clk_gen_200mhz_i (
       .clk_50mhz  (dac_axis_clk),
       .rst_n      (clk104_aresetn),
       .clk_200mhz (clk_200mhz),
       .locked     (clk_200mhz_locked)
   );
+  wire tdc_reset_async_n = clk104_aresetn && clk_200mhz_locked;
+  (* ASYNC_REG = "TRUE" *) reg [3:0] tdc_reset_sync;
+  always @(posedge clk_200mhz or negedge tdc_reset_async_n) begin
+    if (!tdc_reset_async_n) tdc_reset_sync <= 0;
+    else tdc_reset_sync <= {tdc_reset_sync[2:0], 1'b1};
+  end
+  wire tdc_rst_n = tdc_reset_sync[3];
+  reg [31:0] tdc_dac_epoch;
+  reg [31:0] tdc_ref_epoch;
+  reg tdc_ref_toggle;
+  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
+    if (!clk104_aresetn) tdc_dac_epoch <= 0;
+    else tdc_dac_epoch <= tdc_dac_epoch + 1'b1;
+  end
+  always @(negedge dac_axis_clk or negedge clk104_aresetn) begin
+    if (!clk104_aresetn) begin tdc_ref_epoch <= 0; tdc_ref_toggle <= 0; end
+    else begin tdc_ref_epoch <= tdc_dac_epoch; tdc_ref_toggle <= !tdc_ref_toggle; end
+  end
 
-  ext_trigger_phase_detector ext_trigger_phase_detector_i (
-      .clk_50mhz     (dac_axis_clk),
-      .clk_200mhz    (clk_200mhz),
-      .rst_n         (clk104_aresetn && clk_200mhz_locked),
-      .trigger_in    (TRIG_2),
-      .clear_latch   (rfctrl2_play_abort | rfdc_force_mute_pulse),
-      .slot_id       (ext_trig_phase_slot),
-      .slot_valid    (ext_trig_phase_valid)
+  reg [5:0] tdc_calibration_counter;
+  always @(posedge pl_clk or negedge pl_aresetn) begin
+    if (!pl_aresetn) tdc_calibration_counter <= 0;
+    else if (tdc_calibration_counter == 36) tdc_calibration_counter <= 0;
+    else tdc_calibration_counter <= tdc_calibration_counter + 1'b1;
+  end
+  wire tdc_mode_sample, tdc_calibration_source, tdc_carrier_enable_sample;
+  wire tdc_calibrated_sample, tdc_reference_ready;
+  wire signed [15:0] tdc_offset_sample;
+  wire tdc_stats_clear_toggle;
+  wire tdc_calib_wr;
+  wire [10:0] tdc_calib_wr_addr, tdc_calib_rd_addr;
+  wire [15:0] tdc_calib_wr_data, tdc_calib_rd_data;
+  wire tdc_event_valid, tdc_event_good, tdc_event_overflow, tdc_event_bubble;
+  wire [31:0] tdc_event_epoch;
+  wire [10:0] tdc_event_phase;
+  wire [10:0] tdc_event_tap;
+  tdc_event_capture u_tdc_capture (
+      .sample_clk(clk_200mhz), .rst_n(tdc_rst_n),
+      .trigger_in(tdc_calibration_source ? (tdc_calibration_counter < 4) : TRIG_2),
+      .ref_toggle(tdc_ref_toggle), .ref_epoch(tdc_ref_epoch),
+      .calib_wr_en(tdc_calib_wr), .calib_wr_addr(tdc_calib_wr_addr),
+      .calib_wr_data(tdc_calib_wr_data), .calib_rd_addr(tdc_calib_rd_addr),
+      .calib_rd_data(tdc_calib_rd_data), .ready(tdc_reference_ready),
+      .event_valid(tdc_event_valid), .event_good(tdc_event_good),
+      .event_overflow(tdc_event_overflow), .event_bubble(tdc_event_bubble),
+      .event_epoch(tdc_event_epoch), .event_phase_10ps(tdc_event_phase),
+      .event_tap(tdc_event_tap)
   );
-
-  // CDC phase slot to DDR domain for software readback
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_slot_sync_ddr [2:0];
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg       ext_trig_valid_sync_ddr [2:0];
-  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if (!ddr4_ui_aresetn) begin
-      ext_trig_slot_sync_ddr[0]  <= 3'd0;
-      ext_trig_slot_sync_ddr[1]  <= 3'd0;
-      ext_trig_slot_sync_ddr[2]  <= 3'd0;
-      ext_trig_valid_sync_ddr[0] <= 1'b0;
-      ext_trig_valid_sync_ddr[1] <= 1'b0;
-      ext_trig_valid_sync_ddr[2] <= 1'b0;
+  wire [56:0] tdc_fifo_data;
+  wire tdc_fifo_valid, tdc_fifo_ready;
+  tdc_async_fifo #(.WIDTH(57)) u_tdc_events (
+      .wr_clk(clk_200mhz), .rd_clk(dac_axis_clk), .rst_n(tdc_rst_n && dac_rst_n),
+      .wr_data({tdc_event_epoch, tdc_event_phase, tdc_event_tap,
+                tdc_event_good, tdc_event_overflow, tdc_event_bubble}),
+      .wr_valid(tdc_event_valid && !tdc_calibration_source), .wr_ready(tdc_fifo_ready),
+      .rd_data(tdc_fifo_data), .rd_valid(tdc_fifo_valid), .rd_ready(1'b1)
+  );
+  reg tdc_fifo_loss;
+  always @(posedge clk_200mhz or negedge tdc_rst_n) begin
+    if (!tdc_rst_n) tdc_fifo_loss <= 0;
+    else if (tdc_event_valid && !tdc_calibration_source && !tdc_fifo_ready) tdc_fifo_loss <= 1;
+    else if (!tdc_mode_sample) tdc_fifo_loss <= 0;
+  end
+  (* ASYNC_REG = "TRUE" *) reg [2:0] tdc_mode_sync, tdc_ready_sync, tdc_valid_sync;
+  (* ASYNC_REG = "TRUE" *) reg [2:0] tdc_clear_sync, tdc_loss_sync, tdc_carrier_sync;
+  reg tdc_clear_seen;
+  reg tdc_carrier_enable_dac;
+  reg signed [15:0] tdc_offset_meta, tdc_offset_dac;
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if (!dac_rst_n) begin
+      tdc_mode_sync <= 0; tdc_ready_sync <= 0; tdc_valid_sync <= 0;
+      tdc_clear_sync <= 0; tdc_clear_seen <= 0; tdc_loss_sync <= 0;
+      tdc_carrier_sync <= 0; tdc_carrier_enable_dac <= 0;
+      tdc_mode_dac <= 0; tdc_offset_meta <= 0; tdc_offset_dac <= 0;
     end else begin
-      ext_trig_slot_sync_ddr[0]  <= ext_trig_phase_slot;
-      ext_trig_slot_sync_ddr[1]  <= ext_trig_slot_sync_ddr[0];
-      ext_trig_slot_sync_ddr[2]  <= ext_trig_slot_sync_ddr[1];
-      ext_trig_valid_sync_ddr[0] <= ext_trig_phase_valid;
-      ext_trig_valid_sync_ddr[1] <= ext_trig_valid_sync_ddr[0];
-      ext_trig_valid_sync_ddr[2] <= ext_trig_valid_sync_ddr[1];
+      tdc_mode_sync <= {tdc_mode_sync[1:0], tdc_mode_sample};
+      tdc_ready_sync <= {tdc_ready_sync[1:0], tdc_reference_ready && tdc_rst_n};
+      tdc_valid_sync <= {tdc_valid_sync[1:0], tdc_calibrated_sample};
+      tdc_clear_sync <= {tdc_clear_sync[1:0], tdc_stats_clear_toggle};
+      tdc_loss_sync <= {tdc_loss_sync[1:0], tdc_fifo_loss};
+      tdc_carrier_sync <= {tdc_carrier_sync[1:0], tdc_carrier_enable_sample};
+      tdc_clear_seen <= tdc_clear_sync[2];
+      tdc_offset_meta <= tdc_offset_sample;
+      if (!rfctrl2_armed_dac) begin
+        tdc_offset_dac <= tdc_offset_meta;
+        tdc_mode_dac <= tdc_mode_sync[2];
+        tdc_carrier_enable_dac <= tdc_carrier_sync[2];
+      end
     end
   end
-  wire [2:0] ext_trig_slot_ddr  = ext_trig_slot_sync_ddr[2];
-  wire       ext_trig_valid_ddr = ext_trig_valid_sync_ddr[2];
+
+  wire tdc_launch, tdc_config_valid, tdc_pending, tdc_active, tdc_fault;
+  wire [2:0] tdc_delay_samples;
+  wire [5:0] tdc_fractional_phase;
+  wire [7:0] tdc_filter_busy, tdc_clip_pulse;
+  wire [7:0] tdc_fir_busy, tdc_fir_clip, tdc_rotation_clip;
+  assign tdc_clip_pulse = tdc_fir_clip | tdc_rotation_clip;
+  wire [31:0] tdc_accepted, tdc_completed, tdc_rejected, tdc_late, tdc_fault_bits;
+  wire [7:0] tdc_clipped;
+  wire [31:0] tdc_accepted_epoch;
+  wire [10:0] tdc_accepted_phase;
+  wire pc_source_prepared;
+  wire tdc_runtime_fault;
+  wire tdc_clear = rfctrl2_play_abort | rfctrl2_play_prepare;
+  wire tdc_output_mute = tdc_mode_dac &&
+      (tdc_fault || tdc_runtime_fault || !tdc_ready_sync[2] || !tdc_valid_sync[2] || tdc_clear);
+  assign pc_started = pc_source_started || (tdc_mode_dac && tdc_active);
+  assign rfctrl2_prepared_dac = pc_source_prepared && (!tdc_mode_dac ||
+      (!tdc_active && !tdc_fault && tdc_ready_sync[2] && tdc_valid_sync[2]));
+  wire tdc_admission_open, tdc_request_valid, tdc_request_good;
+  wire [31:0] tdc_request_epoch;
+  wire [10:0] tdc_request_phase;
+  tdc_trigger_request_mux #(.IS_MASTER(IS_MASTER)) u_tdc_requests (
+      .prepared(rfctrl2_prepared_dac), .sync_bypass(sync_bypass_dac_sync_ff[2]),
+      .sync_ready(sync_ready_dac_sync_ff[2]),
+      .external_valid(tdc_fifo_valid), .external_good(tdc_fifo_data[2]),
+      .external_epoch(tdc_fifo_data[56:25]), .external_phase(tdc_fifo_data[24:14]),
+      .software_pulse(role_trigger_dac_pulse), .software_is_external(legacy_event_is_external_dac),
+      .current_epoch(tdc_dac_epoch), .admission_open(tdc_admission_open),
+      .event_valid(tdc_request_valid), .event_good(tdc_request_good),
+      .event_epoch(tdc_request_epoch), .event_phase(tdc_request_phase)
+  );
+  tdc_compensating_trigger u_tdc_scheduler (
+      .clk(dac_axis_clk), .rst_n(dac_rst_n), .clear(tdc_clear),
+      .enable(tdc_mode_dac), .calibrated(tdc_valid_sync[2]),
+      .reference_ready(tdc_ready_sync[2]), .prepared(tdc_admission_open),
+      .source_running(pc_source_started), .output_busy(|tdc_filter_busy),
+      .source_done(pc_done_pulse), .loop_enable(cfg_loop_dac),
+      .runtime_fault(tdc_runtime_fault), .clip_pulse(tdc_clip_pulse),
+      .current_epoch(tdc_dac_epoch), .event_valid(tdc_request_valid),
+      .event_good(tdc_request_good), .event_epoch(tdc_request_epoch),
+      .event_phase_10ps(tdc_request_phase), .phase_offset_10ps(tdc_offset_dac),
+      .clear_statistics(tdc_clear_sync[2] != tdc_clear_seen),
+      .launch(tdc_launch), .config_valid(tdc_config_valid),
+      .delay_samples(tdc_delay_samples), .fractional_phase(tdc_fractional_phase),
+      .pending(tdc_pending), .active(tdc_active), .fault(tdc_fault),
+      .accepted_count(tdc_accepted), .completed_count(tdc_completed),
+      .rejected_count(tdc_rejected), .late_count(tdc_late), .fault_bits(tdc_fault_bits),
+      .clipped_channels(tdc_clipped), .accepted_epoch(tdc_accepted_epoch),
+      .accepted_phase_10ps(tdc_accepted_phase)
+  );
+  reg [3:0] tdc_monitor_divider;
+  reg tdc_monitor_toggle;
+  reg [255:0] tdc_monitor_hold;
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if (!dac_rst_n) begin
+      tdc_monitor_divider <= 0; tdc_monitor_toggle <= 0; tdc_monitor_hold <= 0;
+    end else begin
+      tdc_monitor_divider <= tdc_monitor_divider + 1'b1;
+      if (tdc_monitor_divider == 0) begin
+        tdc_monitor_hold <= {
+            23'd0, tdc_delay_samples, tdc_fractional_phase,
+            26'd0, tdc_mode_dac, tdc_ready_sync[2], tdc_valid_sync[2], tdc_fault, tdc_active, tdc_pending,
+            24'd0, tdc_clipped, tdc_fault_bits, tdc_late, tdc_rejected, tdc_completed, tdc_accepted};
+        tdc_monitor_toggle <= !tdc_monitor_toggle;
+      end
+    end
+  end
+  tdc_register_service u_tdc_registers (
+      .ddr_clk(ddr4_ui_clk), .ddr_rst_n(ddr4_ui_aresetn),
+      .sample_clk(clk_200mhz), .sample_rst_n(tdc_rst_n),
+      .reg_valid(tdc_reg_valid), .reg_write(tdc_reg_write), .reg_addr(tdc_reg_addr),
+      .reg_wdata(tdc_reg_wdata), .reg_ready(tdc_reg_ready),
+      .reg_rdata(tdc_reg_rdata), .reg_error(tdc_reg_error),
+      .armed_dac(rfctrl2_armed_dac), .reference_ready(tdc_reference_ready),
+      .monitor_toggle(tdc_monitor_toggle), .monitor_data(tdc_monitor_hold),
+      .event_valid(tdc_event_valid), .event_good(tdc_event_good),
+      .event_overflow(tdc_event_overflow), .event_bubble(tdc_event_bubble),
+      .event_epoch(tdc_event_epoch), .event_phase_10ps(tdc_event_phase), .event_tap(tdc_event_tap),
+      .calib_wr_en(tdc_calib_wr), .calib_wr_addr(tdc_calib_wr_addr), .calib_wr_data(tdc_calib_wr_data),
+      .calib_rd_addr(tdc_calib_rd_addr), .calib_rd_data(tdc_calib_rd_data),
+      .compensation_enable(tdc_mode_sample), .calibration_source(tdc_calibration_source),
+      .carrier_correction_enable(tdc_carrier_enable_sample), .calibration_valid(tdc_calibrated_sample),
+      .phase_offset_10ps(tdc_offset_sample), .clear_statistics_toggle(tdc_stats_clear_toggle)
+  );
+
+  // A held status snapshot crosses at a bounded rate, independently of events.
+  reg [31:0] tdc_status_hold;
+  reg tdc_status_toggle;
+  reg [7:0] tdc_status_divider;
+  wire [2:0] tdc_compat_slot = tdc_event_phase < 500 ? 3'd0 :
+      tdc_event_phase < 1000 ? 3'd1 : tdc_event_phase < 1500 ? 3'd2 : 3'd3;
+  always @(posedge clk_200mhz or negedge tdc_rst_n) begin
+    if (!tdc_rst_n) begin tdc_status_hold <= 0; tdc_status_toggle <= 0; tdc_status_divider <= 0; end
+    else begin
+      tdc_status_divider <= tdc_status_divider + 1'b1;
+      if (tdc_status_divider == 0) begin
+        tdc_status_hold <= {5'd0, tdc_event_phase, tdc_event_tap[7:0], 2'd0,
+                            tdc_event_bubble, tdc_event_overflow,
+                            tdc_event_good && tdc_calibrated_sample, tdc_compat_slot};
+        tdc_status_toggle <= !tdc_status_toggle;
+      end
+    end
+  end
+  (* ASYNC_REG = "TRUE" *) reg [2:0] tdc_status_sync_toggle, tdc_live_ddr;
+  reg [31:0] tdc_status_meta_ddr, tdc_status_data_ddr;
+  reg tdc_status_seen;
+  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
+    if (!ddr4_ui_aresetn) begin
+      tdc_status_sync_toggle <= 0; tdc_live_ddr <= 0;
+      tdc_status_meta_ddr <= 0; tdc_status_data_ddr <= 0; tdc_status_seen <= 0;
+      ext_trig_slot_ddr <= 3'd0;
+      ext_trig_valid_ddr <= 1'b0;
+      ext_trig_overflow_ddr <= 1'b0;
+      ext_trig_metastable_ddr <= 1'b0;
+      ext_trig_tap_index_ddr <= 8'd0;
+      ext_trig_phase_ps_x10_ddr <= 16'd0;
+    end else begin
+      tdc_live_ddr <= {tdc_live_ddr[1:0], tdc_rst_n && tdc_reference_ready};
+      tdc_status_sync_toggle <= {tdc_status_sync_toggle[1:0], tdc_status_toggle};
+      tdc_status_meta_ddr <= tdc_status_hold;
+      tdc_status_data_ddr <= tdc_status_meta_ddr;
+      if (!tdc_live_ddr[2]) begin
+        ext_trig_valid_ddr <= 0;
+      end else if (tdc_status_sync_toggle[2] != tdc_status_seen) begin
+        tdc_status_seen <= tdc_status_sync_toggle[2];
+        ext_trig_phase_ps_x10_ddr <= tdc_status_data_ddr[31:16];
+        ext_trig_tap_index_ddr <= tdc_status_data_ddr[15:8];
+        ext_trig_slot_ddr <= tdc_status_data_ddr[2:0];
+        ext_trig_metastable_ddr <= tdc_status_data_ddr[5];
+        ext_trig_overflow_ddr <= tdc_status_data_ddr[4];
+        ext_trig_valid_ddr <= tdc_status_data_ddr[3];
+      end
+    end
+  end
 
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1457,42 +1667,6 @@ module Top #(
   end
   wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] |
                               udp_trigger_dac_sync_ff[2];
-
-  // CDC: 200 MHz phase info -> fabric 400 MHz domain for compensation
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_slot_sync_fab [2:0];
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ext_trig_valid_sync_fab;
-  always @(posedge clk_fabric or negedge clk104_aresetn) begin
-    if (!clk104_aresetn) begin
-      ext_trig_slot_sync_fab[0] <= 3'b0;
-      ext_trig_slot_sync_fab[1] <= 3'b0;
-      ext_trig_slot_sync_fab[2] <= 3'b0;
-      ext_trig_valid_sync_fab   <= 3'b0;
-    end else begin
-      ext_trig_slot_sync_fab[0] <= {ext_trig_slot_sync_fab[0][1:0], ext_trig_slot_200m[0]};
-      ext_trig_slot_sync_fab[1] <= {ext_trig_slot_sync_fab[1][1:0], ext_trig_slot_200m[1]};
-      ext_trig_slot_sync_fab[2] <= {ext_trig_slot_sync_fab[2][1:0], ext_trig_slot_200m[2]};
-      ext_trig_valid_sync_fab   <= {ext_trig_valid_sync_fab[1:0], ext_trig_valid_200m};
-    end
-  end
-  wire [2:0] ext_trig_slot_fab  = {ext_trig_slot_sync_fab[2][2],
-                                    ext_trig_slot_sync_fab[1][2],
-                                    ext_trig_slot_sync_fab[0][2]};
-  wire       ext_trig_valid_fab = ext_trig_valid_sync_fab[2];
-
-  // Phase compensator: adds programmable delay in fabric domain to achieve
-  // fixed trigger-to-RF timing regardless of external trigger phase
-  wire dac_direct_trigger_compensated;
-  ext_trigger_phase_compensator #(
-      .MAX_DELAY_CYCLES(7)
-  ) ext_trigger_phase_compensator_i (
-      .clk_fabric   (clk_fabric),
-      .rst_n        (clk104_aresetn),
-      .trigger_in   (dac_direct_trigger_pulse),
-      .phase_slot   (ext_trig_slot_fab),
-      .phase_valid  (ext_trig_valid_fab),
-      .trigger_out  (dac_direct_trigger_compensated)
-  );
-
 
   // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========
   // M_AXI_INST signals
@@ -1709,11 +1883,10 @@ module Top #(
     if(!clk104_aresetn) dac_rstff <= 3'b000;
     else                dac_rstff <= {dac_rstff[1:0], 1'b1};
   end
-  wire dac_rst_n = dac_rstff[2];
+  assign dac_rst_n = dac_rstff[2];
 
   wire rfctrl2_play_trigger;
-  wire rfctrl2_play_prepare;
-  wire dac_hw_rfctrl2_trigger = dac_trigger_launch;
+  wire dac_hw_rfctrl2_trigger = tdc_mode_dac ? tdc_launch : dac_trigger_launch;
   wire unused_single_board_inputs = EXT_TRIGGER_P | EXT_TRIGGER_N |
       rfctrl2_start_valid | ^rfctrl2_epoch | ^rfctrl2_start_tick;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -1844,7 +2017,6 @@ module Top #(
   reg [31:0] ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac;
   reg [31:0] ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac;
   reg        cfg_auto_start_dac;
-  reg        cfg_loop_dac;
   reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
   reg        ch5_arm_dac, ch6_arm_dac, ch7_arm_dac, ch8_arm_dac;
   reg [15:0] seq_id_dac;
@@ -1862,7 +2034,7 @@ module Top #(
       ch5_arm_dac   <= 0; ch6_arm_dac   <= 0; ch7_arm_dac <= 0; ch8_arm_dac <= 0;
       seq_id_dac    <= 0;
     end else begin
-      cfg_rd_ready <= 1'b1; // 简化：一直准备接收
+      cfg_rd_ready <= !tdc_mode_dac || (!tdc_active && !(|tdc_filter_busy));
 
       if(cfg_rd_valid && cfg_rd_ready) begin
         ch1_delay_dac <= cfg_rd_data[543:512];
@@ -1964,7 +2136,6 @@ module Top #(
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
   wire [15:0] pc_last_seq_id;
-  wire        pc_done_pulse;
   wire [7:0]  pc_underflow_seen;
   wire [31:0] pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count;
   wire [31:0] pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count;
@@ -1974,10 +2145,10 @@ module Top #(
   ) u_play_ctrl (
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
-    .trigger(ps_trigger_dac_sync),
+    .trigger(tdc_mode_dac ? 1'b0 : ps_trigger_dac_sync),
     .rfctrl2_trigger(dac_hw_rfctrl2_trigger),
     .prepare(rfctrl2_play_prepare),
-    .abort(rfctrl2_play_abort),
+    .abort(rfctrl2_play_abort | (tdc_mode_dac && (tdc_fault || tdc_runtime_fault))),
     .armed(rfctrl2_armed_dac),
 
     .cfg_seq_id(seq_id_dac),
@@ -2052,12 +2223,12 @@ module Top #(
     .ch6_active(),
     .ch7_active(),
     .ch8_active(),
-    .prepared(rfctrl2_prepared_dac),
+    .prepared(pc_source_prepared),
 
     .dbg_trig_pulse (pc_trig_pulse),
     .dbg_new_cfg    (pc_new_cfg),
     .dbg_trig_start (pc_trig_start),
-    .dbg_started    (pc_started),
+    .dbg_started    (pc_source_started),
     .dbg_last_seq_id(pc_last_seq_id),
     .dbg_done_pulse(pc_done_pulse),
     .dbg_underflow_seen(pc_underflow_seen),
@@ -2106,14 +2277,14 @@ module Top #(
   end
   wire wave_fifo_aresetn = ddr4_ui_aresetn & (wave_fifo_reset_cnt == 5'd0);
 
-  assign dac_ch1_ready_gated = dac_ch1_ready & ch1_allow;
-  assign dac_ch2_ready_gated = dac_ch2_ready & ch2_allow;
-  assign dac_ch3_ready_gated = dac_ch3_ready & ch3_allow;
-  assign dac_ch4_ready_gated = dac_ch4_ready & ch4_allow;
-  assign dac_ch5_ready_gated = dac_ch5_ready & ch5_allow;
-  assign dac_ch6_ready_gated = dac_ch6_ready & ch6_allow;
-  assign dac_ch7_ready_gated = dac_ch7_ready & ch7_allow;
-  assign dac_ch8_ready_gated = dac_ch8_ready & ch8_allow;
+  assign dac_ch1_ready_gated = dac_ch1_ready & ch1_allow & !tdc_output_mute;
+  assign dac_ch2_ready_gated = dac_ch2_ready & ch2_allow & !tdc_output_mute;
+  assign dac_ch3_ready_gated = dac_ch3_ready & ch3_allow & !tdc_output_mute;
+  assign dac_ch4_ready_gated = dac_ch4_ready & ch4_allow & !tdc_output_mute;
+  assign dac_ch5_ready_gated = dac_ch5_ready & ch5_allow & !tdc_output_mute;
+  assign dac_ch6_ready_gated = dac_ch6_ready & ch6_allow & !tdc_output_mute;
+  assign dac_ch7_ready_gated = dac_ch7_ready & ch7_allow & !tdc_output_mute;
+  assign dac_ch8_ready_gated = dac_ch8_ready & ch8_allow & !tdc_output_mute;
   assign dac_ch1_valid_gated = dac_in_ch1_tvalid & ch1_allow;
   assign dac_ch2_valid_gated = dac_in_ch2_tvalid & ch2_allow;
   assign dac_ch3_valid_gated = dac_in_ch3_tvalid & ch3_allow;
@@ -2123,22 +2294,69 @@ module Top #(
   assign dac_ch7_valid_gated = dac_in_ch7_tvalid & ch7_allow;
   assign dac_ch8_valid_gated = dac_in_ch8_tvalid & ch8_allow;
 
-  wire [255:0] rfdc_ch1_tdata = (rfdc_output_permitted_dac && ch1_allow) ? dac_in_ch1_tdata : 256'd0;
-  wire [255:0] rfdc_ch2_tdata = (rfdc_output_permitted_dac && ch2_allow) ? dac_in_ch2_tdata : 256'd0;
-  wire [255:0] rfdc_ch3_tdata = (rfdc_output_permitted_dac && ch3_allow) ? dac_in_ch3_tdata : 256'd0;
-  wire [255:0] rfdc_ch4_tdata = (rfdc_output_permitted_dac && ch4_allow) ? dac_in_ch4_tdata : 256'd0;
-  wire [255:0] rfdc_ch5_tdata = (rfdc_output_permitted_dac && ch5_allow) ? dac_in_ch5_tdata : 256'd0;
-  wire [255:0] rfdc_ch6_tdata = (rfdc_output_permitted_dac && ch6_allow) ? dac_in_ch6_tdata : 256'd0;
-  wire [255:0] rfdc_ch7_tdata = (rfdc_output_permitted_dac && ch7_allow) ? dac_in_ch7_tdata : 256'd0;
-  wire [255:0] rfdc_ch8_tdata = (rfdc_output_permitted_dac && ch8_allow) ? dac_in_ch8_tdata : 256'd0;
-  wire         rfdc_ch1_tvalid = (rfdc_output_permitted_dac && ch1_allow) ? dac_in_ch1_tvalid : 1'b1;
-  wire         rfdc_ch2_tvalid = (rfdc_output_permitted_dac && ch2_allow) ? dac_in_ch2_tvalid : 1'b1;
-  wire         rfdc_ch3_tvalid = (rfdc_output_permitted_dac && ch3_allow) ? dac_in_ch3_tvalid : 1'b1;
-  wire         rfdc_ch4_tvalid = (rfdc_output_permitted_dac && ch4_allow) ? dac_in_ch4_tvalid : 1'b1;
-  wire         rfdc_ch5_tvalid = (rfdc_output_permitted_dac && ch5_allow) ? dac_in_ch5_tvalid : 1'b1;
-  wire         rfdc_ch6_tvalid = (rfdc_output_permitted_dac && ch6_allow) ? dac_in_ch6_tvalid : 1'b1;
-  wire         rfdc_ch7_tvalid = (rfdc_output_permitted_dac && ch7_allow) ? dac_in_ch7_tvalid : 1'b1;
-  wire         rfdc_ch8_tvalid = (rfdc_output_permitted_dac && ch8_allow) ? dac_in_ch8_tvalid : 1'b1;
+  wire [2047:0] tdc_input_data = {dac_in_ch8_tdata, dac_in_ch7_tdata, dac_in_ch6_tdata,
+      dac_in_ch5_tdata, dac_in_ch4_tdata, dac_in_ch3_tdata, dac_in_ch2_tdata, dac_in_ch1_tdata};
+  wire [7:0] tdc_input_valid = {dac_in_ch8_tvalid, dac_in_ch7_tvalid, dac_in_ch6_tvalid,
+      dac_in_ch5_tvalid, dac_in_ch4_tvalid, dac_in_ch3_tvalid, dac_in_ch2_tvalid, dac_in_ch1_tvalid};
+  wire [7:0] tdc_channel_allow = {ch8_allow, ch7_allow, ch6_allow, ch5_allow,
+      ch4_allow, ch3_allow, ch2_allow, ch1_allow};
+  wire [7:0] tdc_channel_ready = {dac_ch8_ready, dac_ch7_ready, dac_ch6_ready, dac_ch5_ready,
+      dac_ch4_ready, dac_ch3_ready, dac_ch2_ready, dac_ch1_ready};
+  wire [7:0] tdc_channel_arm = {ch8_arm_dac, ch7_arm_dac, ch6_arm_dac, ch5_arm_dac,
+      ch4_arm_dac, ch3_arm_dac, ch2_arm_dac, ch1_arm_dac};
+  assign tdc_runtime_fault = tdc_mode_dac && tdc_active &&
+      ((|(tdc_channel_allow & ~tdc_input_valid)) ||
+       (|(tdc_channel_arm & ~tdc_channel_ready)) || !rfdc_output_permitted_dac || tdc_loss_sync[2]);
+  wire [2047:0] tdc_filtered_data;
+  wire [2047:0] tdc_corrected_data;
+  wire [2047:0] rfdc_all_data;
+  wire [7:0] rfdc_all_valid;
+  genvar tdc_channel;
+  generate
+    for (tdc_channel = 0; tdc_channel < 8; tdc_channel = tdc_channel + 1) begin : tdc_channels
+      iq_fractional_delay_8ppc u_delay (
+          .clk(dac_axis_clk), .rst_n(dac_rst_n), .clear(tdc_clear || tdc_output_mute),
+          .config_valid(tdc_config_valid), .delay_samples(tdc_delay_samples),
+          .fractional_phase(tdc_fractional_phase),
+          .source_data(tdc_input_data[tdc_channel*256 +: 256]),
+          .source_valid(tdc_mode_dac && tdc_channel_allow[tdc_channel] &&
+                        tdc_input_valid[tdc_channel] && tdc_channel_ready[tdc_channel] && !tdc_output_mute),
+          .out_data(tdc_filtered_data[tdc_channel*256 +: 256]),
+          .busy(tdc_fir_busy[tdc_channel]), .clip_pulse(tdc_fir_clip[tdc_channel])
+      );
+      iq_event_phase_rotator u_phase (
+          .clk(dac_axis_clk), .rst_n(dac_rst_n), .clear(tdc_clear || tdc_output_mute),
+          .config_valid(tdc_config_valid), .armed(rfctrl2_armed_dac), .enable(tdc_carrier_enable_dac),
+          .frequency_word(rfdc_actual_nco_word[tdc_channel*64 +: 48]),
+          .current_epoch(tdc_dac_epoch), .event_epoch(tdc_accepted_epoch),
+          .event_phase_10ps(tdc_accepted_phase),
+          .in_data(tdc_filtered_data[tdc_channel*256 +: 256]), .in_busy(tdc_fir_busy[tdc_channel]),
+          .out_data(tdc_corrected_data[tdc_channel*256 +: 256]),
+          .busy(tdc_filter_busy[tdc_channel]), .clip_pulse(tdc_rotation_clip[tdc_channel])
+      );
+      assign rfdc_all_data[tdc_channel*256 +: 256] = !rfdc_output_permitted_dac ? 256'd0 :
+          tdc_mode_dac ? (tdc_output_mute ? 256'd0 : tdc_corrected_data[tdc_channel*256 +: 256]) :
+          (tdc_channel_allow[tdc_channel] ? tdc_input_data[tdc_channel*256 +: 256] : 256'd0);
+      assign rfdc_all_valid[tdc_channel] = tdc_mode_dac ? 1'b1 :
+          ((rfdc_output_permitted_dac && tdc_channel_allow[tdc_channel]) ? tdc_input_valid[tdc_channel] : 1'b1);
+    end
+  endgenerate
+  wire [255:0] rfdc_ch1_tdata = rfdc_all_data[0 +: 256];
+  wire [255:0] rfdc_ch2_tdata = rfdc_all_data[256 +: 256];
+  wire [255:0] rfdc_ch3_tdata = rfdc_all_data[512 +: 256];
+  wire [255:0] rfdc_ch4_tdata = rfdc_all_data[768 +: 256];
+  wire [255:0] rfdc_ch5_tdata = rfdc_all_data[1024 +: 256];
+  wire [255:0] rfdc_ch6_tdata = rfdc_all_data[1280 +: 256];
+  wire [255:0] rfdc_ch7_tdata = rfdc_all_data[1536 +: 256];
+  wire [255:0] rfdc_ch8_tdata = rfdc_all_data[1792 +: 256];
+  wire rfdc_ch1_tvalid = rfdc_all_valid[0];
+  wire rfdc_ch2_tvalid = rfdc_all_valid[1];
+  wire rfdc_ch3_tvalid = rfdc_all_valid[2];
+  wire rfdc_ch4_tvalid = rfdc_all_valid[3];
+  wire rfdc_ch5_tvalid = rfdc_all_valid[4];
+  wire rfdc_ch6_tvalid = rfdc_all_valid[5];
+  wire rfdc_ch7_tvalid = rfdc_all_valid[6];
+  wire rfdc_ch8_tvalid = rfdc_all_valid[7];
 
   wire dac_any_valid_gated = dac_ch1_valid_gated | dac_ch2_valid_gated |
                              dac_ch3_valid_gated | dac_ch4_valid_gated |

@@ -99,8 +99,13 @@ module tb_pl_riscv_control_v1;
   reg [31:0] request_current [0:7];
   integer channel;
   integer packet_beat;
+  wire tdc_valid, tdc_write;
+  wire [15:0] tdc_address;
+  wire [31:0] tdc_wdata;
+  reg tdc_ready = 0;
+  reg [31:0] tdc_rdata = 0;
 
-  pl_riscv_control_v1 dut (
+  pl_riscv_control_v1 #(.TDC_REG_TIMEOUT_CYCLES(32)) dut (
     .clk(clk),
     .rst_n(rst_n),
     .rvctrl_tvalid(rvctrl_tvalid),
@@ -145,6 +150,16 @@ module tb_pl_riscv_control_v1;
     .playback_armed(1'b0),
     .playback_prepared(playback_prepared),
     .playback_running(1'b0),
+    .sync_role_master(1'b1), .sync_bypass(1'b0), .sync_seen(1'b1),
+    .sync_link_ready(1'b1), .sync_align_busy(1'b0), .sync_align_failed(1'b0),
+    .sync_alignment_epoch(6'd0), .sync_alignment_error(16'd0),
+    .trigger_input_count(32'd0), .trigger_accepted_count(32'd0),
+    .trigger_output_count(32'd0),
+    .ext_trigger_phase_slot(3'd2), .ext_trigger_phase_valid(1'b1),
+    .ext_trigger_phase_overflow(1'b0), .ext_trigger_phase_metastable(1'b0),
+    .ext_trigger_tap_index(8'd137), .ext_trigger_phase_ps_x10(16'd1234),
+    .tdc_reg_valid(tdc_valid), .tdc_reg_write(tdc_write), .tdc_reg_addr(tdc_address),
+    .tdc_reg_wdata(tdc_wdata), .tdc_reg_ready(tdc_ready), .tdc_reg_rdata(tdc_rdata), .tdc_reg_error(16'd0),
     .rfdc_actual_nco_hz(rfdc_actual_nco_hz),
     .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
     .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
@@ -396,16 +411,42 @@ module tb_pl_riscv_control_v1;
     resp_count = 6'd0;
     send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
     send_rv_beat(64'h000000100000008A, 1'b0, 1'b1, 32'hA0000004);
-    wait_for_response_count(17);
-    check_condition(resp_count == 6'd17, "RFCTRL2 STATUS should emit a 17-word RFRESP2 packet");
+    wait_for_response_count(18);
+    check_condition(resp_count == 6'd18, "RFCTRL2 STATUS should emit an 18-word RFRESP2 packet");
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 STATUS magic mismatch");
     check_condition(resp_words[1] == 64'h0000000200000002, "RFRESP2 STATUS header mismatch");
-    check_condition(resp_words[2] == 64'h000000700000008A, "RFRESP2 STATUS sequence mismatch");
+    check_condition(resp_words[2] == 64'h000000780000008A, "RFRESP2 STATUS sequence mismatch");
+    check_condition(resp_words[17] == 64'h0000000004D2890A, "RFRESP2 STATUS TDC fields mismatch");
     check_condition(resp_words[7] == 64'h0000000200000003, "RFRESP2 STATUS playback config/fifo-valid debug mismatch");
     check_condition(resp_words[8] == 64'h000000050000000F, "RFRESP2 STATUS executor/fifo-ready debug mismatch");
     check_condition(resp_words[9] == 64'h0000001200000034, "RFRESP2 STATUS counters debug mismatch");
     check_condition(resp_words[10] == 64'h0000000300000001, "RFRESP2 STATUS prefill/active/pending debug mismatch");
     check_condition(resp_words[11] == 64'h00000007000000F5, "RFRESP2 STATUS MTS/NCO sync debug mismatch");
+
+    resp_count = 0;
+    send_rv_beat(64'h0000001100000002, 1'b1, 1'b0, 32'hA0000008);
+    send_rv_beat(64'h00000010000000A1, 1'b0, 1'b0, 32'hA0000008);
+    send_rv_beat(64'h0000104000000000, 1'b0, 1'b0, 32'hA0000008);
+    send_rv_beat(64'd0, 1'b0, 1'b1, 32'hA0000008);
+    repeat (8) @(negedge clk);
+    check_condition(tdc_valid && !tdc_write && tdc_address == 16'h1040,
+                    "TDC register read was not dispatched");
+    check_condition(resp_count == 0, "TDC response preceded register completion");
+    tdc_rdata = 32'h12345678; tdc_ready = 1;
+    @(negedge clk); tdc_ready = 0;
+    wait_for_response_count(4);
+    check_condition(resp_words[1] == 64'h0000001100000002, "TDC response opcode/status mismatch");
+    check_condition(resp_words[2] == 64'h00000008000000A1, "TDC response length/sequence mismatch");
+    check_condition(resp_words[3] == 64'h1234567800001040, "TDC read payload mismatch");
+
+    resp_count = 0;
+    send_rv_beat(64'h0000001100000002, 1'b1, 1'b0, 32'hA0000008);
+    send_rv_beat(64'h00000010000000A2, 1'b0, 1'b0, 32'hA0000008);
+    send_rv_beat(64'h0000000400000001, 1'b0, 1'b0, 32'hA0000008);
+    send_rv_beat(64'h0000000000000005, 1'b0, 1'b1, 32'hA0000008);
+    wait_for_response_count(4);
+    check_condition(resp_words[1] == 64'h0000001100090002, "TDC timeout status mismatch");
+    check_condition(!tdc_valid, "TDC timeout did not release request");
 
     // RFCTRL2 Trigger is rejected until the DAC-domain prepare handshake is
     // complete, then emitted on its dedicated output instead of legacy trigger_pulse.

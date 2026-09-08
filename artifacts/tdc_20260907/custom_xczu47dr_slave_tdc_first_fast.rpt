@@ -1,0 +1,95 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2024.2 (lin64) Build 5239630 Fri Nov 08 22:34:34 MST 2024
+| Date              : Tue Sep  8 12:15:48 2026
+| Host              : user-System-Product-Name running 64-bit Ubuntu 24.04 LTS
+| Command           : report_timing -user_ignored -from [get_pins -hier -filter {NAME == top_i/u_tdc_registers/control_reg[1]/Q}] -to [get_pins -hier -filter {NAME == top_i/u_tdc_capture/sample_bit[0].u_sample_ff/D}] -delay_type min -max_paths 1 -file /home/kyu/workspace/xczu47dr-rfdc-xs17-250mhz/artifacts/tdc_20260907/custom_xczu47dr_slave_tdc_first_fast.rpt
+| Design            : TopCustomXczu47dr
+| Device            : xczu47dr-ffvg1517
+| Speed File        : -2  PRODUCTION 1.32 01-31-2021
+| Design State      : Physopt postRoute
+| Temperature Grade : I
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack:                    inf
+  Source:                 top_i/u_tdc_registers/control_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk_200mhz_unbuf  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            top_i/u_tdc_capture/sample_bit[0].u_sample_ff/D
+                            (rising edge-triggered cell FDRE clocked by clk_200mhz_unbuf  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             (none)
+  Path Type:              Hold (Min at Fast Process Corner)
+  Data Path Delay:        1.898ns  (logic 0.148ns (7.798%)  route 1.750ns (92.202%))
+  Logic Levels:           2  (CARRY8=1 LUT6=1)
+  Clock Path Skew:        0.276ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    2.548ns
+    Source Clock Delay      (SCD):    2.272ns
+    Clock Pessimism Removal (CPR):    -0.000ns
+  Clock Uncertainty:      0.078ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Discrete Jitter          (DJ):    0.139ns
+    Phase Error              (PE):    0.000ns
+  Clock Net Delay (Source):      1.639ns (routing 0.804ns, distribution 0.835ns)
+  Clock Net Delay (Destination): 1.862ns (routing 0.896ns, distribution 0.966ns)
+  Timing Exception:       False Path
+
+    Pin Reuse     Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  ---------------------------------------------------------------------------------    -------------------
+                                       (clock clk_200mhz_unbuf rise edge)
+                                                                    0.000     0.000 r  
+                  RFDAC_X0Y2           RFDAC                        0.000     0.000 r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/rfdc_custom_xczu47dr_ip_rf_wrapper_i/tx2_u_dac/INTERNAL_FBRC_MUX
+                  RFDAC_X0Y2           RFDAC (Prop_RFDAC_INTERNAL_FBRC_MUX_CLK_DAC)
+                                                                    0.184     0.184 r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/rfdc_custom_xczu47dr_ip_rf_wrapper_i/tx2_u_dac/CLK_DAC
+                                       net (fo=2, routed)           0.110     0.294    top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/i_rfdc_custom_xczu47dr_ip_bufg_gt_ctrl/dac2_bufg_gt_0
+                  BUFG_GT_X1Y149                                                    r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/i_rfdc_custom_xczu47dr_ip_bufg_gt_ctrl/dac2_bufg_gt/I
+                  BUFG_GT_X1Y149       BUFG_GT (Prop_BUFG_GT_I_O)
+                                                                    0.073     0.367 r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/i_rfdc_custom_xczu47dr_ip_bufg_gt_ctrl/dac2_bufg_gt/O
+                                       net (fo=69895, routed)       1.854     2.221    top_i/tdc_clk_gen_200mhz_i/clk_dac2
+                  MMCM_X0Y7                                                         r  top_i/tdc_clk_gen_200mhz_i/mmcm_inst/CLKIN1
+                  MMCM_X0Y7            MMCME4_ADV (Prop_MMCM_CLKIN1_CLKOUT0)
+                                                                   -1.751     0.470 r  top_i/tdc_clk_gen_200mhz_i/mmcm_inst/CLKOUT0
+                                       net (fo=1, routed)           0.146     0.616    top_i/tdc_clk_gen_200mhz_i/clk_200mhz_unbuf
+                  BUFGCE_X0Y181                                                     r  top_i/tdc_clk_gen_200mhz_i/bufg_out/I
+                  BUFGCE_X0Y181        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                                    0.017     0.633 r  top_i/tdc_clk_gen_200mhz_i/bufg_out/O
+                  X3Y3 (CLOCK_ROOT)    net (fo=9202, routed)        1.639     2.272    top_i/u_tdc_registers/sample_clk
+                  SLICE_X52Y315        FDCE                                         r  top_i/u_tdc_registers/control_reg[1]/C
+  ---------------------------------------------------------------------------------    -------------------
+    Routing       SLICE_X52Y315        FDCE (Prop_GFF2_SLICEL_C_Q)
+                                                                    0.040     2.312 r  top_i/u_tdc_registers/control_reg[1]/Q
+                                       net (fo=8, routed)           0.368     2.680    top_i/tdc_calibration_source
+    Routing       SLICE_X61Y297                                                     r  top_i/u_tdc_capture_i_1/I4
+    Routing       SLICE_X61Y297        LUT6 (Prop_E6LUT_SLICEM_I4_O)
+                                                                    0.059     2.739 r  top_i/u_tdc_capture_i_1/O
+                                       net (fo=1, routed)           1.375     4.114    top_i/u_tdc_capture/carry[0]
+    Routing       SLICE_X50Y0                                                       r  top_i/u_tdc_capture/carry_block[0].u_carry8/CI
+    Routing       SLICE_X50Y0          CARRY8 (Prop_CARRY8_SLICEL_CI_CO[0])
+                                                                    0.049     4.163 r  top_i/u_tdc_capture/carry_block[0].u_carry8/CO[0]
+                                       net (fo=1, routed)           0.007     4.170    top_i/u_tdc_capture/carry[1]
+    Routing       SLICE_X50Y0          FDRE                                         r  top_i/u_tdc_capture/sample_bit[0].u_sample_ff/D
+  ---------------------------------------------------------------------------------    -------------------
+
+                                       (clock clk_200mhz_unbuf rise edge)
+                                                                    0.000     0.000 r  
+                  RFDAC_X0Y2           RFDAC                        0.000     0.000 r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/rfdc_custom_xczu47dr_ip_rf_wrapper_i/tx2_u_dac/INTERNAL_FBRC_MUX
+                  RFDAC_X0Y2           RFDAC (Prop_RFDAC_INTERNAL_FBRC_MUX_CLK_DAC)
+                                                                    0.224     0.224 r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/rfdc_custom_xczu47dr_ip_rf_wrapper_i/tx2_u_dac/CLK_DAC
+                                       net (fo=2, routed)           0.169     0.393    top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/i_rfdc_custom_xczu47dr_ip_bufg_gt_ctrl/dac2_bufg_gt_0
+                  BUFG_GT_X1Y149                                                    r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/i_rfdc_custom_xczu47dr_ip_bufg_gt_ctrl/dac2_bufg_gt/I
+                  BUFG_GT_X1Y149       BUFG_GT (Prop_BUFG_GT_I_O)
+                                                                    0.082     0.475 r  top_i/rfdc_custom_i/rfdc_custom_xczu47dr_ip_i/inst/i_rfdc_custom_xczu47dr_ip_bufg_gt_ctrl/dac2_bufg_gt/O
+                                       net (fo=69895, routed)       2.071     2.546    top_i/tdc_clk_gen_200mhz_i/clk_dac2
+                  MMCM_X0Y7                                                         r  top_i/tdc_clk_gen_200mhz_i/mmcm_inst/CLKIN1
+                  MMCM_X0Y7            MMCME4_ADV (Prop_MMCM_CLKIN1_CLKOUT0)
+                                                                   -2.045     0.501 r  top_i/tdc_clk_gen_200mhz_i/mmcm_inst/CLKOUT0
+                                       net (fo=1, routed)           0.166     0.667    top_i/tdc_clk_gen_200mhz_i/clk_200mhz_unbuf
+                  BUFGCE_X0Y181                                                     r  top_i/tdc_clk_gen_200mhz_i/bufg_out/I
+                  BUFGCE_X0Y181        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                                    0.019     0.686 r  top_i/tdc_clk_gen_200mhz_i/bufg_out/O
+                  X3Y3 (CLOCK_ROOT)    net (fo=9202, routed)        1.862     2.548    top_i/u_tdc_capture/sample_clk
+                  SLICE_X50Y0          FDRE                                         r  top_i/u_tdc_capture/sample_bit[0].u_sample_ff/C
+
+
+
+

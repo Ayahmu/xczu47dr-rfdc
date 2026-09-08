@@ -106,9 +106,18 @@ module network_config_pl #(
   ) dna_clk_div_i (
       .I  (clk),
       .CE (1'b1),
-      .CLR(~rst_n),
+      .CLR(1'b0),
       .O  (dna_clk)
   );
+
+  // The reader has its own reset release; resetting the clock divider with
+  // the DDR-domain reset creates recovery/removal paths into a divided clock.
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] dna_reset_sync;
+  always @(posedge dna_clk or negedge rst_n) begin
+    if (!rst_n) dna_reset_sync <= 3'b000;
+    else dna_reset_sync <= {dna_reset_sync[1:0], 1'b1};
+  end
+  wire dna_rst_n = dna_reset_sync[2];
 
   DNA_PORTE2 #(
       .SIM_DNA_VALUE(96'h0000_0000_0000_0000_47D0_0000)
@@ -275,8 +284,8 @@ module network_config_pl #(
   // DNA_PORTE2 read/shift sequence. This state machine is deliberately kept
   // in the divided DNA clock domain; its outputs remain stable after the
   // one-time read and are synchronized into the network configuration clock.
-  always @(posedge dna_clk or negedge rst_n) begin
-    if (!rst_n) begin
+  always @(posedge dna_clk or negedge dna_rst_n) begin
+    if (!dna_rst_n) begin
       dna_read <= 1'b0;
       dna_shift <= 1'b0;
       dna_count <= 8'd0;

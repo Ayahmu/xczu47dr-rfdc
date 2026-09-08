@@ -1,0 +1,36 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2024.2 (lin64) Build 5239630 Fri Nov 08 22:34:34 MST 2024
+| Date         : Tue Sep  8 12:14:17 2026
+| Host         : user-System-Product-Name running 64-bit Ubuntu 24.04 LTS
+| Command      : report_methodology -checks TIMING-17 -file /home/kyu/workspace/xczu47dr-rfdc-xs17-250mhz/artifacts/tdc_20260907/custom_xczu47dr_slave_clock_coverage.rpt
+| Design       : TopCustomXczu47dr
+| Device       : xczu47dr-ffvg1517-2-i
+| Speed File   : -2
+| Design State : ignored
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Report Methodology
+
+Table of Contents
+-----------------
+1. REPORT SUMMARY
+2. REPORT DETAILS
+
+1. REPORT SUMMARY
+-----------------
+            Netlist: netlist
+          Floorplan: checkpoint_TopCustomXczu47dr_postroute_physopt
+      Design limits: <entire design considered>
+
+            Checks: TIMING-17
+             Max checks: <unlimited>
+             Checks found: 0
++------+----------+-------------+--------+
+| Rule | Severity | Description | Checks |
++------+----------+-------------+--------+
++------+----------+-------------+--------+
+
+2. REPORT DETAILS
+-----------------
+

@@ -93,8 +93,8 @@ module udp_waveform_ddr_writer #(
   reg [63:0] data_word1;
   reg [63:0] data_word2;
 
-  reg [63:0]  fifo_addr [0:(1 << FIFO_DEPTH_LOG2)-1];
-  reg [255:0] fifo_data [0:(1 << FIFO_DEPTH_LOG2)-1];
+  (* ram_style = "distributed" *) reg [63:0]  fifo_addr [0:(1 << FIFO_DEPTH_LOG2)-1];
+  (* ram_style = "distributed" *) reg [255:0] fifo_data [0:(1 << FIFO_DEPTH_LOG2)-1];
   reg [FIFO_DEPTH_LOG2-1:0] fifo_wr_ptr;
   reg [FIFO_DEPTH_LOG2-1:0] fifo_rd_ptr;
   reg [FIFO_DEPTH_LOG2:0] fifo_count;
@@ -109,6 +109,13 @@ module udp_waveform_ddr_writer #(
   reg [31:0] rvctrl1_payload_words_left;
   reg [31:0] rvctrl1_word_count;
   reg [31:0] instr_words_left;
+  // Cached classifications describe the counter value in the same cycle.
+  // Predecode on load/decrement to keep wide comparisons out of parser gates.
+  reg rvctrl_nonzero, rvctrl_more_than_two, rvctrl_first_word;
+  reg rvctrl1_nonzero, rvctrl1_more_than_one;
+  reg instr_nonzero, instr_more_than_one;
+  wire [31:0] rvctrl1_rounded_bytes = udp_tdata[63:32] + 32'd7;
+  wire [31:0] rvctrl1_loaded_words = rvctrl1_rounded_bytes >> 3;
   reg [63:0] rvctrl1_hdr0_word;
   reg [63:0] rvctrl1_hdr1_word;
   reg [63:0] rvctrl1_skid_word;
@@ -130,9 +137,7 @@ module udp_waveform_ddr_writer #(
                      (dbg_state != ST_RVCTRL1_PAYLOAD) &&
                      (dbg_state != ST_INSTR_COUNT) &&
                      (dbg_state != ST_INSTR_PAYLOAD) &&
-                     (rvctrl_words_left == 32'd0) &&
-                     (rvctrl1_payload_words_left == 32'd0) &&
-                     (instr_words_left == 32'd0);
+                     !rvctrl_nonzero && !rvctrl1_nonzero && !instr_nonzero;
   wire rvctrl_magic = (udp_tdata == RVCTRL_MAGIC);
   wire rvctrl1_magic = (udp_tdata == RVCTRL1_MAGIC);
   wire rfctrl2_magic = (udp_tdata == RFCTRL2_MAGIC);
@@ -156,6 +161,15 @@ module udp_waveform_ddr_writer #(
   assign m_axi_wlast   = 1'b1;
   assign m_axi_wstrb   = 32'hffff_ffff;
   assign m_axi_bready  = 1'b1;
+
+  // Storage has no reset; fifo_count and the pointers determine validity.
+  // Keep its write process synchronous so the wide queue infers LUT RAM.
+  always @(posedge clk) begin
+    if (rst_n && push_write) begin
+      fifo_addr[fifo_wr_ptr] <= write_addr;
+      fifo_data[fifo_wr_ptr] <= {udp_tdata, data_word2, data_word1, data_word0};
+    end
+  end
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -191,10 +205,14 @@ module udp_waveform_ddr_writer #(
       bulk_mode <= 1'b0;
       bulk_words_left <= 32'd0;
       rvctrl_words_left <= 32'd0;
+      rvctrl_nonzero <= 1'b0; rvctrl_more_than_two <= 1'b0;
+      rvctrl_first_word <= 1'b0;
       rvctrl_total_words <= 32'd0;
       rvctrl1_payload_words_left <= 32'd0;
+      rvctrl1_nonzero <= 1'b0; rvctrl1_more_than_one <= 1'b0;
       rvctrl1_word_count <= 32'd0;
       instr_words_left <= 32'd0;
+      instr_nonzero <= 1'b0; instr_more_than_one <= 1'b0;
       rvctrl1_hdr0_word <= 64'd0;
       rvctrl1_hdr1_word <= 64'd0;
       rvctrl1_skid_word <= 64'd0;
@@ -255,10 +273,10 @@ module udp_waveform_ddr_writer #(
         rvctrl_tvalid <= 1'b1;
         rvctrl_tdata <= rvctrl1_hdr1_word;
         rvctrl_tfirst <= 1'b0;
-        rvctrl_tlast <= (rvctrl1_payload_words_left == 32'd0);
+        rvctrl_tlast <= !rvctrl1_nonzero;
         rvctrl_word_count <= rvctrl1_word_count;
         rvctrl_protocol <= rvctrl2_mode ? RVCTRL_PROTOCOL_RF2 : RVCTRL_PROTOCOL_V1;
-        if (rvctrl1_payload_words_left == 32'd0) begin
+        if (!rvctrl1_nonzero) begin
           rvctrl1_skid_valid <= 1'b0;
           dbg_state <= ST_IDLE;
         end else begin
@@ -266,6 +284,8 @@ module udp_waveform_ddr_writer #(
             rvctrl1_skid_word <= udp_tdata;
             rvctrl1_skid_valid <= 1'b1;
             rvctrl1_payload_words_left <= rvctrl1_payload_words_left - 32'd1;
+            rvctrl1_nonzero <= rvctrl1_more_than_one;
+            rvctrl1_more_than_one <= (rvctrl1_payload_words_left > 32'd2);
           end
           dbg_state <= ST_RVCTRL1_PAYLOAD;
         end
@@ -274,31 +294,36 @@ module udp_waveform_ddr_writer #(
           rvctrl_tvalid <= 1'b1;
           rvctrl_tdata <= rvctrl1_skid_word;
           rvctrl_tfirst <= 1'b0;
-          rvctrl_tlast <= (rvctrl1_payload_words_left == 32'd0) ||
-                          ((rvctrl1_payload_words_left == 32'd1) && !udp_tvalid);
+          rvctrl_tlast <= !rvctrl1_nonzero ||
+                          (!rvctrl1_more_than_one && !udp_tvalid);
           rvctrl_word_count <= rvctrl1_word_count;
           rvctrl_protocol <= rvctrl2_mode ? RVCTRL_PROTOCOL_RF2 : RVCTRL_PROTOCOL_V1;
-          if (udp_tvalid && (rvctrl1_payload_words_left != 32'd0)) begin
+          if (udp_tvalid && rvctrl1_nonzero) begin
             rvctrl1_skid_word <= udp_tdata;
             rvctrl1_skid_valid <= 1'b1;
             rvctrl1_payload_words_left <= rvctrl1_payload_words_left - 32'd1;
+            rvctrl1_nonzero <= rvctrl1_more_than_one;
+            rvctrl1_more_than_one <= (rvctrl1_payload_words_left > 32'd2);
             dbg_state <= ST_RVCTRL1_PAYLOAD;
           end else begin
             rvctrl1_skid_valid <= 1'b0;
-            dbg_state <= (rvctrl1_payload_words_left == 32'd0) ? ST_IDLE : ST_RVCTRL1_PAYLOAD;
+            dbg_state <= !rvctrl1_nonzero ? ST_IDLE : ST_RVCTRL1_PAYLOAD;
           end
-        end else if (udp_tvalid && (rvctrl1_payload_words_left != 32'd0)) begin
+        end else if (udp_tvalid && rvctrl1_nonzero) begin
           rvctrl_tvalid <= 1'b1;
           rvctrl_tdata <= udp_tdata;
           rvctrl_tfirst <= 1'b0;
-          rvctrl_tlast <= (rvctrl1_payload_words_left <= 32'd1);
+          rvctrl_tlast <= !rvctrl1_more_than_one;
           rvctrl_word_count <= rvctrl1_word_count;
           rvctrl_protocol <= rvctrl2_mode ? RVCTRL_PROTOCOL_RF2 : RVCTRL_PROTOCOL_V1;
-          if (rvctrl1_payload_words_left <= 32'd1) begin
+          if (!rvctrl1_more_than_one) begin
             rvctrl1_payload_words_left <= 32'd0;
+            rvctrl1_nonzero <= 1'b0; rvctrl1_more_than_one <= 1'b0;
             dbg_state <= ST_IDLE;
           end else begin
             rvctrl1_payload_words_left <= rvctrl1_payload_words_left - 32'd1;
+            rvctrl1_nonzero <= 1'b1;
+            rvctrl1_more_than_one <= (rvctrl1_payload_words_left > 32'd2);
             dbg_state <= ST_RVCTRL1_PAYLOAD;
           end
         end
@@ -313,20 +338,25 @@ module udp_waveform_ddr_writer #(
             end else if (rvctrl_magic) begin
               dbg_state <= ST_RVCTRL_COUNT;
               rvctrl_words_left <= 32'd0;
+              rvctrl_nonzero <= 1'b0; rvctrl_more_than_two <= 1'b0;
+              rvctrl_first_word <= 1'b0;
               rvctrl_total_words <= 32'd0;
             end else if (rvctrl1_magic) begin
               dbg_state <= ST_RVCTRL1_HDR0;
               rvctrl1_payload_words_left <= 32'd0;
+              rvctrl1_nonzero <= 1'b0; rvctrl1_more_than_one <= 1'b0;
               rvctrl1_word_count <= 32'd0;
               rvctrl2_mode <= 1'b0;
             end else if (rfctrl2_magic) begin
               dbg_state <= ST_RVCTRL1_HDR0;
               rvctrl1_payload_words_left <= 32'd0;
+              rvctrl1_nonzero <= 1'b0; rvctrl1_more_than_one <= 1'b0;
               rvctrl1_word_count <= 32'd0;
               rvctrl2_mode <= 1'b1;
             end else if (instr_magic) begin
               dbg_state <= ST_INSTR_COUNT;
               instr_words_left <= 32'd0;
+              instr_nonzero <= 1'b0; instr_more_than_one <= 1'b0;
             end else begin
               dbg_drop_count <= dbg_drop_count + 32'd1;
             end
@@ -354,10 +384,15 @@ module udp_waveform_ddr_writer #(
             if ((udp_tdata[63:32] != 32'd0) || (udp_tdata[31:0] == 32'd0)) begin
               dbg_drop_count <= dbg_drop_count + 32'd1;
               rvctrl_words_left <= 32'd0;
+              rvctrl_nonzero <= 1'b0; rvctrl_more_than_two <= 1'b0;
+              rvctrl_first_word <= 1'b0;
               rvctrl_total_words <= 32'd0;
               dbg_state <= ST_IDLE;
             end else begin
               rvctrl_words_left <= udp_tdata[31:0];
+              rvctrl_nonzero <= 1'b1;
+              rvctrl_more_than_two <= (udp_tdata[31:0] > 32'd2);
+              rvctrl_first_word <= 1'b1;
               rvctrl_total_words <= udp_tdata[31:0];
               dbg_state <= ST_DATA_LOW;
             end
@@ -370,7 +405,9 @@ module udp_waveform_ddr_writer #(
 
           ST_RVCTRL1_HDR1: begin
             rvctrl1_hdr1_word <= udp_tdata;
-            rvctrl1_payload_words_left <= (udp_tdata[63:32] + 32'd7) >> 3;
+            rvctrl1_payload_words_left <= rvctrl1_loaded_words;
+            rvctrl1_nonzero <= (rvctrl1_loaded_words != 32'd0);
+            rvctrl1_more_than_one <= (rvctrl1_loaded_words > 32'd1);
             rvctrl1_word_count <= 32'd4 + ((udp_tdata[63:32] + 32'd3) >> 2);
             // Emit buffered RVCTRL1 header word 0 after header word 1 reveals
             // the exact total payload length.
@@ -388,23 +425,29 @@ module udp_waveform_ddr_writer #(
                 (udp_tdata[0] != 1'b0)) begin
               dbg_drop_count <= dbg_drop_count + 32'd1;
               instr_words_left <= 32'd0;
+              instr_nonzero <= 1'b0; instr_more_than_one <= 1'b0;
               dbg_state <= ST_IDLE;
             end else begin
               instr_words_left <= udp_tdata[31:0];
+              instr_nonzero <= 1'b1;
+              instr_more_than_one <= (udp_tdata[31:0] > 32'd1);
               dbg_state <= ST_INSTR_PAYLOAD;
             end
           end
 
           ST_INSTR_PAYLOAD: begin
-            if (instr_words_left != 32'd0) begin
+            if (instr_nonzero) begin
               instr_tdata    <= udp_tdata;
               instr_tvalid   <= 1'b1;
               dbg_instr_word <= 1'b1;
-              if (instr_words_left <= 32'd1) begin
+              if (!instr_more_than_one) begin
                 instr_words_left <= 32'd0;
+                instr_nonzero <= 1'b0; instr_more_than_one <= 1'b0;
                 dbg_state <= ST_IDLE;
               end else begin
                 instr_words_left <= instr_words_left - 32'd1;
+                instr_nonzero <= 1'b1;
+                instr_more_than_one <= (instr_words_left > 32'd2);
               end
             end else begin
               dbg_state <= ST_IDLE;
@@ -418,19 +461,24 @@ module udp_waveform_ddr_writer #(
           end
 
           ST_DATA_LOW: begin
-            if (rvctrl_words_left != 32'd0) begin
+            if (rvctrl_nonzero) begin
               rvctrl_tvalid <= 1'b1;
               rvctrl_tdata <= udp_tdata;
-              rvctrl_tfirst <= (rvctrl_words_left == rvctrl_total_words);
-              rvctrl_tlast <= (rvctrl_words_left <= 32'd2);
+              rvctrl_tfirst <= rvctrl_first_word;
+              rvctrl_tlast <= !rvctrl_more_than_two;
               rvctrl_word_count <= rvctrl_total_words;
               rvctrl_protocol <= RVCTRL_PROTOCOL_LEGACY;
-              if (rvctrl_words_left <= 32'd2) begin
+              if (!rvctrl_more_than_two) begin
                 rvctrl_words_left <= 32'd0;
+                rvctrl_nonzero <= 1'b0; rvctrl_more_than_two <= 1'b0;
+                rvctrl_first_word <= 1'b0;
                 rvctrl_total_words <= 32'd0;
                 dbg_state <= ST_IDLE;
               end else begin
                 rvctrl_words_left <= rvctrl_words_left - 32'd2;
+                rvctrl_nonzero <= 1'b1;
+                rvctrl_more_than_two <= (rvctrl_words_left > 32'd4);
+                rvctrl_first_word <= 1'b0;
                 dbg_state <= ST_DATA_LOW;
               end
             end else begin
@@ -454,8 +502,6 @@ module udp_waveform_ddr_writer #(
               dbg_align_error_count <= dbg_align_error_count + 32'd1;
               dbg_drop_count <= dbg_drop_count + 32'd1;
             end else if (!fifo_full || pop_write) begin
-              fifo_addr[fifo_wr_ptr] <= write_addr;
-              fifo_data[fifo_wr_ptr] <= {udp_tdata, data_word2, data_word1, data_word0};
               fifo_wr_ptr <= fifo_wr_ptr + {{FIFO_DEPTH_LOG2-1{1'b0}}, 1'b1};
               dbg_write_count <= dbg_write_count + 32'd1;
             end else begin
@@ -480,23 +526,27 @@ module udp_waveform_ddr_writer #(
         if (udp_tlast) begin
           if ((dbg_state == ST_ADDR) || (dbg_state == ST_BULK_COUNT) ||
               (dbg_state == ST_RVCTRL_COUNT) || (dbg_state == ST_RVCTRL1_HDR0) ||
-              ((dbg_state == ST_DATA_LOW) && (rvctrl_words_left == 32'd0)) ||
-              ((dbg_state == ST_DATA_LOW) && (rvctrl_words_left > 32'd2)) ||
+              ((dbg_state == ST_DATA_LOW) && !rvctrl_nonzero) ||
+              ((dbg_state == ST_DATA_LOW) && rvctrl_more_than_two) ||
               (dbg_state == ST_DATA_1) || (dbg_state == ST_DATA_2) ||
               ((dbg_state == ST_DATA_3) && bulk_mode && (bulk_words_left > 32'd4)) ||
               ((dbg_state == ST_INSTR_COUNT) &&
                   !((udp_tdata[63:32] == 32'd0) && (udp_tdata[31:0] == 32'd0))) ||
-              ((dbg_state == ST_INSTR_PAYLOAD) && (instr_words_left > 32'd1)) ||
+              ((dbg_state == ST_INSTR_PAYLOAD) && instr_more_than_one) ||
               ((dbg_state == ST_RVCTRL1_HDR1) && (udp_tdata[63:32] != 32'd0)) ||
-              ((dbg_state == ST_RVCTRL1_PAYLOAD) && (rvctrl1_payload_words_left > 32'd1))) begin
+              ((dbg_state == ST_RVCTRL1_PAYLOAD) && rvctrl1_more_than_one)) begin
             dbg_drop_count <= dbg_drop_count + 32'd1;
             bulk_mode <= 1'b0;
             bulk_words_left <= 32'd0;
             rvctrl_words_left <= 32'd0;
+            rvctrl_nonzero <= 1'b0; rvctrl_more_than_two <= 1'b0;
+            rvctrl_first_word <= 1'b0;
             rvctrl_total_words <= 32'd0;
             rvctrl1_payload_words_left <= 32'd0;
+            rvctrl1_nonzero <= 1'b0; rvctrl1_more_than_one <= 1'b0;
             rvctrl1_skid_valid <= 1'b0;
             instr_words_left <= 32'd0;
+            instr_nonzero <= 1'b0; instr_more_than_one <= 1'b0;
             dbg_state <= ST_IDLE;
           end
         end

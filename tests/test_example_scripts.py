@@ -27,6 +27,8 @@ FORMAL = {
 # regrowth of contradictory entrypoints" guarantee intact.
 BENCH = {
     "hardware_slave_xs18_loopback_trigger_test.py",
+    "hardware_external_tdc_trigger_test.py",
+    "hardware_slave_phase_compensation_test.py",
 }
 
 OLD_DUPLICATES = {

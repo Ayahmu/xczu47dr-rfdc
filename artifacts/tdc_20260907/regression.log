@@ -1,0 +1,79 @@
+..............................................................................................................................................................usage: python -m unittest [-h]
+                          {sine,burst,pypulse,golden,ezq,max-length,rvctrl-ping,rvctrl-play,rvctrl-trigger,rvctrl1-ping,rvctrl1-play,rvctrl1-trigger,rvctrl1-mmio-read,rvctrl1-mmio-write,rvctrl1-mmio-rmw,rvctrl1-mmio-batch,rvctrl1-status,rvctrl1-rfdc-ch-enable,rvctrl1-rfdc-set-nco}
+                          ...
+python -m unittest: error: unrecognized arguments: --x-freq-hz 1000000
+.......[waveform] ERROR: CH1: looped tone 20.5 MHz is not periodic over the 400-sample loop (repetition rate 1.000000 MHz, 20.5000 cycles). It would move to 20.000000 MHz and create a comb at 1.000000 MHz spacing. Pick a tone that is a multiple of the repetition rate, or adjust --duration-s.
+..........................................................................................................................................................s........................................
+----------------------------------------------------------------------
+Ran 360 tests in 179.037s
+
+OK (skipped=1)
+通过 enp-test 从 169.254.250.11 广播 NETWORK_GET，目标 169.254.255.255:1234
+发现板卡：UID=slave-uid，临时IP=169.254.2.3，MAC=02:00:00:00:00:02，角色=slave
+发现板卡：UID=master-uid，临时IP=169.254.1.2，MAC=02:00:00:00:00:01，角色=master
+配置主卡：UID=master-uid，169.254.1.2 -> 10.50.0.101
+主卡网络配置完成：UID=master-uid，IP=10.50.0.101，MAC=02:00:00:00:00:01
+配置从卡：UID=slave-uid，169.254.2.3 -> 10.50.0.102
+从卡网络配置完成：UID=slave-uid，IP=10.50.0.102，MAC=02:00:00:00:00:02
+通过 enp-test 从 169.254.250.11 广播 NETWORK_GET，目标 169.254.255.255:1234
+[rvresp1] skip source=('192.168.1.200', 1234), expected=(192.168.1.128, 1234)
+[instr] Sending 1 instructions, 16 bytes
+[udp] Sending 32 bytes (4 x 64-bit words) to 192.168.1.128:1234
+[instr] Sending 1 instructions, 16 bytes
+[udp] Sending 32 bytes (4 x 64-bit words) to 192.168.1.128:1234
+[instr] Sending 1 instructions, 16 bytes
+[udp] Sending 32 bytes (4 x 64-bit words) to 192.168.1.128:1234
+[trig] UDP TRIGGER1
+[udp] Sending 8 bytes (1 x 64-bit words) to 192.168.1.128:1234
+[waveform] mode=burst sample_rate_hz=400000000.0
+[waveform] CH1 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH2 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] CH3 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH4 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] CH5 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH6 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] CH7 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH8 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] output_dir=/tmp/send-waveform-delay-test
+Done.
+[waveform] mode=burst sample_rate_hz=400000000.0
+[waveform] CH1 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH2 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] CH3 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH4 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] CH5 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH6 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] CH7 min=-18776 max=21276 first16=[267, 366, 443, 450, 326, 0, -590, -1475, -2628, -3936, -5190, -6096, -6304, -5481, -3395, 0]
+[waveform] CH8 min=-23813 max=13844 first16=[0, -119, -322, -619, -1003, -1430, -1816, -2031, -1909, -1279, 0, 1981, 4580, 7544, 10450, 12746]
+[waveform] output_dir=/tmp/send-waveform-delay-test
+Done.
+[ezq] artifact_dir=/tmp/tmpyp39_dbp/artifacts
+[ezq] channels=[1] layout=interleaved_512b
+[ezq] waiting 0.500s for DDR write completion
+Done.
+[max-length] per_channel=4096 bytes, total=32768 bytes, duration=0.000002560s
+[max-length] metadata=/tmp/tmp6cg45byp/max_length_metadata.json
+[max-length] per_channel=4096 bytes, total=32768 bytes, duration=0.000002560s
+[max-length] metadata=/tmp/tmp6cg45byp/max_length_metadata.json
+[max-length] waveform cache=/tmp/tmp6cg45byp/waveform_cache/max_length_lowfreq_sine_4096B_ch_10Hz_4096_43fef1ae897cbe61.bin
+[max-length] per_channel=4096 bytes, total=32768 bytes, duration=0.000002560s
+[max-length] metadata=/tmp/tmph6lorzji/max_length_metadata.json
+[max-length] waveform cache=/tmp/tmph6lorzji/waveform_cache/max_length_lowfreq_sine_4096B_ch_10Hz_4096_43fef1ae897cbe61.bin
+[max-length] upload complete, datagrams=<Mock name='mock.upload_max_length_udp()' id='132407479924736'>
+[max-length] PLAY instructions sent
+[waveform] mode=sine sample_rate_hz=400000000.0
+[waveform] CH1 min=-20000 max=20000 first16=[20000, 0, 19021, -6180, 16180, -11756, 11756, -16180, 6180, -19021, 0, -20000, -6180, -19021, -11756, -16180]
+[waveform] CH2 min=-20000 max=20000 first16=[0, -20000, -6180, -19021, -11756, -16180, -16180, -11756, -19021, -6180, -20000, 0, -19021, 6180, -16180, 11756]
+[waveform] CH3 min=-20000 max=20000 first16=[20000, 0, 19021, -6180, 16180, -11756, 11756, -16180, 6180, -19021, 0, -20000, -6180, -19021, -11756, -16180]
+[waveform] CH4 min=-20000 max=20000 first16=[0, -20000, -6180, -19021, -11756, -16180, -16180, -11756, -19021, -6180, -20000, 0, -19021, 6180, -16180, 11756]
+[waveform] CH5 min=-20000 max=20000 first16=[20000, 0, 19021, -6180, 16180, -11756, 11756, -16180, 6180, -19021, 0, -20000, -6180, -19021, -11756, -16180]
+[waveform] CH6 min=-20000 max=20000 first16=[0, -20000, -6180, -19021, -11756, -16180, -16180, -11756, -19021, -6180, -20000, 0, -19021, 6180, -16180, 11756]
+[waveform] CH7 min=-20000 max=20000 first16=[20000, 0, 19021, -6180, 16180, -11756, 11756, -16180, 6180, -19021, 0, -20000, -6180, -19021, -11756, -16180]
+[waveform] CH8 min=-20000 max=20000 first16=[0, -20000, -6180, -19021, -11756, -16180, -16180, -11756, -19021, -6180, -20000, 0, -19021, 6180, -16180, 11756]
+[waveform] output_dir=/tmp/send-waveform-loop-test
+Done.
+[sync] plan: wait HMC done -> SYNC_EPOCH(master) -> wait HMC SYNC done -> wait MTS/NCO ready
+[sync] dry-run: no UDP packets sent
+[sync] plan: wait HMC done -> SYNC_EPOCH(master) -> wait HMC SYNC done -> wait MTS/NCO ready
+[sync] plan: then RFDC_APPLY both -> ARM both -> TRIGGER master
+[sync] dry-run: no UDP packets sent

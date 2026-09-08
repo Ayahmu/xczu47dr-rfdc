@@ -105,11 +105,11 @@ foreach xdc ${xdc_files} {
     # whole enclosing foreach fail to parse.
     set clock_names [list]
     foreach {whole inner} [regexp -all -inline \
-        {get_clocks\s+-quiet\s+\{([^\}]*)\}} ${trimmed}] {
+        {get_clocks\s+(?:-quiet\s+|-include_generated_clocks\s+)+\{([^\}]*)\}} ${trimmed}] {
       foreach name ${inner} { lappend clock_names ${name} }
     }
     foreach {whole inner} [regexp -all -inline \
-        {get_clocks\s+-quiet\s+([^\s\{]\S*)\]} ${trimmed}] {
+        {get_clocks\s+(?:-quiet\s+|-include_generated_clocks\s+)+([^\s\{\-]\S*)\]} ${trimmed}] {
       lappend clock_names ${inner}
     }
     foreach name ${clock_names} {

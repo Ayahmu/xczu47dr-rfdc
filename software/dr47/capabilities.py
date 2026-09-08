@@ -61,6 +61,10 @@ class DeviceCapabilities:
     trigger_output_count: int = 0
     ext_trigger_phase_slot: int = 0
     ext_trigger_phase_valid: bool = False
+    ext_trigger_phase_overflow: bool = False
+    ext_trigger_phase_metastable: bool = False
+    ext_trigger_tap_index: int = 0
+    ext_trigger_phase_ps_x10: int = 0
     config_valid_mask: int = 0
     playback_state: PlaybackState = PlaybackState.IDLE
     playback_armed: bool = False

@@ -62,6 +62,14 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path and framed UDP instructions",
         )
 
+    def test_udp_writer_full_fifo_read_write_collision(self):
+        self.run_sim(
+            "tb_udp_writer_fifo_collision",
+            [ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
+             ROOT / "tests/tb_udp_writer_fifo_collision.sv"],
+            "PASS: writer FIFO preserves old data on full push/pop and resets admission",
+        )
+
     def test_udp_writer_resets_at_packet_boundary(self):
         self.run_sim(
             "tb_udp_waveform_packet_boundary",

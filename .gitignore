@@ -151,3 +151,12 @@ software/webui/.vite/
 # ILA capture output (CSV/TCL/logs regenerated on demand)
 trigger_latency_reports/
 ila_hmc_event_reports/
+
+# TDC/Vivado local build state and timing-debug dumps.
+work/
+hardware/vivado/sim_work/
+build_slave.log
+clockInfo.txt
+FinalUnmatchedCellsToUnplace.txt
+iter_*_CongestedCLBsAndNets.txt
+artifacts/tdc_20260907/TDC_20260907_slave.zip

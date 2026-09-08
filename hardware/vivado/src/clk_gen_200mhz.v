@@ -11,7 +11,7 @@
 //   VCO = 50 × 20 = 1000 MHz (within 600–1440 MHz range for -2 speed grade)
 //   CLKOUT0 = 1000 / 5 = 200 MHz
 
-module clk_gen_200mhz (
+module tdc_clk_gen_200mhz (
     input  wire clk_50mhz,       // dac_axis_clk
     input  wire rst_n,           // Active-low reset
     output wire clk_200mhz,      // 200 MHz output

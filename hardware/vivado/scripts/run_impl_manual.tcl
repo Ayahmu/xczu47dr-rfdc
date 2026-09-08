@@ -9,6 +9,8 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 source "${script_path}/build_options.tcl"
+source "${script_path}/check_tdc_physical.tcl"
+source "${script_path}/restore_xxv_timing.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -35,15 +37,19 @@ restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 # implementation run script explicitly before patching its link_design step;
 # this keeps the full project-managed implementation flow while allowing the
 # protected XXV checkpoint to be bound to its parent cell.
-if {![file exists ${generated_tcl}]} {
-    puts "INFO: Generating implementation Tcl for explicit XXV DCP binding"
-    reset_run impl_1
-    launch_runs impl_1 -scripts_only
-}
+puts "INFO: Regenerating implementation Tcl for the current source and constraint set"
+reset_run impl_1
+launch_runs impl_1 -scripts_only
 if {![file exists ${generated_tcl}]} {
     error "Vivado did not generate implementation Tcl: ${generated_tcl}"
 }
 close_project
+set previous_outputs [concat [glob -nocomplain ${impl_dir}/TopCustomXczu47dr_*.dcp] [glob -nocomplain ${impl_dir}/*.bit]]
+if {[llength $previous_outputs]} {
+    set archive ${impl_dir}/previous_manual_[clock seconds]
+    file mkdir $archive
+    foreach output $previous_outputs {file rename -force $output $archive/[file tail $output]}
+}
 if {[info exists ::env(XXV_REFERENCE_DCP)] && $::env(XXV_REFERENCE_DCP) ne ""} {
     set xxv_dcp [file normalize $::env(XXV_REFERENCE_DCP)]
 }
@@ -68,7 +74,8 @@ set link_injection [format {
     error "XXV Ethernet remains a black box after DCP binding"
   }
   puts "INFO: XXV Ethernet DCP binding complete"
-} ${xxv_dcp} ${xxv_dcp}]
+  restore_xxv_timing {%s}
+} ${xxv_dcp} ${xxv_dcp} ${proj_dir}]
 set marker_at [string first ${link_marker} ${generated_script}]
 if {${marker_at} < 0} {
     error "Could not find link_design insertion point in ${generated_tcl}"
@@ -77,6 +84,15 @@ if {${marker_at} < 0} {
 # explicitly so the DCP-binding block is inserted immediately before the
 # generated link-design end marker.
 set base_script "[string range ${generated_script} 0 [expr {${marker_at} - 1}]]${link_injection}[string range ${generated_script} ${marker_at} end]"
+if {[info exists ::env(TDC_INCREMENTAL_DCP)] && $::env(TDC_INCREMENTAL_DCP) ne ""} {
+    set incremental_dcp [file normalize $::env(TDC_INCREMENTAL_DCP)]
+    if {![file exists $incremental_dcp]} {error "Missing incremental checkpoint $incremental_dcp"}
+    set opt_marker {OPTRACE "opt_design" END { }}
+    if {[string first $opt_marker $base_script] < 0} {error "Missing incremental insertion point"}
+    set insertion [format {read_checkpoint -incremental -directive TimingClosure {%s}
+  } $incremental_dcp]
+    set base_script [string map [list $opt_marker "$insertion$opt_marker"] $base_script]
+}
 
 proc profile_script {base_script profile} {
     set place_opt ""
@@ -134,12 +150,9 @@ proc verify_implementation {impl_dir proj_name} {
     }
     puts "INFO: Verifying implemented checkpoint ${implemented_dcp}"
     open_checkpoint ${implemented_dcp}
-    # The DDR4 UI reset deassertion is a known marginal async recovery path
-    # (a few tens of ps).  Accept sub-50 ps setup/hold margin here instead of
-    # refusing an otherwise clean, routed design.  The sync logic is unrelated
-    # to this reset path.
-    set setup_paths [get_timing_paths -quiet -delay_type max -slack_lesser_than -0.050 -max_paths 1]
-    set hold_paths [get_timing_paths -quiet -delay_type min -slack_lesser_than -0.050 -max_paths 1]
+    report_timing_summary -delay_type min_max -report_unconstrained -file "${impl_dir}/tdc_final_timing.rpt"
+    set setup_paths [get_timing_paths -quiet -delay_type max -slack_lesser_than 0.0 -max_paths 1]
+    set hold_paths [get_timing_paths -quiet -delay_type min -slack_lesser_than 0.0 -max_paths 1]
     if {[llength ${setup_paths}] > 0 || [llength ${hold_paths}] > 0} {
         puts "WARNING: Implementation has timing violations"
         close_design
@@ -149,6 +162,7 @@ proc verify_implementation {impl_dir proj_name} {
     if {[regexp {Number of Unrouted Nets\s*:\s*([1-9][0-9]*)} ${route_status}]} {
         error "Implementation contains unrouted nets; refusing to write bitstream"
     }
+    report_drc -file "${impl_dir}/tdc_final_drc.rpt"
     set drc_results [get_drc_violations -quiet -filter {SEVERITY == Error}]
     set critical_drc_results [get_drc_violations -quiet -filter {SEVERITY == {Critical Warning}}]
     if {[llength ${drc_results}] > 0 || [llength ${critical_drc_results}] > 0} {
@@ -158,6 +172,7 @@ proc verify_implementation {impl_dir proj_name} {
     if {[llength ${xxv_gt_cells}] != 1} {
         error "Expected one implemented XXV Ethernet GTYE4 channel, found [llength ${xxv_gt_cells}]"
     }
+    if {[llength [get_cells -quiet top_i/u_tdc_capture]] > 0} {check_tdc_physical}
     return 1
 }
 

@@ -26,7 +26,7 @@ proc target_config_load {target} {
                 part xczu47dr-ffvg1517-2-i \
                 part_query *xczu47dr*ffvg1517* \
                 board_part {} \
-                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_master.xdc] \
+                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_master.xdc constraints/tdc_placement.xdc constraints/tdc_timing.xdc] \
                 top_module TopCustomXczu47dr \
                 output_basename custom_xczu47dr_master \
                 firmware_workspace firmware/workspace/custom_xczu47dr_master \
@@ -44,7 +44,7 @@ proc target_config_load {target} {
                 part xczu47dr-ffvg1517-2-i \
                 part_query *xczu47dr*ffvg1517* \
                 board_part {} \
-                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_slave.xdc] \
+                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_slave.xdc constraints/tdc_placement.xdc constraints/tdc_timing.xdc] \
                 top_module TopCustomXczu47dr \
                 output_basename custom_xczu47dr_slave \
                 firmware_workspace firmware/workspace/custom_xczu47dr_slave \
@@ -68,7 +68,7 @@ proc target_config_load {target} {
                 part xczu47dr-ffvg1517-2-i \
                 part_query *xczu47dr*ffvg1517* \
                 board_part {} \
-                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_slave_trigout.xdc] \
+                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_slave_trigout.xdc constraints/tdc_placement.xdc constraints/tdc_timing.xdc] \
                 top_module TopCustomXczu47dr \
                 output_basename custom_xczu47dr_slave_trigout \
                 firmware_workspace firmware/workspace/custom_xczu47dr_slave \

@@ -3,7 +3,8 @@
 module pl_riscv_control_v1 #(
     parameter integer MAX_PAYLOAD_WORDS = 64,
     parameter integer ENABLE_UNSAFE_RFDC_MMIO = 1,
-    parameter [31:0] BUILD_PROFILE_ID = 32'd1
+    parameter [31:0] BUILD_PROFILE_ID = 32'd1,
+    parameter integer TDC_REG_TIMEOUT_CYCLES = 1000000
 ) (
     input  wire         clk,
     input  wire         rst_n,
@@ -75,6 +76,17 @@ module pl_riscv_control_v1 #(
     input  wire [31:0]  trigger_output_count,
     input  wire [2:0]   ext_trigger_phase_slot,
     input  wire         ext_trigger_phase_valid,
+    input  wire         ext_trigger_phase_overflow,
+    input  wire         ext_trigger_phase_metastable,
+    input  wire [7:0]   ext_trigger_tap_index,
+    input  wire [15:0]  ext_trigger_phase_ps_x10,
+    output reg          tdc_reg_valid,
+    output reg          tdc_reg_write,
+    output reg  [15:0]  tdc_reg_addr,
+    output reg  [31:0]  tdc_reg_wdata,
+    input  wire         tdc_reg_ready,
+    input  wire [31:0]  tdc_reg_rdata,
+    input  wire [15:0]  tdc_reg_error,
     input  wire [511:0] rfdc_actual_nco_hz,
     input  wire [15:0]  rfdc_actual_nyquist_zone,
     input  wire [255:0] rfdc_actual_phase_mdeg,
@@ -192,6 +204,7 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_NETWORK_RESTART   = 32'h0000000E;
   localparam [31:0] RF2_OP_SET_SYNC_ROLE     = 32'h0000000F;
   localparam [31:0] RF2_OP_EMIT_TRIGGER      = 32'h00000010;
+  localparam [31:0] RF2_OP_TDC_REG           = 32'h00000011;
 
   localparam [31:0] RV1_VERSION = 32'd1;
   localparam [31:0] RF2_VERSION = 32'd2;
@@ -248,6 +261,7 @@ module pl_riscv_control_v1 #(
   localparam [4:0] DEC_RV1_STATUS_READ   = 5'd22;
   localparam [4:0] DEC_RF2_SET_SYNC_ROLE = 5'd23;
   localparam [4:0] DEC_RF2_EMIT_TRIGGER  = 5'd24;
+  localparam [4:0] DEC_RF2_TDC_REG       = 5'd25;
   localparam integer RX_COUNT_WIDTH = $clog2(MAX_PAYLOAD_WORDS + 1);
   localparam [31:0] MAX_PAYLOAD_WORDS_U32 = MAX_PAYLOAD_WORDS;
   localparam [RX_COUNT_WIDTH-1:0] MAX_PAYLOAD_WORDS_COUNT = MAX_PAYLOAD_WORDS;
@@ -293,6 +307,11 @@ module pl_riscv_control_v1 #(
   reg [31:0] rfdc_response_opcode;
   reg        rfdc_payload_fields_invalid_latched;
   reg        network_response_pending;
+  reg [31:0] tdc_reg_timeout;
+  reg [31:0] tdc_response_sequence;
+  reg        tdc_response_pending;
+  reg [31:0] tdc_response_data;
+  reg [15:0] tdc_response_error;
   reg [31:0] network_response_sequence;
   reg [31:0] network_response_opcode;
   reg        resp_request_valid;
@@ -407,6 +426,7 @@ module pl_riscv_control_v1 #(
           RF2_OP_ABORT_MUTE: decode_kind = DEC_RF2_ABORT_MUTE;
           RF2_OP_SET_SYNC_ROLE: decode_kind = DEC_RF2_SET_SYNC_ROLE;
           RF2_OP_EMIT_TRIGGER: decode_kind = DEC_RF2_EMIT_TRIGGER;
+          RF2_OP_TDC_REG: decode_kind = DEC_RF2_TDC_REG;
           default: decode_kind = DEC_UNSUPPORTED;
         endcase
       end else if (is_v1) begin
@@ -510,7 +530,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd112, 64'd0, 64'd0);
+      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd120, 64'd0, 64'd0);
     end
   endtask
 
@@ -585,7 +605,16 @@ module pl_riscv_control_v1 #(
         resp_words[15] <= {32'd0, 8'd0, sync_align_failed, sync_align_busy,
                            16'd0, sync_alignment_epoch};
         resp_words[16] <= {48'd0, sync_alignment_error};
-        resp_words[17] <= {32'd0, 28'd0, ext_trigger_phase_valid, ext_trigger_phase_slot};
+        resp_words[17] <= {
+            32'd0,
+            ext_trigger_phase_ps_x10,
+            ext_trigger_tap_index,
+            2'd0,
+            ext_trigger_phase_metastable,
+            ext_trigger_phase_overflow,
+            ext_trigger_phase_valid,
+            ext_trigger_phase_slot
+        };
         resp_count <= 6'd18;
         resp_index <= 6'd0;
         rvresp_word_count <= 16'd18;
@@ -793,6 +822,15 @@ module pl_riscv_control_v1 #(
       network_apply_gateway <= 32'd0;
       network_apply_port <= 16'd0;
       network_restart_start <= 1'b0;
+      tdc_reg_valid <= 1'b0;
+      tdc_reg_write <= 1'b0;
+      tdc_reg_addr <= 16'd0;
+      tdc_reg_wdata <= 32'd0;
+      tdc_reg_timeout <= 32'd0;
+      tdc_response_sequence <= 32'd0;
+      tdc_response_pending <= 1'b0;
+      tdc_response_data <= 32'd0;
+      tdc_response_error <= 16'd0;
       rvresp_tdata <= 64'd0;
       rvresp_tvalid <= 1'b0;
       rvresp_tlast <= 1'b0;
@@ -963,6 +1001,17 @@ module pl_riscv_control_v1 #(
         queue_network_response(network_response_opcode, network_response_sequence);
       end
 
+      if (tdc_reg_valid) begin
+        if (tdc_reg_ready || tdc_reg_timeout >= TDC_REG_TIMEOUT_CYCLES - 1) begin
+          tdc_reg_valid <= 1'b0;
+          tdc_response_pending <= 1'b1;
+          tdc_response_data <= tdc_reg_ready ? tdc_reg_rdata : 32'd0;
+          tdc_response_error <= tdc_reg_ready ? tdc_reg_error : 16'h0009;
+        end else begin
+          tdc_reg_timeout <= tdc_reg_timeout + 32'd1;
+        end
+      end
+
       if (rvresp_tvalid && rvresp_tready) begin
         if (rvresp_tlast) begin
           rvresp_tvalid <= 1'b0;
@@ -1074,6 +1123,15 @@ module pl_riscv_control_v1 #(
           dbg_last_cmd <= payload_words[0];
           dbg_last_seq <= payload_words[1];
         end
+      end else if (tdc_response_pending && !resp_request_valid &&
+                   !resp_request_valid2 &&
+                   !(rfdc_response_pending && rfdc_apply_done) &&
+                   !(network_response_pending && network_done)) begin
+        // Queue completion separately so a following packet cannot change its sequence.
+        request_response(RESP_REQ_1, RFRESP2_MAGIC, RF2_VERSION[15:0],
+                         RF2_OP_TDC_REG, tdc_response_error, tdc_response_sequence,
+                         32'd8, {tdc_response_data, 16'd0, tdc_reg_addr}, 64'd0);
+        tdc_response_pending <= 1'b0;
       end else if (decode_pending) begin
         decode_pending <= 1'b0;
         dbg_state <= ST_PROCESS;
@@ -1084,6 +1142,23 @@ module pl_riscv_control_v1 #(
           queue_resp0(cmd_opcode, 16'h0001, cmd_seq);
         end else begin
           case (cmd_kind)
+            DEC_RF2_TDC_REG: begin
+              if (cmd_payload_bytes != 32'd16 || rx_expected_words != 32'd8 ||
+                  cmd_flags != 32'd0 || payload_words[4] > 32'd1 ||
+                  payload_words[5][31:16] != 16'd0 ||
+                  payload_words[5][1:0] != 2'd0 || payload_words[7] != 32'd0) begin
+                queue_resp0(RF2_OP_TDC_REG, 16'h0003, cmd_seq);
+              end else if (tdc_reg_valid || tdc_response_pending) begin
+                queue_resp0(RF2_OP_TDC_REG, 16'h0004, cmd_seq);
+              end else begin
+                tdc_reg_valid <= 1'b1;
+                tdc_reg_write <= payload_words[4][0];
+                tdc_reg_addr <= payload_words[5][15:0];
+                tdc_reg_wdata <= payload_words[6];
+                tdc_reg_timeout <= 32'd0;
+                tdc_response_sequence <= cmd_seq;
+              end
+            end
             DEC_RF2_HELLO: begin
               dbg_status <= 32'h2000_0001;
               queue_rf2_status(RF2_OP_HELLO, cmd_seq);

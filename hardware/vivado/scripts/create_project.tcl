@@ -340,6 +340,12 @@ foreach xdc_file $target_xdc_files {
 if {[llength $resolved_xdc_files] > 0} {
     puts "INFO: Adding target constraint files: [join $target_xdc_files {, }]"
     add_files -fileset constrs_1 -norecurse $resolved_xdc_files
+    foreach tdc_xdc [get_files -quiet */tdc_placement.xdc] {
+        set_property USED_IN_SYNTHESIS false $tdc_xdc
+    }
+    foreach tdc_xdc [get_files -quiet */tdc_timing.xdc] {
+        set_property USED_IN_SYNTHESIS false $tdc_xdc
+    }
     puts "INFO: Added [llength $resolved_xdc_files] constraint files for TARGET=${target}"
 }
 
