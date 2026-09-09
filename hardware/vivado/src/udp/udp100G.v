@@ -66,6 +66,7 @@ module udp_10G
     input   wire       gt_refclk_n     ,
  
 	input   wire       clk_100Mhz,
+	output  wire       calibration_clk_out,
 	/////////////////////////////	
     input  wire        clk,
     input  wire        rst,
@@ -156,6 +157,7 @@ wire            stat_rx_block_lock;
 
     wire       tx_clk_out;    
     wire       rx_clk_out;
+    assign calibration_clk_out = tx_clk_out;
     
 /* Instantiate 10G axi configuration module */	
  xxv_ethernet_0_axi4_lite_user_if i_xxv_ethernet_0_axi4_lite_user_if (

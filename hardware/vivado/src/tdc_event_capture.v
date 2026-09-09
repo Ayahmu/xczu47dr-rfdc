@@ -33,6 +33,19 @@ module tdc_event_capture #(
   localparam integer GROUPS = TAPS / 8;
   localparam integer GROUP_BITS = $clog2(GROUPS);
 
+  // Encode the highest 1->0 transition in a group. A thermometer sample can
+  // contain isolated low islands; the final falling edge is the end of the
+  // propagated carry wave. Using a bitwise OR of multiple boundaries creates
+  // a tap code that does not correspond to any physical transition.
+  function automatic [2:0] highest_boundary_index(input [7:0] boundary);
+    integer q;
+    begin
+      highest_boundary_index = 3'd0;
+      for (q = 0; q < 8; q = q + 1)
+        if (boundary[q]) highest_boundary_index = q[2:0];
+    end
+  endfunction
+
   reg ref_toggle_half;
   reg [31:0] ref_epoch_half;
   reg ref_seen;
@@ -118,8 +131,8 @@ module tdc_event_capture #(
   // pipelined one-hot OR encoder, not a 1024-way combinational priority chain.
   reg [GROUPS-1:0] group_nonzero;
   reg [GROUPS-1:0] group_full;
-  reg [GROUPS-1:0] group_bad;
   reg [GROUPS-1:0] group_boundary;
+  reg [GROUPS-1:0] group_multi_boundary;
   reg [2:0] group_index [0:GROUPS-1];
   reg head_s2;
   reg [1:0] slot_s2;
@@ -135,19 +148,16 @@ module tdc_event_capture #(
         if (!rst_n) begin
           group_nonzero[g] <= 1'b0;
           group_full[g] <= 1'b0;
-          group_bad[g] <= 1'b0;
           group_boundary[g] <= 1'b0;
+          group_multi_boundary[g] <= 1'b0;
           group_index[g] <= 3'd0;
         end else begin
           group_nonzero[g] <= |bits_local;
           group_full[g] <= &bits_local;
-          group_bad[g] <= |(~bits_local & bits_next);
           group_boundary[g] <= |boundary;
-          group_index[g] <= {
-              |boundary[7:4],
-              |(boundary & 8'hcc),
-              |(boundary & 8'haa)
-          };
+          group_multi_boundary[g] <= (boundary != 8'd0) &&
+              ((boundary & (boundary - 8'd1)) != 8'd0);
+          group_index[g] <= highest_boundary_index(boundary);
         end
       end
     end
@@ -170,22 +180,36 @@ module tdc_event_capture #(
   integer n;
   reg [GROUP_BITS-1:0] encoded_group;
   reg [2:0] encoded_local;
+  reg boundary_found;
   always @* begin
     encoded_group = {GROUP_BITS{1'b0}};
     encoded_local = 3'd0;
+    boundary_found = 1'b0;
     for (n = 0; n < GROUPS; n = n + 1) begin
       if (group_boundary[n]) begin
-        encoded_local = encoded_local | group_index[n];
-      end
-      for (b = 0; b < GROUP_BITS; b = b + 1) begin
-        if ((n & (1 << b)) != 0)
-          encoded_group[b] = encoded_group[b] | group_boundary[n];
+        // A later falling boundary is the physical end of the carry wave;
+        // earlier boundaries are bubbles in the sampled thermometer code.
+        boundary_found = 1'b1;
+        encoded_group = n[GROUP_BITS-1:0];
+        encoded_local = group_index[n];
       end
     end
   end
   wire sample_zero = !(|group_nonzero);
   wire sample_full = &group_full;
-  wire sample_bad = !head_s2 || (|group_bad);
+  integer boundary_group_count;
+  integer k;
+  always @* begin
+    boundary_group_count = 0;
+    for (k = 0; k < GROUPS; k = k + 1) begin
+      if (group_boundary[k]) boundary_group_count = boundary_group_count + 1;
+    end
+  end
+  // The highest falling edge is the thermometer-code result. Earlier falling
+  // edges are bubbles caused by sampling the asynchronous carry chain. The
+  // selected highest boundary remains the physical edge; retain only hard
+  // invalid thermometer cases here.
+  wire sample_bad = !head_s2 || !boundary_found || sample_full;
   wire [TAP_WIDTH-1:0] decoded_tap = {encoded_group, encoded_local};
   reg armed;
   reg valid_s3;
@@ -288,7 +312,10 @@ module tdc_event_capture #(
     end else begin
       event_valid <= valid_s4;
       if (valid_s4) begin
-        event_good <= good_s4 && calibration_in_range && ready;
+        // Admission was already gated by ready_s2 at valid_s3. Checking the
+        // live ready window here is too late: the four-slot reference window
+        // normally closes before this output pipeline stage.
+        event_good <= good_s4 && calibration_in_range;
         event_overflow <= overflow_s4 || (good_s4 && !calibration_in_range);
         event_bubble <= bubble_s4;
         event_tap <= tap_s4;

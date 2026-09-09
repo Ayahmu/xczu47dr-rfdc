@@ -708,6 +708,7 @@ module Top #(
       .identity_ready(network_identity_ready)
   );
 
+  wire tdc_async_calibration_clk;
   udp_10G udp_10g_i (
       .gt_rxp_in   (sfp_rxp),
       .gt_rxn_in   (sfp_rxn),
@@ -716,6 +717,7 @@ module Top #(
       .gt_refclk_p (sfp_refclkp),
       .gt_refclk_n (sfp_refclkn),
       .clk_100Mhz  (pl_clk),
+      .calibration_clk_out(tdc_async_calibration_clk),
       .clk         (ddr4_ui_clk),
       .rst         (~ddr4_ui_aresetn),
       .network_local_mac(udp_network_mac),
@@ -1438,13 +1440,14 @@ module Top #(
     else begin tdc_ref_epoch <= tdc_dac_epoch; tdc_ref_toggle <= !tdc_ref_toggle; end
   end
 
-  reg [5:0] tdc_calibration_counter;
-  always @(posedge pl_clk or negedge pl_aresetn) begin
-    if (!pl_aresetn) tdc_calibration_counter <= 0;
-    else if (tdc_calibration_counter == 36) tdc_calibration_counter <= 0;
-    else tdc_calibration_counter <= tdc_calibration_counter + 1'b1;
-  end
   wire tdc_mode_sample, tdc_calibration_source, tdc_carrier_enable_sample;
+  // The existing XXV Ethernet TX user clock provides an independent
+  // code-density phase source; the control crossing only selects this pulse.
+  wire tdc_calibration_level;
+  tdc_calibration_source u_tdc_calibration_source (
+      .async_clk(tdc_async_calibration_clk), .rst_n(pl_resetn0),
+      .pulse(tdc_calibration_level)
+  );
   wire tdc_calibrated_sample, tdc_reference_ready;
   wire signed [15:0] tdc_offset_sample;
   wire tdc_stats_clear_toggle;
@@ -1457,7 +1460,7 @@ module Top #(
   wire [10:0] tdc_event_tap;
   tdc_event_capture u_tdc_capture (
       .sample_clk(clk_200mhz), .rst_n(tdc_rst_n),
-      .trigger_in(tdc_calibration_source ? (tdc_calibration_counter < 4) : TRIG_2),
+      .trigger_in(tdc_calibration_source ? tdc_calibration_level : TRIG_2),
       .ref_toggle(tdc_ref_toggle), .ref_epoch(tdc_ref_epoch),
       .calib_wr_en(tdc_calib_wr), .calib_wr_addr(tdc_calib_wr_addr),
       .calib_wr_data(tdc_calib_wr_data), .calib_rd_addr(tdc_calib_rd_addr),

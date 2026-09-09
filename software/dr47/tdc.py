@@ -64,7 +64,7 @@ def calibration_from_histogram(histogram: Sequence[int], *, minimum_samples: int
     return {
         "schema": 1, "identity": IDENTITY, "units": "10 ps",
         "sample_period_ps": SAMPLE_PERIOD_PS, "tap_count": TAPS,
-        "excitation": "independent PS clock; uniform phase assumed",
+        "excitation": "independent XXV Ethernet TX user clock; uniform phase assumed",
         "samples": total, "occupied_bins": occupied,
         "largest_bin_ps": float(widths.max()), "table": table,
         "histogram": counts.tolist(),
