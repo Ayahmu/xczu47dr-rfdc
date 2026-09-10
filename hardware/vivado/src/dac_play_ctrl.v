@@ -318,6 +318,9 @@ module dac_play_ctrl #(
         prepare_wait_cfg <= 1'b1;
         prepare_wait_warm <= 1'b0;
         loop_refill_pending <= 1'b0;
+        burst_complete_pending <= 1'b0;
+        repeat_limit_latched <= 32'd0;
+        repeat_index <= 32'd0;
         prepared <= 1'b0;
       end else begin
         if(prepare_wait_cfg && new_cfg &&
@@ -362,20 +365,34 @@ module dac_play_ctrl #(
           dbg_ch7_fire_count <= 32'd0; dbg_ch8_fire_count <= 32'd0;
           cfg_seen <= 1'b1;
           last_seq_id <= cfg_seq_id;
-          prepare_wait_warm <= 1'b1;
-          loop_refill_pending <= loop_enable;
-          repeat_limit_latched <= repeat_limit_clean;
-          repeat_index <= 32'd0;
+          // This is an executor refill of the same ARM transaction, not a
+          // new finite burst.  In particular, do not re-latch/reset the
+          // repeat state: long records commit a new cfg_seq_id after every
+          // DDR refill and resetting repeat_index here makes a finite burst
+          // loop forever.  Loop refill completion is handled below from
+          // loop_refill_pending; one-shot mode still waits for warm data and
+          // returns to PREPARED for the next external Trigger.
+          if(loop_enable) begin
+            loop_refill_pending <= 1'b1;
+          end else begin
+            prepare_wait_warm <= 1'b1;
+          end
         end
 
         if(prepare_wait_warm && start_warm) begin
           prepare_wait_warm <= 1'b0;
           if(loop_refill_pending) begin
-            started <= 1'b1;
-            prepared <= 1'b0;
+            started <= !burst_complete_pending;
+            prepared <= burst_complete_pending;
             loop_refill_pending <= 1'b0;
+            if(burst_complete_pending) begin
+              burst_complete_pending <= 1'b0;
+              repeat_index <= 32'd0;
+            end
           end else begin
             prepared <= 1'b1;
+            burst_complete_pending <= 1'b0;
+            repeat_index <= 32'd0;
           end
         end
 
@@ -456,7 +473,10 @@ module dac_play_ctrl #(
           beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
           beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
           burst_complete_pending <= 1'b0;
-          repeat_index <= 32'd0;
+          // Preserve the completed-frame count across ordinary refills.
+          // It is reset only after the finite burst's final refill has made
+          // the next externally triggered run PREPARED.
+          if(burst_complete_pending) repeat_index <= 32'd0;
         end
       end
 
@@ -523,6 +543,7 @@ module dac_play_ctrl #(
               started <= 1'b0;
               start_pending <= 1'b0;
               loop_refill_pending <= 1'b1;
+              repeat_index <= repeat_index + 32'd1;
             end
             dbg_done_pulse <= 1'b1;
           end else begin

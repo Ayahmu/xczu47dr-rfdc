@@ -6,9 +6,16 @@ module tb_dac_play_burst;
   reg [31:0] repeat_limit=3;
   reg debug_alternate=0;
   reg auto_start=1;
+  reg ch1_fifo_tvalid=1;
+  reg ch1_fifo_prog_empty=0;
+  reg observe_fires=0;
+  integer observed_fires=0;
   wire allow, started, prepared;
   wire [31:0] admitted, skipped, fires;
   always #5 clk=~clk;
+  always @(posedge clk) begin
+    if(observe_fires && allow && ch1_fifo_tvalid) observed_fires <= observed_fires + 1;
+  end
 
   dac_play_ctrl dut(
     .clk(clk), .rst_n(rst_n), .trigger(trigger), .rfctrl2_trigger(rfctrl2_trigger),
@@ -20,9 +27,9 @@ module tb_dac_play_burst;
     .ch1_len_beats(2), .ch2_len_beats(0), .ch3_len_beats(0), .ch4_len_beats(0),
     .ch5_len_beats(0), .ch6_len_beats(0), .ch7_len_beats(0), .ch8_len_beats(0),
     .ch1_arm(1'b1), .ch2_arm(0), .ch3_arm(0), .ch4_arm(0), .ch5_arm(0), .ch6_arm(0), .ch7_arm(0), .ch8_arm(0),
-    .ch1_fifo_tvalid(1'b1), .ch2_fifo_tvalid(0), .ch3_fifo_tvalid(0), .ch4_fifo_tvalid(0),
+    .ch1_fifo_tvalid(ch1_fifo_tvalid), .ch2_fifo_tvalid(0), .ch3_fifo_tvalid(0), .ch4_fifo_tvalid(0),
     .ch5_fifo_tvalid(0), .ch6_fifo_tvalid(0), .ch7_fifo_tvalid(0), .ch8_fifo_tvalid(0),
-    .ch1_fifo_prog_empty(1'b0), .ch2_fifo_prog_empty(1), .ch3_fifo_prog_empty(1), .ch4_fifo_prog_empty(1),
+    .ch1_fifo_prog_empty(ch1_fifo_prog_empty), .ch2_fifo_prog_empty(1), .ch3_fifo_prog_empty(1), .ch4_fifo_prog_empty(1),
     .ch5_fifo_prog_empty(1), .ch6_fifo_prog_empty(1), .ch7_fifo_prog_empty(1), .ch8_fifo_prog_empty(1),
     .dac_ch1_ready_in(1'b1), .dac_ch2_ready_in(0), .dac_ch3_ready_in(0), .dac_ch4_ready_in(0),
     .dac_ch5_ready_in(0), .dac_ch6_ready_in(0), .dac_ch7_ready_in(0), .dac_ch8_ready_in(0),
@@ -52,6 +59,38 @@ module tb_dac_play_burst;
     if(fires != 6 || admitted != 1 || skipped != 0) begin
       $error("finite burst must emit exactly repeat_limit frames fires=%0d admitted=%0d skipped=%0d", fires, admitted, skipped); $finish;
     end
+
+    // Real long records empty the DAC FIFO at every frame boundary.  The DDR
+    // executor then refills the same record and commits a fresh cfg_seq_id.
+    // That refill must not reset the ARM-scoped repeat counter.
+    @(negedge clk); rst_n=0; repeat(2) @(posedge clk); rst_n=1;
+    cfg_seq_id=16'd10; repeat_limit=3; debug_alternate=0; auto_start=0;
+    ch1_fifo_tvalid=1; ch1_fifo_prog_empty=1;
+    observed_fires=0; observe_fires=1;
+    pulse_prepare(); wait(prepared); pulse_trigger(); wait(started);
+
+    wait(!started);
+    @(negedge clk); ch1_fifo_tvalid=0; cfg_seq_id=16'd11;
+    repeat(2) @(posedge clk);
+    @(negedge clk); ch1_fifo_tvalid=1;
+    wait(started);
+
+    wait(!started);
+    @(negedge clk); ch1_fifo_tvalid=0; cfg_seq_id=16'd12;
+    repeat(2) @(posedge clk);
+    @(negedge clk); ch1_fifo_tvalid=1;
+    wait(started);
+
+    wait(!started);
+    @(negedge clk); ch1_fifo_tvalid=0; cfg_seq_id=16'd13;
+    repeat(2) @(posedge clk);
+    @(negedge clk); ch1_fifo_tvalid=1;
+    wait(prepared); repeat(5) @(posedge clk);
+    if(started || observed_fires != 6 || admitted != 1) begin
+      $error("finite burst across cfg_seq_id refills must stop after three frames started=%b fires=%0d admitted=%0d", started, observed_fires, admitted); $finish;
+    end
+    observe_fires=0;
+
     @(negedge clk); rst_n=0; repeat(2) @(posedge clk); rst_n=1;
     cfg_seq_id=2; debug_alternate=1; repeat_limit=1; auto_start=0; pulse_prepare(); wait(prepared);
     pulse_trigger(); repeat(3) @(posedge clk);
