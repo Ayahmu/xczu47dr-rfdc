@@ -65,6 +65,8 @@ class DeviceCapabilities:
     ext_trigger_phase_metastable: bool = False
     ext_trigger_tap_index: int = 0
     ext_trigger_phase_ps_x10: int = 0
+    playback_admitted_count: int = 0
+    playback_skipped_count: int = 0
     config_valid_mask: int = 0
     playback_state: PlaybackState = PlaybackState.IDLE
     playback_armed: bool = False

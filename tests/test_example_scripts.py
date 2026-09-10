@@ -1,4 +1,4 @@
-"""三个正式板级示例入口的静态契约测试。
+"""正式板级示例入口的静态契约测试。
 
 这些测试不连接真实硬件，只防止示例脚本重新退化成一堆相互矛盾的旧入口，
 并锁定用户要求的调用顺序。
@@ -19,6 +19,7 @@ FORMAL = {
     "hardware_slave_wait_sync_trigger_test.py",
     "hardware_master_slave_sync_trigger_test.py",
     "hardware_slave_bypass_trigger_test.py",
+    "hardware_slave_bypass_sweep_trigger_test.py",
 }
 
 # Bench diagnostics, deliberately kept out of FORMAL: they target one specific
@@ -54,7 +55,7 @@ def _called_methods(tree: ast.AST) -> set[str]:
 
 
 class ExampleScriptTests(unittest.TestCase):
-    def test_only_three_formal_entrypoints_remain(self):
+    def test_only_supported_formal_entrypoints_remain(self):
         actual = {
             path.name
             for path in EXAMPLES.glob("*.py")
@@ -121,8 +122,67 @@ class ExampleScriptTests(unittest.TestCase):
         self.assertIn("loop=False", COMMON.read_text(encoding="utf-8"))
         self.assertIn("while True:", text)
         self.assertNotIn("device.sync()", text)
+
+    def test_slave_bypass_sweep_groups_external_triggers_and_retunes(self):
+        path = EXAMPLES / "hardware_slave_bypass_sweep_trigger_test.py"
+        text = path.read_text(encoding="utf-8")
+        ast.parse(text)
+
+        self.assertIn('EXPECTED_SYNC_ROLE = "slave"', text)
+        self.assertIn("SWEEP_ENABLED = True", text)
+        self.assertIn("START_FREQUENCY_GHZ = 4.000", text)
+        self.assertIn("FREQUENCY_STEP_GHZ = 0.001", text)
+        config = ast.parse(text)
+        trigger_assignments = [
+            node
+            for node in config.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "TRIGGERS_PER_FREQUENCY"
+                for target in node.targets
+            )
+        ]
+        self.assertEqual(len(trigger_assignments), 1)
+        trigger_value = ast.literal_eval(trigger_assignments[0].value)
+        self.assertIsInstance(trigger_value, int)
+        self.assertGreater(trigger_value, 0)
+        self.assertIn("device.bypass_sync()", text)
+        self.assertIn("device.abort_mute()", text)
+        self.assertIn("set_xy_target_frequency", COMMON.read_text(encoding="utf-8"))
+        self.assertIn("common.configure_and_arm", text)
+        self.assertIn("channels=(1, 2)", text)
+        self.assertIn("trigger_input_count", text)
+        self.assertIn("trigger_accepted_count", text)
+        self.assertIn("common.wait_state", text)
         self.assertNotIn("device.require_external_sync()", text)
+        self.assertNotIn("device.sync()", text)
+        self.assertNotIn("device.trigger()", text)
+        self.assertNotIn("device.emit_trigger()", text)
         self.assertIn("cleanup", text)
+
+    def test_slave_external_trigger_diagnostic_arms_ch1_and_ch2(self):
+        path = EXAMPLES / "hardware_slave_xs18_loopback_trigger_test.py"
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        called = _called_methods(tree)
+
+        self.assertIn("CH1/CH2", text)
+        self.assertIn("channels=(1, 2)", text)
+        self.assertIn("BURST_DELAY_NS", text)
+        self.assertIn("BURST_INTERVAL_NS", text)
+        self.assertIn("BURST_COUNT", text)
+        self.assertIn("make_gaussian_burst_record", text)
+        self.assertIn("bulk_upload=True", text)
+        self.assertIn("XS19 Trigger 输入/接受=", text)
+        self.assertIn("device.bypass_sync()", text)
+        self.assertIn("_wait_external_triggers", text)
+        self.assertIn("common.configure_and_arm", text)
+        self.assertIn("loop=False", text)
+        self.assertNotIn("device.trigger()", text)
+        self.assertNotIn("device.emit_trigger()", text)
+        self.assertNotIn("trigger", called)
+        self.assertNotIn("emit_trigger", called)
 
 
 if __name__ == "__main__":

@@ -9,11 +9,18 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
+from .capabilities import PlaybackState
 from .device import Dr47Device
-from .errors import ConnectionError, DriverError, ParameterRangeError
+from .errors import (
+    ConnectionError,
+    DeviceStatusError,
+    DriverError,
+    ParameterRangeError,
+)
 from .protocol import (
     RF2_OP_NETWORK_GET,
     RF2_STATUS_OK,
+    RF2_STATUS_UNSAFE_STATE,
     pack_rfctrl2_network_get,
     parse_rfctrl2_network_response,
 )
@@ -26,6 +33,10 @@ class DiscoveryError(DriverError):
 
 class ProvisionError(DriverError):
     """A board network identity could not be provisioned and verified."""
+
+
+_NETWORK_IDLE_TIMEOUT_S = 5.0
+_NETWORK_IDLE_POLL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -242,6 +253,77 @@ def _probe_ip_conflict(ip: str, interface: str) -> bool | None:
     return result.returncode != 0
 
 
+def _recover_playback_for_network_apply(
+    device: Dr47Device,
+    device_uid: str,
+) -> None:
+    """Stop stale playback after NETWORK_APPLY reports an unsafe state.
+
+    NETWORK_APPLY is deliberately rejected by the PL while any playback flag
+    is asserted.  ABORT_MUTE is the one control operation that remains valid in
+    that state, so use it only after the board has explicitly returned
+    ``RF2_STATUS_UNSAFE_STATE`` instead of interrupting an idle provisioning
+    path unconditionally.
+    """
+
+    try:
+        if not device.connected:
+            device.connect()
+        device.abort_mute()
+        deadline = time.monotonic() + _NETWORK_IDLE_TIMEOUT_S
+        last_state = "unknown"
+        while time.monotonic() < deadline:
+            status = device.status(refresh=True)
+            last_state = status.state.value
+            if status.state is PlaybackState.IDLE:
+                return
+            time.sleep(_NETWORK_IDLE_POLL_S)
+    except Exception as exc:
+        raise ProvisionError(
+            f"cannot stop playback before NETWORK_APPLY for {device_uid}: {exc}"
+        ) from exc
+    raise ProvisionError(
+        f"playback did not become IDLE before NETWORK_APPLY for {device_uid} "
+        f"(last state={last_state})"
+    )
+
+
+def _network_apply_with_recovery(
+    device: Dr47Device,
+    device_uid: str,
+    *,
+    revision: int,
+    ip: str,
+    mac: str,
+    subnet_mask: str,
+    gateway: str,
+    port: int,
+):
+    """Apply a network identity, retrying once after an unsafe-state reply."""
+
+    try:
+        return device.rfctrl2_network_apply(
+            revision=revision,
+            ip=ip,
+            mac=mac,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            port=port,
+        )
+    except DeviceStatusError as exc:
+        if exc.status != RF2_STATUS_UNSAFE_STATE:
+            raise
+        _recover_playback_for_network_apply(device, device_uid)
+        return device.rfctrl2_network_apply(
+            revision=revision,
+            ip=ip,
+            mac=mac,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            port=port,
+        )
+
+
 def provision_board(
     board: DiscoveredBoard,
     ip: str,
@@ -294,7 +376,9 @@ def provision_board(
     )
     try:
         try:
-            apply_response = device.rfctrl2_network_apply(
+            apply_response = _network_apply_with_recovery(
+                device,
+                board.device_uid,
                 revision=int(board.revision + 1 if revision is None else revision),
                 ip=target_ip,
                 mac=target_mac,

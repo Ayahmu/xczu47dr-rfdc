@@ -145,6 +145,16 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: dac_play_ctrl preserves legacy startup and loops from refill-safe FIFO state",
         )
 
+    def test_dac_play_finite_burst_and_debug_alternate(self):
+        self.run_sim(
+            "tb_dac_play_burst",
+            [
+                ROOT / "hardware/vivado/src/dac_play_ctrl.v",
+                ROOT / "tests/tb_dac_play_burst.sv",
+            ],
+            "PASS: finite burst repeat count and ARM-scoped debug alternate gating",
+        )
+
     def test_rfctrl2_playback_controller_is_single_board(self):
         self.run_sim(
             "tb_rfctrl2_playback_controller",

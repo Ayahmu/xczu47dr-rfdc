@@ -20,6 +20,7 @@
  PYTHONPATH=software python -m dr47.examples.hardware_slave_wait_sync_trigger_test
  PYTHONPATH=software python -m dr47.examples.hardware_master_slave_sync_trigger_test
  PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_trigger_test
+ PYTHONPATH=software python -m dr47.examples.hardware_slave_bypass_sweep_trigger_test
  ~~~
 
  双板交换机测试使用一个主机 10G 口：主机和两板在同一 Access VLAN，先配置
