@@ -1,14 +1,4 @@
-"""每个示例模块都必须能被真正 import。
-
-tests/test_example_scripts.py 用 ast.parse 检查这些文件，只看语法和名字，从不真的
-import，所以一个指向已删除模块的 import 是完全看不见的。250 MHz 分支把示例脚本合并
-进 _common 之后，从 10 MHz 主线同步过来的
-hardware_slave_xs18_loopback_trigger_test.py 仍然 import 已经不存在的
-hardware_slave_bypass_software_trigger_test，直到在板子上运行才报
-ModuleNotFoundError。
-
-import 这些模块不需要硬件——顶层只有常量和函数定义，设备连接都在 main() 里。
-"""
+"""示例模块必须能在不连接硬件的情况下正常导入。"""
 
 import importlib
 import sys

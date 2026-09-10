@@ -5,12 +5,12 @@
 
 ## 从哪里开始
 
-- [八通道 TDC 外触发补偿](docs/TDC_项目评估与实施记录.md)：现状评估、校准、外部 Trigger 测试与精度边界。
-
+- [Slave 外部 Trigger 快速上手](快速上手_方案B.md)：当前唯一板级测试入口。
 - [使用与测试指南](docs/使用与测试指南.md)：安装、网络、烧写、接线和第一次发波。
 - [硬件验收](docs/硬件验收.md)：示波器/频谱仪项目和验收记录模板。
 - [API 参考](docs/API参考.md)：Python 驱动、UDP 协议和命令行接口。
 - [网页部署说明](software/网页部署说明.md)：部署 FastAPI + Vue 控制台。
+- [TDC 实施记录](docs/TDC_项目评估与实施记录.md)：历史研发与验证记录，不是当前操作入口。
 
 ## 目录
 
@@ -34,6 +34,9 @@ make all TARGET=custom_xczu47dr_slave
 
 # 同时构建主卡和从卡 bitstream
 make bitstream-dual
+
+# 构建单板 bypass 外部 Trigger bitstream
+make bitstream-slave-trigout
 
 # 运行本地回归测试
 PYTHONPATH=software .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q

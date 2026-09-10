@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import csv
-import os
 import subprocess
 import sys
 import time
@@ -28,7 +27,8 @@ CSV_PATH = REPORT_DIR / "capture.csv"
 TCL_PATH = REPORT_DIR / "capture.tcl"
 VIVADO_LOG = REPORT_DIR / "vivado.log"
 
-CAPTURE_ROLE = os.environ.get("ILA_CAPTURE_ROLE", "master").strip().lower()
+# User configuration: edit this constant before running the script.
+CAPTURE_ROLE = "master"
 BOARD_IP = "169.254.21.60" if CAPTURE_ROLE == "master" else "169.254.214.189"
 UDP_INTERFACE = "enp1s0f0"
 SOURCE_IP = "169.254.250.11"
@@ -160,13 +160,10 @@ def drive_once() -> None:
         if CAPTURE_ROLE == "master":
             device.trigger()
         else:
-            # The slave ILA is armed first, then the normal dual-board test
-            # sends SYNC and one master Trigger through XS18 -> XS19.
-            import dr47.examples.hardware_master_slave_sync_trigger_test as dual_test
-            dual_test.common.MASTER_TARGET_IP = "169.254.21.60"
-            dual_test.common.SLAVE_TARGET_IP = BOARD_IP
-            dual_test.TRIGGER_COUNT = 1
-            dual_test.run()
+            raise RuntimeError(
+                "slave ILA capture needs an independent external SYNC/Trigger source; "
+                "the deleted dual-board example is no longer invoked automatically"
+            )
         time.sleep(0.5)
     finally:
         try:

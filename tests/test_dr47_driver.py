@@ -49,7 +49,6 @@ from dr47 import (  # noqa: E402
     make_iq_sine_interleaved,
     place_interleaved_iq_in_record,
 )
-from dr47.examples import _common as example_common  # noqa: E402
 from dr47.capabilities import PlaybackState  # noqa: E402
 from dr47.network import _network_apply_with_recovery, _recover_playback_for_network_apply  # noqa: E402
 from dr47.transport import UdpTransport  # noqa: E402
@@ -458,43 +457,6 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<hhhh", image, 0), (1, 2, 3, 4))
         self.assertEqual(struct.unpack_from("<hhhh", image, 8), (5, 6, 7, 8))
 
-    def test_gaussian_burst_record_places_configured_pulses(self):
-        record = example_common.make_gaussian_burst_record(
-            pulse_duration_ns=30.0,
-            first_delay_ns=100.0,
-            interval_ns=200.0,
-            pulse_count=3,
-            fwhm_ns=30.0,
-            sample_rate_hz=400e6,
-        )
-        # 400 MS/s gives 2.5 ns complex-sample spacing and 16-sample alignment.
-        self.assertEqual(record.dtype, np.int16)
-        self.assertEqual(record.size % 16, 0)
-        active = np.flatnonzero(np.abs(record[0::2]) > 0)
-        self.assertEqual(active.min(), 40)
-        self.assertLessEqual(active.max(), 40 + 80 + 120)
-        self.assertGreater(np.count_nonzero(record[0::2][40:56]), 0)
-        self.assertGreater(np.count_nonzero(record[0::2][120:136]), 0)
-        self.assertGreater(np.count_nonzero(record[0::2][200:216]), 0)
-
-    def test_gaussian_burst_record_rejects_interval_shorter_than_aligned_pulse(self):
-        with self.assertRaisesRegex(ValueError, "interval_ns"):
-            example_common.make_gaussian_burst_record(
-                pulse_duration_ns=30.0,
-                interval_ns=20.0,
-                pulse_count=2,
-            )
-
-    def test_single_gaussian_record_accepts_explicit_fwhm(self):
-        record = example_common.make_gaussian_record(
-            duration_ns=30.0,
-            delay_ns=100.0,
-            record_duration_ns=200.0,
-            fwhm_ns=30.0,
-        )
-        self.assertEqual(record.dtype, np.int16)
-        self.assertEqual(record.size % 16, 0)
-
     def test_simulator_state_machine_and_unsupported_capability(self):
         """检查模拟器的基本上传、ARM、软件 Trigger、停止和能力拒绝路径。"""
         device = SimulatedDr47Device()
@@ -559,8 +521,8 @@ class DriverTests(unittest.TestCase):
     def test_slave_bypass_accepts_software_trigger_without_physical_io(self):
         """检查从卡 bypass 后的 UDP Trigger 不伪造 XS20，也不计入 XS18/XS19。
 
-        这对应 ``hardware_slave_bypass_trigger_test.py`` 的软件 Trigger 模式核心路径：
-        模拟器只验证数字状态机，真实 RF 输出仍需上板和仪器确认。
+        模拟器只验证驱动仍支持软件 Trigger；当前板级示例仅覆盖 XS19 外部
+        Trigger，真实 RF 输出仍需上板和仪器确认。
         """
 
         device = SimulatedDr47Device(batch_mode=True, sync_role="slave")

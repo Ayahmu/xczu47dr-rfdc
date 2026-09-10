@@ -1,5 +1,9 @@
 # 八通道 TDC 外触发补偿：评估与实施记录
 
+> 研发归档：本文保留 2026-09-07 的 TDC 实施与交付证据。其中的
+> `hardware_external_tdc_trigger_test` 入口已从当前仓库删除，命令不能直接运行。
+> 当前板级测试流程见 [Slave 外部 Trigger 快速上手](../快速上手_方案B.md)。
+
 日期：2026-09-07。远程项目：`kyu@10.87.5.16:/home/kyu/workspace/xczu47dr-rfdc-xs17-250mhz`。
 起始提交：`7e5f889cbc4cecd545f62d10ed571b46be68c647`；起始工作区已有未提交 TDC 改动。
 
