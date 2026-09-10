@@ -22,6 +22,9 @@ from .protocol import (
     PLAY_FLAG_INTERLEAVED,
     PLAY_FLAG_LOOP,
     PLAY_FLAG_TILED,
+    REPEAT_FLAG_DEBUG_ALTERNATE,
+    CMD_REPEAT,
+    UDP_BULK_SAFE_MAX_BEATS,
     UDP_WAVE_BULK_MAGIC,
     UDP_WAVE_DDR_MAGIC,
     UDP_WAVE_INSTR_MAGIC,
@@ -176,6 +179,50 @@ def place_interleaved_iq_in_record(
     record = np.zeros(record_count, dtype=np.int16)
     record[start:end] = active
     return record
+
+
+def make_burst_record(
+    active_wave: np.ndarray | list,
+    *,
+    first_delay_ns: float,
+    interval_ns: float,
+    sample_rate_hz: float = DEFAULT_WAVEFORM_SAMPLE_RATE_HZ,
+) -> tuple[np.ndarray, dict[str, float | int]]:
+    """Create one zero-filled record whose length is the requested burst period.
+
+    Timing is quantized upward to the 20 ns DAC fabric clock. The returned
+    record contains exactly one active waveform; the hardware loop replays it
+    once per period, so storage does not scale with repeat count.
+    """
+    from .playback import BurstSchedule
+
+    active = np.asarray(active_wave, dtype=np.int16).reshape(-1)
+    if active.size == 0 or active.size % 2:
+        raise WaveformFormatError("active IQ waveform must contain I/Q samples")
+    schedule = BurstSchedule(first_delay_ns, interval_ns, 1).quantized()
+    sample_rate = float(sample_rate_hz)
+    if sample_rate <= 0.0:
+        raise ParameterRangeError("sample_rate_hz must be positive")
+    active_complex = active.size // 2
+    first_complex = int(round(schedule.effective_first_delay_ns * 1e-9 * sample_rate))
+    period_complex = int(round(schedule.effective_interval_ns * 1e-9 * sample_rate))
+    active_duration_ns = active_complex / sample_rate * 1e9
+    if period_complex < first_complex + active_complex:
+        raise ParameterRangeError(
+            "interval_ns must contain first_delay_ns plus the active waveform"
+        )
+    record = np.zeros(period_complex * 2, dtype=np.int16)
+    start = first_complex * 2
+    record[start:start + active.size] = active
+    return record, {
+        "requested_first_delay_ns": schedule.requested_first_delay_ns,
+        "requested_interval_ns": schedule.requested_interval_ns,
+        "effective_first_delay_ns": schedule.effective_first_delay_ns,
+        "effective_interval_ns": schedule.effective_interval_ns,
+        "first_delay_cycles": schedule.first_delay_cycles,
+        "interval_cycles": schedule.interval_cycles,
+        "active_duration_ns": active_duration_ns,
+    }
 
 
 def waveform_bytes(wave: np.ndarray | list) -> bytes:
@@ -339,11 +386,112 @@ def pack_interleaved_512b_waveforms(channel_waves: Mapping[int, np.ndarray | lis
     return bytes(image), max_samples
 
 
-def iter_interleaved_udp_waveform_packets(channel_waves: Mapping[int, np.ndarray | list], base_addr: int = DDR_BASE):
-    payload, _ = pack_interleaved_512b_waveforms(channel_waves)
-    for offset in range(0, len(payload), BEAT_BYTES):
-        words = struct.unpack_from("<QQQQ", payload, offset)
-        yield struct.pack("<QQQQQQ", UDP_WAVE_DDR_MAGIC, int(base_addr) + offset, *words)
+def _interleaved_channel_arrays(
+    channel_waves: Mapping[int, np.ndarray | list],
+) -> tuple[dict[int, np.ndarray], int]:
+    """Normalize channel arrays without allocating the full interleaved image."""
+
+    if not channel_waves:
+        return {}, 0
+    normalized: dict[int, np.ndarray] = {}
+    max_samples = 0
+    for channel in range(1, DDR_INTERLEAVED_CHANNELS + 1):
+        wave = channel_waves.get(channel)
+        arr = (
+            np.asarray(wave, dtype="<i2").reshape(-1)
+            if wave is not None
+            else np.zeros(0, dtype="<i2")
+        )
+        normalized[channel] = arr
+        max_samples = max(max_samples, int(arr.size))
+    # Each 256-bit DDR write contains four int16 samples from four adjacent
+    # interleaved lanes.  Keep the same padding contract as the full packer.
+    max_samples = align_bytes_to_beat(max_samples * 2) // 2
+    return normalized, max_samples
+
+
+def _interleaved_write_payload(
+    normalized: Mapping[int, np.ndarray],
+    max_samples: int,
+    write_index: int,
+) -> bytes:
+    """Return one 32-byte AXI write from the logical interleaved image."""
+
+    # pack_interleaved_512b_waveforms lays out channels 1..8 as two adjacent
+    # 32-byte writes for every group of four int16 samples.
+    image_beat = int(write_index) // 2
+    channel_group = int(write_index) & 1
+    sample_start = image_beat * 4
+    values = np.zeros(16, dtype="<i2")
+    for channel in range(1 + channel_group * 4, 5 + channel_group * 4):
+        arr = normalized[channel]
+        if sample_start >= arr.size:
+            continue
+        channel_offset = (channel - 1 - channel_group * 4) * 4
+        available = min(4, arr.size - sample_start)
+        values[channel_offset:channel_offset + available] = arr[
+            sample_start:sample_start + available
+        ]
+    # max_samples is a whole interleaved beat, so every write is complete.
+    del max_samples
+    return values.tobytes()
+
+
+def _iter_interleaved_write_payloads(
+    channel_waves: Mapping[int, np.ndarray | list],
+):
+    normalized, max_samples = _interleaved_channel_arrays(channel_waves)
+    if not normalized:
+        return
+    write_count = (max_samples // 4) * 2
+    for write_index in range(write_count):
+        yield _interleaved_write_payload(normalized, max_samples, write_index)
+
+
+def iter_interleaved_udp_waveform_packets(
+    channel_waves: Mapping[int, np.ndarray | list],
+    base_addr: int = DDR_BASE,
+):
+    """Yield legacy one-AXI-write UDP packets using bounded memory."""
+
+    base = require_beat_aligned(base_addr, "base_addr") & 0xFFFFFFFFFFFFFFFF
+    for write_index, payload in enumerate(_iter_interleaved_write_payloads(channel_waves)):
+        words = struct.unpack("<QQQQ", payload)
+        yield struct.pack(
+            "<QQQQQQ", UDP_WAVE_DDR_MAGIC, base + write_index * BEAT_BYTES, *words
+        )
+
+
+def iter_interleaved_udp_bulk_packets(
+    channel_waves: Mapping[int, np.ndarray | list],
+    base_addr: int = DDR_BASE,
+    beats_per_datagram: int = UDP_BULK_SAFE_MAX_BEATS,
+):
+    """Yield bulk UDP packets for large interleaved uploads.
+
+    The PL bulk parser accepts up to four 256-bit writes per datagram.  The
+    iterator deliberately builds only one datagram at a time, so a long record
+    can be uploaded without constructing the complete multi-channel DDR image.
+    """
+
+    beats = validate_udp_bulk_beats(beats_per_datagram)
+    base = require_beat_aligned(base_addr, "base_addr") & 0xFFFFFFFFFFFFFFFF
+    payloads = _iter_interleaved_write_payloads(channel_waves)
+    offset = 0
+    while True:
+        chunk = []
+        for _ in range(beats):
+            try:
+                chunk.append(next(payloads))
+            except StopIteration:
+                break
+        if not chunk:
+            return
+        payload = b"".join(chunk)
+        yield struct.pack(
+            "<QQQ", UDP_WAVE_BULK_MAGIC, base + offset, len(payload) // 8
+        ) + payload
+        offset += len(payload)
 
 
 def ezq_sequence_rows(sequence: np.ndarray | list) -> np.ndarray:
@@ -383,6 +531,11 @@ def pack_udp_instruction_packet(commands: list[list[int] | tuple[int, ...]]) -> 
         if op == 2:
             require_beat_aligned(value, "PLAY length")
             require_beat_aligned(address, "PLAY addr")
+        if op == CMD_REPEAT:
+            if value <= 0 or value > 0xFFFFFFFF:
+                raise ParameterRangeError("REPEAT count must be in 1..2^32-1")
+            if address != 0:
+                raise ParameterRangeError("REPEAT address must be zero")
         word0 = (channel & 0xF) << 4 | (op & 0xF) | ((flags & 0x7) << 8)
         data += struct.pack("<IIII", word0, value & 0xFFFFFFFF, address & 0xFFFFFFFF, (address >> 32) & 0xFFFFFFFF)
     return struct.pack("<QQ", UDP_WAVE_INSTR_MAGIC, len(data) // 8) + data

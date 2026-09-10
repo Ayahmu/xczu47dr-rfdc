@@ -20,6 +20,8 @@ module dac_play_ctrl #(
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
     input  wire        loop_enable,  // loop refill 后自动继续输出，不等待下一次 Trigger
+    input  wire [31:0] repeat_limit,
+    input  wire        debug_alternate,
 
     input  wire [31:0] ch1_delay_cycles,
     input  wire [31:0] ch2_delay_cycles,
@@ -106,7 +108,9 @@ module dac_play_ctrl #(
     output reg  [31:0] dbg_ch5_fire_count,
     output reg  [31:0] dbg_ch6_fire_count,
     output reg  [31:0] dbg_ch7_fire_count,
-    output reg  [31:0] dbg_ch8_fire_count
+    output reg  [31:0] dbg_ch8_fire_count,
+    output reg  [31:0] dbg_trigger_admitted_count,
+    output reg  [31:0] dbg_trigger_skipped_count
 );
 
   reg started;
@@ -115,6 +119,12 @@ module dac_play_ctrl #(
   reg prepare_wait_cfg;
   reg prepare_wait_warm;
   reg loop_refill_pending;
+  reg burst_complete_pending;
+  reg debug_phase;
+  reg [31:0] repeat_limit_latched;
+  reg [31:0] repeat_index;
+  wire [31:0] repeat_limit_clean = (^repeat_limit === 1'bx) ? 32'd0 : repeat_limit;
+  wire debug_alternate_clean = (debug_alternate === 1'b1);
   reg [31:0] dly1, dly2, dly3, dly4, dly5, dly6, dly7, dly8;
   reg [31:0] beats1, beats2, beats3, beats4, beats5, beats6, beats7, beats8;
 
@@ -137,7 +147,9 @@ module dac_play_ctrl #(
   wire prepare_active = prepare_wait_cfg || prepare_wait_warm || prepared;
   wire trigger_seen = trig_pulse || trigger_pending;
   wire start_req = trigger_seen || auto_start;
+  wire debug_trigger_admit = (!debug_alternate_clean) || debug_phase;
   wire trig_start = start_req && new_cfg && !started && !start_pending && !prepare_active &&
+                    debug_trigger_admit &&
                     (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm);
 
   // DDR 域已经在整帧预取完成后才提交 cfg；DAC 域只需等首个 FIFO beat 可读。
@@ -228,6 +240,10 @@ module dac_play_ctrl #(
       prepare_wait_cfg <= 1'b0;
       prepare_wait_warm <= 1'b0;
       loop_refill_pending <= 1'b0;
+      burst_complete_pending <= 1'b0;
+      debug_phase <= 1'b0;
+      repeat_limit_latched <= 32'd0;
+      repeat_index <= 32'd0;
       prepared <= 1'b0;
       dly1        <= 32'd0;
       dly2        <= 32'd0;
@@ -263,6 +279,8 @@ module dac_play_ctrl #(
       dbg_ch6_fire_count <= 32'd0;
       dbg_ch7_fire_count <= 32'd0;
       dbg_ch8_fire_count <= 32'd0;
+      dbg_trigger_admitted_count <= 32'd0;
+      dbg_trigger_skipped_count <= 32'd0;
 
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
@@ -273,11 +291,17 @@ module dac_play_ctrl #(
       prepare_wait_cfg <= 1'b0;
       prepare_wait_warm <= 1'b0;
       loop_refill_pending <= 1'b0;
+      burst_complete_pending <= 1'b0;
+      debug_phase <= 1'b0;
+      repeat_limit_latched <= 32'd0;
+      repeat_index <= 32'd0;
       prepared <= 1'b0;
       dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
       dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
       beats1 <= 32'd0; beats2 <= 32'd0; beats3 <= 32'd0; beats4 <= 32'd0;
       beats5 <= 32'd0; beats6 <= 32'd0; beats7 <= 32'd0; beats8 <= 32'd0;
+      dbg_trigger_admitted_count <= 32'd0;
+      dbg_trigger_skipped_count <= 32'd0;
       ch1_active <= 1'b0; ch2_active <= 1'b0; ch3_active <= 1'b0; ch4_active <= 1'b0;
       ch5_active <= 1'b0; ch6_active <= 1'b0; ch7_active <= 1'b0; ch8_active <= 1'b0;
       dbg_done_pulse <= 1'b0;
@@ -315,6 +339,8 @@ module dac_play_ctrl #(
           last_seq_id <= cfg_seq_id;
           prepare_wait_cfg <= 1'b0;
           prepare_wait_warm <= 1'b1;
+          repeat_limit_latched <= repeat_limit_clean;
+          repeat_index <= 32'd0;
         end else if(armed && cfg_seen && new_cfg && !started &&
                     !prepare_wait_cfg && !prepare_wait_warm && !prepared &&
                     (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
@@ -338,6 +364,8 @@ module dac_play_ctrl #(
           last_seq_id <= cfg_seq_id;
           prepare_wait_warm <= 1'b1;
           loop_refill_pending <= loop_enable;
+          repeat_limit_latched <= repeat_limit_clean;
+          repeat_index <= 32'd0;
         end
 
         if(prepare_wait_warm && start_warm) begin
@@ -354,13 +382,25 @@ module dac_play_ctrl #(
         // In the RFCTRL2 path all launch state was loaded while PREPARED.
         // Trigger therefore only opens the output gates; it never waits for
         // FIFO data or reloads delay/beat counters.
-        if(rfctrl2_trigger && prepared && !started) begin
+        if((trig_pulse || rfctrl2_trigger) && debug_alternate_clean) begin
+          if(!debug_phase) begin
+            debug_phase <= 1'b1;
+            dbg_trigger_skipped_count <= dbg_trigger_skipped_count + 32'd1;
+          end else begin
+            debug_phase <= 1'b0;
+            dbg_trigger_admitted_count <= dbg_trigger_admitted_count + 32'd1;
+          end
+        end else if(trig_pulse || rfctrl2_trigger) begin
+          dbg_trigger_admitted_count <= dbg_trigger_admitted_count + 32'd1;
+        end
+
+        if(rfctrl2_trigger && prepared && !started && debug_trigger_admit) begin
           started <= 1'b1;
           prepared <= 1'b0;
         end
 
-        if(trig_pulse && !started && !start_pending && !prepare_active) begin
-        trigger_pending <= 1'b1;
+        if(trig_pulse && !started && !start_pending && !prepare_active && debug_trigger_admit) begin
+          trigger_pending <= 1'b1;
         end
 
         // 旧 GPIO/RVCTRL 路径保持原行为：Trigger 可以早于配置，且要等
@@ -404,17 +444,19 @@ module dac_play_ctrl #(
         end
 
         if(loop_refill_pending && !started && loop_refill_warm) begin
-          started <= 1'b1;
+          started <= !burst_complete_pending;
           start_pending <= 1'b0;
           trigger_pending <= 1'b0;
           loop_refill_pending <= 1'b0;
-          prepared <= 1'b0;
+          prepared <= burst_complete_pending;
           dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
           dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
           beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
           beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
           beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
           beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
+          burst_complete_pending <= 1'b0;
+          repeat_index <= 32'd0;
         end
       end
 
@@ -460,7 +502,13 @@ module dac_play_ctrl #(
         // 这样不会把当前最后一拍 tvalid 误判为下一轮已有数据。
         if(frame_done_after) begin
           if(loop_enable) begin
-            if(loop_boundary_warm) begin
+            if((repeat_limit_latched != 32'd0) &&
+               (repeat_index + 32'd1 >= repeat_limit_latched)) begin
+              started <= 1'b0;
+              start_pending <= 1'b0;
+              loop_refill_pending <= 1'b1;
+              burst_complete_pending <= 1'b1;
+            end else if(loop_boundary_warm) begin
               started <= 1'b1;
               start_pending <= 1'b0;
               loop_refill_pending <= 1'b0;
@@ -470,6 +518,7 @@ module dac_play_ctrl #(
               beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
               dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
               dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
+              repeat_index <= repeat_index + 32'd1;
             end else begin
               started <= 1'b0;
               start_pending <= 1'b0;
@@ -480,6 +529,7 @@ module dac_play_ctrl #(
             started <= 1'b0;
             start_pending <= 1'b0;
             loop_refill_pending <= 1'b0;
+            burst_complete_pending <= 1'b1;
             dbg_done_pulse <= 1'b1;
           end
         end

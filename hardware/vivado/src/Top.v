@@ -194,6 +194,8 @@ module Top #(
   wire [31:0] trigger_input_count;
   wire [31:0] trigger_accepted_count;
   wire [31:0] trigger_output_count;
+  wire [31:0] pc_trigger_admitted_count;
+  wire [31:0] pc_trigger_skipped_count;
   wire [63:0] hmc_event_tick;
   wire [63:0] sync_event_tick;
   wire [63:0] trigger_capture_tick;
@@ -329,6 +331,10 @@ module Top #(
   reg [31:0] trigger_accepted_count_ddr;
   reg [31:0] trigger_output_count_ddr_meta;
   reg [31:0] trigger_output_count_ddr;
+  reg [31:0] playback_admitted_count_ddr_meta;
+  reg [31:0] playback_admitted_count_ddr;
+  reg [31:0] playback_skipped_count_ddr_meta;
+  reg [31:0] playback_skipped_count_ddr;
   wire hmc_done_ddr = hmc_done_ddr_sync[1];
   wire sync_seen_ddr = sync_seen_ddr_sync[1];
   wire sync_link_ready_ddr = sync_ready_ddr_sync[1];
@@ -931,6 +937,8 @@ module Top #(
       .tdc_reg_addr(tdc_reg_addr), .tdc_reg_wdata(tdc_reg_wdata),
       .tdc_reg_ready(tdc_reg_ready), .tdc_reg_rdata(tdc_reg_rdata),
       .tdc_reg_error(tdc_reg_error),
+      .playback_admitted_count(playback_admitted_count_ddr),
+      .playback_skipped_count(playback_skipped_count_ddr),
       .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
       .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
       .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
@@ -1204,6 +1212,10 @@ module Top #(
       trigger_accepted_count_ddr <= 32'd0;
       trigger_output_count_ddr_meta <= 32'd0;
       trigger_output_count_ddr <= 32'd0;
+      playback_admitted_count_ddr_meta <= 32'd0;
+      playback_admitted_count_ddr <= 32'd0;
+      playback_skipped_count_ddr_meta <= 32'd0;
+      playback_skipped_count_ddr <= 32'd0;
     end else begin
       firmware_status_meta <= gpio_out_reg;
       firmware_status_ddr <= firmware_status_meta;
@@ -1222,6 +1234,10 @@ module Top #(
       trigger_accepted_count_ddr <= trigger_accepted_count_ddr_meta;
       trigger_output_count_ddr_meta <= trigger_output_count;
       trigger_output_count_ddr <= trigger_output_count_ddr_meta;
+      playback_admitted_count_ddr_meta <= pc_trigger_admitted_count;
+      playback_admitted_count_ddr <= playback_admitted_count_ddr_meta;
+      playback_skipped_count_ddr_meta <= pc_trigger_skipped_count;
+      playback_skipped_count_ddr <= playback_skipped_count_ddr_meta;
     end
   end
 
@@ -1754,6 +1770,8 @@ module Top #(
   wire [31:0] ch5_len_beats,   ch6_len_beats,   ch7_len_beats,   ch8_len_beats;
   wire        cfg_auto_start;
   wire        cfg_loop;
+  wire [31:0] cfg_repeat_count;
+  wire        cfg_debug_alternate;
   wire        cfg_commit; // 每次 END 提交一帧配置
 
   localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
@@ -1846,6 +1864,8 @@ module Top #(
     .ch8_arm(ch8_arm),
     .cfg_auto_start(cfg_auto_start),
     .cfg_loop(cfg_loop),
+    .cfg_repeat_count(cfg_repeat_count),
+    .cfg_debug_alternate(cfg_debug_alternate),
     .cfg_commit(cfg_commit),
     .fifo_clear(ex_fifo_clear),
 
@@ -1935,8 +1955,10 @@ module Top #(
   wire [15:0] seq_id_next = seq_id + 16'd1;
   reg         cfg_wr_pending;
   wire        cfg_wr_ready;
-  reg [543:0] cfg_wr_payload;
-  wire [543:0] cfg_payload_next = {
+  reg [576:0] cfg_wr_payload;
+  wire [576:0] cfg_payload_next = {
+      cfg_repeat_count,
+      cfg_debug_alternate,
       ch1_delay_cycles,
       ch2_delay_cycles,
       ch3_delay_cycles,
@@ -1971,7 +1993,7 @@ module Top #(
     if(!ddr4_ui_aresetn) begin
       seq_id <= 16'd0;
       cfg_wr_pending <= 1'b0;
-      cfg_wr_payload <= 544'd0;
+      cfg_wr_payload <= 577'd0;
     end else begin
       if(cfg_commit && !cfg_wr_pending) begin
         cfg_wr_pending <= 1'b1;
@@ -1990,12 +2012,12 @@ module Top #(
   // ==========================================================
   // cfg CDC FIFO (xpm_fifo_async)  DDR->DAC
   // ==========================================================
-  wire [543:0] cfg_rd_data;
+  wire [576:0] cfg_rd_data;
   wire         cfg_rd_valid;
   reg          cfg_rd_ready;
 
   cfg_cdc_fifo_xpm #(
-    .W(544),
+    .W(577),
     .DEPTH(16)
   ) u_cfg_fifo (
     .wr_clk(ddr4_ui_clk),
@@ -2017,6 +2039,8 @@ module Top #(
   reg [31:0] ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac;
   reg [31:0] ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac;
   reg        cfg_auto_start_dac;
+  reg [31:0] cfg_repeat_count_dac;
+  reg        cfg_debug_alternate_dac;
   reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
   reg        ch5_arm_dac, ch6_arm_dac, ch7_arm_dac, ch8_arm_dac;
   reg [15:0] seq_id_dac;
@@ -2030,6 +2054,8 @@ module Top #(
       ch5_len_dac   <= 0; ch6_len_dac   <= 0; ch7_len_dac <= 0; ch8_len_dac <= 0;
       cfg_auto_start_dac <= 0;
       cfg_loop_dac <= 0;
+      cfg_repeat_count_dac <= 0;
+      cfg_debug_alternate_dac <= 0;
       ch1_arm_dac   <= 0; ch2_arm_dac   <= 0; ch3_arm_dac <= 0; ch4_arm_dac <= 0;
       ch5_arm_dac   <= 0; ch6_arm_dac   <= 0; ch7_arm_dac <= 0; ch8_arm_dac <= 0;
       seq_id_dac    <= 0;
@@ -2053,6 +2079,8 @@ module Top #(
         ch6_len_dac   <= cfg_rd_data[127:96];
         ch7_len_dac   <= cfg_rd_data[95:64];
         ch8_len_dac   <= cfg_rd_data[63:32];
+        cfg_debug_alternate_dac <= cfg_rd_data[544];
+        cfg_repeat_count_dac <= cfg_rd_data[576:545];
         cfg_loop_dac <= cfg_rd_data[25];
         cfg_auto_start_dac <= cfg_rd_data[24];
         ch1_arm_dac   <= cfg_rd_data[23];
@@ -2154,6 +2182,8 @@ module Top #(
     .cfg_seq_id(seq_id_dac),
     .auto_start(cfg_auto_start_dac),
     .loop_enable(cfg_loop_dac),
+    .repeat_limit(cfg_repeat_count_dac),
+    .debug_alternate(cfg_debug_alternate_dac),
 
     .ch1_delay_cycles(ch1_delay_dac),
     .ch2_delay_cycles(ch2_delay_dac),
@@ -2239,7 +2269,9 @@ module Top #(
     .dbg_ch5_fire_count(pc_ch5_fire_count),
     .dbg_ch6_fire_count(pc_ch6_fire_count),
     .dbg_ch7_fire_count(pc_ch7_fire_count),
-    .dbg_ch8_fire_count(pc_ch8_fire_count)
+    .dbg_ch8_fire_count(pc_ch8_fire_count),
+    .dbg_trigger_admitted_count(pc_trigger_admitted_count),
+    .dbg_trigger_skipped_count(pc_trigger_skipped_count)
   );
 
   wire [31:0] ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count;

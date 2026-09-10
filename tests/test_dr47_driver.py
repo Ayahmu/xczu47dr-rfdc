@@ -49,6 +49,9 @@ from dr47 import (  # noqa: E402
     make_iq_sine_interleaved,
     place_interleaved_iq_in_record,
 )
+from dr47.examples import _common as example_common  # noqa: E402
+from dr47.capabilities import PlaybackState  # noqa: E402
+from dr47.network import _network_apply_with_recovery, _recover_playback_for_network_apply  # noqa: E402
 from dr47.transport import UdpTransport  # noqa: E402
 from dr47.errors import DriverError, TransportTimeout  # noqa: E402
 import waveform_model  # noqa: E402
@@ -324,6 +327,48 @@ class DriverTests(unittest.TestCase):
                 exclude_device_uid=target.device_uid,
             )
 
+    @patch("dr47.network.time.sleep")
+    def test_network_recovery_aborts_stale_playback_and_waits_for_idle(self, _sleep):
+        """NETWORK_APPLY 恢复路径必须确认硬件已回到 IDLE。"""
+
+        device = MagicMock()
+        device.connected = False
+        device.status.side_effect = [
+            SimpleNamespace(state=PlaybackState.ARMED),
+            SimpleNamespace(state=PlaybackState.IDLE),
+        ]
+
+        _recover_playback_for_network_apply(device, "stale-uid")
+
+        device.connect.assert_called_once_with()
+        device.abort_mute.assert_called_once_with()
+        self.assertEqual(device.status.call_count, 2)
+
+    @patch("dr47.network._recover_playback_for_network_apply")
+    def test_network_apply_retries_once_after_unsafe_state(self, recover):
+        """只有 PL 明确返回 0x0006 时才触发一次清理并重试。"""
+
+        device = MagicMock()
+        device.rfctrl2_network_apply.side_effect = [
+            DeviceStatusError("NETWORK_APPLY", 0x0006),
+            {"revision": 2},
+        ]
+
+        result = _network_apply_with_recovery(
+            device,
+            "stale-uid",
+            revision=2,
+            ip="169.254.100.102",
+            mac="02:00:00:00:00:02",
+            subnet_mask="255.255.0.0",
+            gateway="0.0.0.0",
+            port=1234,
+        )
+
+        self.assertEqual(result["revision"], 2)
+        recover.assert_called_once_with(device, "stale-uid")
+        self.assertEqual(device.rfctrl2_network_apply.call_count, 2)
+
     def test_hardware_test_network_discovers_roles_and_provisions_code_settings(self):
         """检查板级测试按角色选板，并使用代码常量完成 IP 配置和验证。"""
 
@@ -412,6 +457,43 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(samples, 16)
         self.assertEqual(struct.unpack_from("<hhhh", image, 0), (1, 2, 3, 4))
         self.assertEqual(struct.unpack_from("<hhhh", image, 8), (5, 6, 7, 8))
+
+    def test_gaussian_burst_record_places_configured_pulses(self):
+        record = example_common.make_gaussian_burst_record(
+            pulse_duration_ns=30.0,
+            first_delay_ns=100.0,
+            interval_ns=200.0,
+            pulse_count=3,
+            fwhm_ns=30.0,
+            sample_rate_hz=400e6,
+        )
+        # 400 MS/s gives 2.5 ns complex-sample spacing and 16-sample alignment.
+        self.assertEqual(record.dtype, np.int16)
+        self.assertEqual(record.size % 16, 0)
+        active = np.flatnonzero(np.abs(record[0::2]) > 0)
+        self.assertEqual(active.min(), 40)
+        self.assertLessEqual(active.max(), 40 + 80 + 120)
+        self.assertGreater(np.count_nonzero(record[0::2][40:56]), 0)
+        self.assertGreater(np.count_nonzero(record[0::2][120:136]), 0)
+        self.assertGreater(np.count_nonzero(record[0::2][200:216]), 0)
+
+    def test_gaussian_burst_record_rejects_interval_shorter_than_aligned_pulse(self):
+        with self.assertRaisesRegex(ValueError, "interval_ns"):
+            example_common.make_gaussian_burst_record(
+                pulse_duration_ns=30.0,
+                interval_ns=20.0,
+                pulse_count=2,
+            )
+
+    def test_single_gaussian_record_accepts_explicit_fwhm(self):
+        record = example_common.make_gaussian_record(
+            duration_ns=30.0,
+            delay_ns=100.0,
+            record_duration_ns=200.0,
+            fwhm_ns=30.0,
+        )
+        self.assertEqual(record.dtype, np.int16)
+        self.assertEqual(record.size % 16, 0)
 
     def test_simulator_state_machine_and_unsupported_capability(self):
         """检查模拟器的基本上传、ARM、软件 Trigger、停止和能力拒绝路径。"""
@@ -681,6 +763,33 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(upload["commands"], web_commands)
         self.assertEqual(upload["instruction_repeats"], 3)
         self.assertEqual(transport.sent, expected_ddr + [expected_instruction] * 3)
+
+    def test_bulk_upload_preserves_interleaved_image_and_limits_packet_payload(self):
+        record = np.arange(32, dtype=np.int16)
+        transport = _CaptureTransport()
+        device = Dr47Device(transport=transport)
+        progress = []
+        upload = device.upload_waveforms(
+            {1: record, 2: record},
+            wave_formats={1: "interleaved_iq", 2: "interleaved_iq"},
+            auto_start=False,
+            loop=False,
+            channel_delays={1: 0, 2: 0},
+            instruction_repeats=1,
+            packet_pause_s=0.0,
+            bulk_upload=True,
+            progress_callback=lambda sent, total: progress.append((sent, total)),
+        )
+
+        bulk_packets = [packet for packet in transport.sent if packet[:8] == b"0RTSEVAW"]
+        self.assertTrue(bulk_packets)
+        for packet in bulk_packets:
+            self.assertLessEqual(len(packet) - 24, 4 * 32)
+        self.assertEqual(upload["waveform_packet_count"], 4)
+        self.assertEqual(progress[0], (0, 4))
+        self.assertEqual(progress[-1], (4, 4))
+        self.assertEqual(len(progress), 5)
+        self.assertEqual(upload["commands"][-1], [3, 0, 0, 0, 0])
 
 
 if __name__ == "__main__":

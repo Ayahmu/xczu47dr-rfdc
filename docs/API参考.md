@@ -1,5 +1,13 @@
 # XCZU47DR 驱动 API 文档
 
+## BurstSchedule
+
+`BurstSchedule` 统一描述 Trigger 后的首次延迟、波形起始到起始间隔、重复次数
+和 debug 交替模式。`configure_playback()` 只上传一份 DDR 记录，并返回实际
+20 ns 量化后的调度参数。旧 `upload_waveforms()`、`arm()`、`trigger()` 和
+`abort_mute()` 继续保留用于兼容，新代码优先使用 `configure_playback()`、
+`arm_playback()`、`trigger_playback()` 和 `abort_playback()`。
+
 本文档对应当前仓库中的 `software/dr47` 驱动包（版本 `0.1.0`）。驱动通过
 UDP 控制 FPGA PL 中的 RFCTRL2 服务，支持单板控制，也支持通过 10G 交换机
 发现和配置多块板卡。
@@ -257,6 +265,11 @@ NETWORK_GET（新 IP）
     -> 校验返回 device_uid
 ```
 
+如果第一次 `NETWORK_APPLY` 返回 `0x0006`（板卡仍处于 `ARMED`、`PREPARED` 或
+`RUNNING`），函数会在旧 IP 上执行一次 `ABORT_MUTE`，确认状态回到 `IDLE` 后重试
+`NETWORK_APPLY`。这会停止板卡上残留的播放，适用于上一次测试被 Ctrl-C 或网络断开
+中断的情况；其他错误不会自动重试。
+
 ```python
 result = provision_board(
     board,
@@ -441,7 +454,7 @@ print(plan)
 设置 RO/QR 输出通道，RO/IFOUT 映射 CH7..CH8。`ri`/`ifin` 属于 ADC 输入，
 当前 bitstream 不支持，会抛出 `UnsupportedCapabilityError`。
 
-#### `upload_waveforms(channel_waves, channel_sequences=None, *, wave_formats=None, layout="interleaved_512b", base_addr=0, auto_start=True, loop=False, packet_pause_s=1e-5, packet_burst=8) -> dict`
+#### `upload_waveforms(channel_waves, channel_sequences=None, *, wave_formats=None, layout="interleaved_512b", base_addr=0, auto_start=True, loop=False, packet_pause_s=1e-5, packet_burst=8, bulk_upload=False, progress_callback=None) -> dict`
 
 上传一个或多个物理通道的波形，并生成 PL 播放指令。
 
@@ -456,8 +469,10 @@ print(plan)
 | `loop` | 是否循环播放 |
 | `packet_pause_s` | 每 `packet_burst` 个包后的暂停时间 |
 | `packet_burst` | 每批发送的包数；用于降低 PL UDP RX FIFO 丢包概率 |
+| `bulk_upload` | 使用 PL bulk UDP 格式合并 DDR 写包；适合长记录，减少 UDP 包头开销 |
+| `progress_callback` | 可选回调 `callback(sent_packets, total_waveform_packets)`；每发送一个 waveform 包调用一次，指令包不计入总数 |
 
-返回字典包括 `packet_count`、`channels`、`bytes_per_channel`、
+返回字典包括 `packet_count`、`waveform_packet_count`、`channels`、`bytes_per_channel`、
 `wait_for_trigger`、`loop` 和实际 `commands`。
 
 当前推荐的波形格式是小端 IQ 交错 int16：`I0,Q0,I1,Q1,...`。二维矩阵可以

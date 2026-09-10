@@ -87,6 +87,8 @@ module pl_riscv_control_v1 #(
     input  wire         tdc_reg_ready,
     input  wire [31:0]  tdc_reg_rdata,
     input  wire [15:0]  tdc_reg_error,
+    input  wire [31:0]  playback_admitted_count,
+    input  wire [31:0]  playback_skipped_count,
     input  wire [511:0] rfdc_actual_nco_hz,
     input  wire [15:0]  rfdc_actual_nyquist_zone,
     input  wire [255:0] rfdc_actual_phase_mdeg,
@@ -530,7 +532,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd120, 64'd0, 64'd0);
+      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd128, 64'd0, 64'd0);
     end
   endtask
 
@@ -615,9 +617,10 @@ module pl_riscv_control_v1 #(
             ext_trigger_phase_valid,
             ext_trigger_phase_slot
         };
-        resp_count <= 6'd18;
+        resp_words[18] <= {playback_skipped_count, playback_admitted_count};
+        resp_count <= 6'd19;
         resp_index <= 6'd0;
-        rvresp_word_count <= 16'd18;
+        rvresp_word_count <= 16'd19;
         rvresp_tdata <= resp_request_magic;
         rvresp_tvalid <= 1'b1;
         rvresp_tlast <= 1'b0;

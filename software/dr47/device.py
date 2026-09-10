@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -71,11 +71,15 @@ from .waveforms import (
     DDR_LAYOUT_INTERLEAVED_512B,
     PLAY_FLAG_INTERLEAVED,
     ezq_wave_to_interleaved_int16,
+    iter_interleaved_udp_bulk_packets,
     iter_interleaved_udp_waveform_packets,
     pack_udp_instruction_packet,
     sequence_to_play_commands,
     waveform_length_bytes,
+    make_burst_record,
 )
+from .playback import BurstSchedule, PlaybackConfig
+from .protocol import CMD_REPEAT, REPEAT_FLAG_DEBUG_ALTERNATE
 
 
 GHZ_TO_HZ = 1_000_000_000.0
@@ -276,6 +280,8 @@ class Dr47Device:
             ext_trigger_phase_metastable=bool(decoded.get("ext_trigger_phase_metastable", False)),
             ext_trigger_tap_index=int(decoded.get("ext_trigger_tap_index", 0)) & 0xFF,
             ext_trigger_phase_ps_x10=int(decoded.get("ext_trigger_phase_ps_x10", 0)) & 0xFFFF,
+            playback_admitted_count=int(decoded.get("playback_admitted_count", 0)) & 0xFFFFFFFF,
+            playback_skipped_count=int(decoded.get("playback_skipped_count", 0)) & 0xFFFFFFFF,
             config_valid_mask=int(decoded.get("config_valid_mask", 0)) & 0xFF,
             playback_state=state,
             playback_armed=bool(decoded.get("armed")),
@@ -749,13 +755,24 @@ class Dr47Device:
         packet_burst: int = 8,
         channel_delays: Mapping[int, int] | None = None,
         instruction_repeats: int = 1,
+        bulk_upload: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
+        schedule: BurstSchedule | None = None,
     ) -> dict[str, Any]:
-        """Upload one or more channels and queue WAVEINS0 playback commands."""
+        """Upload channels and queue WAVEINS0 commands.
+
+        ``bulk_upload`` uses the existing PL bulk DDR packet format and keeps
+        only one small datagram in memory, which is useful for long finite
+        records.
+        """
         if layout != DDR_LAYOUT_INTERLEAVED_512B:
             raise UnsupportedCapabilityError("upload_waveforms", "interleaved_512b DDR layout")
         if not channel_waves:
             raise ParameterRangeError("channel_waves must not be empty")
+        if progress_callback is not None and not callable(progress_callback):
+            raise ParameterRangeError("progress_callback must be callable")
         normalized: dict[int, np.ndarray] = {}
+        converted_cache: dict[tuple[int, str], np.ndarray] = {}
         for logical, wave in channel_waves.items():
             channel = int(logical)
             if not 1 <= channel <= 8:
@@ -767,13 +784,66 @@ class Dr47Device:
                     fmt = "iq_matrix"
                 else:
                     fmt = _infer_wave_format(wave, channel)
-            normalized[channel] = ezq_wave_to_interleaved_int16(wave, fmt)
+            cache_key = (id(wave), str(fmt))
+            if cache_key not in converted_cache:
+                if str(fmt).lower() in {"interleaved_iq", "interleaved", "iq_interleaved"}:
+                    native = np.asarray(wave, dtype="<i2").reshape(-1)
+                    if native.size % 2:
+                        raise ParameterRangeError(
+                            "interleaved_iq wave must contain an even number of int16 lanes"
+                        )
+                    # Keep an already contiguous int16 record zero-copy. This
+                    # matters for long burst records approaching 1 GB/channel.
+                    converted_cache[cache_key] = (
+                        native if native.flags.c_contiguous else np.ascontiguousarray(native)
+                    )
+                else:
+                    converted_cache[cache_key] = ezq_wave_to_interleaved_int16(wave, fmt)
+            normalized[channel] = converted_cache[cache_key]
+        quantized_schedule = None
+        schedule_meta: dict[str, Any] = {}
+        if schedule is not None:
+            quantized_schedule = schedule.quantized()
+            padded: dict[int, np.ndarray] = {}
+            for channel, wave in normalized.items():
+                padded_wave, meta = make_burst_record(
+                    wave,
+                    first_delay_ns=quantized_schedule.requested_first_delay_ns,
+                    interval_ns=quantized_schedule.requested_interval_ns,
+                )
+                padded[channel] = padded_wave
+                if not schedule_meta:
+                    schedule_meta = meta
+                elif padded_wave.size != next(iter(padded.values())).size:
+                    raise ParameterRangeError("all scheduled channel records must have one common period")
+            normalized = padded
         packet_pause = max(0.0, float(packet_pause_s))
         burst = max(1, int(packet_burst))
         packet_count = 0
-        for packet in iter_interleaved_udp_waveform_packets(normalized, base_addr=base_addr):
+        # The interleaved writer emits two 32-byte AXI writes for every four
+        # int16 samples per channel. Bulk packets group four such writes.
+        # Compute this from the padded per-channel length so the callback can
+        # report a real percentage before the first UDP packet is sent.
+        bytes_per_channel = max(
+            waveform_length_bytes(wave) for wave in normalized.values()
+        )
+        waveform_packet_count = (bytes_per_channel + 3) // 4
+        if bulk_upload:
+            waveform_packet_count = (
+                waveform_packet_count + UDP_BULK_SAFE_MAX_BEATS - 1
+            ) // UDP_BULK_SAFE_MAX_BEATS
+        if progress_callback is not None:
+            progress_callback(0, waveform_packet_count)
+        packet_iterator = (
+            iter_interleaved_udp_bulk_packets(normalized, base_addr=base_addr)
+            if bulk_upload
+            else iter_interleaved_udp_waveform_packets(normalized, base_addr=base_addr)
+        )
+        for packet in packet_iterator:
             self.transport.send(packet)
             packet_count += 1
+            if progress_callback is not None:
+                progress_callback(packet_count, waveform_packet_count)
             # The PL UDP RX FIFO is intentionally small.  A host can enqueue
             # 10G packets faster than the DDR writer can drain AXI responses;
             # periodic pacing prevents silent packet loss on real hardware.
@@ -804,7 +874,15 @@ class Dr47Device:
                 if channel_delays is not None:
                     commands.append([1, channel, delays.get(channel, 0), 0])
                 commands.append([2, channel, waveform_length_bytes(wave), base_addr, PLAY_FLAG_INTERLEAVED])
-        effective_loop = bool(loop or loop_from_sequence)
+        effective_loop = bool(loop or loop_from_sequence or schedule is not None)
+        if quantized_schedule is not None:
+            commands.append([
+                CMD_REPEAT,
+                0,
+                quantized_schedule.repetitions,
+                0,
+                REPEAT_FLAG_DEBUG_ALTERNATE if quantized_schedule.debug_alternate else 0,
+            ])
         commands.append([3, 0 if wait_for_trigger or not auto_start else 15, 0, 0, PLAY_FLAG_LOOP if effective_loop else 0])
         instruction_packet = pack_udp_instruction_packet(commands)
         repeats = max(1, int(instruction_repeats))
@@ -816,13 +894,56 @@ class Dr47Device:
         self._uploaded_channels.update(normalized)
         return {
             "packet_count": packet_count,
+            "waveform_packet_count": waveform_packet_count,
             "channels": tuple(sorted(normalized)),
             "bytes_per_channel": max(waveform_length_bytes(wave) for wave in normalized.values()),
             "wait_for_trigger": wait_for_trigger,
             "loop": effective_loop,
             "commands": commands,
             "instruction_repeats": repeats,
+            "schedule": quantized_schedule,
+            **schedule_meta,
         }
+
+    def configure_playback(
+        self,
+        channel_waves: Mapping[int, np.ndarray | list],
+        schedule: BurstSchedule,
+        *,
+        wave_formats: Mapping[int, str] | None = None,
+        channel_mask: int | None = None,
+        bulk_upload: bool = False,
+        **kwargs: Any,
+    ) -> PlaybackConfig:
+        """Upload one zero-padded record and configure finite burst playback."""
+        uploaded = self.upload_waveforms(
+            channel_waves,
+            wave_formats=wave_formats,
+            auto_start=False,
+            loop=True,
+            schedule=schedule,
+            bulk_upload=bulk_upload,
+            **kwargs,
+        )
+        mask = channel_mask
+        if mask is None:
+            mask = sum(1 << (int(channel) - 1) for channel in uploaded["channels"])
+        quantized = uploaded["schedule"]
+        return PlaybackConfig(
+            schedule=quantized,
+            channel_mask=int(mask),
+            record_duration_ns=float(uploaded["bytes_per_channel"]) / 4.0 / 400e6 * 1e9,
+            record_bytes_per_channel=int(uploaded["bytes_per_channel"]),
+        )
+
+    def arm_playback(self, channel_mask: int | None = None, run_id: int | None = None) -> int:
+        return self.arm(channel_mask=channel_mask, run_id=run_id)
+
+    def trigger_playback(self) -> int:
+        return self.trigger()
+
+    def abort_playback(self) -> int:
+        return self.abort_mute()
 
     def arm(self, channel_mask: int | None = None, run_id: int | None = None) -> int:
         self._require_connected()

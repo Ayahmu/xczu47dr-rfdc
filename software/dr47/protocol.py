@@ -121,6 +121,11 @@ FIXED_DATA_BYTES = DDR_TILE_BYTES
 PLAY_FLAG_LOOP = 0x1
 PLAY_FLAG_TILED = 0x2
 PLAY_FLAG_INTERLEAVED = 0x4
+REPEAT_FLAG_DEBUG_ALTERNATE = 0x1
+CMD_DELAY = 0x1
+CMD_PLAY = 0x2
+CMD_END = 0x3
+CMD_REPEAT = 0x4
 UDP_STANDARD_MTU_BYTES = 1500
 UDP_IPV4_HEADER_BYTES = 20
 UDP_HEADER_BYTES = 8
@@ -384,6 +389,7 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         "ext_trigger_phase_overflow": False,
         "ext_trigger_phase_metastable": False,
         "ext_trigger_tap_index": 0, "ext_trigger_phase_ps_x10": 0,
+        "playback_admitted_count": 0, "playback_skipped_count": 0,
     })
     if len(payload) >= 32:
         (
@@ -436,6 +442,8 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["ext_trigger_phase_metastable"] = bool((phase_word >> 5) & 1)
         result["ext_trigger_tap_index"] = (phase_word >> 8) & 0xFF
         result["ext_trigger_phase_ps_x10"] = (phase_word >> 16) & 0xFFFF
+    if len(payload) >= 128:
+        result["playback_admitted_count"], result["playback_skipped_count"] = struct.unpack_from("<II", payload, 120)
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)
@@ -537,6 +545,6 @@ def require_beat_aligned(value: int, name: str = "value") -> int:
     return value
 
 
-__all__ = [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "PLAY_", "CHANNEL_", "WAVE", "pack_", "parse_", "align_", "require_", "normalize_", "validate_"))] + [
+__all__ = [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "PLAY_", "REPEAT_", "CMD_", "CHANNEL_", "WAVE", "pack_", "parse_", "align_", "require_", "normalize_", "validate_"))] + [
     "BEAT_BYTES", "FIXED_DATA_BYTES", "CHANNEL_ROLES", "DDR_BASE", "DDR_TILE_BYTES", "DDR_TILE_CHANNELS",
 ]

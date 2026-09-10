@@ -88,6 +88,8 @@ module Waveform_Interleaved_System_Top #(
     output reg          ch8_arm,
     output reg          cfg_auto_start,
     output reg          cfg_loop,
+    output reg  [31:0]  cfg_repeat_count,
+    output reg          cfg_debug_alternate,
     output reg          cfg_commit,
     output reg          fifo_clear,
 
@@ -126,6 +128,7 @@ module Waveform_Interleaved_System_Top #(
   localparam CMD_DELAY = 4'd1;
   localparam CMD_PLAY  = 4'd2;
   localparam CMD_END   = 4'd3;
+  localparam CMD_REPEAT = 4'd4;
   localparam CH_AUTO_START = 4'hF;
   localparam [31:0] CHUNK_DM_BEATS_U32 = CHUNK_DM_BEATS;
   localparam [31:0] CHUNK_BYTES_U32 = CHUNK_DM_BEATS * DM_BEAT_BYTES;
@@ -153,6 +156,7 @@ module Waveform_Interleaved_System_Top #(
   wire trig_pulse = trigger & ~trig_d;
 
   wire [3:0]  instr_cmd = main_tdata[3:0];
+  wire [2:0]  instr_flags = main_tdata[10:8];
   wire [3:0]  instr_ch  = main_tdata[7:4];
   wire        instr_loop = main_tdata[8];
   wire        instr_tiled_layout = main_tdata[9];
@@ -411,6 +415,8 @@ module Waveform_Interleaved_System_Top #(
 	      fifo_clear <= 1'b0;
       cfg_auto_start <= 1'b0;
       cfg_loop <= 1'b0;
+      cfg_repeat_count <= 32'd0;
+      cfg_debug_alternate <= 1'b0;
       ch1_delay_cycles <= 32'd0; ch2_delay_cycles <= 32'd0; ch3_delay_cycles <= 32'd0; ch4_delay_cycles <= 32'd0;
       ch5_delay_cycles <= 32'd0; ch6_delay_cycles <= 32'd0; ch7_delay_cycles <= 32'd0; ch8_delay_cycles <= 32'd0;
       ch1_len_beats <= 32'd0; ch2_len_beats <= 32'd0; ch3_len_beats <= 32'd0; ch4_len_beats <= 32'd0;
@@ -450,6 +456,8 @@ module Waveform_Interleaved_System_Top #(
 	        m_axis_dm_cmd_tvalid <= 1'b0;
         cfg_auto_start <= 1'b0;
         cfg_loop <= 1'b0;
+        cfg_repeat_count <= 32'd0;
+        cfg_debug_alternate <= 1'b0;
 	        fifo_clear <= 1'b1;
 	        ch1_delay_cycles <= 32'd0; ch2_delay_cycles <= 32'd0; ch3_delay_cycles <= 32'd0; ch4_delay_cycles <= 32'd0;
 	        ch5_delay_cycles <= 32'd0; ch6_delay_cycles <= 32'd0; ch7_delay_cycles <= 32'd0; ch8_delay_cycles <= 32'd0;
@@ -544,6 +552,13 @@ module Waveform_Interleaved_System_Top #(
               end else begin
                 cfg_commit <= 1'b1;
                 st <= ST_WAITTRIG;
+              end
+            end else if(instr_cmd == CMD_REPEAT) begin
+              if(instr_value == 32'd0) begin
+                dbg_bad_instr_count <= dbg_bad_instr_count + 32'd1;
+              end else begin
+                cfg_repeat_count <= instr_value;
+                cfg_debug_alternate <= instr_flags[0];
               end
             end else begin
               dbg_bad_instr_count <= dbg_bad_instr_count + 32'd1;
