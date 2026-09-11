@@ -30,3 +30,12 @@ XS19 外部 Trigger，并同时播放 CH1/CH2。板卡 IP、主机网卡、源 I
 - `webapp/`：FastAPI 后端；`webui/`：Vue 前端。
 
 网页控制台当前一次只控制一块板。
+
+## SDK 交付
+
+交付指南、API 参考、模拟器样例和上板样例见
+[47DR 驱动 SDK 交付指南](../docs/驱动SDK交付指南.md)。在仓库根目录生成可发布包：
+
+~~~bash
+make driver-release
+~~~

@@ -9,6 +9,7 @@ import numpy as np
 
 from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState
 from .device import Dr47Device
+from .errors import ParameterRangeError
 from .protocol import (
     RF2_CAP_DAC_MTS,
     RF2_CAP_NCO_SYNC,
@@ -44,6 +45,11 @@ from .protocol import (
     RF2_STATUS_RUNNING,
     RFCTRL2_VERSION,
     parse_rfctrl2_rfdc_config_response,
+)
+from .waveforms import (
+    ezq_wave_to_interleaved_int16,
+    make_burst_record,
+    waveform_length_bytes,
 )
 
 
@@ -280,9 +286,18 @@ class SimulatedDr47Device(Dr47Device):
         return self._response(RF2_OP_ABORT_MUTE, self._make_status_payload(), seq or 1)
 
     def upload_waveforms(self, channel_waves, channel_sequences=None, **kwargs):
+        if not channel_waves:
+            raise ParameterRangeError("channel_waves must not be empty")
+        progress_callback = kwargs.get("progress_callback")
+        if progress_callback is not None and not callable(progress_callback):
+            raise ParameterRangeError("progress_callback must be callable")
+
+        normalized: dict[int, np.ndarray] = {}
         for channel, wave in channel_waves.items():
-            fmt = (kwargs.get("wave_formats") or {}).get(int(channel))
-            from .waveforms import ezq_wave_to_interleaved_int16
+            physical = int(channel)
+            if not 1 <= physical <= 8:
+                raise ParameterRangeError("physical channel must be in 1..8")
+            fmt = (kwargs.get("wave_formats") or {}).get(physical)
             if fmt is None:
                 arr = np.asarray(wave)
                 if arr.ndim == 2:
@@ -291,11 +306,47 @@ class SimulatedDr47Device(Dr47Device):
                     fmt = "interleaved_iq"
                 else:
                     fmt = "packed_iq"
-            self.waveforms[int(channel)] = ezq_wave_to_interleaved_int16(wave, fmt)
+            normalized[physical] = ezq_wave_to_interleaved_int16(wave, fmt)
+
+        quantized_schedule = None
+        schedule_meta: dict[str, Any] = {}
+        schedule = kwargs.get("schedule")
+        if schedule is not None:
+            quantized_schedule = schedule.quantized()
+            padded: dict[int, np.ndarray] = {}
+            for channel, wave in normalized.items():
+                padded_wave, meta = make_burst_record(
+                    wave,
+                    first_delay_ns=quantized_schedule.requested_first_delay_ns,
+                    interval_ns=quantized_schedule.requested_interval_ns,
+                )
+                padded[channel] = padded_wave
+                if not schedule_meta:
+                    schedule_meta = meta
+            normalized = padded
+
+        self.waveforms.update(normalized)
         if channel_sequences:
             self.sequences.update({int(channel): sequence for channel, sequence in channel_sequences.items()})
-        self._uploaded_channels.update(int(channel) for channel in channel_waves)
-        return {"packet_count": 0, "channels": tuple(sorted(int(channel) for channel in channel_waves)), "simulated": True}
+        self._uploaded_channels.update(normalized)
+        bytes_per_channel = max(
+            waveform_length_bytes(wave) for wave in normalized.values()
+        )
+        if progress_callback is not None:
+            progress_callback(0, 0)
+        return {
+            "packet_count": 0,
+            "waveform_packet_count": 0,
+            "channels": tuple(sorted(normalized)),
+            "bytes_per_channel": bytes_per_channel,
+            "wait_for_trigger": bool(channel_sequences),
+            "loop": bool(kwargs.get("loop") or schedule is not None),
+            "commands": [],
+            "instruction_repeats": max(1, int(kwargs.get("instruction_repeats", 1))),
+            "schedule": quantized_schedule,
+            "simulated": True,
+            **schedule_meta,
+        }
 
     def close(self) -> None:
         self._closed = True

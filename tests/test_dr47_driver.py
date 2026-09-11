@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "software"))
 import host  # type: ignore[import-not-found]  # noqa: E402
 
 from dr47 import (  # noqa: E402
+    BurstSchedule,
     Dr47Device,
     DeviceCapabilities,
     RFDC_NCO_MAX_GHZ,
@@ -470,6 +471,38 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(device.status(refresh=False).state.value, "running")
         device.abort_mute()
         self.assertEqual(device.status(refresh=False).state.value, "idle")
+
+    def test_simulator_supports_high_level_burst_playback(self):
+        """无硬件示例依赖的高层 burst API 必须与实板返回相同元数据。"""
+
+        device = SimulatedDr47Device(sync_role="master", batch_mode=True)
+        waveform = np.zeros(16, dtype="<i2")
+        waveform[0::2] = 1200
+        progress = []
+
+        with device:
+            device.set_xy_target_frequency(1, 4.0)
+            device.set_qc_on_off("xy", 1, "on")
+            device.commit()
+            playback = device.configure_playback(
+                {1: waveform},
+                schedule=BurstSchedule(20.0, 1000.0, 3),
+                wave_formats={1: "interleaved_iq"},
+                channel_mask=0x01,
+                progress_callback=lambda sent, total: progress.append((sent, total)),
+            )
+            self.assertEqual(playback.schedule.effective_first_delay_ns, 20.0)
+            self.assertEqual(playback.schedule.effective_interval_ns, 1000.0)
+            self.assertEqual(playback.schedule.repetitions, 3)
+            self.assertEqual(playback.channel_mask, 0x01)
+            self.assertEqual(playback.record_bytes_per_channel, 1600)
+            self.assertEqual(progress, [(0, 0)])
+
+            device.arm_playback(channel_mask=playback.channel_mask)
+            device.trigger_playback()
+            self.assertIs(device.status(refresh=False).state, PlaybackState.RUNNING)
+            device.abort_playback()
+            self.assertIs(device.status(refresh=False).state, PlaybackState.IDLE)
 
     def test_simulator_bypass_models_xs18_to_xs19_loopback(self):
         """检查 simulator 中 bypass 会放开 XS18->XS19 的本地回环门控。"""

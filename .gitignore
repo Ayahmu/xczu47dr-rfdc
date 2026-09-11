@@ -143,6 +143,7 @@ htmlcov/
 coverage.xml
 *.egg-info/
 software/dr47/build/
+/dist/
 software/rfsoc_web.sqlite3-*
 software/webui/.vite/
 

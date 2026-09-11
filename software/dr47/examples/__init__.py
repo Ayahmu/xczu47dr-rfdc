@@ -1,5 +1,6 @@
-"""板级硬件测试脚本。
+"""Runnable SDK examples and the maintained board acceptance test.
 
-当前只保留从卡 bypass SYNC、等待 XS19 外部 Trigger 的测试入口。脚本会真实访问
-板卡；运行前直接修改脚本顶部的用户配置，不通过命令行或环境变量传参。
+Hardware-facing files keep all user configuration as direct constants near the
+top and run without command-line arguments. ``simulator_quickstart`` is safe to
+run without a board.
 """

@@ -9,12 +9,26 @@ description = "Direct UDP driver for the XCZU47DR (47DR) RFDC playback board"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.23"]
+keywords = ["XCZU47DR", "RFSoC", "RFDC", "UDP", "waveform"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+]
 
 [project.scripts]
 dr47-network = "dr47.cli:main"
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.6"]
+
+[project.urls]
+Repository = "https://github.com/Ayahmu/xczu47dr-rfdc"
+Documentation = "https://github.com/Ayahmu/xczu47dr-rfdc/tree/xs17-250mhz-sync/docs"
 
 [tool.setuptools]
 packages = ["dr47", "dr47.examples"]

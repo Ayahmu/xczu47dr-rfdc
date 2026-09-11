@@ -4,6 +4,9 @@
 安装和板级流程请看[使用与测试指南](../../docs/使用与测试指南.md)，完整接口请看
 [API 参考](../../docs/API参考.md)。
 
+当前 `0.1.0` 对外交付范围不包含 TDC 校准、补偿或诊断；发布 wheel 会移除
+`dr47.tdc`。仓库中保留的相关研发代码和底层寄存器入口不属于当前公共 API。
+
 ## 快速导入
 
 ~~~python
@@ -32,6 +35,13 @@ Trigger。脚本不会调用软件 `trigger()`，也不会从 XS18 输出 Trigge
 ~~~bash
 .venv/bin/python software/dr47/examples/hardware_slave_bypass_external_trigger_test.py
 ~~~
+
+`examples/` 还包含三个 SDK 教学样例：`simulator_quickstart.py`、
+`network_discovery_example.py` 和 `single_board_software_trigger_example.py`。
+安装 wheel 后可用 `python -m dr47.examples.<模块名>` 直接运行。
+
+对外 SDK 交付请先阅读 [47DR 驱动 SDK 交付指南](../../docs/驱动SDK交付指南.md)；
+运行 `make driver-release` 会在 `dist/` 生成 wheel 和包含文档/样例的 ZIP 包。
 
 ## 本地验证
 

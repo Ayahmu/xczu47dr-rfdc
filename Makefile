@@ -73,7 +73,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 # and 13 test modules die on import.  Prefer the repo venv when it exists.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-test driver-wheel driver-smoke hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -87,6 +87,7 @@ help:
 	@echo "  make artifacts        Verify the selected role's checked-in artifacts"
 	@echo "  make artifacts-hash   Refresh artifacts/SHA256SUMS atomically"
 	@echo "  make artifacts-clean  Remove local checked-in artifacts explicitly"
+	@echo "  make driver-release   Build and verify the distributable Python SDK bundle"
 	@echo ""
 	@echo "Step targets:"
 	@echo "  make chisel           Generate Chisel Verilog"
@@ -153,10 +154,14 @@ driver-test:
 	$(PYTHON) -m unittest tests.test_dr47_driver
 
 driver-wheel:
+	mkdir -p "$(ROOT)/dist"
 	$(PYTHON) -m pip wheel --no-deps -w "$(ROOT)/dist" "$(SOFTWARE_DIR)/dr47"
 
 driver-smoke: driver-wheel
-	$(PYTHON) -c "import sys; sys.path.insert(0, '$(SOFTWARE_DIR)'); import dr47 as d; print(d.__version__)"
+	$(PYTHON) -c "import glob, runpy, sys; wheels=glob.glob('$(ROOT)/dist/47dr_driver-*-py3-none-any.whl'); assert wheels, 'driver wheel missing'; wheel=sorted(wheels)[-1]; sys.path.insert(0, wheel); import dr47 as d; assert '.whl/' in d.__file__, d.__file__; print('wheel version', d.__version__, 'from', d.__file__); runpy.run_module('dr47.examples.simulator_quickstart', run_name='__main__')"
+
+driver-release: driver-smoke
+	$(PYTHON) software/build_driver_release.py
 
 check-tools:
 	@command -v vivado >/dev/null || { echo "ERROR: vivado not found. Source Vivado settings first."; exit 1; }

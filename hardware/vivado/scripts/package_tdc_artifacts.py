@@ -78,8 +78,21 @@ def main():
     passed = re.search(r"^OK(?: \(skipped=(\d+)\))?$", test_text, re.MULTILINE)
     if not count or not passed:
         raise ValueError("Complete regression success is not recorded")
-    shutil.copy2(root / "docs/TDC_项目评估与实施记录.md", output / "TDC_PROJECT_REVIEW.md")
-    shutil.copy2(args.work / "tdc_model_limits.png", output / "tdc_model_limits.png")
+    # TDC is outside the current SDK.  Keep this historical packager usable by
+    # taking provenance files from the archived artifact when the old source
+    # document or work image is not present in a cleaned checkout.
+    review_source = root / "docs/TDC_项目评估与实施记录.md"
+    if not review_source.is_file():
+        review_source = root / "artifacts/tdc_20260907/TDC_PROJECT_REVIEW.md"
+    review_target = output / "TDC_PROJECT_REVIEW.md"
+    if review_source.resolve() != review_target.resolve():
+        shutil.copy2(review_source, review_target)
+    model_source = args.work / "tdc_model_limits.png"
+    if not model_source.is_file():
+        model_source = root / "artifacts/tdc_20260907/tdc_model_limits.png"
+    model_target = output / "tdc_model_limits.png"
+    if model_source.resolve() != model_target.resolve():
+        shutil.copy2(model_source, model_target)
     shutil.copy2(test_log, output / "regression.log")
     source_files = set()
     for directory, suffixes in (

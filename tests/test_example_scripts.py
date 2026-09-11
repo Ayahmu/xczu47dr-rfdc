@@ -24,8 +24,7 @@ class ExampleScriptTests(unittest.TestCase):
     def test_only_one_hardware_test_remains(self):
         scripts = {
             path.name
-            for path in EXAMPLES.glob("*.py")
-            if path.name != "__init__.py" and not path.name.startswith("_")
+            for path in EXAMPLES.glob("hardware_*_test.py")
         }
         self.assertEqual(scripts, {SCRIPT_NAME})
 

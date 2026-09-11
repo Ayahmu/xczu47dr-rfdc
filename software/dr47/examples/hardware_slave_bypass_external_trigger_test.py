@@ -111,6 +111,20 @@ def print_status(device: Dr47Device, label: str) -> None:
     )
 
 
+def print_upload_progress(sent_packets: int, total_packets: int) -> None:
+    """在同一行显示波形 UDP 上传进度。"""
+
+    if total_packets <= 0:
+        return
+    percent = min(100, round(sent_packets * 100 / total_packets))
+    print(
+        f"\r    波形上传 {percent:3d}% "
+        f"({sent_packets}/{total_packets} 包)",
+        end="\n" if sent_packets >= total_packets else "",
+        flush=True,
+    )
+
+
 def wait_rfdc_ready(device: Dr47Device) -> None:
     """等待 RFDC、DAC MTS 和 NCO 同步全部就绪。"""
 
@@ -256,6 +270,7 @@ def run_test() -> None:
             wave_formats={channel: "interleaved_iq" for channel in OUTPUT_CHANNELS},
             channel_mask=CHANNEL_MASK,
             bulk_upload=True,
+            progress_callback=print_upload_progress,
         )
         device.arm_playback(channel_mask=CHANNEL_MASK)
         wait_playback_ready(device, "ARM 后")
