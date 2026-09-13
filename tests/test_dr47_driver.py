@@ -39,6 +39,7 @@ from dr47 import (  # noqa: E402
     UDP_RFCTRL2_MAGIC,
     UDP_RFRESP2_MAGIC,
     RF2_OP_STATUS,
+    RF2_STATUS_UNSAFE_STATE,
     RFCTRL2_VERSION,
     pack_rfctrl2_arm,
     pack_interleaved_512b_waveforms,
@@ -53,7 +54,7 @@ from dr47 import (  # noqa: E402
 from dr47.capabilities import PlaybackState  # noqa: E402
 from dr47.network import _network_apply_with_recovery, _recover_playback_for_network_apply  # noqa: E402
 from dr47.transport import UdpTransport  # noqa: E402
-from dr47.errors import DriverError, TransportTimeout  # noqa: E402
+from dr47.errors import DriverError, ProtocolVersionError, TransportTimeout  # noqa: E402
 import waveform_model  # noqa: E402
 import waveform_tools  # noqa: E402
 from dr47 import hardware_test_network  # noqa: E402
@@ -152,6 +153,25 @@ class _TransientHandshakeTransport:
         pass
 
 
+class _IdentityMismatchTransport:
+    def request(self, _packet, *, seq, opcode, **_kwargs):
+        # STATUS identity extension: source commit=0xDEADBEEF, profile=1.
+        payload = bytearray(120)
+        struct.pack_into("<Q", payload, 72, 3 << 32)
+        struct.pack_into("<Q", payload, 104, (0xDEADBEEF << 32) | (1 << 16))
+        return {
+            "version": RFCTRL2_VERSION,
+            "status": 0,
+            "opcode": int(opcode),
+            "seq": int(seq),
+            "payload_bytes": len(payload),
+            "payload": bytes(payload),
+        }
+
+    def close(self):
+        pass
+
+
 class DriverTests(unittest.TestCase):
     """按协议层、状态机层和波形层组织的驱动回归测试。"""
 
@@ -200,6 +220,49 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(device.connect(), 0)
         self.assertTrue(device.connected)
         self.assertEqual([opcode for opcode, _ in transport.requests], [1, 1, RF2_OP_STATUS])
+
+    def test_connect_rejects_source_commit_identity_mismatch(self):
+        device = Dr47Device(
+            ip="169.254.214.189", retries=0, transport=_IdentityMismatchTransport(),
+            expected_source_commit_id=0x12345678,
+        )
+        with self.assertRaises(ProtocolVersionError) as ctx:
+            device.connect()
+        self.assertIn("source commit", str(ctx.exception))
+
+    def test_diagnostic_snapshot_decodes_rtl_word_layout(self):
+        from dr47.protocol import parse_rfctrl2_diagnostics_payload
+
+        words = [0] * 19
+        words[0] = 7  # generation
+        words[1] = 11  # input count
+        words[2] = 13  # capture tick
+        words[3] = 17  # accepted count
+        words[4] = 19  # skipped count
+        words[6] = 23  # launch tick
+        words[7] = 29  # playback start tick
+        words[8] = 31  # first valid tick
+        words[9] = 37  # trigger -> launch
+        words[10] = 41  # launch -> first valid
+        words[11] = (0xA5 << 8) | (1 << 5) | (1 << 4) | (1 << 3) | (1 << 2) | (1 << 1) | 1
+        words[12] = (0x1234 << 16) | 0x5678
+        words[13] = (2 << 18) | 0x2AAAA
+        words[14] = (0xCAFEBABE << 32) | 0xDEADBEEF
+        words[15] = 101
+        words[16] = 103
+        words[17] = (1 << 32) | (1 << 33)
+        words[18] = 3
+        decoded = parse_rfctrl2_diagnostics_payload({"payload": b"".join(struct.pack("<Q", w) for w in words)})
+        self.assertEqual(decoded["generation"], 7)
+        self.assertTrue(decoded["replay_ready"])
+        self.assertTrue(decoded["replay_active"])
+        self.assertEqual(decoded["underflow_mask"], 0xA5)
+        self.assertEqual(decoded["rfdc_status"], 0x1234)
+        self.assertEqual(decoded["rfdc_failure_stage"], 0x5678)
+        self.assertEqual(decoded["rfdc_failure_address"], 0x2AAAA)
+        self.assertEqual(decoded["rfdc_axi_response"], 2)
+        self.assertEqual(decoded["dac_direct_input_count"], 0xDEADBEEF)
+        self.assertEqual(decoded["dac_direct_accept_count"], 0xCAFEBABE)
 
     def test_transport_collects_all_broadcast_responses(self):
         """检查一次广播请求可以收集不同板卡的多个响应源地址。"""
@@ -471,6 +534,45 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(device.status(refresh=False).state.value, "running")
         device.abort_mute()
         self.assertEqual(device.status(refresh=False).state.value, "idle")
+
+    @patch("dr47.device.time.sleep")
+    def test_rfdc_apply_recovers_once_from_unsafe_playback_state(self, _sleep):
+        """重复 RFDC 提交遇到活动播放时应清理并只重试一次。"""
+        device = Dr47Device(batch_mode=True)
+        device._connected = True
+        device._status = SimpleNamespace(state=PlaybackState.ARMED)
+        device.rfctrl2_rfdc_apply = MagicMock(side_effect=[
+            DeviceStatusError("RFDC_APPLY", RF2_STATUS_UNSAFE_STATE),
+            {"revision": 1, "config_valid_mask": 0x01, "channels": []},
+        ])
+        device.abort_playback = MagicMock()
+        device.status = MagicMock(side_effect=[
+            SimpleNamespace(state=PlaybackState.ARMED),
+            SimpleNamespace(state=PlaybackState.IDLE),
+        ])
+
+        result = device._apply_pending(0x01)
+
+        self.assertEqual(result["revision"], 1)
+        self.assertEqual(device.rfctrl2_rfdc_apply.call_count, 2)
+        device.abort_playback.assert_called_once_with()
+        self.assertEqual(device.status.call_count, 2)
+        _sleep.assert_called_once()
+
+    def test_rfdc_apply_does_not_retry_non_unsafe_errors(self):
+        """RFDC 的其它错误必须原样返回，不得自动停止播放。"""
+        device = Dr47Device(batch_mode=True)
+        device._connected = True
+        device.rfctrl2_rfdc_apply = MagicMock(
+            side_effect=DeviceStatusError("RFDC_APPLY", 0x0008)
+        )
+        device.abort_playback = MagicMock()
+
+        with self.assertRaises(DeviceStatusError):
+            device._apply_pending(0x01)
+
+        device.rfctrl2_rfdc_apply.assert_called_once()
+        device.abort_playback.assert_not_called()
 
     def test_simulator_supports_high_level_burst_playback(self):
         """无硬件示例依赖的高层 burst API 必须与实板返回相同元数据。"""

@@ -80,6 +80,18 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         )
         self.assertNotIn("        ch4.\n", top)
 
+    def test_external_trigger_launch_has_no_fixed_dac_scheduler(self):
+        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        capture = (REPO_ROOT / "hardware" / "vivado" / "src" / "dac_ext_trigger_capture.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertNotIn("TARGET_DAC_DELAY_CYCLES", top)
+        self.assertNotIn("dac_trigger_scheduler", top)
+        self.assertIn("assign trigger_pulse = accept;", capture)
+        self.assertFalse((REPO_ROOT / "hardware" / "vivado" / "src" / "dac_trigger_scheduler.v").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

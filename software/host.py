@@ -153,7 +153,7 @@ UDP_RVRESP1_MAGIC = 0x0031505345525652  # ASCII "RVRESP1\\0" on the UDP byte str
 RVCTRL1_VERSION = 1
 UDP_RFCTRL2_MAGIC = 0x00324C5254434652  # ASCII "RFCTRL2\\0" on the UDP byte stream
 UDP_RFRESP2_MAGIC = 0x0032505345524652  # ASCII "RFRESP2\\0" on the UDP byte stream
-RFCTRL2_VERSION = 2
+RFCTRL2_VERSION = 3
 
 
 def validate_udp_bulk_beats(beats_per_datagram: int) -> int:
@@ -205,6 +205,9 @@ RF2_OP_NETWORK_APPLY = 0x0000000D
 RF2_OP_NETWORK_RESTART = 0x0000000E
 RF2_OP_SET_SYNC_ROLE = 0x0000000F
 RF2_OP_EMIT_TRIGGER = 0x00000010
+RF2_OP_TDC_REG = 0x00000011
+RF2_OP_DIAG_SNAPSHOT = 0x00000012
+RF2_OP_DIAG_CONTROL = 0x00000013
 
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
@@ -220,6 +223,8 @@ RF2_BUILD_PROFILE_NAMES = {
     RF2_BUILD_PROFILE_NORMAL: "custom_xczu47dr",
     RF2_BUILD_PROFILE_BANDWIDTH: "custom_xczu47dr_bw",
 }
+RF2_TRIGGER_PATH_VERSION = 3
+RF2_SOURCE_COMMIT_UNKNOWN = 0
 RF2_STATUS_RFDC_READY = 0x00000001
 RF2_STATUS_RFDC_BUSY = 0x00000002
 RF2_STATUS_ARMED = 0x00000004
@@ -615,6 +620,18 @@ def pack_rfctrl2_status(seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_STATUS, seq=seq)
 
 
+def pack_rfctrl2_diag_snapshot(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_DIAG_SNAPSHOT, seq=seq)
+
+
+def pack_rfctrl2_diag_control(events: int = 0xFFFFFFFF, counters: bool = True, seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(
+        RF2_OP_DIAG_CONTROL,
+        struct.pack("<II", int(events) & 0xFFFFFFFF, 1 if counters else 0),
+        seq=seq,
+    )
+
+
 def normalize_rfdc_phase_mdeg(phase_deg: float) -> int:
     """Normalize a mixer phase to the signed RFDC -180..180 degree range."""
     phase = ((float(phase_deg) + 180.0) % 360.0) - 180.0
@@ -907,6 +924,10 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         "trigger_input_count": 0,
         "trigger_accepted_count": 0,
         "trigger_output_count": 0,
+        "build_profile_id": RF2_BUILD_PROFILE_UNKNOWN,
+        "build_profile": "",
+        "source_commit_id": RF2_SOURCE_COMMIT_UNKNOWN,
+        "trigger_path_version": 0,
     })
     if len(payload) >= 32:
         (
@@ -939,6 +960,7 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         result["dac_mts_error"] = (mts_flags >> 16) & 0xFFFF
     if len(payload) >= 80:
         result["sync_status"] = struct.unpack_from("<I", payload, 72)[0]
+        result["trigger_path_version"] = (struct.unpack_from("<Q", payload, 72)[0] >> 32) & 0xFFFFFFFF
         result["sync_seen"] = bool(result["sync_status"] & RF2_SYNC_STATUS_SEEN)
         result["sync_link_ready"] = bool(result["sync_status"] & RF2_SYNC_STATUS_READY)
         result["sync_mode"] = "bypass" if result["sync_status"] & RF2_SYNC_STATUS_BYPASS else "external"
@@ -947,6 +969,11 @@ def parse_rfctrl2_status_payload(response: dict) -> dict:
         result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)
     if len(payload) >= 96:
         result["trigger_output_count"] = struct.unpack_from("<I", payload, 88)[0]
+    if len(payload) >= 112:
+        identity_word = struct.unpack_from("<Q", payload, 104)[0]
+        result["source_commit_id"] = (identity_word >> 32) & 0xFFFFFFFF
+        result["build_profile_id"] = (identity_word >> 16) & 0xFFFF
+        result["build_profile"] = RF2_BUILD_PROFILE_NAMES.get(result["build_profile_id"], "")
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)

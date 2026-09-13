@@ -7,7 +7,10 @@ module Top #(
     // Puts the scope reference and the RF launch in one clock domain so a
     // single-board XS18->XS19 loopback measures ~0 jitter; see
     // dac_trigger_emitter.v.
-    parameter integer TRIG_EMIT_DAC = 0
+    parameter integer TRIG_EMIT_DAC = 0,
+    // Number of RFDC fabric beats retained per enabled channel for immediate
+    // repeat Trigger playback.
+    parameter integer REPLAY_CACHE_BEATS = 256
 ) (
 
     // HMC7044 clock chip control (SPI interface)
@@ -200,6 +203,64 @@ module Top #(
   wire [63:0] sync_event_tick;
   wire [63:0] trigger_capture_tick;
   wire [63:0] trigger_launch_tick;
+  wire [31:0] dac_direct_input_count, dac_direct_accept_count;
+  wire dac_any_valid_gated;
+  wire diag_clear_events_pulse, diag_clear_counters_pulse;
+  wire diag_snapshot_request_toggle;
+  reg diag_snapshot_ack_toggle_dac;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_snapshot_req_dac_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_snapshot_ack_ddr_sync;
+  reg diag_snapshot_req_dac_seen;
+  reg diag_snapshot_ack_ddr_seen;
+  wire diag_snapshot_request_dac = diag_snapshot_req_dac_sync[2] != diag_snapshot_req_dac_seen;
+  wire diag_snapshot_ack_toggle = diag_snapshot_ack_ddr_sync[2];
+  reg [63:0] diag_snapshot_capture_tick_dac, diag_snapshot_launch_tick_dac;
+  reg [63:0] diag_snapshot_playback_start_tick_dac, diag_snapshot_first_valid_tick_dac;
+  reg [31:0] diag_snapshot_direct_input_count_dac, diag_snapshot_direct_accept_count_dac;
+  reg diag_snapshot_trigger_pulse_dac, diag_snapshot_trigger_launch_dac;
+  reg diag_snapshot_prepared_dac, diag_snapshot_output_permitted_dac;
+  reg [7:0] diag_snapshot_underflow_mask_dac;
+  reg diag_snapshot_replay_ready_dac, diag_snapshot_replay_active_dac;
+  reg diag_snapshot_ack_pending_dac;
+  reg [511:0] diag_snapshot_hold_dac;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [511:0] diag_snapshot_hold_meta_ddr;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [511:0] diag_snapshot_hold_sync_ddr;
+  reg [511:0] diag_snapshot_hold_ddr;
+  reg diag_snapshot_hold_valid_ddr;
+  wire [63:0] diag_snapshot_capture_tick_ddr = diag_snapshot_hold_ddr[63:0];
+  wire [63:0] diag_snapshot_launch_tick_ddr = diag_snapshot_hold_ddr[127:64];
+  wire [63:0] diag_snapshot_playback_start_tick_ddr = diag_snapshot_hold_ddr[191:128];
+  wire [63:0] diag_snapshot_first_valid_tick_ddr = diag_snapshot_hold_ddr[255:192];
+  wire [31:0] diag_snapshot_direct_input_count_ddr = diag_snapshot_hold_ddr[287:256];
+  wire [31:0] diag_snapshot_direct_accept_count_ddr = diag_snapshot_hold_ddr[319:288];
+  wire [7:0] diag_snapshot_underflow_mask_ddr = diag_snapshot_hold_ddr[327:320];
+  // The held-bus concatenation places pc_replay_active at bit 328 and
+  // replay_cache_ready at bit 329 (LSB-oriented decoder contract).
+  wire diag_snapshot_replay_active_ddr = diag_snapshot_hold_ddr[328];
+  wire diag_snapshot_replay_ready_ddr = diag_snapshot_hold_ddr[329];
+  wire diag_snapshot_trigger_pulse_ddr = diag_snapshot_hold_ddr[330];
+  wire diag_snapshot_trigger_launch_ddr = diag_snapshot_hold_ddr[331];
+  wire diag_snapshot_prepared_ddr = diag_snapshot_hold_ddr[332];
+  wire diag_snapshot_output_permitted_ddr = diag_snapshot_hold_ddr[333];
+  reg diag_clear_events_toggle_ddr, diag_clear_counters_toggle_ddr;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_clear_events_dac_sync;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_clear_counters_dac_sync;
+  reg diag_clear_events_dac_seen, diag_clear_counters_dac_seen;
+  wire diag_clear_events_dac = diag_clear_events_dac_sync[2] != diag_clear_events_dac_seen;
+  wire diag_clear_counters_dac = diag_clear_counters_dac_sync[2] != diag_clear_counters_dac_seen;
+  wire [63:0] dac_direct_capture_tick;
+  reg  [63:0] dac_diag_tick;
+  reg  [63:0] dac_diag_launch_tick;
+  reg  [63:0] dac_diag_playback_start_tick;
+  reg  [63:0] dac_diag_first_valid_tick;
+  reg         dac_diag_trigger_pulse_sticky;
+  reg         dac_diag_trigger_launch_sticky;
+  reg         dac_diag_playback_start_sticky;
+  reg         dac_any_valid_diag_prev;
+  wire [63:0] diag_trigger_capture_tick = (dac_direct_input_count != 0) ?
+      dac_direct_capture_tick : trigger_capture_tick;
+  wire [63:0] diag_trigger_launch_tick = (dac_direct_input_count != 0) ?
+      dac_diag_launch_tick : trigger_launch_tick;
   wire [31:0] gpio_out_reg;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_meta;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
@@ -649,7 +710,23 @@ module Top #(
 
   assign network_bootstrap_ip = 32'hC0A8FEFE;
   assign network_capabilities = 32'h00040000;
+`ifdef RF2_BUILD_PROFILE_ID
+  localparam [31:0] RF2_BUILD_PROFILE_ID = `RF2_BUILD_PROFILE_ID;
+`else
   localparam [31:0] RF2_BUILD_PROFILE_ID = 32'd1;
+`endif
+`ifdef RF2_SOURCE_COMMIT_ID
+  localparam [31:0] RF2_SOURCE_COMMIT_ID = `RF2_SOURCE_COMMIT_ID;
+`else
+  localparam [31:0] RF2_SOURCE_COMMIT_ID = 32'h00000000;
+`endif
+  // RFCTRL2 v3 identity: protocol/path version is exported in STATUS/HELLO
+  // and is checked by the host before any state-changing operation.
+`ifdef RF2_TRIGGER_PATH_VERSION
+  localparam [31:0] RF2_TRIGGER_PATH_VERSION = `RF2_TRIGGER_PATH_VERSION;
+`else
+  localparam [31:0] RF2_TRIGGER_PATH_VERSION = 32'd3;
+`endif
   assign network_status_flags = {
       25'd0,
       sync_seen_ddr,
@@ -832,6 +909,11 @@ module Top #(
   wire        ch5_arm, ch6_arm, ch7_arm, ch8_arm;
   wire        dac_in_ch1_tvalid, dac_in_ch2_tvalid, dac_in_ch3_tvalid, dac_in_ch4_tvalid;
   wire        dac_in_ch5_tvalid, dac_in_ch6_tvalid, dac_in_ch7_tvalid, dac_in_ch8_tvalid;
+  wire        dac_direct_trigger_pulse, dac_direct_trigger_edge;
+  wire        dac_direct_trigger_sync, dac_direct_trigger_latched;
+  wire        dac_trigger_launch;
+  reg         replay_cache_ready_dac;
+  wire        replay_cache_required_dac;
   wire        ch1_wave_tready_internal, ch2_wave_tready_internal, ch3_wave_tready_internal, ch4_wave_tready_internal;
   wire        ch5_wave_tready_internal, ch6_wave_tready_internal, ch7_wave_tready_internal, ch8_wave_tready_internal;
   wire [2:0]  ex_dbg_st;
@@ -864,7 +946,9 @@ module Top #(
 
   pl_riscv_control_v1 #(
       .ENABLE_UNSAFE_RFDC_MMIO(0),
-      .BUILD_PROFILE_ID(RF2_BUILD_PROFILE_ID)
+      .BUILD_PROFILE_ID(RF2_BUILD_PROFILE_ID),
+      .TRIGGER_PATH_VERSION(RF2_TRIGGER_PATH_VERSION),
+      .SOURCE_COMMIT_ID(RF2_SOURCE_COMMIT_ID)
   ) pl_riscv_control_v1_i (
       .clk                 (ddr4_ui_clk),
       .rst_n               (ddr4_ui_aresetn),
@@ -983,6 +1067,23 @@ module Top #(
       .play_prefill_ready(ex_dbg_prefill_ready),
       .play_active_valid(ex_dbg_active_valid),
       .play_pending_valid(ex_dbg_pending_valid),
+      .diag_trigger_capture_tick(diag_snapshot_capture_tick_ddr),
+      .diag_trigger_launch_tick(diag_snapshot_launch_tick_ddr),
+      .diag_playback_start_tick(diag_snapshot_playback_start_tick_ddr),
+      .diag_first_valid_tick(diag_snapshot_first_valid_tick_ddr),
+      .diag_direct_input_count(diag_snapshot_direct_input_count_ddr),
+      .diag_direct_accept_count(diag_snapshot_direct_accept_count_ddr),
+      .diag_trigger_pulse(diag_snapshot_trigger_pulse_ddr),
+      .diag_trigger_launch(diag_snapshot_trigger_launch_ddr),
+      .diag_prepared_dac(diag_snapshot_prepared_ddr),
+      .diag_output_permitted_dac(diag_snapshot_output_permitted_ddr),
+      .diag_underflow_mask(diag_snapshot_underflow_mask_ddr),
+      .diag_replay_ready(diag_snapshot_replay_ready_ddr),
+      .diag_replay_active(diag_snapshot_replay_active_ddr),
+      .diag_snapshot_ack_toggle(diag_snapshot_ack_toggle),
+      .diag_snapshot_request_toggle(diag_snapshot_request_toggle),
+      .diag_clear_events_pulse(diag_clear_events_pulse),
+      .diag_clear_counters_pulse(diag_clear_counters_pulse),
       .rvresp_tdata        (rvresp64_tdata),
       .rvresp_tvalid       (rvresp64_tvalid),
       .rvresp_tready       (rvresp64_tready),
@@ -1218,6 +1319,12 @@ module Top #(
       playback_admitted_count_ddr <= 32'd0;
       playback_skipped_count_ddr_meta <= 32'd0;
       playback_skipped_count_ddr <= 32'd0;
+      diag_snapshot_ack_ddr_sync <= 3'b000;
+      diag_snapshot_ack_ddr_seen <= 1'b0;
+      diag_snapshot_hold_meta_ddr <= 512'd0;
+      diag_snapshot_hold_sync_ddr <= 512'd0;
+      diag_snapshot_hold_ddr <= 512'd0;
+      diag_snapshot_hold_valid_ddr <= 1'b0;
     end else begin
       firmware_status_meta <= gpio_out_reg;
       firmware_status_ddr <= firmware_status_meta;
@@ -1240,6 +1347,14 @@ module Top #(
       playback_admitted_count_ddr <= playback_admitted_count_ddr_meta;
       playback_skipped_count_ddr_meta <= pc_trigger_skipped_count;
       playback_skipped_count_ddr <= playback_skipped_count_ddr_meta;
+      diag_snapshot_ack_ddr_sync <= {diag_snapshot_ack_ddr_sync[1:0], diag_snapshot_ack_toggle_dac};
+      diag_snapshot_hold_meta_ddr <= diag_snapshot_hold_dac;
+      diag_snapshot_hold_sync_ddr <= diag_snapshot_hold_meta_ddr;
+      if (diag_snapshot_ack_ddr_sync[2] != diag_snapshot_ack_ddr_seen) begin
+        diag_snapshot_ack_ddr_seen <= diag_snapshot_ack_ddr_sync[2];
+        diag_snapshot_hold_ddr <= diag_snapshot_hold_sync_ddr;
+        diag_snapshot_hold_valid_ddr <= 1'b1;
+      end
     end
   end
 
@@ -1317,18 +1432,36 @@ module Top #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] trig_event_ext_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_bypass_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_ready_dac_sync_ff;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] prefill_ready_dac_sync_ff;
   reg pc_started_dac_prev;
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
     if(!clk104_aresetn) begin
       trig_event_ext_dac_sync_ff <= 3'b000;
       sync_bypass_dac_sync_ff <= 3'b000;
       sync_ready_dac_sync_ff <= 3'b000;
+      prefill_ready_dac_sync_ff <= 3'b000;
       pc_started_dac_prev <= 1'b0;
+      diag_clear_events_dac_sync <= 3'b000;
+      diag_clear_counters_dac_sync <= 3'b000;
+      diag_snapshot_req_dac_sync <= 3'b000;
+      diag_snapshot_req_dac_seen <= 1'b0;
+      diag_clear_events_dac_seen <= 1'b0;
+      diag_clear_counters_dac_seen <= 1'b0;
     end else begin
       trig_event_ext_dac_sync_ff <= {trig_event_ext_dac_sync_ff[1:0], trigger_event_external_hmc};
       sync_bypass_dac_sync_ff <= {sync_bypass_dac_sync_ff[1:0], sync_bypass_ddr};
       sync_ready_dac_sync_ff <= {sync_ready_dac_sync_ff[1:0], sync_link_ready};
+      prefill_ready_dac_sync_ff <= {prefill_ready_dac_sync_ff[1:0], ex_dbg_prefill_ready};
       pc_started_dac_prev <= pc_source_started;
+      diag_clear_events_dac_sync <= {diag_clear_events_dac_sync[1:0], diag_clear_events_toggle_ddr};
+      diag_clear_counters_dac_sync <= {diag_clear_counters_dac_sync[1:0], diag_clear_counters_toggle_ddr};
+      diag_snapshot_req_dac_sync <= {diag_snapshot_req_dac_sync[1:0], diag_snapshot_request_toggle};
+      if (diag_snapshot_request_dac)
+        diag_snapshot_req_dac_seen <= diag_snapshot_req_dac_sync[2];
+      if (diag_clear_events_dac)
+        diag_clear_events_dac_seen <= diag_clear_events_dac_sync[2];
+      if (diag_clear_counters_dac)
+        diag_clear_counters_dac_seen <= diag_clear_counters_dac_sync[2];
     end
   end
   wire legacy_event_is_external_dac = trig_event_ext_dac_sync_ff[2];
@@ -1353,12 +1486,8 @@ module Top #(
       .pulse_count     (trigger_emit_dac_count)
   );
 
-  wire        dac_direct_trigger_pulse;
-  wire        dac_direct_trigger_edge;
-  wire        dac_direct_trigger_sync;
-  wire        dac_direct_trigger_latched;
-  wire [31:0] dac_direct_input_count;
-  wire [31:0] dac_direct_accept_count;
+  // Direct-trigger signals are declared with the status wires above so the
+  // RFCTRL2 instance never relies on implicit-net inference.
   wire rfctrl2_play_abort;
   wire rfctrl2_play_prepare;
   reg tdc_mode_dac;
@@ -1368,35 +1497,106 @@ module Top #(
       .rst_n           (clk104_aresetn),
       .trigger_in      (TRIG_2),
       .gate_open       (dac_ext_trigger_gate),
-      .clear           (rfctrl2_play_abort | rfdc_force_mute_pulse),
+      // rfdc_force_mute_pulse is a short DDR-domain pulse.  The playback
+      // controller turns it into rfctrl2_play_abort through its toggle CDC;
+      // use that DAC-domain pulse here instead of sampling the raw pulse.
+      .clear           (rfctrl2_play_abort),
+      .diag_clear_counters(diag_clear_counters_dac),
       .trigger_pulse   (dac_direct_trigger_pulse),
       .trigger_edge_raw(dac_direct_trigger_edge),
       .input_count     (dac_direct_input_count),
       .accept_count    (dac_direct_accept_count),
+      .capture_tick    (dac_direct_capture_tick),
       .trigger_in_sync (dac_direct_trigger_sync),
       .trigger_latched (dac_direct_trigger_latched)
   );
 
   // On the master XS19 is unused, so keep the original source untouched.
   // On a slave the external event comes from the direct capture and everything
-  // else (host RFCTRL2 TRIGGER, EMIT) still arrives over hmc_pl_clk.
+  // else (host RFCTRL2 TRIGGER, EMIT) still arrives over hmc_pl_clk.  Both
+  // sources are already one-cycle pulses in dac_axis_clk, so select them
+  // directly and let dac_play_ctrl sample the request on the next DAC edge.
   wire dac_trigger_request =
       tdc_mode_dac ? 1'b0 : IS_MASTER ? role_trigger_dac_pulse
                 : (dac_direct_trigger_pulse |
                    (role_trigger_dac_pulse && !legacy_event_is_external_dac));
+  // No programmable launch delay is inserted here.  Abort/mute has priority
+  // in dac_play_ctrl; masking the request as well prevents a request that is
+  // present during the mute pulse from becoming a stale start on the next
+  // edge.  The only remaining latency is the required DAC-domain CDC/capture
+  // latency, with no programmable launch-delay state.
+  // A request is a launch only when the DAC-domain admission contract is
+  // true. Requests arriving while a buffer is being prepared are dropped at
+  // this boundary and never become a delayed playback event.
+  assign dac_trigger_launch = dac_trigger_request && rfctrl2_prepared_dac &&
+      !rfctrl2_play_abort;
 
-  // SYSREF remains dedicated to RFDC MTS/NCO alignment.  Playback is released
-  // after a fixed DAC-clock delay, never by a board-local SYSREF frame.
-  wire dac_trigger_launch;
-  wire dac_trigger_pending;
-  dac_trigger_scheduler dac_trigger_scheduler_i (
-      .clk(dac_axis_clk),
-      .rst_n(clk104_aresetn),
-      .trigger_request(dac_trigger_request),
-      .clear_pending(rfctrl2_play_abort | rfdc_force_mute_pulse),
-      .trigger_launch(dac_trigger_launch),
-      .trigger_pending(dac_trigger_pending)
-  );
+  // DAC-domain timestamps are latched at the event boundary.  They are kept
+  // independent of the DDR/HMC status snapshots so a diagnostic read cannot
+  // perturb the Trigger path.
+  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
+    if (!clk104_aresetn) begin
+      dac_diag_tick <= 64'd0;
+      dac_diag_launch_tick <= 64'd0;
+      dac_diag_playback_start_tick <= 64'd0;
+      dac_diag_first_valid_tick <= 64'd0;
+      dac_diag_trigger_pulse_sticky <= 1'b0;
+      dac_diag_trigger_launch_sticky <= 1'b0;
+      dac_diag_playback_start_sticky <= 1'b0;
+      dac_any_valid_diag_prev <= 1'b0;
+      diag_snapshot_ack_toggle_dac <= 1'b0;
+      diag_snapshot_ack_pending_dac <= 1'b0;
+      diag_snapshot_hold_dac <= 512'd0;
+    end else begin
+      dac_diag_tick <= dac_diag_tick + 64'd1;
+      if (diag_clear_counters_dac) begin
+        dac_diag_launch_tick <= 64'd0;
+        dac_diag_playback_start_tick <= 64'd0;
+        dac_diag_first_valid_tick <= 64'd0;
+        dac_diag_trigger_pulse_sticky <= 1'b0;
+        dac_diag_trigger_launch_sticky <= 1'b0;
+        dac_diag_playback_start_sticky <= 1'b0;
+      end else begin
+        if (dac_trigger_launch) begin
+          dac_diag_launch_tick <= dac_diag_tick;
+          dac_diag_trigger_launch_sticky <= 1'b1;
+        end
+        if (dac_direct_trigger_pulse)
+          dac_diag_trigger_pulse_sticky <= 1'b1;
+        if (pc_started_pulse_dac)
+          dac_diag_playback_start_tick <= dac_diag_tick;
+        if (dac_any_valid_gated && !dac_any_valid_diag_prev) begin
+          dac_diag_first_valid_tick <= dac_diag_tick;
+          dac_diag_playback_start_sticky <= 1'b1;
+        end
+      end
+      dac_any_valid_diag_prev <= dac_any_valid_gated;
+      if (diag_snapshot_request_dac) begin
+        diag_snapshot_hold_dac <= {
+          178'd0,
+          rfdc_output_permitted_dac,
+          rfctrl2_prepared_dac,
+          dac_diag_trigger_launch_sticky,
+          dac_diag_trigger_pulse_sticky,
+          replay_cache_ready_dac,
+          pc_replay_active,
+          pc_underflow_seen,
+          dac_direct_accept_count,
+          dac_direct_input_count,
+          dac_diag_first_valid_tick,
+          dac_diag_playback_start_tick,
+          diag_trigger_launch_tick,
+          diag_trigger_capture_tick
+        };
+        // Delay ACK by one DAC edge.  The held bus is then stable before the
+        // DDR-domain synchronizer can observe the acknowledgement.
+        diag_snapshot_ack_pending_dac <= 1'b1;
+      end else if (diag_snapshot_ack_pending_dac) begin
+        diag_snapshot_ack_toggle_dac <= ~diag_snapshot_ack_toggle_dac;
+        diag_snapshot_ack_pending_dac <= 1'b0;
+      end
+    end
+  end
 
   // Measures, per Trigger, how many DAC cycles the hmc_pl_clk detour adds.
   // trig_lat_delta_max - trig_lat_delta_min is the launch jitter that path was
@@ -1545,7 +1745,10 @@ module Top #(
   wire tdc_output_mute = tdc_mode_dac &&
       (tdc_fault || tdc_runtime_fault || !tdc_ready_sync[2] || !tdc_valid_sync[2] || tdc_clear);
   assign pc_started = pc_source_started || (tdc_mode_dac && tdc_active);
-  assign rfctrl2_prepared_dac = pc_source_prepared && (!tdc_mode_dac ||
+  wire long_buffer_ready_dac = prefill_ready_dac_sync_ff[2];
+  assign rfctrl2_prepared_dac = pc_source_prepared &&
+      (replay_cache_required_dac ? replay_cache_ready_dac : long_buffer_ready_dac) &&
+      rfdc_output_permitted_dac && (!tdc_mode_dac ||
       (!tdc_active && !tdc_fault && tdc_ready_sync[2] && tdc_valid_sync[2]));
   wire tdc_admission_open, tdc_request_valid, tdc_request_good;
   wire [31:0] tdc_request_epoch;
@@ -1922,6 +2125,8 @@ module Top #(
       rfctrl2_pending_ddr <= 1'b0;
       pc_started_meta <= 1'b0;
       pc_started_ddr <= 1'b0;
+      diag_clear_events_toggle_ddr <= 1'b0;
+      diag_clear_counters_toggle_ddr <= 1'b0;
     end else begin
       rfctrl2_armed_meta <= rfctrl2_armed_dac;
       rfctrl2_armed_ddr <= rfctrl2_armed_meta;
@@ -1931,6 +2136,10 @@ module Top #(
       rfctrl2_pending_ddr <= rfctrl2_pending_meta;
       pc_started_meta <= pc_started;
       pc_started_ddr <= pc_started_meta;
+      if (diag_clear_events_pulse)
+        diag_clear_events_toggle_ddr <= ~diag_clear_events_toggle_ddr;
+      if (diag_clear_counters_pulse)
+        diag_clear_counters_toggle_ddr <= ~diag_clear_counters_toggle_ddr;
     end
   end
 
@@ -2166,8 +2375,81 @@ module Top #(
 
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
+  wire [15:0] pc_replay_index;
+  reg [255:0] replay_mem_ch1 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch2 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch3 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch4 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch5 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch6 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch7 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_mem_ch8 [0:REPLAY_CACHE_BEATS-1];
+  reg [15:0] replay_capture_count;
+  reg [7:0] replay_capture_done_mask;
+  function automatic [31:0] max_enabled_beats;
+    input [7:0] arm_mask;
+    input [31:0] len1, len2, len3, len4, len5, len6, len7, len8;
+    reg [31:0] max_len;
+    begin
+      max_len = 32'd0;
+      if (arm_mask[0] && len1 > max_len) max_len = len1;
+      if (arm_mask[1] && len2 > max_len) max_len = len2;
+      if (arm_mask[2] && len3 > max_len) max_len = len3;
+      if (arm_mask[3] && len4 > max_len) max_len = len4;
+      if (arm_mask[4] && len5 > max_len) max_len = len5;
+      if (arm_mask[5] && len6 > max_len) max_len = len6;
+      if (arm_mask[6] && len7 > max_len) max_len = len7;
+      if (arm_mask[7] && len8 > max_len) max_len = len8;
+      max_enabled_beats = max_len;
+    end
+  endfunction
+  wire [7:0] replay_arm_mask_dac = {ch8_arm_dac, ch7_arm_dac, ch6_arm_dac, ch5_arm_dac,
+                                    ch4_arm_dac, ch3_arm_dac, ch2_arm_dac, ch1_arm_dac};
+  wire [31:0] replay_target_beats_dac = max_enabled_beats(
+      replay_arm_mask_dac, ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,
+      ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac);
+  assign replay_cache_required_dac = (replay_target_beats_dac != 0) &&
+                                    (replay_target_beats_dac <= REPLAY_CACHE_BEATS);
+  wire replay_capture_enable = rfctrl2_armed_dac && !replay_cache_ready_dac &&
+      (replay_target_beats_dac != 0) && (replay_target_beats_dac <= REPLAY_CACHE_BEATS) && !pc_source_started;
+  // A channel shorter than the longest record is considered complete once
+  // its programmed length has been captured.  It must not hold the other
+  // channels hostage while the cache is being filled.
+  wire replay_capture_fire = replay_capture_enable &&
+      ((replay_capture_done_mask[0] || !ch1_arm_dac || (dac_in_ch1_tvalid && dac_ch1_ready)) &&
+       (replay_capture_done_mask[1] || !ch2_arm_dac || (dac_in_ch2_tvalid && dac_ch2_ready)) &&
+       (replay_capture_done_mask[2] || !ch3_arm_dac || (dac_in_ch3_tvalid && dac_ch3_ready)) &&
+       (replay_capture_done_mask[3] || !ch4_arm_dac || (dac_in_ch4_tvalid && dac_ch4_ready)) &&
+       (replay_capture_done_mask[4] || !ch5_arm_dac || (dac_in_ch5_tvalid && dac_ch5_ready)) &&
+       (replay_capture_done_mask[5] || !ch6_arm_dac || (dac_in_ch6_tvalid && dac_ch6_ready)) &&
+       (replay_capture_done_mask[6] || !ch7_arm_dac || (dac_in_ch7_tvalid && dac_ch7_ready)) &&
+       (replay_capture_done_mask[7] || !ch8_arm_dac || (dac_in_ch8_tvalid && dac_ch8_ready)));
+  wire replay_valid_dac = replay_cache_ready_dac && pc_replay_active;
+  wire replay_ch1_valid = replay_valid_dac && ch1_arm_dac && (pc_replay_index < ch1_len_dac[15:0]);
+  wire replay_ch2_valid = replay_valid_dac && ch2_arm_dac && (pc_replay_index < ch2_len_dac[15:0]);
+  wire replay_ch3_valid = replay_valid_dac && ch3_arm_dac && (pc_replay_index < ch3_len_dac[15:0]);
+  wire replay_ch4_valid = replay_valid_dac && ch4_arm_dac && (pc_replay_index < ch4_len_dac[15:0]);
+  wire replay_ch5_valid = replay_valid_dac && ch5_arm_dac && (pc_replay_index < ch5_len_dac[15:0]);
+  wire replay_ch6_valid = replay_valid_dac && ch6_arm_dac && (pc_replay_index < ch6_len_dac[15:0]);
+  wire replay_ch7_valid = replay_valid_dac && ch7_arm_dac && (pc_replay_index < ch7_len_dac[15:0]);
+  wire replay_ch8_valid = replay_valid_dac && ch8_arm_dac && (pc_replay_index < ch8_len_dac[15:0]);
+  wire [255:0] play_ch1_tdata = replay_ch1_valid ? replay_mem_ch1[pc_replay_index] : dac_in_ch1_tdata;
+  wire [255:0] play_ch2_tdata = replay_ch2_valid ? replay_mem_ch2[pc_replay_index] : dac_in_ch2_tdata;
+  wire [255:0] play_ch3_tdata = replay_ch3_valid ? replay_mem_ch3[pc_replay_index] : dac_in_ch3_tdata;
+  wire [255:0] play_ch4_tdata = replay_ch4_valid ? replay_mem_ch4[pc_replay_index] : dac_in_ch4_tdata;
+  wire [255:0] play_ch5_tdata = replay_ch5_valid ? replay_mem_ch5[pc_replay_index] : dac_in_ch5_tdata;
+  wire [255:0] play_ch6_tdata = replay_ch6_valid ? replay_mem_ch6[pc_replay_index] : dac_in_ch6_tdata;
+  wire [255:0] play_ch7_tdata = replay_ch7_valid ? replay_mem_ch7[pc_replay_index] : dac_in_ch7_tdata;
+  wire [255:0] play_ch8_tdata = replay_ch8_valid ? replay_mem_ch8[pc_replay_index] : dac_in_ch8_tdata;
+  wire play_ch1_valid = replay_ch1_valid | (!replay_valid_dac && dac_in_ch1_tvalid);
+  wire play_ch2_valid = replay_ch2_valid | (!replay_valid_dac && dac_in_ch2_tvalid);
+  wire play_ch3_valid = replay_ch3_valid | (!replay_valid_dac && dac_in_ch3_tvalid);
+  wire play_ch4_valid = replay_ch4_valid | (!replay_valid_dac && dac_in_ch4_tvalid);
+  wire play_ch5_valid = replay_ch5_valid | (!replay_valid_dac && dac_in_ch5_tvalid);
+  wire play_ch6_valid = replay_ch6_valid | (!replay_valid_dac && dac_in_ch6_tvalid);
+  wire play_ch7_valid = replay_ch7_valid | (!replay_valid_dac && dac_in_ch7_tvalid);
+  wire play_ch8_valid = replay_ch8_valid | (!replay_valid_dac && dac_in_ch8_tvalid);
   wire [15:0] pc_last_seq_id;
-  wire [7:0]  pc_underflow_seen;
   wire [31:0] pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count;
   wire [31:0] pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count;
 
@@ -2177,16 +2459,22 @@ module Top #(
     .clk(dac_axis_clk),
     .rst_n(dac_rst_n),
     .trigger(tdc_mode_dac ? 1'b0 : ps_trigger_dac_sync),
-    .rfctrl2_trigger(dac_hw_rfctrl2_trigger),
+    .rfctrl2_trigger(dac_hw_rfctrl2_trigger && rfctrl2_prepared_dac),
     .prepare(rfctrl2_play_prepare),
     .abort(rfctrl2_play_abort | (tdc_mode_dac && (tdc_fault || tdc_runtime_fault))),
+    .diag_clear_events(diag_clear_events_dac),
+    .diag_clear_counters(diag_clear_counters_dac),
     .armed(rfctrl2_armed_dac),
 
     .cfg_seq_id(seq_id_dac),
-    .auto_start(cfg_auto_start_dac),
+    // A short external-trigger frame must finish its one-time replay fill
+    // before auto-start can consume the FIFO. Long/legacy frames retain the
+    // executor's normal auto-start behavior.
+    .auto_start(cfg_auto_start_dac && (!replay_cache_required_dac || replay_cache_ready_dac)),
     .loop_enable(cfg_loop_dac),
     .repeat_limit(cfg_repeat_count_dac),
     .debug_alternate(cfg_debug_alternate_dac),
+    .replay_cache_ready(replay_cache_ready_dac),
 
     .ch1_delay_cycles(ch1_delay_dac),
     .ch2_delay_cycles(ch2_delay_dac),
@@ -2213,14 +2501,14 @@ module Top #(
     .ch7_arm(ch7_arm_dac),
     .ch8_arm(ch8_arm_dac),
 
-    .ch1_fifo_tvalid(dac_in_ch1_tvalid),
-    .ch2_fifo_tvalid(dac_in_ch2_tvalid),
-    .ch3_fifo_tvalid(dac_in_ch3_tvalid),
-    .ch4_fifo_tvalid(dac_in_ch4_tvalid),
-    .ch5_fifo_tvalid(dac_in_ch5_tvalid),
-    .ch6_fifo_tvalid(dac_in_ch6_tvalid),
-    .ch7_fifo_tvalid(dac_in_ch7_tvalid),
-    .ch8_fifo_tvalid(dac_in_ch8_tvalid),
+    .ch1_fifo_tvalid(play_ch1_valid),
+    .ch2_fifo_tvalid(play_ch2_valid),
+    .ch3_fifo_tvalid(play_ch3_valid),
+    .ch4_fifo_tvalid(play_ch4_valid),
+    .ch5_fifo_tvalid(play_ch5_valid),
+    .ch6_fifo_tvalid(play_ch6_valid),
+    .ch7_fifo_tvalid(play_ch7_valid),
+    .ch8_fifo_tvalid(play_ch8_valid),
     .ch1_fifo_prog_empty(ch1_prog_empty),
     .ch2_fifo_prog_empty(ch2_prog_empty),
     .ch3_fifo_prog_empty(ch3_prog_empty),
@@ -2257,6 +2545,8 @@ module Top #(
     .ch7_active(),
     .ch8_active(),
     .prepared(pc_source_prepared),
+    .replay_active(pc_replay_active),
+    .replay_index(pc_replay_index),
 
     .dbg_trig_pulse (pc_trig_pulse),
     .dbg_new_cfg    (pc_new_cfg),
@@ -2276,6 +2566,45 @@ module Top #(
     .dbg_trigger_admitted_count(pc_trigger_admitted_count),
     .dbg_trigger_skipped_count(pc_trigger_skipped_count)
   );
+
+  // DAC-domain replay cache.  During the first short burst the normal
+  // asynchronous FIFOs are consumed and their beats are mirrored into BRAM.
+  // Once the burst completes, subsequent accepted Triggers select this cache;
+  // the DDR FIFOs are held closed and no refill is possible on that path.
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if (!dac_rst_n) begin
+      replay_capture_count <= 16'd0;
+      replay_capture_done_mask <= 8'd0;
+      replay_cache_ready_dac <= 1'b0;
+    end else begin
+      if (rfctrl2_play_prepare) begin
+        replay_capture_count <= 16'd0;
+        replay_capture_done_mask <= 8'd0;
+        replay_cache_ready_dac <= 1'b0;
+      end
+      if (replay_capture_fire && replay_capture_count < REPLAY_CACHE_BEATS) begin
+        if (!replay_capture_done_mask[0]) replay_mem_ch1[replay_capture_count] <= dac_in_ch1_tdata;
+        if (!replay_capture_done_mask[1]) replay_mem_ch2[replay_capture_count] <= dac_in_ch2_tdata;
+        if (!replay_capture_done_mask[2]) replay_mem_ch3[replay_capture_count] <= dac_in_ch3_tdata;
+        if (!replay_capture_done_mask[3]) replay_mem_ch4[replay_capture_count] <= dac_in_ch4_tdata;
+        if (!replay_capture_done_mask[4]) replay_mem_ch5[replay_capture_count] <= dac_in_ch5_tdata;
+        if (!replay_capture_done_mask[5]) replay_mem_ch6[replay_capture_count] <= dac_in_ch6_tdata;
+        if (!replay_capture_done_mask[6]) replay_mem_ch7[replay_capture_count] <= dac_in_ch7_tdata;
+        if (!replay_capture_done_mask[7]) replay_mem_ch8[replay_capture_count] <= dac_in_ch8_tdata;
+        if (!replay_capture_done_mask[0] && ch1_arm_dac && (replay_capture_count + 1 >= ch1_len_dac)) replay_capture_done_mask[0] <= 1'b1;
+        if (!replay_capture_done_mask[1] && ch2_arm_dac && (replay_capture_count + 1 >= ch2_len_dac)) replay_capture_done_mask[1] <= 1'b1;
+        if (!replay_capture_done_mask[2] && ch3_arm_dac && (replay_capture_count + 1 >= ch3_len_dac)) replay_capture_done_mask[2] <= 1'b1;
+        if (!replay_capture_done_mask[3] && ch4_arm_dac && (replay_capture_count + 1 >= ch4_len_dac)) replay_capture_done_mask[3] <= 1'b1;
+        if (!replay_capture_done_mask[4] && ch5_arm_dac && (replay_capture_count + 1 >= ch5_len_dac)) replay_capture_done_mask[4] <= 1'b1;
+        if (!replay_capture_done_mask[5] && ch6_arm_dac && (replay_capture_count + 1 >= ch6_len_dac)) replay_capture_done_mask[5] <= 1'b1;
+        if (!replay_capture_done_mask[6] && ch7_arm_dac && (replay_capture_count + 1 >= ch7_len_dac)) replay_capture_done_mask[6] <= 1'b1;
+        if (!replay_capture_done_mask[7] && ch8_arm_dac && (replay_capture_count + 1 >= ch8_len_dac)) replay_capture_done_mask[7] <= 1'b1;
+        replay_capture_count <= replay_capture_count + 16'd1;
+      end
+      if (replay_capture_fire && (replay_capture_count + 16'd1 >= replay_target_beats_dac[15:0]))
+        replay_cache_ready_dac <= 1'b1;
+    end
+  end
 
   wire [31:0] ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count;
   wire [31:0] ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count;
@@ -2312,27 +2641,27 @@ module Top #(
   end
   wire wave_fifo_aresetn = ddr4_ui_aresetn & (wave_fifo_reset_cnt == 5'd0);
 
-  assign dac_ch1_ready_gated = dac_ch1_ready & ch1_allow & !tdc_output_mute;
-  assign dac_ch2_ready_gated = dac_ch2_ready & ch2_allow & !tdc_output_mute;
-  assign dac_ch3_ready_gated = dac_ch3_ready & ch3_allow & !tdc_output_mute;
-  assign dac_ch4_ready_gated = dac_ch4_ready & ch4_allow & !tdc_output_mute;
-  assign dac_ch5_ready_gated = dac_ch5_ready & ch5_allow & !tdc_output_mute;
-  assign dac_ch6_ready_gated = dac_ch6_ready & ch6_allow & !tdc_output_mute;
-  assign dac_ch7_ready_gated = dac_ch7_ready & ch7_allow & !tdc_output_mute;
-  assign dac_ch8_ready_gated = dac_ch8_ready & ch8_allow & !tdc_output_mute;
-  assign dac_ch1_valid_gated = dac_in_ch1_tvalid & ch1_allow;
-  assign dac_ch2_valid_gated = dac_in_ch2_tvalid & ch2_allow;
-  assign dac_ch3_valid_gated = dac_in_ch3_tvalid & ch3_allow;
-  assign dac_ch4_valid_gated = dac_in_ch4_tvalid & ch4_allow;
-  assign dac_ch5_valid_gated = dac_in_ch5_tvalid & ch5_allow;
-  assign dac_ch6_valid_gated = dac_in_ch6_tvalid & ch6_allow;
-  assign dac_ch7_valid_gated = dac_in_ch7_tvalid & ch7_allow;
-  assign dac_ch8_valid_gated = dac_in_ch8_tvalid & ch8_allow;
+  assign dac_ch1_ready_gated = dac_ch1_ready & (ch1_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch2_ready_gated = dac_ch2_ready & (ch2_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch3_ready_gated = dac_ch3_ready & (ch3_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch4_ready_gated = dac_ch4_ready & (ch4_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch5_ready_gated = dac_ch5_ready & (ch5_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch6_ready_gated = dac_ch6_ready & (ch6_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch7_ready_gated = dac_ch7_ready & (ch7_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch8_ready_gated = dac_ch8_ready & (ch8_allow || replay_capture_enable) & !tdc_output_mute & !replay_valid_dac;
+  assign dac_ch1_valid_gated = play_ch1_valid & ch1_allow;
+  assign dac_ch2_valid_gated = play_ch2_valid & ch2_allow;
+  assign dac_ch3_valid_gated = play_ch3_valid & ch3_allow;
+  assign dac_ch4_valid_gated = play_ch4_valid & ch4_allow;
+  assign dac_ch5_valid_gated = play_ch5_valid & ch5_allow;
+  assign dac_ch6_valid_gated = play_ch6_valid & ch6_allow;
+  assign dac_ch7_valid_gated = play_ch7_valid & ch7_allow;
+  assign dac_ch8_valid_gated = play_ch8_valid & ch8_allow;
 
-  wire [2047:0] tdc_input_data = {dac_in_ch8_tdata, dac_in_ch7_tdata, dac_in_ch6_tdata,
-      dac_in_ch5_tdata, dac_in_ch4_tdata, dac_in_ch3_tdata, dac_in_ch2_tdata, dac_in_ch1_tdata};
-  wire [7:0] tdc_input_valid = {dac_in_ch8_tvalid, dac_in_ch7_tvalid, dac_in_ch6_tvalid,
-      dac_in_ch5_tvalid, dac_in_ch4_tvalid, dac_in_ch3_tvalid, dac_in_ch2_tvalid, dac_in_ch1_tvalid};
+  wire [2047:0] tdc_input_data = {play_ch8_tdata, play_ch7_tdata, play_ch6_tdata,
+      play_ch5_tdata, play_ch4_tdata, play_ch3_tdata, play_ch2_tdata, play_ch1_tdata};
+  wire [7:0] tdc_input_valid = {play_ch8_valid, play_ch7_valid, play_ch6_valid,
+      play_ch5_valid, play_ch4_valid, play_ch3_valid, play_ch2_valid, play_ch1_valid};
   wire [7:0] tdc_channel_allow = {ch8_allow, ch7_allow, ch6_allow, ch5_allow,
       ch4_allow, ch3_allow, ch2_allow, ch1_allow};
   wire [7:0] tdc_channel_ready = {dac_ch8_ready, dac_ch7_ready, dac_ch6_ready, dac_ch5_ready,
@@ -2393,7 +2722,7 @@ module Top #(
   wire rfdc_ch7_tvalid = rfdc_all_valid[6];
   wire rfdc_ch8_tvalid = rfdc_all_valid[7];
 
-  wire dac_any_valid_gated = dac_ch1_valid_gated | dac_ch2_valid_gated |
+  assign dac_any_valid_gated = dac_ch1_valid_gated | dac_ch2_valid_gated |
                              dac_ch3_valid_gated | dac_ch4_valid_gated |
                              dac_ch5_valid_gated | dac_ch6_valid_gated |
                              dac_ch7_valid_gated | dac_ch8_valid_gated;
@@ -3261,7 +3590,7 @@ module Top #(
   assign M_AXI_GPIO_rdata =
       {hmc7044_set_finish, sync_event_epoch, axigpio_rdata[24:0]};
 
-
+`ifdef ENABLE_ILA
   ila_s_axi_01 u_ila_s_axi_01 (
     .clk(ddr4_ui_clk),
     .probe0(M_AXI_DM_araddr),
@@ -3390,7 +3719,7 @@ module Top #(
       // Top 6 bits: the DAC-domain external Trigger path under test.
       dac_ext_trigger_gate,
       role_trigger_dac_pulse,
-      dac_trigger_pending,
+      1'b0,
       dac_trigger_launch,
       dac_direct_trigger_sync,
       dac_direct_trigger_pulse,
@@ -3508,4 +3837,5 @@ module Top #(
     .probe3(trigger_capture_tick),
     .probe4(trigger_launch_tick)
   );
+`endif
 endmodule

@@ -16,12 +16,15 @@ module dac_play_ctrl #(
     input  wire        rfctrl2_trigger, // RFCTRL2 专用、DAC 域单周期 trigger
     input  wire        prepare,      // RFCTRL2 ARM 到达 DAC 域后的单周期 prepare
     input  wire        abort,        // DAC 域同步后的 emergency mute pulse
+    input  wire        diag_clear_events,
+    input  wire        diag_clear_counters,
     input  wire        armed,        // RFCTRL2 ARM 会话保持到 ABORT_MUTE
     input  wire [15:0] cfg_seq_id,   // DAC 域锁存配置帧编号
     input  wire        auto_start,   // END ch=15：配置到达后直接启动
     input  wire        loop_enable,  // loop refill 后自动继续输出，不等待下一次 Trigger
     input  wire [31:0] repeat_limit,
     input  wire        debug_alternate,
+    input  wire        replay_cache_ready,
 
     input  wire [31:0] ch1_delay_cycles,
     input  wire [31:0] ch2_delay_cycles,
@@ -92,6 +95,8 @@ module dac_play_ctrl #(
     output reg         ch7_active,
     output reg         ch8_active,
     output reg         prepared,
+    output wire        replay_active,
+    output wire [15:0] replay_index,
 
     // ===== debug (可选接 ILA) =====
     output wire        dbg_trig_pulse,
@@ -120,6 +125,8 @@ module dac_play_ctrl #(
   reg prepare_wait_warm;
   reg loop_refill_pending;
   reg burst_complete_pending;
+  reg replay_active_r;
+  reg [15:0] replay_index_r;
   reg debug_phase;
   reg [31:0] repeat_limit_latched;
   reg [31:0] repeat_index;
@@ -154,10 +161,11 @@ module dac_play_ctrl #(
 
   // DDR 域已经在整帧预取完成后才提交 cfg；DAC 域只需等首个 FIFO beat 可读。
   // 短帧可能小于 prog_empty 阈值，不能用 prog_empty 作为启动条件。
-  wire start_warm = (!ch1_arm || ch1_fifo_tvalid) && (!ch2_arm || ch2_fifo_tvalid) &&
+  wire start_warm = (replay_cache_ready === 1'b1) ||
+                    ((!ch1_arm || ch1_fifo_tvalid) && (!ch2_arm || ch2_fifo_tvalid) &&
                     (!ch3_arm || ch3_fifo_tvalid) && (!ch4_arm || ch4_fifo_tvalid) &&
                     (!ch5_arm || ch5_fifo_tvalid) && (!ch6_arm || ch6_fifo_tvalid) &&
-                    (!ch7_arm || ch7_fifo_tvalid) && (!ch8_arm || ch8_fifo_tvalid);
+                    (!ch7_arm || ch7_fifo_tvalid) && (!ch8_arm || ch8_fifo_tvalid));
 
   localparam [31:0] LOOP_SAFE_BEATS = 32'd128;
   wire ch1_loop_short = (ch1_len_beats <= LOOP_SAFE_BEATS);
@@ -196,26 +204,32 @@ module dac_play_ctrl #(
   assign ch8_allow = started && ch8_arm && (dly8 == 0) && (beats8 != 0);
 
   // fire：allow 且 FIFO 有效 且 DAC ready
-  wire ch1_fire = ch1_allow && ch1_fifo_tvalid && dac_ch1_ready_in;
-  wire ch2_fire = ch2_allow && ch2_fifo_tvalid && dac_ch2_ready_in;
-  wire ch3_fire = ch3_allow && ch3_fifo_tvalid && dac_ch3_ready_in;
-  wire ch4_fire = ch4_allow && ch4_fifo_tvalid && dac_ch4_ready_in;
-  wire ch5_fire = ch5_allow && ch5_fifo_tvalid && dac_ch5_ready_in;
-  wire ch6_fire = ch6_allow && ch6_fifo_tvalid && dac_ch6_ready_in;
-  wire ch7_fire = ch7_allow && ch7_fifo_tvalid && dac_ch7_ready_in;
-  wire ch8_fire = ch8_allow && ch8_fifo_tvalid && dac_ch8_ready_in;
+  // Keep the optional replay port fail-safe for legacy instantiations that do
+  // not connect it: only a definite 1 enables local replay.
+  wire replay_cache_ready_clean = (replay_cache_ready === 1'b1);
+  wire replay_valid = replay_active_r && replay_cache_ready_clean;
+  wire ch1_fire = ch1_allow && (replay_valid || ch1_fifo_tvalid) && dac_ch1_ready_in;
+  wire ch2_fire = ch2_allow && (replay_valid || ch2_fifo_tvalid) && dac_ch2_ready_in;
+  wire ch3_fire = ch3_allow && (replay_valid || ch3_fifo_tvalid) && dac_ch3_ready_in;
+  wire ch4_fire = ch4_allow && (replay_valid || ch4_fifo_tvalid) && dac_ch4_ready_in;
+  wire ch5_fire = ch5_allow && (replay_valid || ch5_fifo_tvalid) && dac_ch5_ready_in;
+  wire ch6_fire = ch6_allow && (replay_valid || ch6_fifo_tvalid) && dac_ch6_ready_in;
+  wire ch7_fire = ch7_allow && (replay_valid || ch7_fifo_tvalid) && dac_ch7_ready_in;
+  wire ch8_fire = ch8_allow && (replay_valid || ch8_fifo_tvalid) && dac_ch8_ready_in;
 
   // underflow：门已开、DAC 已 ready，但 FIFO 当拍无数据。
   // RF-DAC AXIS 不用 tvalid 选通，这一拍会被当成显式零样本送进 RFDC，
   // 落在 fabric beat 节拍上，因此必须 fail closed 而不是继续播放。
-  wire ch1_underflow_now = ch1_allow && dac_ch1_ready_in && !ch1_fifo_tvalid;
-  wire ch2_underflow_now = ch2_allow && dac_ch2_ready_in && !ch2_fifo_tvalid;
-  wire ch3_underflow_now = ch3_allow && dac_ch3_ready_in && !ch3_fifo_tvalid;
-  wire ch4_underflow_now = ch4_allow && dac_ch4_ready_in && !ch4_fifo_tvalid;
-  wire ch5_underflow_now = ch5_allow && dac_ch5_ready_in && !ch5_fifo_tvalid;
-  wire ch6_underflow_now = ch6_allow && dac_ch6_ready_in && !ch6_fifo_tvalid;
-  wire ch7_underflow_now = ch7_allow && dac_ch7_ready_in && !ch7_fifo_tvalid;
-  wire ch8_underflow_now = ch8_allow && dac_ch8_ready_in && !ch8_fifo_tvalid;
+  // A replay beat is local BRAM data, not FIFO data.  Do not report a false
+  // underflow while a short waveform is being replayed from the cache.
+  wire ch1_underflow_now = ch1_allow && dac_ch1_ready_in && !replay_valid && !ch1_fifo_tvalid;
+  wire ch2_underflow_now = ch2_allow && dac_ch2_ready_in && !replay_valid && !ch2_fifo_tvalid;
+  wire ch3_underflow_now = ch3_allow && dac_ch3_ready_in && !replay_valid && !ch3_fifo_tvalid;
+  wire ch4_underflow_now = ch4_allow && dac_ch4_ready_in && !replay_valid && !ch4_fifo_tvalid;
+  wire ch5_underflow_now = ch5_allow && dac_ch5_ready_in && !replay_valid && !ch5_fifo_tvalid;
+  wire ch6_underflow_now = ch6_allow && dac_ch6_ready_in && !replay_valid && !ch6_fifo_tvalid;
+  wire ch7_underflow_now = ch7_allow && dac_ch7_ready_in && !replay_valid && !ch7_fifo_tvalid;
+  wire ch8_underflow_now = ch8_allow && dac_ch8_ready_in && !replay_valid && !ch8_fifo_tvalid;
   wire any_underflow_now = ch1_underflow_now || ch2_underflow_now ||
                            ch3_underflow_now || ch4_underflow_now ||
                            ch5_underflow_now || ch6_underflow_now ||
@@ -281,6 +295,8 @@ module dac_play_ctrl #(
       dbg_ch8_fire_count <= 32'd0;
       dbg_trigger_admitted_count <= 32'd0;
       dbg_trigger_skipped_count <= 32'd0;
+      replay_active_r <= 1'b0;
+      replay_index_r <= 16'd0;
 
       cfg_seen    <= 1'b0;
       last_seq_id <= 16'd0;
@@ -305,7 +321,20 @@ module dac_play_ctrl #(
       ch1_active <= 1'b0; ch2_active <= 1'b0; ch3_active <= 1'b0; ch4_active <= 1'b0;
       ch5_active <= 1'b0; ch6_active <= 1'b0; ch7_active <= 1'b0; ch8_active <= 1'b0;
       dbg_done_pulse <= 1'b0;
+      replay_active_r <= 1'b0;
+      replay_index_r <= 16'd0;
     end else begin
+      if (diag_clear_counters === 1'b1) begin
+        dbg_underflow_seen <= 8'd0;
+        dbg_ch1_fire_count <= 32'd0; dbg_ch2_fire_count <= 32'd0;
+        dbg_ch3_fire_count <= 32'd0; dbg_ch4_fire_count <= 32'd0;
+        dbg_ch5_fire_count <= 32'd0; dbg_ch6_fire_count <= 32'd0;
+        dbg_ch7_fire_count <= 32'd0; dbg_ch8_fire_count <= 32'd0;
+        dbg_trigger_admitted_count <= 32'd0;
+        dbg_trigger_skipped_count <= 32'd0;
+      end
+      if (diag_clear_events === 1'b1)
+        dbg_underflow_seen <= 8'd0;
       dbg_done_pulse <= 1'b0;
       // RFCTRL2 ARM begins a new prepare transaction. The waveform executor
       // is already prefetching in the DDR domain; do not open any DAC gate
@@ -322,6 +351,8 @@ module dac_play_ctrl #(
         repeat_limit_latched <= 32'd0;
         repeat_index <= 32'd0;
         prepared <= 1'b0;
+        replay_active_r <= 1'b0;
+        replay_index_r <= 16'd0;
       end else begin
         if(prepare_wait_cfg && new_cfg &&
            (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
@@ -396,9 +427,9 @@ module dac_play_ctrl #(
           end
         end
 
-        // In the RFCTRL2 path all launch state was loaded while PREPARED.
-        // Trigger therefore only opens the output gates; it never waits for
-        // FIFO data or reloads delay/beat counters.
+        // In the RFCTRL2 path configuration is captured while PREPARED.
+        // Trigger never waits for FIFO data; replay mode only reloads the
+        // already cached beat counters and resets its local read pointer.
         if((trig_pulse || rfctrl2_trigger) && debug_alternate_clean) begin
           if(!debug_phase) begin
             debug_phase <= 1'b1;
@@ -412,8 +443,22 @@ module dac_play_ctrl #(
         end
 
         if(rfctrl2_trigger && prepared && !started && debug_trigger_admit) begin
+          // A replay Trigger starts a fresh pass over the immutable DAC-domain
+          // cache.  The first pass decremented beats*/delay* to zero; reload
+          // them here so every subsequent Trigger emits the complete record
+          // from beat zero instead of immediately completing an empty frame.
+          dly1 <= ch1_delay_cycles; dly2 <= ch2_delay_cycles;
+          dly3 <= ch3_delay_cycles; dly4 <= ch4_delay_cycles;
+          dly5 <= ch5_delay_cycles; dly6 <= ch6_delay_cycles;
+          dly7 <= ch7_delay_cycles; dly8 <= ch8_delay_cycles;
+          beats1 <= ch1_len_beats; beats2 <= ch2_len_beats;
+          beats3 <= ch3_len_beats; beats4 <= ch4_len_beats;
+          beats5 <= ch5_len_beats; beats6 <= ch6_len_beats;
+          beats7 <= ch7_len_beats; beats8 <= ch8_len_beats;
           started <= 1'b1;
           prepared <= 1'b0;
+          replay_active_r <= replay_cache_ready_clean;
+          replay_index_r <= 16'd0;
         end
 
         if(trig_pulse && !started && !start_pending && !prepare_active && debug_trigger_admit) begin
@@ -458,6 +503,8 @@ module dac_play_ctrl #(
 
           cfg_seen      <= 1'b1;
           last_seq_id   <= cfg_seq_id;
+          replay_active_r <= 1'b0;
+          replay_index_r <= 16'd0;
         end
 
         if(loop_refill_pending && !started && loop_refill_warm) begin
@@ -477,10 +524,27 @@ module dac_play_ctrl #(
           // It is reset only after the finite burst's final refill has made
           // the next externally triggered run PREPARED.
           if(burst_complete_pending) repeat_index <= 32'd0;
+          replay_active_r <= 1'b0;
+          replay_index_r <= 16'd0;
         end
       end
 
+      // The cache completion indication is local to the DAC domain.  Latch
+      // PREPARED as soon as the first short frame has drained, so the next
+      // physical Trigger is admitted without waiting for a DDR-domain status
+      // snapshot or a fresh configuration commit.
+      if (!started && replay_cache_ready_clean && cfg_seen && !prepare_wait_cfg &&
+          !prepare_wait_warm && !loop_refill_pending && !burst_complete_pending &&
+          (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
+        prepared <= 1'b1;
+      end
+
       if(started) begin
+        if(replay_active_r && replay_valid &&
+           (ch1_fire || ch2_fire || ch3_fire || ch4_fire ||
+            ch5_fire || ch6_fire || ch7_fire || ch8_fire)) begin
+          replay_index_r <= replay_index_r + 16'd1;
+        end
         if(dly1 != 0) dly1 <= dly1 - 1;
         if(dly2 != 0) dly2 <= dly2 - 1;
         if(dly3 != 0) dly3 <= dly3 - 1;
@@ -539,6 +603,8 @@ module dac_play_ctrl #(
               dly1 <= 32'd0; dly2 <= 32'd0; dly3 <= 32'd0; dly4 <= 32'd0;
               dly5 <= 32'd0; dly6 <= 32'd0; dly7 <= 32'd0; dly8 <= 32'd0;
               repeat_index <= repeat_index + 32'd1;
+              replay_active_r <= replay_cache_ready;
+              replay_index_r <= 16'd0;
             end else begin
               started <= 1'b0;
               start_pending <= 1'b0;
@@ -551,6 +617,11 @@ module dac_play_ctrl #(
             start_pending <= 1'b0;
             loop_refill_pending <= 1'b0;
             burst_complete_pending <= 1'b1;
+            replay_active_r <= 1'b0;
+            replay_index_r <= 16'd0;
+            // A complete short record is immediately re-armable.  The next
+            // Trigger will select the local replay cache instead of DDR.
+            if (replay_cache_ready_clean) prepared <= 1'b1;
             dbg_done_pulse <= 1'b1;
           end
         end
@@ -563,6 +634,7 @@ module dac_play_ctrl #(
         // rate, which modulates the RF output instead of simply truncating it.
         if(any_underflow_now) begin
           started        <= 1'b0;
+          replay_active_r <= 1'b0;
           start_pending  <= 1'b0;
           trigger_pending <= 1'b0;
           prepared       <= 1'b0;
@@ -593,5 +665,7 @@ module dac_play_ctrl #(
   assign dbg_trig_start  = trig_start;
   assign dbg_started     = started;
   assign dbg_last_seq_id = last_seq_id;
+  assign replay_active = replay_active_r;
+  assign replay_index = replay_index_r;
 
 endmodule

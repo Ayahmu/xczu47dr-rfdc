@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState
+from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, DiagnosticsSnapshot
 from .device import Dr47Device
 from .errors import ParameterRangeError
 from .protocol import (
@@ -27,6 +27,9 @@ from .protocol import (
     RF2_OP_SYNC_EPOCH,
     RF2_OP_SET_SYNC_ROLE,
     RF2_OP_EMIT_TRIGGER,
+    RF2_OP_DIAG_SNAPSHOT,
+    RF2_OP_DIAG_CONTROL,
+    RF2_CAP_DIAGNOSTICS,
     RF2_SYNC_MODE_EXTERNAL,
     RF2_SYNC_MODE_BYPASS,
     RF2_SYNC_ROLE_MASTER,
@@ -80,11 +83,12 @@ class SimulatedDr47Device(Dr47Device):
         self._sim_sync_align_failed = False
         self._sim_sync_alignment_epoch = 0
         self._sim_sync_alignment_error = 0
+        self._diag_generation = 0
 
     def _make_status_payload(self) -> bytes:
         capabilities = (RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
                         RF2_CAP_DAC_MTS | RF2_CAP_NCO_SYNC |
-                        RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO)
+                        RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS)
         state_flags = RF2_STATUS_RFDC_READY | RF2_STATUS_DAC_MTS_READY | RF2_STATUS_DAC_MTS_REQUIRED | RF2_STATUS_NCO_SYNC_READY
         if self.playback_armed:
             state_flags |= RF2_STATUS_ARMED | RF2_STATUS_PREPARED
@@ -111,10 +115,11 @@ class SimulatedDr47Device(Dr47Device):
             "<QIIII", sync_status, self._trigger_input_count,
             self._trigger_accepted_count, self._trigger_output_count, 0,
         ) + struct.pack(
-            "<QII", (self._sim_sync_alignment_epoch & 0x3F) |
+            "<QQQQ", (self._sim_sync_alignment_epoch & 0x3F) |
             (int(self._sim_sync_align_busy) << 22) |
             (int(self._sim_sync_align_failed) << 23),
-            self._sim_sync_alignment_error, 0,
+            (1 << 16) | (self._sim_sync_alignment_error & 0xFFFF),
+            0, 0,
         )
 
     def _response(self, opcode: int, payload: bytes = b"", seq: int = 1, status: int = RF2_STATUS_OK) -> dict[str, Any]:
@@ -135,9 +140,11 @@ class SimulatedDr47Device(Dr47Device):
             protocol_version=RFCTRL2_VERSION,
             build_profile_id=1,
             build_profile="simulated_xczu47dr",
+            source_commit_id=0,
+            trigger_path_version=3,
             capability_bits=(RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
                               RF2_CAP_DAC_MTS | RF2_CAP_NCO_SYNC |
-                              RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO),
+                              RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS),
             state_flags=RF2_STATUS_RFDC_READY | RF2_STATUS_DAC_MTS_READY | RF2_STATUS_DAC_MTS_REQUIRED | RF2_STATUS_NCO_SYNC_READY,
             rfdc_ready=True,
             dac_mts_required=True,
@@ -190,6 +197,25 @@ class SimulatedDr47Device(Dr47Device):
 
     def rfctrl2_status(self, seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         return self._response(RF2_OP_STATUS, self._make_status_payload(), seq or 1)
+
+    def read_diagnostics(self) -> DiagnosticsSnapshot:
+        self._diag_generation = (self._diag_generation + 1) & 0xFFFFFFFFFFFFFFFF
+        return DiagnosticsSnapshot(
+            generation=self._diag_generation,
+            trigger_input_count=self._trigger_input_count,
+            trigger_accepted_count=self._trigger_accepted_count,
+            replay_ready=self.playback_prepared,
+            replay_active=self.playback_running,
+            raw={"device_uid": self.device_uid},
+        )
+
+    def clear_diagnostics(self, events: int = 0xFFFFFFFF, counters: bool = True):
+        if counters:
+            self._trigger_input_count = 0
+            self._trigger_accepted_count = 0
+            self._trigger_output_count = 0
+        self._diag_generation = 0
+        return self._response(RF2_OP_DIAG_CONTROL, self._make_status_payload(), seq=1)
 
     def rfctrl2_set_sync_role(self, role: int, mode: int = RF2_SYNC_MODE_EXTERNAL,
                               seq: int | None = None, wait_response: bool = True):

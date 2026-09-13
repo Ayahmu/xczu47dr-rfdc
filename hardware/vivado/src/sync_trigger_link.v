@@ -124,8 +124,12 @@ module sync_trigger_link #(
   wire emit_trigger_hmc_pulse =
       emit_trigger_hmc_sync[1] != emit_trigger_hmc_seen;
   wire sync_trigger_allowed_hmc = role_master || bypass_hmc_sync[1] || ready_hmc_sync[1];
+  // HMC is only the physical input/synchronization statistics domain. DAC
+  // admission is decided by the native DAC-domain prepared/buffer-ready
+  // state. The delayed PREPARED copy is used solely as a conservative
+  // one-event re-arm guard for the legacy/link pulse generator; it is never
+  // used to launch an already accepted DAC event.
   wire trigger_allowed_hmc = sync_trigger_allowed_hmc &&
-                             playback_prepared_hmc_sync[1] &&
                              !trigger_wait_rearm_hmc;
 
   wire sync_done_hmc;
@@ -232,13 +236,13 @@ module sync_trigger_link #(
       trigger_in_seen_hmc <= trigger_in_rise_hmc;
       trigger_accepted_hmc <= 1'b0;
 
-      // Consume at most one Trigger per PREPARED interval. The finite-frame
-      // executor drops PREPARED while refilling and raises it again when the
-      // same DDR record is ready for the next external Trigger.
+      // Suppress duplicate link pulses until the player has observed one
+      // complete PREPARED -> not-prepared -> PREPARED cycle. This is a
+      // forwarding guard only; DAC-domain admission remains authoritative.
       if (trigger_wait_rearm_hmc) begin
-        if (!playback_prepared_hmc_sync[1]) begin
+        if (!playback_prepared_hmc_sync[1])
           trigger_seen_unprepared_hmc <= 1'b1;
-        end else if (trigger_seen_unprepared_hmc) begin
+        else if (trigger_seen_unprepared_hmc) begin
           trigger_wait_rearm_hmc <= 1'b0;
           trigger_seen_unprepared_hmc <= 1'b0;
         end
