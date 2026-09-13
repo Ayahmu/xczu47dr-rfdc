@@ -41,6 +41,12 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertIn("TARGET=$(TARGET)", makefile)
         self.assertIn("./build.sh --clean", makefile)
 
+    def test_production_bitstream_targets_do_not_require_ila_probes(self):
+        makefile = MAKEFILE.read_text(encoding="utf-8", errors="ignore")
+        self.assertIn('if [ "$(ENABLE_ILA)" = "1" ]; then', makefile)
+        self.assertIn("production master build unexpectedly contains debug probes", makefile)
+        self.assertIn("production slave build unexpectedly contains debug probes", makefile)
+
     def test_rfdc_reference_clock_is_not_overridden_after_chisel_generation(self):
         create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
         chisel = RFDC_CHISEL.read_text(encoding="utf-8", errors="ignore")
