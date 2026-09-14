@@ -206,7 +206,7 @@ case "$1" in
             run_dry_run
             print_target_paths
         else
-            check_bit
+            check_xsa
             check_psu_init
             if [ ! -f "${ELF_FILE}" ]; then
                 print_error "ELF file not found: ${ELF_FILE}"
@@ -215,7 +215,7 @@ case "$1" in
             fi
         fi
         print_info "Programming FPGA and downloading ELF..."
-        run_xsct "${SCRIPT_DIR}/scripts/program.tcl" "${BIT_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
+        run_xsct "${SCRIPT_DIR}/scripts/program.tcl" "${XSA_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
         ;;
 
     download)
@@ -223,14 +223,14 @@ case "$1" in
             run_dry_run
             print_target_paths
         else
-            check_bit
+            check_xsa
             if [ ! -f "${ELF_FILE}" ]; then
                 print_error "ELF file not found: ${ELF_FILE}"
                 exit 1
             fi
         fi
         print_info "Downloading ELF only; the FPGA bitstream will not be reprogrammed"
-        DOWNLOAD_ELF_ONLY=1 run_xsct "${SCRIPT_DIR}/scripts/program.tcl" "${BIT_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
+        DOWNLOAD_ELF_ONLY=1 run_xsct "${SCRIPT_DIR}/scripts/program.tcl" "${XSA_FILE}" "${ELF_FILE}" "${PSU_INIT_FILE}"
         ;;
 
     clean)
