@@ -175,6 +175,9 @@ module Top #(
       .IB (PL_CLK_N_0),
       .O  (hmc_pl_clk_ibuf)
   );
+
+  localparam integer REPLAY_CACHE_ADDR_WIDTH =
+      (REPLAY_CACHE_BEATS <= 1) ? 1 : $clog2(REPLAY_CACHE_BEATS);
   BUFG hmc_pl_clk_bufg_i (
       .I(hmc_pl_clk_ibuf),
       .O(hmc_pl_clk)
@@ -2437,7 +2440,7 @@ module Top #(
   wire [15:0] pc_replay_index;
   wire [255:0] replay_mem_ch1, replay_mem_ch2, replay_mem_ch3, replay_mem_ch4;
   wire [255:0] replay_mem_ch5, replay_mem_ch6, replay_mem_ch7, replay_mem_ch8;
-  reg [15:0] replay_read_addr_dac;
+  reg [REPLAY_CACHE_ADDR_WIDTH-1:0] replay_read_addr_dac;
   wire [255:0] replay_rd_ch1, replay_rd_ch2, replay_rd_ch3, replay_rd_ch4;
   wire [255:0] replay_rd_ch5, replay_rd_ch6, replay_rd_ch7, replay_rd_ch8;
   reg replay_prev_active_dac;
@@ -2488,7 +2491,8 @@ module Top #(
   // XPM address ports are sized from REPLAY_CACHE_BEATS.  Keep the top-level
   // counter wider so the saturation comparison remains explicit, then slice
   // only at the RAM boundary to avoid width-extension warnings.
-  wire [15:0] replay_ram_wr_addr = replay_capture_count;
+  wire [REPLAY_CACHE_ADDR_WIDTH-1:0] replay_ram_wr_addr =
+      replay_capture_count[REPLAY_CACHE_ADDR_WIDTH-1:0];
   // Issue the beat-zero read on the same DAC edge that accepts an RFCTRL2
   // Trigger.  `pc_replay_active` is registered by dac_play_ctrl and therefore
   // is still low on that edge; omitting the trigger term would leave the RAM
@@ -2730,7 +2734,7 @@ module Top #(
       end else if (!replay_prev_active_dac) begin
         // The RAM samples address zero on this edge and presents beat zero
         // during the following cycle.  Queue address one for the next edge.
-        replay_read_addr_dac <= (REPLAY_CACHE_BEATS > 1) ? 16'd1 : 16'd0;
+        replay_read_addr_dac <= (REPLAY_CACHE_BEATS > 1) ? 1'b1 : 1'b0;
         replay_prime_valid_dac <= 1'b1;
       end else if (pc_replay_index + 16'd2 < REPLAY_CACHE_BEATS) begin
         // The current registered RAM output is consumed this cycle.  Read
