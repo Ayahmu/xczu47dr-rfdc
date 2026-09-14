@@ -2376,14 +2376,23 @@ module Top #(
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
   wire [15:0] pc_replay_index;
-  reg [255:0] replay_mem_ch1 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch2 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch3 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch4 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch5 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch6 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch7 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_mem_ch8 [0:REPLAY_CACHE_BEATS-1];
+  // Use synchronous block-RAM read ports.  A combinational read of eight
+  // 256-bit memories turns the cache into a very large LUT mux and can make
+  // the otherwise modest design impossible to place.  The one-cycle read
+  // pipeline is primed before READY is exposed, so an accepted Trigger still
+  // starts at replay beat zero and never waits for DDR.
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch1 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch2 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch3 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch4 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch5 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch6 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch7 [0:REPLAY_CACHE_BEATS-1];
+  (* ram_style = "block" *) reg [255:0] replay_mem_ch8 [0:REPLAY_CACHE_BEATS-1];
+  reg [255:0] replay_rd_ch1, replay_rd_ch2, replay_rd_ch3, replay_rd_ch4;
+  reg [255:0] replay_rd_ch5, replay_rd_ch6, replay_rd_ch7, replay_rd_ch8;
+  reg replay_prev_active_dac;
+  reg replay_prime_valid_dac;
   reg [15:0] replay_capture_count;
   reg [7:0] replay_capture_done_mask;
   function automatic [31:0] max_enabled_beats;
@@ -2424,7 +2433,12 @@ module Top #(
        (replay_capture_done_mask[5] || !ch6_arm_dac || (dac_in_ch6_tvalid && dac_ch6_ready)) &&
        (replay_capture_done_mask[6] || !ch7_arm_dac || (dac_in_ch7_tvalid && dac_ch7_ready)) &&
        (replay_capture_done_mask[7] || !ch8_arm_dac || (dac_in_ch8_tvalid && dac_ch8_ready)));
-  wire replay_valid_dac = replay_cache_ready_dac && pc_replay_active;
+  // BRAM reads have one cycle of latency.  Hold the replay gate closed until
+  // beat zero has been loaded, then prefetch index+1 on every subsequent
+  // cycle.  This prevents a duplicate first beat while keeping the accepted
+  // Trigger independent of DDR/FIFO refill.
+  wire replay_valid_dac = replay_cache_ready_dac && pc_replay_active &&
+                          replay_prime_valid_dac;
   wire replay_ch1_valid = replay_valid_dac && ch1_arm_dac && (pc_replay_index < ch1_len_dac[15:0]);
   wire replay_ch2_valid = replay_valid_dac && ch2_arm_dac && (pc_replay_index < ch2_len_dac[15:0]);
   wire replay_ch3_valid = replay_valid_dac && ch3_arm_dac && (pc_replay_index < ch3_len_dac[15:0]);
@@ -2433,14 +2447,14 @@ module Top #(
   wire replay_ch6_valid = replay_valid_dac && ch6_arm_dac && (pc_replay_index < ch6_len_dac[15:0]);
   wire replay_ch7_valid = replay_valid_dac && ch7_arm_dac && (pc_replay_index < ch7_len_dac[15:0]);
   wire replay_ch8_valid = replay_valid_dac && ch8_arm_dac && (pc_replay_index < ch8_len_dac[15:0]);
-  wire [255:0] play_ch1_tdata = replay_ch1_valid ? replay_mem_ch1[pc_replay_index] : dac_in_ch1_tdata;
-  wire [255:0] play_ch2_tdata = replay_ch2_valid ? replay_mem_ch2[pc_replay_index] : dac_in_ch2_tdata;
-  wire [255:0] play_ch3_tdata = replay_ch3_valid ? replay_mem_ch3[pc_replay_index] : dac_in_ch3_tdata;
-  wire [255:0] play_ch4_tdata = replay_ch4_valid ? replay_mem_ch4[pc_replay_index] : dac_in_ch4_tdata;
-  wire [255:0] play_ch5_tdata = replay_ch5_valid ? replay_mem_ch5[pc_replay_index] : dac_in_ch5_tdata;
-  wire [255:0] play_ch6_tdata = replay_ch6_valid ? replay_mem_ch6[pc_replay_index] : dac_in_ch6_tdata;
-  wire [255:0] play_ch7_tdata = replay_ch7_valid ? replay_mem_ch7[pc_replay_index] : dac_in_ch7_tdata;
-  wire [255:0] play_ch8_tdata = replay_ch8_valid ? replay_mem_ch8[pc_replay_index] : dac_in_ch8_tdata;
+  wire [255:0] play_ch1_tdata = replay_ch1_valid ? replay_rd_ch1 : dac_in_ch1_tdata;
+  wire [255:0] play_ch2_tdata = replay_ch2_valid ? replay_rd_ch2 : dac_in_ch2_tdata;
+  wire [255:0] play_ch3_tdata = replay_ch3_valid ? replay_rd_ch3 : dac_in_ch3_tdata;
+  wire [255:0] play_ch4_tdata = replay_ch4_valid ? replay_rd_ch4 : dac_in_ch4_tdata;
+  wire [255:0] play_ch5_tdata = replay_ch5_valid ? replay_rd_ch5 : dac_in_ch5_tdata;
+  wire [255:0] play_ch6_tdata = replay_ch6_valid ? replay_rd_ch6 : dac_in_ch6_tdata;
+  wire [255:0] play_ch7_tdata = replay_ch7_valid ? replay_rd_ch7 : dac_in_ch7_tdata;
+  wire [255:0] play_ch8_tdata = replay_ch8_valid ? replay_rd_ch8 : dac_in_ch8_tdata;
   wire play_ch1_valid = replay_ch1_valid | (!replay_valid_dac && dac_in_ch1_tvalid);
   wire play_ch2_valid = replay_ch2_valid | (!replay_valid_dac && dac_in_ch2_tvalid);
   wire play_ch3_valid = replay_ch3_valid | (!replay_valid_dac && dac_in_ch3_tvalid);
@@ -2603,6 +2617,46 @@ module Top #(
       end
       if (replay_capture_fire && (replay_capture_count + 16'd1 >= replay_target_beats_dac[15:0]))
         replay_cache_ready_dac <= 1'b1;
+    end
+  end
+
+  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
+    if (!dac_rst_n) begin
+      replay_rd_ch1 <= 256'd0;
+      replay_rd_ch2 <= 256'd0;
+      replay_rd_ch3 <= 256'd0;
+      replay_rd_ch4 <= 256'd0;
+      replay_rd_ch5 <= 256'd0;
+      replay_rd_ch6 <= 256'd0;
+      replay_rd_ch7 <= 256'd0;
+      replay_rd_ch8 <= 256'd0;
+      replay_prev_active_dac <= 1'b0;
+      replay_prime_valid_dac <= 1'b0;
+    end else begin
+      replay_prev_active_dac <= pc_replay_active;
+      if (!pc_replay_active || !replay_cache_ready_dac) begin
+        replay_prime_valid_dac <= 1'b0;
+      end else if (!replay_prev_active_dac) begin
+        // A newly accepted Trigger always starts at replay beat zero.
+        replay_rd_ch1 <= replay_mem_ch1[0];
+        replay_rd_ch2 <= replay_mem_ch2[0];
+        replay_rd_ch3 <= replay_mem_ch3[0];
+        replay_rd_ch4 <= replay_mem_ch4[0];
+        replay_rd_ch5 <= replay_mem_ch5[0];
+        replay_rd_ch6 <= replay_mem_ch6[0];
+        replay_rd_ch7 <= replay_mem_ch7[0];
+        replay_rd_ch8 <= replay_mem_ch8[0];
+        replay_prime_valid_dac <= 1'b1;
+      end else if (pc_replay_index + 16'd1 < REPLAY_CACHE_BEATS) begin
+        replay_rd_ch1 <= replay_mem_ch1[pc_replay_index + 16'd1];
+        replay_rd_ch2 <= replay_mem_ch2[pc_replay_index + 16'd1];
+        replay_rd_ch3 <= replay_mem_ch3[pc_replay_index + 16'd1];
+        replay_rd_ch4 <= replay_mem_ch4[pc_replay_index + 16'd1];
+        replay_rd_ch5 <= replay_mem_ch5[pc_replay_index + 16'd1];
+        replay_rd_ch6 <= replay_mem_ch6[pc_replay_index + 16'd1];
+        replay_rd_ch7 <= replay_mem_ch7[pc_replay_index + 16'd1];
+        replay_rd_ch8 <= replay_mem_ch8[pc_replay_index + 16'd1];
+      end
     end
   end
 
