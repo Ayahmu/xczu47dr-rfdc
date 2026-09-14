@@ -4,6 +4,7 @@ set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
+source "${script_path}/build_options.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -29,6 +30,19 @@ set is_master_target [expr {$target eq "custom_xczu47dr_master"}]
 # defined CUSTOM_XCZU47DR_MASTER and made Top.v instantiate a vio_0 that was
 # never generated for a non-master target.
 set is_slave_target [expr {[string match "custom_xczu47dr_slave*" $target]}]
+set enable_ila [expr {[build_option_get ENABLE_ILA 0] ne "0"}]
+
+# Stamp the exact source revision and protocol identity into every generated
+# RTL compile.  The Top module consumes these preprocessor defines, so a
+# STATUS/HELLO response can be tied back to this project without relying on a
+# hand-maintained constant in Verilog.
+set repo_root [file normalize "${script_path}/../../.."]
+set source_commit "00000000"
+if {[catch {exec git -C ${repo_root} rev-parse --verify HEAD} git_head] == 0} {
+    set source_commit [string range [string trim ${git_head}] 0 7]
+}
+set build_profile_id [expr {$is_bandwidth_target ? 3 : 1}]
+set trigger_path_version 3
 
 puts "INFO: Creating Vivado project..."
 puts "INFO: Target: ${target}"
@@ -68,12 +82,22 @@ set_property target_language Verilog [current_project]
 set_property simulator_language Mixed [current_project]
 puts "INFO: Enabling target Verilog define"
 if {$is_bandwidth_target} {
-    set_property verilog_define {CUSTOM_XCZU47DR_BW} [current_fileset]
+    set define_list {CUSTOM_XCZU47DR_BW}
 } elseif {$is_slave_target} {
-    set_property verilog_define {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_SLAVE} [current_fileset]
+    set define_list {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_SLAVE}
 } else {
-    set_property verilog_define {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_MASTER} [current_fileset]
+    set define_list {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_MASTER}
 }
+if {$enable_ila} { lappend define_list ENABLE_ILA }
+lappend define_list RF2_BUILD_PROFILE_ID=32'd${build_profile_id}
+lappend define_list RF2_TRIGGER_PATH_VERSION=32'd${trigger_path_version}
+lappend define_list RF2_SOURCE_COMMIT_ID=32'h${source_commit}
+set_property verilog_define ${define_list} [current_fileset]
+
+set build_manifest_file "${proj_dir}/build_manifest.json"
+set manifest_fd [open ${build_manifest_file} w]
+puts ${manifest_fd} "{\"target\":\"${target}\",\"protocol_version\":3,\"build_profile_id\":${build_profile_id},\"trigger_path_version\":${trigger_path_version},\"source_commit\":\"${source_commit}\",\"ila_enabled\":${enable_ila}}"
+close ${manifest_fd}
 
 set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
 set ddr_generated_config "${vivado_dir}/../chisel/generated/ddr_custom_xczu47dr_config.tcl"
@@ -384,7 +408,7 @@ if {!$is_bandwidth_target && [file exists ${async_fifo_script}]} {
 
 # Create ILA IPs used for custom 10G UDP to RFDC debug and acceptance.
 set ila_udp_ddr_script "${script_path}/ila_udp_ddr.tcl"
-if {!$is_bandwidth_target && [file exists ${ila_udp_ddr_script}]} {
+if {$enable_ila && !$is_bandwidth_target && [file exists ${ila_udp_ddr_script}]} {
     source ${ila_udp_ddr_script}
     puts "INFO: DDR-domain UDP/DataMover ILA IP created"
 } else {
@@ -392,7 +416,7 @@ if {!$is_bandwidth_target && [file exists ${ila_udp_ddr_script}]} {
 }
 
 set ila_dac_axis_script "${script_path}/ila_dac_axis.tcl"
-if {!$is_bandwidth_target && [file exists ${ila_dac_axis_script}]} {
+if {$enable_ila && !$is_bandwidth_target && [file exists ${ila_dac_axis_script}]} {
   source ${ila_dac_axis_script}
   puts "INFO: DAC-domain RFDC AXIS ILA IP created"
 } else {
@@ -400,7 +424,7 @@ if {!$is_bandwidth_target && [file exists ${ila_dac_axis_script}]} {
 }
 
 set ila_hmc_event_script "${script_path}/ila_hmc_event.tcl"
-if {!$is_bandwidth_target && [file exists ${ila_hmc_event_script}]} {
+if {$enable_ila && !$is_bandwidth_target && [file exists ${ila_hmc_event_script}]} {
     source ${ila_hmc_event_script}
     puts "INFO: HMC PL_CLK event ILA IP created"
 } else {
@@ -408,7 +432,7 @@ if {!$is_bandwidth_target && [file exists ${ila_hmc_event_script}]} {
 }
 
 set ila_s_axi_01_script "${script_path}/ila_s_axi_01.tcl"
-if {!$is_bandwidth_target && [file exists ${ila_s_axi_01_script}]} {
+if {$enable_ila && !$is_bandwidth_target && [file exists ${ila_s_axi_01_script}]} {
     source ${ila_s_axi_01_script}
     puts "INFO: S_AXI_01 ILA IP created"
 } else {

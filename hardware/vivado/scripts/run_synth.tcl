@@ -186,6 +186,36 @@ restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 # Open synthesized design for reporting
 open_run synth_1
 
+# Synthesis identity/structure guardrails.  These checks intentionally run on
+# the synthesized design (rather than only grepping RTL) so a stale generated
+# source or cached checkpoint cannot silently reintroduce the legacy delayed
+# Trigger path.
+set synth_cells [get_cells -hier -quiet *dac_trigger_scheduler*]
+if {[llength ${synth_cells}] > 0} {
+    error "legacy dac_trigger_scheduler is present in synthesized netlist"
+}
+set synth_ila_cells [get_cells -hier -quiet *ila*]
+set synth_defines [get_property verilog_define [current_fileset]]
+set ila_requested [expr {[lsearch -exact ${synth_defines} ENABLE_ILA] >= 0}]
+if {!${ila_requested} && [llength ${synth_ila_cells}] > 0} {
+    error "production synthesis unexpectedly contains ILA cells"
+}
+set manifest_file "${proj_dir}/build_manifest.json"
+if {![file exists ${manifest_file}]} {
+    error "missing build manifest: ${manifest_file}"
+}
+set manifest_fd [open ${manifest_file} r]
+set manifest_text [read ${manifest_fd}]
+close ${manifest_fd}
+if {[string first "\"protocol_version\":3" ${manifest_text}] < 0 ||
+    [string first "\"trigger_path_version\":3" ${manifest_text}] < 0} {
+    error "build manifest protocol/trigger identity mismatch"
+}
+set synth_dcp [file join ${proj_dir} ${proj_name}.runs synth_1 [target_config_get ${target} top_module].dcp]
+if {[file exists ${synth_dcp}]} {
+    file copy -force ${manifest_file} "${synth_dcp}.manifest.json"
+}
+
 # Save a stable checkpoint for the next synthesis iteration only after the
 # current run has completed successfully.
 write_checkpoint -force ${synth_incremental_checkpoint}

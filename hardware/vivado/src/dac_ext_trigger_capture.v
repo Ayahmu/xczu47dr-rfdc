@@ -38,10 +38,14 @@ module dac_ext_trigger_capture #(
     input  wire        gate_open,
     // ABORT/MUTE cancels a consumed marker without waiting for PREPARED.
     input  wire        clear,
-    output reg         trigger_pulse,
+    // RFCTRL2 DIAG_CONTROL counter clear. Case equality keeps legacy
+    // standalone instantiations with this optional port unconnected safe.
+    input  wire        diag_clear_counters,
+    output wire        trigger_pulse,
     output reg         trigger_edge_raw,
     output reg  [31:0] input_count,
     output reg  [31:0] accept_count,
+    output reg  [63:0] capture_tick,
     output wire        trigger_in_sync,
     output wire        trigger_latched
 );
@@ -55,6 +59,7 @@ module dac_ext_trigger_capture #(
   reg latch_prev;
   reg consumed;
   reg [BLANK_WIDTH-1:0] blank_count;
+  reg [63:0] tick_counter;
 
   // Release the latch whenever its level has already been observed for a full
   // cycle.  Continuous rather than counted, so a pad that keeps setting the
@@ -70,10 +75,15 @@ module dac_ext_trigger_capture #(
 
   wire latch_rise = latch_sync_ff[2] && !latch_prev;
   wire blanked    = (blank_count != {BLANK_WIDTH{1'b0}});
+  // The third synchronizer stage is already in the DAC clock domain. Expose
+  // the accepted edge combinationally so the playback controller samples it
+  // on the very next DAC edge; registering this signal would add one needless
+  // cycle without improving CDC safety.
   wire accept     = latch_rise && gate_open && !consumed && !blanked;
 
   assign trigger_in_sync = latch_sync_ff[2];
   assign trigger_latched = trig_latch;
+  assign trigger_pulse = accept;
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -81,23 +91,33 @@ module dac_ext_trigger_capture #(
       latch_prev       <= 1'b0;
       consumed         <= 1'b0;
       blank_count      <= {BLANK_WIDTH{1'b0}};
-      trigger_pulse    <= 1'b0;
       trigger_edge_raw <= 1'b0;
       input_count      <= 32'd0;
       accept_count     <= 32'd0;
+      capture_tick     <= 64'd0;
+      tick_counter     <= 64'd0;
     end else begin
+      tick_counter     <= tick_counter + 64'd1;
       latch_sync_ff    <= {latch_sync_ff[1:0], trig_latch};
       latch_prev       <= latch_sync_ff[2];
-      trigger_pulse    <= accept;
       trigger_edge_raw <= latch_rise;
 
-      if (latch_rise)
-        input_count <= input_count + 32'd1;
-      if (accept) begin
+      if (diag_clear_counters === 1'b1) begin
+        input_count  <= 32'd0;
+        accept_count <= 32'd0;
+        blank_count  <= {BLANK_WIDTH{1'b0}};
+        capture_tick <= 64'd0;
+      end else begin
+        if (latch_rise)
+          input_count <= input_count + 32'd1;
+        if (latch_rise)
+          capture_tick <= tick_counter;
+        if (accept) begin
         accept_count <= accept_count + 32'd1;
         blank_count  <= MIN_RETRIGGER_CYCLES[BLANK_WIDTH-1:0];
-      end else if (blanked) begin
-        blank_count <= blank_count - 1'b1;
+        end else if (blanked) begin
+          blank_count <= blank_count - 1'b1;
+        end
       end
 
       if (clear)

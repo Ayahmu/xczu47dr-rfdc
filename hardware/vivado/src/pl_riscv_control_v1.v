@@ -4,6 +4,8 @@ module pl_riscv_control_v1 #(
     parameter integer MAX_PAYLOAD_WORDS = 64,
     parameter integer ENABLE_UNSAFE_RFDC_MMIO = 1,
     parameter [31:0] BUILD_PROFILE_ID = 32'd1,
+    parameter [31:0] TRIGGER_PATH_VERSION = 32'd3,
+    parameter [31:0] SOURCE_COMMIT_ID = 32'd0,
     parameter integer TDC_REG_TIMEOUT_CYCLES = 1000000
 ) (
     input  wire         clk,
@@ -130,6 +132,25 @@ module pl_riscv_control_v1 #(
     input  wire        play_prefill_ready,
     input  wire        play_active_valid,
     input  wire        play_pending_valid,
+    // RFCTRL2 v3 diagnostic snapshot inputs.  Sources are expected to be
+    // locally latched in their native clock domain before crossing here.
+    input  wire [63:0] diag_trigger_capture_tick,
+    input  wire [63:0] diag_trigger_launch_tick,
+    input  wire [63:0] diag_playback_start_tick,
+    input  wire [63:0] diag_first_valid_tick,
+    input  wire [31:0] diag_direct_input_count,
+    input  wire [31:0] diag_direct_accept_count,
+    input  wire        diag_trigger_pulse,
+    input  wire        diag_trigger_launch,
+    input  wire        diag_prepared_dac,
+    input  wire        diag_output_permitted_dac,
+    input  wire [7:0]  diag_underflow_mask,
+    input  wire        diag_replay_ready,
+    input  wire        diag_replay_active,
+    input  wire        diag_snapshot_ack_toggle,
+    output reg         diag_snapshot_request_toggle,
+    output reg         diag_clear_events_pulse,
+    output reg         diag_clear_counters_pulse,
 
     output reg  [63:0]  rvresp_tdata,
     output reg          rvresp_tvalid,
@@ -197,7 +218,7 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_RFDC_GET_CONFIG   = 32'h0000000B;
   // Structured RFDC apply, RFDC readback, and runtime network identity
   // configuration are all advertised through HELLO/STATUS.
-  localparam [31:0] RF2_CAPABILITIES         = 32'h007F0000;
+  localparam [31:0] RF2_CAPABILITIES         = 32'h00FF0000;
   localparam [31:0] RF2_RFDC_REQUEST_BYTES   = 32'd200;
   localparam [31:0] RF2_NETWORK_APPLY_BYTES  = 32'd32;
   localparam [31:0] RF2_NETWORK_RESPONSE_BYTES = 32'd80;
@@ -207,9 +228,11 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_SET_SYNC_ROLE     = 32'h0000000F;
   localparam [31:0] RF2_OP_EMIT_TRIGGER      = 32'h00000010;
   localparam [31:0] RF2_OP_TDC_REG           = 32'h00000011;
+  localparam [31:0] RF2_OP_DIAG_SNAPSHOT     = 32'h00000012;
+  localparam [31:0] RF2_OP_DIAG_CONTROL       = 32'h00000013;
 
   localparam [31:0] RV1_VERSION = 32'd1;
-  localparam [31:0] RF2_VERSION = 32'd2;
+  localparam [31:0] RF2_VERSION = 32'd3;
   localparam [1:0] RVCTRL_PROTOCOL_LEGACY = 2'd0;
   localparam [1:0] RVCTRL_PROTOCOL_V1     = 2'd1;
   localparam [1:0] RVCTRL_PROTOCOL_RF2    = 2'd2;
@@ -238,6 +261,7 @@ module pl_riscv_control_v1 #(
   localparam [2:0] RESP_REQ_STATUS  = 3'd4;
   localparam [2:0] RESP_REQ_RFDC    = 3'd5;
   localparam [2:0] RESP_REQ_NETWORK = 3'd6;
+  localparam [2:0] RESP_REQ_DIAG    = 3'd7;
   localparam [4:0] DEC_UNSUPPORTED       = 5'd0;
   localparam [4:0] DEC_RF2_HELLO         = 5'd1;
   localparam [4:0] DEC_RF2_STATUS        = 5'd2;
@@ -264,6 +288,8 @@ module pl_riscv_control_v1 #(
   localparam [4:0] DEC_RF2_SET_SYNC_ROLE = 5'd23;
   localparam [4:0] DEC_RF2_EMIT_TRIGGER  = 5'd24;
   localparam [4:0] DEC_RF2_TDC_REG       = 5'd25;
+  localparam [4:0] DEC_RF2_DIAG_SNAPSHOT = 5'd26;
+  localparam [4:0] DEC_RF2_DIAG_CONTROL  = 5'd27;
   localparam integer RX_COUNT_WIDTH = $clog2(MAX_PAYLOAD_WORDS + 1);
   localparam [31:0] MAX_PAYLOAD_WORDS_U32 = MAX_PAYLOAD_WORDS;
   localparam [RX_COUNT_WIDTH-1:0] MAX_PAYLOAD_WORDS_COUNT = MAX_PAYLOAD_WORDS;
@@ -341,6 +367,10 @@ module pl_riscv_control_v1 #(
   reg [63:0] resp_request_payload02;
   reg [63:0] resp_request_payload12;
   reg        dbg_error_pending;
+  reg [63:0] diag_generation;
+  reg        diag_snapshot_wait;
+  reg [31:0] diag_snapshot_pending_seq;
+  reg        diag_snapshot_ack_seen;
 
   wire instr_fire = m_instr_tvalid && m_instr_tready;
   wire out_can_load = !m_instr_tvalid || instr_fire;
@@ -429,6 +459,8 @@ module pl_riscv_control_v1 #(
           RF2_OP_SET_SYNC_ROLE: decode_kind = DEC_RF2_SET_SYNC_ROLE;
           RF2_OP_EMIT_TRIGGER: decode_kind = DEC_RF2_EMIT_TRIGGER;
           RF2_OP_TDC_REG: decode_kind = DEC_RF2_TDC_REG;
+          RF2_OP_DIAG_SNAPSHOT: decode_kind = DEC_RF2_DIAG_SNAPSHOT;
+          RF2_OP_DIAG_CONTROL: decode_kind = DEC_RF2_DIAG_CONTROL;
           default: decode_kind = DEC_UNSUPPORTED;
         endcase
       end else if (is_v1) begin
@@ -536,6 +568,15 @@ module pl_riscv_control_v1 #(
     end
   endtask
 
+  task queue_rf2_diag;
+    input [31:0] opcode;
+    input [31:0] resp_seq;
+    begin
+      request_response(RESP_REQ_DIAG, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode,
+                       16'h0000, resp_seq, 32'd152, 64'd0, 64'd0);
+    end
+  endtask
+
   task queue_rfdc_response;
     input [31:0] opcode;
     input [31:0] resp_seq;
@@ -598,7 +639,10 @@ module pl_riscv_control_v1 #(
             nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
             1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
         };
-        resp_words[12] <= {32'd0, 27'd0, sync_role_master, sync_bypass,
+        // STATUS identity is intentionally in the reserved high halves so
+        // the established low-word sync layout remains stable.
+        resp_words[12] <= {TRIGGER_PATH_VERSION,
+                            27'd0, sync_role_master, sync_bypass,
                             sync_link_ready, sync_seen};
         resp_words[13] <= {trigger_accepted_count, trigger_input_count};
         resp_words[14] <= {32'd0, trigger_output_count};
@@ -606,7 +650,8 @@ module pl_riscv_control_v1 #(
         // acknowledged hardware epoch; bits 22/23 are busy/failed.
         resp_words[15] <= {32'd0, 8'd0, sync_align_failed, sync_align_busy,
                            16'd0, sync_alignment_epoch};
-        resp_words[16] <= {48'd0, sync_alignment_error};
+        resp_words[16] <= {SOURCE_COMMIT_ID, BUILD_PROFILE_ID[15:0],
+                           sync_alignment_error};
         resp_words[17] <= {
             32'd0,
             ext_trigger_phase_ps_x10,
@@ -621,6 +666,54 @@ module pl_riscv_control_v1 #(
         resp_count <= 6'd19;
         resp_index <= 6'd0;
         rvresp_word_count <= 16'd19;
+        rvresp_tdata <= resp_request_magic;
+        rvresp_tvalid <= 1'b1;
+        rvresp_tlast <= 1'b0;
+      end else begin
+        dbg_error_pending <= 1'b1;
+      end
+    end
+  endtask
+
+  // Fixed 160-byte v3 snapshot body. Header words are emitted by the common
+  // response path; the body is deliberately word-aligned for software reads.
+  task load_rf2_diag;
+    input [31:0] opcode;
+    input [31:0] resp_seq;
+    begin
+      if (!rvresp_tvalid) begin
+        resp_words[0] <= resp_request_magic;
+        resp_words[1] <= {opcode, 16'h0000, resp_request_version};
+        resp_words[2] <= {32'd152, resp_seq};
+        resp_words[3] <= diag_generation;
+        resp_words[4] <= {32'd0, trigger_input_count};
+        resp_words[5] <= diag_trigger_capture_tick;
+        resp_words[6] <= {32'd0, trigger_accepted_count};
+        resp_words[7] <= {32'd0, playback_skipped_count};
+        resp_words[8] <= 64'd0;
+        resp_words[9] <= diag_trigger_launch_tick;
+        resp_words[10] <= diag_playback_start_tick;
+        resp_words[11] <= diag_first_valid_tick;
+        resp_words[12] <= {32'd0, diag_trigger_launch_tick[31:0] - diag_trigger_capture_tick[31:0]};
+        resp_words[13] <= {32'd0, diag_first_valid_tick[31:0] - diag_trigger_launch_tick[31:0]};
+        // Snapshot flags are deliberately packed from bit zero upward so the
+        // software decoder can inspect them without depending on HDL field
+        // ordering.  Bits 8..15 contain the per-channel underflow mask.
+        resp_words[14] <= {48'd0, diag_underflow_mask, 2'd0,
+                           diag_output_permitted_dac, diag_prepared_dac,
+                           diag_trigger_launch, diag_trigger_pulse,
+                           diag_replay_active, diag_replay_ready};
+        resp_words[15] <= {32'd0, rfdc_apply_status, rfdc_failure_stage[15:0]};
+        resp_words[16] <= {44'd0, rfdc_failure_axi_response, rfdc_failure_address};
+        resp_words[17] <= {diag_direct_accept_count, diag_direct_input_count};
+        resp_words[18] <= {32'd0, play_ddr_read_counter};
+        resp_words[19] <= {32'd0, play_ddr_read_counter};
+        resp_words[20] <= {32'd0, diag_trigger_pulse, diag_trigger_launch,
+                           6'd0, SOURCE_COMMIT_ID[23:0]};
+        resp_words[21] <= {32'd0, TRIGGER_PATH_VERSION};
+        resp_count <= 6'd22;
+        resp_index <= 6'd0;
+        rvresp_word_count <= 16'd22;
         rvresp_tdata <= resp_request_magic;
         rvresp_tvalid <= 1'b1;
         rvresp_tlast <= 1'b0;
@@ -809,6 +902,8 @@ module pl_riscv_control_v1 #(
       rfctrl2_epoch <= 64'd0;
       rfctrl2_start_valid <= 1'b0;
       rfctrl2_start_tick <= 64'd0;
+      diag_clear_events_pulse <= 1'b0;
+      diag_clear_counters_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
       rfdc_apply_sequence <= 32'd0;
       rfdc_apply_revision <= 32'd0;
@@ -825,6 +920,8 @@ module pl_riscv_control_v1 #(
       network_apply_gateway <= 32'd0;
       network_apply_port <= 16'd0;
       network_restart_start <= 1'b0;
+      diag_clear_events_pulse <= 1'b0;
+      diag_clear_counters_pulse <= 1'b0;
       tdc_reg_valid <= 1'b0;
       tdc_reg_write <= 1'b0;
       tdc_reg_addr <= 16'd0;
@@ -916,6 +1013,11 @@ module pl_riscv_control_v1 #(
       resp_request_payload_bytes2 <= 32'd0;
       resp_request_payload02 <= 64'd0;
       resp_request_payload12 <= 64'd0;
+      diag_generation <= 64'd0;
+      diag_snapshot_wait <= 1'b0;
+      diag_snapshot_pending_seq <= 32'd0;
+      diag_snapshot_ack_seen <= 1'b0;
+      diag_snapshot_request_toggle <= 1'b0;
       for (i = 0; i < MAX_PAYLOAD_WORDS; i = i + 1) begin
         payload_words[i] <= 32'd0;
       end
@@ -965,6 +1067,9 @@ module pl_riscv_control_v1 #(
           end
           RESP_REQ_STATUS: begin
             load_rf2_status(resp_request_opcode, resp_request_sequence);
+          end
+          RESP_REQ_DIAG: begin
+            load_rf2_diag(resp_request_opcode, resp_request_sequence);
           end
           RESP_REQ_RFDC: begin
             load_rfdc_response(resp_request_opcode, resp_request_sequence);
@@ -1126,6 +1231,16 @@ module pl_riscv_control_v1 #(
           dbg_last_cmd <= payload_words[0];
           dbg_last_seq <= payload_words[1];
         end
+      end else if (diag_snapshot_wait &&
+                   (diag_snapshot_ack_toggle === ~diag_snapshot_ack_seen) &&
+                   !resp_request_valid && !resp_request_valid2 && !rvresp_tvalid) begin
+        // The DAC domain has latched the complete held snapshot and returned
+        // an acknowledgement.  Queue the response only after that handshake
+        // so every multi-bit diagnostic field is internally coherent.
+        diag_snapshot_ack_seen <= diag_snapshot_ack_toggle;
+        diag_snapshot_wait <= 1'b0;
+        diag_generation <= diag_generation + 64'd1;
+        queue_rf2_diag(RF2_OP_DIAG_SNAPSHOT, diag_snapshot_pending_seq);
       end else if (tdc_response_pending && !resp_request_valid &&
                    !resp_request_valid2 &&
                    !(rfdc_response_pending && rfdc_apply_done) &&
@@ -1160,6 +1275,30 @@ module pl_riscv_control_v1 #(
                 tdc_reg_wdata <= payload_words[6];
                 tdc_reg_timeout <= 32'd0;
                 tdc_response_sequence <= cmd_seq;
+              end
+            end
+            DEC_RF2_DIAG_SNAPSHOT: begin
+              if (cmd_payload_bytes != 32'd0 || rx_expected_words != 32'd4) begin
+                queue_resp0(RF2_OP_DIAG_SNAPSHOT, 16'h0003, cmd_seq);
+              end else if (diag_snapshot_wait || rvresp_tvalid || resp_request_valid || resp_request_valid2) begin
+                queue_resp0(RF2_OP_DIAG_SNAPSHOT, 16'h0004, cmd_seq);
+              end else begin
+                diag_snapshot_pending_seq <= cmd_seq;
+                diag_snapshot_request_toggle <= ~diag_snapshot_request_toggle;
+                diag_snapshot_wait <= 1'b1;
+              end
+            end
+            DEC_RF2_DIAG_CONTROL: begin
+              if ((cmd_payload_bytes != 32'd8) || (rx_expected_words != 32'd6)) begin
+                queue_resp0(RF2_OP_DIAG_CONTROL, 16'h0003, cmd_seq);
+              end else begin
+                // W1C control is converted to one-cycle pulses.  Top-level
+                // logic transports these pulses with a toggle CDC into the
+                // native DAC domain, so a diagnostic clear never samples a
+                // multi-bit bus asynchronously.
+                diag_clear_events_pulse <= (payload_words[4] != 32'd0);
+                diag_clear_counters_pulse <= payload_words[5][0];
+                queue_resp0(RF2_OP_DIAG_CONTROL, 16'h0000, cmd_seq);
               end
             end
             DEC_RF2_HELLO: begin

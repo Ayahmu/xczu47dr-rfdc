@@ -260,17 +260,6 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: bypass accepts XS19 and local RFCTRL2 Trigger without XS20 SYNC",
         )
 
-    def test_dac_trigger_scheduler_uses_fixed_delay_without_sysref_gating(self):
-        self.run_sim(
-            "tb_dac_trigger_scheduler",
-            [
-                ROOT / "hardware/vivado/src/dac_trigger_scheduler.v",
-                ROOT / "tests/tb_dac_trigger_scheduler.sv",
-            ],
-            "PASS: DAC trigger uses a fixed DAC delay without SYSREF launch gating",
-        )
-
-
     def test_axilite_arbiter_locks_complete_transactions(self):
         self.run_sim(
             "tb_axilite_arbiter_2to1",

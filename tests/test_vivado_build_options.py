@@ -41,6 +41,12 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertIn("TARGET=$(TARGET)", makefile)
         self.assertIn("./build.sh --clean", makefile)
 
+    def test_production_bitstream_targets_do_not_require_ila_probes(self):
+        makefile = MAKEFILE.read_text(encoding="utf-8", errors="ignore")
+        self.assertIn('if [ "$(ENABLE_ILA)" = "1" ]; then', makefile)
+        self.assertIn("production master build unexpectedly contains debug probes", makefile)
+        self.assertIn("production slave build unexpectedly contains debug probes", makefile)
+
     def test_rfdc_reference_clock_is_not_overridden_after_chisel_generation(self):
         create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
         chisel = RFDC_CHISEL.read_text(encoding="utf-8", errors="ignore")
@@ -79,6 +85,18 @@ class VivadoBuildOptionsTests(unittest.TestCase):
             top,
         )
         self.assertNotIn("        ch4.\n", top)
+
+    def test_external_trigger_launch_has_no_fixed_dac_scheduler(self):
+        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        capture = (REPO_ROOT / "hardware" / "vivado" / "src" / "dac_ext_trigger_capture.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertNotIn("TARGET_DAC_DELAY_CYCLES", top)
+        self.assertNotIn("dac_trigger_scheduler", top)
+        self.assertIn("assign trigger_pulse = accept;", capture)
+        self.assertFalse((REPO_ROOT / "hardware" / "vivado" / "src" / "dac_trigger_scheduler.v").exists())
 
 
 if __name__ == "__main__":

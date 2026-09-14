@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from software.dr47 import Dr47Device
 from software.dr47.errors import ParameterRangeError, ProtocolError
-from software.dr47.protocol import pack_rfctrl2_tdc_register, parse_rfctrl2_tdc_register_response
+from software.dr47.protocol import RFCTRL2_VERSION, pack_rfctrl2_tdc_register, parse_rfctrl2_tdc_register_response
 from software.dr47.tdc import TAPS, calibration_from_histogram, validate_table
 
 
@@ -40,7 +40,7 @@ class TdcCalibrationTests(unittest.TestCase):
 
     def test_driver_does_not_retry_side_effecting_write(self):
         board = Dr47Device()
-        response = {"version": 2, "status": 0, "payload": struct.pack("<II", 4, 1)}
+        response = {"version": RFCTRL2_VERSION, "status": 0, "payload": struct.pack("<II", 4, 1)}
         with patch.object(board, "_require_connected"), patch.object(board, "_request", return_value=response) as request:
             self.assertEqual(board.write_tdc_register(4, 1), 1)
             self.assertEqual(request.call_args.kwargs["retries"], 0)

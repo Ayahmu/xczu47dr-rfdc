@@ -1,15 +1,15 @@
 #!/usr/bin/env xsct
 # Program FPGA and Download ELF
-# Usage: xsct program.tcl <bit_file> <elf_file> [psu_init_tcl]
+# Usage: xsct program.tcl <xsa_or_bit_file> <elf_file> [psu_init_tcl]
 # Set DRY_RUN=1 to print resolved paths without connecting to hardware.
 
 if {$argc < 2 || $argc > 3} {
-    puts "Usage: xsct program.tcl <bit_file> <elf_file> \[psu_init_tcl\]"
-    puts "Example: xsct program.tcl ../artifacts/custom_xczu47dr_master.bit ../artifacts/custom_xczu47dr_master.elf ../artifacts/custom_xczu47dr_master_psu_init.tcl"
+    puts "Usage: xsct program.tcl <xsa_or_bit_file> <elf_file> \[psu_init_tcl\]"
+    puts "Example: xsct program.tcl ../artifacts/custom_xczu47dr_master.xsa ../artifacts/custom_xczu47dr_master.elf ../artifacts/custom_xczu47dr_master_psu_init.tcl"
     exit 1
 }
 
-set bit_file [file normalize [lindex $argv 0]]
+set image_file [file normalize [lindex $argv 0]]
 set elf_file [file normalize [lindex $argv 1]]
 set script_dir [file dirname [file normalize [info script]]]
 set firmware_dir [file normalize [file join $script_dir ".."]]
@@ -29,6 +29,39 @@ if {$argc == 3} {
     source $config_script
     set project_root [file normalize [file join $firmware_dir ".."]]
     set psu_init_file [file normalize [file join $project_root [target_config_get $target psu_init]]]
+}
+
+# XSA is a ZIP-compatible hardware platform archive.  Prefer its embedded
+# production bitstream so the software platform and FPGA image cannot drift.
+# Keep accepting a standalone .bit for direct/debug use and for old callers.
+set bit_file $image_file
+set extracted_bit_file ""
+if {[string tolower [file extension $image_file]] eq ".xsa"} {
+    if {![file exists $image_file]} { error "XSA not found: $image_file" }
+    set listing [exec unzip -Z1 $image_file]
+    set candidates [list]
+    foreach member [split $listing "\n"] {
+        if {[string match "*.tmp.bit" [string trim $member]]} {
+            lappend candidates [string trim $member]
+        }
+    }
+    if {[llength $candidates] != 1} {
+        error "XSA must contain exactly one *.tmp.bit (found [llength $candidates])"
+    }
+    set extracted_bit_file [file join [file dirname $image_file] ".program_[pid].bit"]
+    set out [open $extracted_bit_file w]
+    fconfigure $out -translation binary
+    puts -nonewline $out [exec unzip -p $image_file [lindex $candidates 0]]
+    close $out
+    set bit_file $extracted_bit_file
+    puts "Using embedded bitstream [lindex $candidates 0] from XSA"
+}
+
+proc cleanup_extracted_bit {} {
+    global extracted_bit_file
+    if {$extracted_bit_file ne "" && [file exists $extracted_bit_file]} {
+        catch {file delete -force $extracted_bit_file}
+    }
 }
 
 proc board_target_filter {target role} {
@@ -182,6 +215,7 @@ puts ""
 
 if {[info exists ::env(DRY_RUN)] && $::env(DRY_RUN) eq "1"} {
     puts "DRY_RUN=1; skipping connect, reset, psu_init, fpga, dow, and con"
+    cleanup_extracted_bit
     exit 0
 }
 
@@ -250,6 +284,11 @@ dow ${elf_file}
 
 puts "Starting execution..."
 con
+cleanup_extracted_bit
+
+if {$extracted_bit_file ne "" && [file exists $extracted_bit_file]} {
+    file delete -force $extracted_bit_file
+}
 
 puts ""
 puts "=========================================="

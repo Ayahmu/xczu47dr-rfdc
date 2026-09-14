@@ -16,7 +16,7 @@ from .errors import ParameterRangeError, ProtocolError, ProtocolVersionError
 
 UDP_RFCTRL2_MAGIC = 0x00324C5254434652
 UDP_RFRESP2_MAGIC = 0x0032505345524652
-RFCTRL2_VERSION = 2
+RFCTRL2_VERSION = 3
 
 RF2_OP_HELLO = 0x01
 RF2_OP_STATUS = 0x02
@@ -35,6 +35,8 @@ RF2_OP_NETWORK_RESTART = 0x0E
 RF2_OP_SET_SYNC_ROLE = 0x0F
 RF2_OP_EMIT_TRIGGER = 0x10
 RF2_OP_TDC_REG = 0x11
+RF2_OP_DIAG_SNAPSHOT = 0x12
+RF2_OP_DIAG_CONTROL = 0x13
 
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
@@ -43,6 +45,7 @@ RF2_CAP_DAC_MTS = 0x00080000
 RF2_CAP_NCO_SYNC = 0x00100000
 RF2_CAP_SYNC_IO = 0x00200000
 RF2_CAP_TRIGGER_IO = 0x00400000
+RF2_CAP_DIAGNOSTICS = 0x00800000
 
 RF2_BUILD_PROFILE_UNKNOWN = 0
 RF2_BUILD_PROFILE_NORMAL = 1
@@ -51,6 +54,10 @@ RF2_BUILD_PROFILE_NAMES = {
     RF2_BUILD_PROFILE_NORMAL: "custom_xczu47dr",
     RF2_BUILD_PROFILE_BANDWIDTH: "custom_xczu47dr_bw",
 }
+RF2_TRIGGER_PATH_VERSION = 3
+# The source commit is populated by the Vivado project script.  A driver can
+# optionally pin this value through Dr47Device(expected_source_commit_id=...).
+RF2_SOURCE_COMMIT_UNKNOWN = 0
 
 RF2_STATUS_RFDC_READY = 0x00000001
 RF2_STATUS_RFDC_BUSY = 0x00000002
@@ -170,6 +177,16 @@ def pack_rfctrl2_hello(seq: int = 1) -> bytes:
 
 def pack_rfctrl2_status(seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_STATUS, seq=seq)
+
+
+def pack_rfctrl2_diag_snapshot(seq: int = 1) -> bytes:
+    return pack_rfctrl2_packet(RF2_OP_DIAG_SNAPSHOT, seq=seq)
+
+
+def pack_rfctrl2_diag_control(events: int = 0, counters: bool = False, seq: int = 1) -> bytes:
+    """Clear sticky diagnostic events and/or counters (W1C semantics)."""
+    flags = 1 if counters else 0
+    return pack_rfctrl2_packet(RF2_OP_DIAG_CONTROL, struct.pack("<II", int(events) & 0xFFFFFFFF, flags), seq=seq)
 
 
 def pack_rfctrl2_arm(run_id: int, channel_mask: int = 0xFF, seq: int = 1) -> bytes:
@@ -390,6 +407,9 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         "ext_trigger_phase_metastable": False,
         "ext_trigger_tap_index": 0, "ext_trigger_phase_ps_x10": 0,
         "playback_admitted_count": 0, "playback_skipped_count": 0,
+        "build_profile_id": RF2_BUILD_PROFILE_UNKNOWN, "build_profile": "",
+        "source_commit_id": RF2_SOURCE_COMMIT_UNKNOWN,
+        "trigger_path_version": 0,
     })
     if len(payload) >= 32:
         (
@@ -417,6 +437,9 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["dac_mts_error"] = (mts_flags >> 16) & 0xFFFF
     if len(payload) >= 80:
         result["sync_status"] = struct.unpack_from("<I", payload, 72)[0]
+        # The identity extension shares this word with the legacy sync flags:
+        # upper 32 bits carry the trigger path version.
+        result["trigger_path_version"] = (struct.unpack_from("<Q", payload, 72)[0] >> 32) & 0xFFFFFFFF
         result["sync_seen"] = bool(result["sync_status"] & RF2_SYNC_STATUS_SEEN)
         result["sync_link_ready"] = bool(result["sync_status"] & RF2_SYNC_STATUS_READY)
         result["sync_mode"] = "bypass" if result["sync_status"] & RF2_SYNC_STATUS_BYPASS else "external"
@@ -434,6 +457,11 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["sync_align_failed"] = bool((alignment_word >> 23) & 1)
     if len(payload) >= 112:
         result["sync_alignment_error"] = struct.unpack_from("<I", payload, 104)[0] & 0xFFFF
+    if len(payload) >= 112:
+        identity_word = struct.unpack_from("<Q", payload, 104)[0]
+        result["source_commit_id"] = (identity_word >> 32) & 0xFFFFFFFF
+        result["build_profile_id"] = (identity_word >> 16) & 0xFFFF
+        result["build_profile"] = RF2_BUILD_PROFILE_NAMES.get(result["build_profile_id"], "")
     if len(payload) >= 120:
         phase_word = struct.unpack_from("<Q", payload, 112)[0]
         result["ext_trigger_phase_slot"] = phase_word & 0x7
@@ -453,6 +481,74 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
     result["dac_mts_failed"] = result["dac_mts_failed"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_FAILED)
     result["nco_sync_ready"] = bool(result["state_flags"] & RF2_STATUS_NCO_SYNC_READY)
     result["dac_mts_required"] = result["dac_mts_required"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_REQUIRED)
+    return result
+
+
+def parse_rfctrl2_diagnostics_payload(response: Mapping) -> dict:
+    """Decode the fixed v3 diagnostic snapshot payload.
+
+    The first eight words are intentionally stable; newer firmware may append
+    more words and older snapshots remain readable through the defaults.
+    """
+    payload = bytes(response.get("payload", b""))
+    result = dict(response)
+    result.update({
+        "generation": 0, "trigger_input_count": 0, "trigger_capture_tick": 0,
+        "trigger_accepted_count": 0, "trigger_skipped_count": 0,
+        "trigger_rejected_count": 0, "trigger_launch_tick": 0,
+        "playback_start_tick": 0, "first_valid_tick": 0,
+        "trigger_to_launch_last": 0, "launch_to_first_valid_last": 0,
+        "replay_ready": False, "replay_active": False, "fifo_level": tuple(),
+        "prepared_dac": False, "output_permitted_dac": False,
+        "underflow_mask": 0, "mute": False, "abort": False,
+        "rfdc_status": 0, "rfdc_failure_stage": 0, "rfdc_failure_address": 0,
+        "rfdc_axi_response": 0, "dma_chunk_beats": 0,
+        "dma_outstanding_beats": 0, "refill_start_tick": 0, "refill_done_tick": 0,
+        "dac_direct_input_count": 0, "dac_direct_accept_count": 0,
+        "dac_direct_trigger_pulse": False, "dac_trigger_launch": False,
+    })
+    if len(payload) >= 8:
+        result["generation"] = struct.unpack_from("<Q", payload, 0)[0]
+    fields = ["trigger_input_count", "trigger_capture_tick", "trigger_accepted_count",
+              "trigger_skipped_count", "trigger_rejected_count", "trigger_launch_tick",
+              "playback_start_tick", "first_valid_tick"]
+    for i, name in enumerate(fields, start=1):
+        if len(payload) >= (i + 1) * 8:
+            result[name] = struct.unpack_from("<Q", payload, i * 8)[0]
+    if len(payload) >= 96:
+        word = struct.unpack_from("<Q", payload, 88)[0]
+        result["replay_ready"] = bool(word & 1)
+        result["replay_active"] = bool(word & 2)
+        result["dac_direct_trigger_pulse"] = bool((word >> 2) & 1)
+        result["dac_trigger_launch"] = bool((word >> 3) & 1)
+        result["prepared_dac"] = bool((word >> 4) & 1)
+        result["output_permitted_dac"] = bool((word >> 5) & 1)
+        result["underflow_mask"] = (word >> 8) & 0xFF
+        result["mute"] = bool((word >> 6) & 1)
+        result["abort"] = bool((word >> 7) & 1)
+    if len(payload) >= 104:
+        result["trigger_to_launch_last"] = struct.unpack_from("<Q", payload, 72)[0]
+        result["launch_to_first_valid_last"] = struct.unpack_from("<Q", payload, 80)[0]
+    if len(payload) >= 104:
+        status_word = struct.unpack_from("<Q", payload, 96)[0]
+        result["rfdc_failure_stage"] = status_word & 0xFFFF
+        result["rfdc_status"] = (status_word >> 16) & 0xFFFF
+    if len(payload) >= 112:
+        failure_word = struct.unpack_from("<Q", payload, 104)[0]
+        result["rfdc_failure_address"] = failure_word & 0x3FFFF
+        result["rfdc_axi_response"] = (failure_word >> 18) & 0x3
+    if len(payload) >= 120:
+        direct_word = struct.unpack_from("<Q", payload, 112)[0]
+        result["dac_direct_input_count"] = direct_word & 0xFFFFFFFF
+        result["dac_direct_accept_count"] = (direct_word >> 32) & 0xFFFFFFFF
+    if len(payload) >= 128:
+        result["dma_chunk_beats"] = struct.unpack_from("<Q", payload, 120)[0] & 0xFFFFFFFF
+    if len(payload) >= 136:
+        result["dma_outstanding_beats"] = struct.unpack_from("<Q", payload, 128)[0] & 0xFFFFFFFF
+    if len(payload) >= 144:
+        event_word = struct.unpack_from("<Q", payload, 136)[0]
+        result["dac_direct_trigger_pulse"] = result["dac_direct_trigger_pulse"] or bool((event_word >> 32) & 1)
+        result["dac_trigger_launch"] = result["dac_trigger_launch"] or bool((event_word >> 33) & 1)
     return result
 
 

@@ -16,6 +16,7 @@ from typing import Any, Literal
 import numpy as np
 
 from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, RfdcChannelReadback
+from .capabilities import DiagnosticsSnapshot
 from .errors import (
     ConnectionError,
     ConnectionStateError,
@@ -85,6 +86,8 @@ from .protocol import CMD_REPEAT, REPEAT_FLAG_DEBUG_ALTERNATE
 GHZ_TO_HZ = 1_000_000_000.0
 RFDC_NCO_MIN_GHZ = RFDC_NCO_MIN_HZ / GHZ_TO_HZ
 RFDC_NCO_MAX_GHZ = RFDC_NCO_MAX_HZ / GHZ_TO_HZ
+_RFDC_IDLE_TIMEOUT_S = 5.0
+_RFDC_IDLE_POLL_S = 0.05
 
 
 def ghz_to_hz(value_ghz: float) -> float:
@@ -137,6 +140,9 @@ class Dr47Device:
         batch_mode: bool = False,
         sync_role: Literal["master", "slave"] = "slave",
         transport: object | None = None,
+        expected_build_profile_id: int | None = RF2_BUILD_PROFILE_NORMAL,
+        expected_trigger_path_version: int | None = RF2_TRIGGER_PATH_VERSION,
+        expected_source_commit_id: int | None = None,
     ) -> None:
         self.ip = str(ip)
         self.port = int(port)
@@ -145,6 +151,9 @@ class Dr47Device:
         self.udp_source_ip = str(udp_source_ip or "")
         self.retries = max(0, int(retries))
         self.batch_mode = bool(batch_mode)
+        self.expected_build_profile_id = None if expected_build_profile_id is None else int(expected_build_profile_id)
+        self.expected_trigger_path_version = None if expected_trigger_path_version is None else int(expected_trigger_path_version)
+        self.expected_source_commit_id = None if expected_source_commit_id is None else int(expected_source_commit_id) & 0xFFFFFFFF
         if sync_role not in {"master", "slave"}:
             raise ValueError("sync_role must be 'master' or 'slave'")
         self._transport = transport
@@ -253,6 +262,8 @@ class Dr47Device:
             protocol_version=int(response.get("version", RFCTRL2_VERSION)),
             build_profile_id=int(decoded.get("build_profile_id", self._capabilities.build_profile_id)),
             build_profile=str(decoded.get("build_profile", self._capabilities.build_profile)),
+            source_commit_id=int(decoded.get("source_commit_id", self._capabilities.source_commit_id)) & 0xFFFFFFFF,
+            trigger_path_version=int(decoded.get("trigger_path_version", self._capabilities.trigger_path_version)) & 0xFFFFFFFF,
             capability_bits=int(decoded.get("capabilities", 0)),
             state_flags=state_flags,
             rfdc_ready=bool(decoded.get("rfdc_ready")),
@@ -294,6 +305,36 @@ class Dr47Device:
         self._sync_mode = self._capabilities.sync_mode
         return self._capabilities
 
+    def _validate_identity(self, response: Mapping, operation: str) -> None:
+        """Reject a v3 bitstream built for a different hardware contract.
+
+        Test transports and very old read-only replies may omit the payload;
+        a real v3 HELLO/STATUS always carries the identity extension.  Once an
+        identity is present it is never silently ignored.
+        """
+        payload = bytes(response.get("payload", b""))
+        if len(payload) < 112:
+            return
+        decoded = parse_rfctrl2_status_payload(response)
+        profile = int(decoded.get("build_profile_id", 0))
+        trigger_path = int(decoded.get("trigger_path_version", 0))
+        source_commit = int(decoded.get("source_commit_id", 0))
+        if self.expected_build_profile_id is not None and profile != self.expected_build_profile_id:
+            raise ProtocolVersionError(
+                f"RFCTRL2 {operation} build profile {profile} is incompatible with expected "
+                f"{self.expected_build_profile_id}"
+            )
+        if self.expected_trigger_path_version is not None and trigger_path != self.expected_trigger_path_version:
+            raise ProtocolVersionError(
+                f"RFCTRL2 {operation} trigger path version {trigger_path} is incompatible with expected "
+                f"{self.expected_trigger_path_version}"
+            )
+        if self.expected_source_commit_id is not None and source_commit != self.expected_source_commit_id:
+            raise ProtocolVersionError(
+                f"RFCTRL2 {operation} source commit 0x{source_commit:08X} does not match expected "
+                f"0x{self.expected_source_commit_id:08X}"
+            )
+
     def connect(self) -> int:
         with self._lock:
             if self._closed:
@@ -316,6 +357,7 @@ class Dr47Device:
                             retries=self.retries,
                         )
                         self._check_response(hello, "HELLO")
+                        self._validate_identity(hello, "HELLO")
                         self._connected = True
                         self._update_from_status(hello)
                         # STATUS is authoritative when a board returns a
@@ -328,6 +370,7 @@ class Dr47Device:
                             retries=self.retries,
                         )
                         self._check_response(status, "STATUS")
+                        self._validate_identity(status, "STATUS")
                         self._update_from_status(status)
                         return 0
                     except TransportTimeout:
@@ -364,6 +407,23 @@ class Dr47Device:
     def rfctrl2_status(self, seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         sequence = self._next_sequence() if seq is None else int(seq)
         response = self._request(pack_rfctrl2_status(sequence), RF2_OP_STATUS, sequence, wait_response=wait_response, retries=retries)
+        return response
+
+    def read_diagnostics(self) -> DiagnosticsSnapshot:
+        """Read the hardware-latched RFCTRL2 diagnostic snapshot."""
+        self._require_connected()
+        seq = self._next_sequence()
+        response = self._request(pack_rfctrl2_diag_snapshot(seq), RF2_OP_DIAG_SNAPSHOT, seq, retries=self.retries)
+        self._check_response(response, "DIAG_SNAPSHOT")
+        decoded = parse_rfctrl2_diagnostics_payload(response)
+        return DiagnosticsSnapshot(**{k: v for k, v in decoded.items() if k in DiagnosticsSnapshot.__dataclass_fields__})
+
+    def clear_diagnostics(self, events: int = 0xFFFFFFFF, counters: bool = True):
+        """Clear sticky diagnostic events (W1C) and optionally counters."""
+        self._require_connected()
+        seq = self._next_sequence()
+        response = self._request(pack_rfctrl2_diag_control(events, counters, seq), RF2_OP_DIAG_CONTROL, seq, retries=0)
+        self._check_response(response, "DIAG_CONTROL")
         return response
 
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
@@ -601,12 +661,43 @@ class Dr47Device:
             if self.batch_mode:
                 return {"revision": self._pending_revision, "applied_mask": channel_mask}
             raise ConnectionStateError("Dr47Device.connect() must be called before applying RFDC configuration")
-        result = self.rfctrl2_rfdc_apply(
-            self._pending_nco, self._pending_zone, self._pending_phase, self._pending_current,
-            revision=self._pending_revision, channel_mask=channel_mask, retries=self.retries,
-        )
+        try:
+            result = self.rfctrl2_rfdc_apply(
+                self._pending_nco, self._pending_zone, self._pending_phase, self._pending_current,
+                revision=self._pending_revision, channel_mask=channel_mask, retries=self.retries,
+            )
+        except DeviceStatusError as exc:
+            # RFDC_APPLY is intentionally rejected while playback is armed or
+            # running.  The PL also emits a force-mute pulse for this status,
+            # but that pulse crosses clock domains asynchronously; explicitly
+            # abort and wait for a confirmed IDLE state before retrying once.
+            # This makes repeated commits deterministic without retrying
+            # unrelated protocol, range, AXI, or readiness failures.
+            if exc.operation != "RFDC_APPLY" or exc.status != RF2_STATUS_UNSAFE_STATE:
+                raise
+            self.abort_playback()
+            self._wait_for_playback_idle()
+            result = self.rfctrl2_rfdc_apply(
+                self._pending_nco, self._pending_zone, self._pending_phase, self._pending_current,
+                revision=self._pending_revision, channel_mask=channel_mask, retries=self.retries,
+            )
         self._cache_rfdc_readback(result)
         return result
+
+    def _wait_for_playback_idle(self, timeout_s: float = _RFDC_IDLE_TIMEOUT_S) -> None:
+        """Wait until the board confirms that RFDC changes are safe to apply."""
+
+        deadline = time.monotonic() + float(timeout_s)
+        last_state = self._status.state.value
+        while time.monotonic() < deadline:
+            status = self.status(refresh=True)
+            last_state = status.state.value
+            if status.state is PlaybackState.IDLE:
+                return
+            time.sleep(_RFDC_IDLE_POLL_S)
+        raise TimeoutError(
+            f"playback did not become IDLE before RFDC_APPLY retry (last state={last_state})"
+        )
 
     def _cache_rfdc_readback(self, result: Mapping | None) -> None:
         if not isinstance(result, Mapping):

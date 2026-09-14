@@ -215,11 +215,11 @@ xsa: bitstream
 
 bitstream-master:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_master.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: master debug probes missing: $$ltx"; exit 1; }; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "MASTER LTX: $$ltx"
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_master.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; if [ "$(ENABLE_ILA)" = "1" ]; then test -s "$$ltx" || { echo "ERROR: master debug probes missing: $$ltx"; exit 1; }; else test ! -e "$$ltx" || { echo "ERROR: production master build unexpectedly contains debug probes: $$ltx"; exit 1; }; fi; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; if [ "$(ENABLE_ILA)" = "1" ]; then echo "MASTER LTX: $$ltx"; else echo "MASTER LTX: disabled"; fi
 
 bitstream-slave:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: slave debug probes missing: $$ltx"; exit 1; }; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "SLAVE LTX: $$ltx"
+	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; if [ "$(ENABLE_ILA)" = "1" ]; then test -s "$$ltx" || { echo "ERROR: slave debug probes missing: $$ltx"; exit 1; }; else test ! -e "$$ltx" || { echo "ERROR: production slave build unexpectedly contains debug probes: $$ltx"; exit 1; }; fi; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; if [ "$(ENABLE_ILA)" = "1" ]; then echo "SLAVE LTX: $$ltx"; else echo "SLAVE LTX: disabled"; fi
 
 bitstream-slave-trigout:
 	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave_trigout VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave-trigout" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave-trigout" bitstream
@@ -298,11 +298,10 @@ firmware-clean:
 	rm -rf "$(FIRMWARE_DIR)/workspace"
 
 artifacts:
-	@test -f "$(BIT)" || { echo "ERROR: missing bitstream: $(BIT)"; exit 1; }
 	@test -f "$(XSA)" || { echo "ERROR: missing XSA: $(XSA)"; exit 1; }
 	@test -f "$(ELF)" || { echo "ERROR: missing ELF: $(ELF)"; exit 1; }
 	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PS init script: $(PSU_INIT)"; exit 1; }
-	@du -h "$(BIT)" "$(XSA)" "$(ELF)" "$(PSU_INIT)"
+	@du -h "$(XSA)" "$(ELF)" "$(PSU_INIT)"
 	@test ! -e "$(LTX)" || du -h "$(LTX)"
 	@test ! -e "$(ARTIFACT_DIR)/SHA256SUMS" || (cd "$(ARTIFACT_DIR)" && sha256sum -c SHA256SUMS)
 
@@ -333,7 +332,7 @@ ifeq ($(EXPLICIT_PROGRAM_ARTIFACTS),1)
 	@test -f "$(BIT)" || { echo "ERROR: missing BIT=$(BIT). Run make bitstream first or pass BIT=..."; exit 1; }
 	@test -f "$(ELF)" || { echo "ERROR: missing ELF=$(ELF). Run make firmware first or pass ELF=..."; exit 1; }
 	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PSU_INIT=$(PSU_INIT). Run make firmware-create first or pass PSU_INIT=..."; exit 1; }
-	cd $(FIRMWARE_DIR) && xsct scripts/program.tcl "$(BIT)" "$(ELF)" "$(PSU_INIT)"
+	cd $(FIRMWARE_DIR) && xsct scripts/program.tcl "$(XSA)" "$(ELF)" "$(PSU_INIT)"
 else
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh program
 endif

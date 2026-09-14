@@ -27,27 +27,35 @@
 #   only runtime discriminator is sync_xs20_oe: 1 in a trigout build (XS20 driven
 #   as a Trigger output), 0 in the plain slave (XS20 is a SYNC input).
 #
-# Usage:  ./software/load_and_verify.sh [slave_trigout|slave]
+# Usage:  ./software/load_and_verify.sh [slave|master]
 #   SKIP_PSU_INIT=1  never run psu_init, even if DDR looks uninitialized
 #   FORCE_PSU_INIT=1 run psu_init unconditionally
 set -uo pipefail
 
-ROLE=${1:-slave_trigout}
+ROLE=${1:-slave}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CABLE=${JTAG_CABLE_SERIAL:-210512180082}
-BIT="$REPO/artifacts/custom_xczu47dr_${ROLE}.bit"
+XSA="$REPO/artifacts/custom_xczu47dr_${ROLE}.xsa"
 LTX="$REPO/artifacts/custom_xczu47dr_${ROLE}.ltx"
-# The PS side is identical for both slave variants, so both reuse the slave ELF.
-ELF="$REPO/artifacts/custom_xczu47dr_slave.elf"
-PSU="$REPO/artifacts/custom_xczu47dr_slave_psu_init.tcl"
+ELF="$REPO/artifacts/custom_xczu47dr_${ROLE}.elf"
+PSU="$WORK/psu_init.tcl"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+BIT="$WORK/${ROLE}.bit"
 
 fail() { echo "FAILED: $*" >&2; exit 1; }
 
-for f in "$BIT" "$LTX" "$ELF" "$PSU"; do
+case "$ROLE" in
+  slave|master) ;;
+  *) fail "unsupported role '$ROLE' (use slave or master)" ;;
+esac
+
+for f in "$XSA" "$ELF"; do
   [ -s "$f" ] || fail "missing artifact: $f"
 done
+member=$(unzip -Z1 "$XSA" | awk '/\.tmp\.bit$/ {print; n++} END {if (n != 1) exit 1}') || fail "XSA must contain exactly one embedded .tmp.bit"
+unzip -p "$XSA" "$member" > "$BIT" || fail "cannot extract embedded bitstream"
+unzip -p "$XSA" psu_init.tcl > "$PSU" || fail "XSA does not contain psu_init.tcl"
 echo "role   : $ROLE"
 echo "bit    : $(sha256sum "$BIT" | cut -c1-16)  $(wc -c <"$BIT") bytes"
 
@@ -119,8 +127,10 @@ open_hw_target {localhost:3121/xilinx_tcf/Xilinx/${CABLE}}
 set dev [lindex [get_hw_devices] 0]
 current_hw_device \$dev
 set_property PROGRAM.FILE {${BIT}} \$dev
-set_property PROBES.FILE {${LTX}} \$dev
-set_property FULL_PROBES.FILE {${LTX}} \$dev
+if {[file exists {${LTX}}]} {
+  set_property PROBES.FILE {${LTX}} \$dev
+  set_property FULL_PROBES.FILE {${LTX}} \$dev
+}
 program_hw_devices \$dev
 after 4000
 refresh_hw_device \$dev

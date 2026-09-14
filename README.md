@@ -26,8 +26,8 @@ bitstream、脚本及操作流程混用。
 ## 常用命令
 
 ```bash
-# 使用已有产物烧写 slave_trigout
-JTAG_CABLE_SERIAL=<序列号> ./software/load_and_verify.sh slave_trigout
+# 使用已有生产产物烧写 slave（也可传 master）
+JTAG_CABLE_SERIAL=<序列号> ./software/load_and_verify.sh slave
 
 # 运行当前 slave 外部 Trigger 测试
 .venv/bin/python software/dr47/examples/hardware_slave_bypass_external_trigger_test.py

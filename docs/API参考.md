@@ -144,6 +144,10 @@ device.commit() -> int
 - `set_gain()` 的 `gain_type="norm"` 范围是 `0..1`，映射为 DAC 输出电流。
 - `set_qc_on_off()` 控制输出通道；`set_qr_on_off()` 当前不支持 ADC/DAQ 输入。
 - `batch_mode=True` 时，设置不会立即发送，必须调用 `commit()`。
+- RFDC 配置只能在播放器 `IDLE` 时生效。若重复 `commit()` 或非批量模式下的
+  setter 遇到板端 `0x0006`（播放仍处于 ARM/RUNNING），驱动会发送一次
+  `ABORT_MUTE`，等待板端确认回到 `IDLE` 后自动重试一次；这会停止当前播放。
+  需要保留当前播放时，应先不要修改 RFDC 参数。
 
 `apply_rfdc_config(...)` 可一次提交多通道的 `nco_ghz`、`nyquist_zone`、`phase_deg`、
 `output_current_ma`、`revision` 和 `channel_mask`。普通应用使用上面的通道方法更直观。

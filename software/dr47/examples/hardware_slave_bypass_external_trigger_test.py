@@ -53,7 +53,9 @@ GAUSSIAN_AMPLITUDE = 0.7
 #   PULSE_INTERVAL_NS：相邻脉冲起点之间的时间
 #   PULSES_PER_TRIGGER：一组内的脉冲数量
 # 调度时间由硬件向上量化到 20 ns。
-FIRST_DELAY_NS = 20.0
+# Start the first sample on the first available DAC beat after Trigger.  This
+# is waveform-record padding, independent of the removed launch scheduler.
+FIRST_DELAY_NS = 0.0
 PULSE_INTERVAL_NS = 1000.0
 PULSES_PER_TRIGGER = 10
 

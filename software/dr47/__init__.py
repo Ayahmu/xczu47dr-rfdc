@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, RfdcChannelReadback
+from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, RfdcChannelReadback, DiagnosticsSnapshot
 from .device import (
     Dr47Device,
     GHZ_TO_HZ,
@@ -41,7 +41,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Dr47Device", "connect", "SimulatedDr47Device", "MagicMock",
     "SyncGroup", "SyncAlignmentResult", "make_trigger_sequence", "make_single_trigger_sequence",
-    "DeviceCapabilities", "DeviceStatus", "PlaybackState", "RfdcChannelReadback",
+    "DeviceCapabilities", "DeviceStatus", "PlaybackState", "RfdcChannelReadback", "DiagnosticsSnapshot",
     "BurstSchedule", "QuantizedBurstSchedule", "PlaybackConfig",
     "UdpTransport", "rfdc_nco_plan_for_target",
     "DiscoveredBoard", "ProvisionedBoard", "DiscoveryError", "ProvisionError",
