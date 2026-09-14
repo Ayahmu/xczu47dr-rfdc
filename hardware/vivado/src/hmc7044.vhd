@@ -36,7 +36,7 @@ USE IEEE.STD_LOGIC_ARITH.ALL;
 -- have period ratio 25:48, so their relative phase repeats every 500 ns on a
 -- gcd(20, 125/12) = 5/12 ns lattice.  Anything timed in PL_CLK and consumed in
 -- dac_axis_clk therefore inherits up to 19.583 ns of quantization - see
--- docs/使用与测试指南.md, section on 同步时钟域.
+-- See docs/硬件指标.md for the user-visible clock and synchronization contract.
 --  ****************************************************************************/
 entity hmc7044 is
 

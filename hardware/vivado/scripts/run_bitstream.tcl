@@ -73,41 +73,16 @@ if {!${manual_bitstream}} {
     }
 }
 
-# Copy bitstream and debug files to output directory
+# The bitstream is an intermediate input to XSA export.  Do not publish a
+# second image or debug-probe file next to the XSA; the production artifact
+# directory contains only XSA and ELF files.
 set bit_file "${impl_dir}/*.bit"
-set ltx_file "${impl_dir}/*.ltx"
-
-puts "INFO: Copying bitstream to output directory..."
 set bit_files [glob -nocomplain ${bit_file}]
-if {[llength $bit_files] > 0} {
-    set bit_output "${output_dir}/${output_basename}.bit"
-    set bit_tmp "${bit_output}.tmp"
-    file delete -force ${bit_tmp}
-    file copy -force [lindex $bit_files 0] ${bit_tmp}
-    file rename -force ${bit_tmp} ${bit_output}
-    puts "INFO: Bitstream copied to ${output_dir}/${output_basename}.bit"
-} else {
+if {[llength $bit_files] == 0} {
     puts "ERROR: Bitstream file not found!"
     exit 1
 }
-
-# Copy debug probe file if exists
-set ltx_files [glob -nocomplain ${ltx_file}]
-if {[llength $ltx_files] > 0} {
-    set ltx_output "${output_dir}/${output_basename}.ltx"
-    set ltx_tmp "${ltx_output}.tmp"
-    file delete -force ${ltx_tmp}
-    file copy -force [lindex $ltx_files 0] ${ltx_tmp}
-    file rename -force ${ltx_tmp} ${ltx_output}
-    puts "INFO: Debug probes copied to ${output_dir}/${output_basename}.ltx"
-} else {
-    # Never leave an older role/build's probes next to a fresh bitstream.
-    set ltx_output "${output_dir}/${output_basename}.ltx"
-    if {[file exists ${ltx_output}]} {
-        file delete -force ${ltx_output}
-        puts "INFO: Removed stale debug probes: ${ltx_output}"
-    }
-}
+puts "INFO: Bitstream generated internally for XSA export; no standalone image published"
 
 set timing_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_postroute_physopted.rpt"
 if {![file exists ${timing_rpt}]} {

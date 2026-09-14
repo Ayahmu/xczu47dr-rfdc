@@ -1,10 +1,8 @@
 """firmware/build.sh 的目标路径解析测试。
 
-custom_xczu47dr_slave_trigout 和 custom_xczu47dr_slave 只差 PL generics
-（XS20 作为第二路 Trigger 输出），所以它有自己的 .bit，但复用 slave 的 workspace、
-ELF 和 psu_init。build.sh 原来把 ELF/psu_init 从 output_basename 推导，指向了
-custom_xczu47dr_slave_trigout.elf 这种根本不会生成的文件；而且 case 分支里漏了这个
-目标，直接报 "Unsupported TARGET"。两个问题都是在板上烧写时才暴露的。
+custom_xczu47dr_slave_trigout 和 custom_xczu47dr_slave 只差 PL generics，固件路径
+仍应复用 slave workspace 和 ELF。生产烧写入口现在统一使用 XSA，PS 初始化脚本从
+XSA 提取，不再维护独立 bitstream 或 psu_init 产物。
 """
 
 import os
@@ -18,22 +16,11 @@ BUILD_SH = REPO_ROOT / "firmware" / "build.sh"
 
 EXPECTED = {
     "custom_xczu47dr_master": {
-        "BIT": "custom_xczu47dr_master.bit",
         "ELF": "custom_xczu47dr_master.elf",
-        "PSU_INIT": "custom_xczu47dr_master_psu_init.tcl",
         "WORKSPACE": "custom_xczu47dr_master",
     },
     "custom_xczu47dr_slave": {
-        "BIT": "custom_xczu47dr_slave.bit",
         "ELF": "custom_xczu47dr_slave.elf",
-        "PSU_INIT": "custom_xczu47dr_slave_psu_init.tcl",
-        "WORKSPACE": "custom_xczu47dr_slave",
-    },
-    # 自己的 bit，slave 的固件
-    "custom_xczu47dr_slave_trigout": {
-        "BIT": "custom_xczu47dr_slave_trigout.bit",
-        "ELF": "custom_xczu47dr_slave.elf",
-        "PSU_INIT": "custom_xczu47dr_slave_psu_init.tcl",
         "WORKSPACE": "custom_xczu47dr_slave",
     },
 }
@@ -55,7 +42,7 @@ def _resolve(target: str) -> dict:
         )
     values = {}
     for line in result.stdout.splitlines():
-        for key in ("BIT", "ELF", "PSU_INIT", "WORKSPACE", "BOARD_DEFINE"):
+        for key in ("ELF", "WORKSPACE", "BOARD_DEFINE"):
             marker = f"{key}="
             if marker in line:
                 values.setdefault(key, line.split(marker, 1)[1].strip())
@@ -65,15 +52,11 @@ def _resolve(target: str) -> dict:
 @unittest.skipUnless(shutil.which("tclsh"), "tclsh not installed")
 class FirmwareBuildTargetPathTests(unittest.TestCase):
     def test_every_supported_target_resolves(self):
-        """三个目标都必须能解析，不能落进 Unsupported TARGET 分支。"""
+        """两个生产目标都必须能解析，不能落进 Unsupported TARGET 分支。"""
         for target, expected in EXPECTED.items():
             with self.subTest(target=target):
                 values = _resolve(target)
-                self.assertEqual(Path(values["BIT"]).name, expected["BIT"])
                 self.assertEqual(Path(values["ELF"]).name, expected["ELF"])
-                self.assertEqual(
-                    Path(values["PSU_INIT"]).name, expected["PSU_INIT"]
-                )
                 self.assertEqual(
                     Path(values["WORKSPACE"]).name, expected["WORKSPACE"]
                 )
@@ -81,24 +64,11 @@ class FirmwareBuildTargetPathTests(unittest.TestCase):
                     values["BOARD_DEFINE"], "-DBOARD_CUSTOM_XCZU47DR"
                 )
 
-    def test_trigout_reuses_slave_firmware_but_keeps_its_own_bitstream(self):
-        """trigout 的 bit 必须是自己的，ELF/psu_init 必须是 slave 的。
-
-        这正是原来的 bug：ELF 从 output_basename 推导出
-        custom_xczu47dr_slave_trigout.elf，那个文件永远不存在。
-        """
-        trigout = _resolve("custom_xczu47dr_slave_trigout")
-        slave = _resolve("custom_xczu47dr_slave")
-        self.assertNotEqual(trigout["BIT"], slave["BIT"])
-        self.assertEqual(trigout["ELF"], slave["ELF"])
-        self.assertEqual(trigout["PSU_INIT"], slave["PSU_INIT"])
-        self.assertEqual(trigout["WORKSPACE"], slave["WORKSPACE"])
-
     def test_artifact_dir_override_still_applies(self):
         """ARTIFACT_DIR 覆盖必须仍然生效——修复只取 basename，不能写死路径。"""
         env = dict(
             os.environ,
-            TARGET="custom_xczu47dr_slave_trigout",
+            TARGET="custom_xczu47dr_slave",
             DRY_RUN="1",
             ARTIFACT_DIR="/tmp/xczu47dr-artifact-override",
         )
@@ -117,10 +87,7 @@ class FirmwareBuildTargetPathTests(unittest.TestCase):
         )
 
     def test_allowed_targets_and_build_sh_agree(self):
-        """Makefile 的 ALLOWED_TARGETS 和 build.sh 的 case 分支不能脱节。
-
-        当初就是只加了 Makefile 和 target_config.tcl，漏了 build.sh。
-        """
+        """Makefile 的 ALLOWED_TARGETS 和 build.sh 的 case 分支不能脱节。"""
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         allowed = []
         for line in makefile.splitlines():

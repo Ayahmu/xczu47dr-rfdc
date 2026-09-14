@@ -15,6 +15,7 @@ set script_dir [file dirname [file normalize [info script]]]
 set firmware_dir [file normalize [file join $script_dir ".."]]
 set target custom_xczu47dr_master
 set download_elf_only 0
+set extracted_psu_file ""
 if {[info exists ::env(DOWNLOAD_ELF_ONLY)] && $::env(DOWNLOAD_ELF_ONLY) eq "1"} {
     set download_elf_only 1
 }
@@ -25,10 +26,10 @@ if {[info exists ::env(TARGET)]} {
 if {$argc == 3} {
     set psu_init_file [file normalize [lindex $argv 2]]
 } else {
-    set config_script [file normalize [file join $firmware_dir ".." "hardware" "vivado" "scripts" "target_config.tcl"]]
-    source $config_script
-    set project_root [file normalize [file join $firmware_dir ".."]]
-    set psu_init_file [file normalize [file join $project_root [target_config_get $target psu_init]]]
+    # Production XSA files carry psu_init.tcl.  Leave the path empty until
+    # the archive is inspected below; standalone .bit callers still need to
+    # provide an explicit third argument.
+    set psu_init_file ""
 }
 
 # XSA is a ZIP-compatible hardware platform archive.  Prefer its embedded
@@ -55,12 +56,37 @@ if {[string tolower [file extension $image_file]] eq ".xsa"} {
     close $out
     set bit_file $extracted_bit_file
     puts "Using embedded bitstream [lindex $candidates 0] from XSA"
+    if {$argc < 3} {
+        set psu_candidates [list]
+        foreach member [split $listing "\n"] {
+            if {[string equal [string trim $member] "psu_init.tcl"]} {
+                lappend psu_candidates [string trim $member]
+            }
+        }
+        if {[llength $psu_candidates] != 1} {
+            error "XSA must contain psu_init.tcl when no external PS init file is provided"
+        }
+        set extracted_psu_file [file join [file dirname $image_file] ".program_[pid].psu_init.tcl"]
+        set psu_out [open $extracted_psu_file w]
+        fconfigure $psu_out -translation binary
+        puts -nonewline $psu_out [exec unzip -p $image_file [lindex $psu_candidates 0]]
+        close $psu_out
+        set psu_init_file $extracted_psu_file
+        puts "Using embedded PS init [lindex $psu_candidates 0] from XSA"
+    }
+}
+if {$psu_init_file eq "" && !$download_elf_only} {
+    error "standalone bitstream programming requires an explicit psu_init.tcl; use the production XSA instead"
 }
 
 proc cleanup_extracted_bit {} {
     global extracted_bit_file
     if {$extracted_bit_file ne "" && [file exists $extracted_bit_file]} {
         catch {file delete -force $extracted_bit_file}
+    }
+    global extracted_psu_file
+    if {$extracted_psu_file ne "" && [file exists $extracted_psu_file]} {
+        catch {file delete -force $extracted_psu_file}
     }
 }
 

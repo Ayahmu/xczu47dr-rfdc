@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 TARGET ?= custom_xczu47dr_master
-ALLOWED_TARGETS := custom_xczu47dr_master custom_xczu47dr_slave custom_xczu47dr_slave_trigout custom_xczu47dr_bw
+ALLOWED_TARGETS := custom_xczu47dr_master custom_xczu47dr_slave
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -20,47 +20,8 @@ SOFTWARE_DIR := $(ROOT)/software
 TARGET_PROJECT_BASENAME := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^project_basename:/ {print $$2}')
 TARGET_OUTPUT_BASENAME := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^output_basename:/ {print $$2}')
 TARGET_FIRMWARE_WORKSPACE := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^firmware_workspace:/ {print $$2}')
-TARGET_FIRMWARE_ELF := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^firmware_elf:/ {print $$2}')
-TARGET_PSU_INIT := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^psu_init:/ {print $$2}')
-
-BIT ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit
-LTX ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx
 XSA ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa
 ELF ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf
-PSU_INIT ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl
-
-BIT_ORIGIN := $(origin BIT)
-ELF_ORIGIN := $(origin ELF)
-PSU_INIT_ORIGIN := $(origin PSU_INIT)
-EXPLICIT_PROGRAM_ARTIFACTS := 0
-ifeq ($(BIT_ORIGIN),command line)
-  EXPLICIT_PROGRAM_ARTIFACTS := 1
-endif
-ifeq ($(ELF_ORIGIN),command line)
-  EXPLICIT_PROGRAM_ARTIFACTS := 1
-endif
-ifeq ($(PSU_INIT_ORIGIN),command line)
-  EXPLICIT_PROGRAM_ARTIFACTS := 1
-endif
-
-RUN_ARGS :=
-ifneq ($(filter run program,$(MAKECMDGOALS)),)
-  RUN_ARGS := $(filter-out run program,$(MAKECMDGOALS))
-  RUN_ARG1 := $(word 1,$(RUN_ARGS))
-  RUN_ARG2 := $(word 2,$(RUN_ARGS))
-  ifneq ($(RUN_ARG1),)
-    ifneq ($(filter %.elf,$(RUN_ARG1)),)
-      ELF := $(RUN_ARG1)
-      EXPLICIT_PROGRAM_ARTIFACTS := 1
-    else
-      $(error legacy BOARD argument '$(RUN_ARG1)' is no longer supported. Use TARGET=$(ALLOWED_TARGETS) and optional BIT=... ELF=... PSU_INIT=...)
-    endif
-  endif
-  ifneq ($(RUN_ARG2),)
-    ELF := $(RUN_ARG2)
-    EXPLICIT_PROGRAM_ARTIFACTS := 1
-  endif
-endif
 
 IP ?= 10.87.5.241
 PORT ?= 7
@@ -73,7 +34,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 # and 13 test modules die on import.  Prefer the repo venv when it exists.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean bitstream-dual bitstream-master bitstream-slave bitstream-slave-trigout bitstream-slave-both bitstream-dual-clean xsa-master xsa-slave chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean $(RUN_ARGS)
+.PHONY: help all test driver-test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -95,48 +56,36 @@ help:
 	@echo "  make preflight        Elaborate RTL and run structural checks without synthesis"
 	@echo "  make synth            Run Vivado synthesis"
 	@echo "  make impl             Run Vivado implementation"
-	@echo "  make bitstream        Generate/copy bitstream and debug probes"
-	@echo "  make bitstream-master Build the master bitstream in an isolated Vivado tree"
-	@echo "  make bitstream-slave  Build the slave bitstream in an isolated Vivado tree"
-	@echo "  make bitstream-slave-trigout  XS20 as a second Trigger output (bench measurement, bypass only)"
-	@echo "  make bitstream-slave-both     Both slave variants in parallel"
+	@echo "  make bitstream        Generate the selected production bitstream internally"
 	@echo "  make xdc-check        Verify XDC get_pins constraints against the synthesized netlist"
-	@echo "  make bitstream-dual   Build master and slave bitstreams in parallel"
 	@echo "  make xsa              Export XSA"
-	@echo "  make xsa-master       Export XSA from the isolated master project"
-	@echo "  make xsa-slave        Export XSA from the isolated slave project"
 	@echo "  make firmware-create  Create Vitis platform/application"
 	@echo "  make firmware-build   Build firmware ELF"
 	@echo ""
 	@echo "Board/host targets:"
-	@echo "  make run              Program FPGA with BIT and download ELF over JTAG"
-	@echo "  make run"
-	@echo "  make run ELF=/path/app.elf BIT=/path/top.bit PSU_INIT=/path/psu_init.tcl"
+	@echo "  make program          Program XSA and download the matching ELF over JTAG"
+	@echo "  make run              Alias for make program"
 	@echo "  make host             Run host.py against board IP/PORT"
 	@echo "  make host IP=10.87.5.241 PORT=7"
 	@echo "  make host-dry-run     Generate host artifacts without board access"
 	@echo ""
 	@echo "Maintenance:"
-	@echo "  make hardware-clean   Clean Vivado work, reports, dual trees, and old ignored output"
-	@echo "  make bitstream-dual-clean  Remove only the isolated dual-build trees"
+	@echo "  make hardware-clean   Clean Vivado work, reports, and ignored output"
 	@echo "  make chisel-clean     Remove Chisel/Mill generated state"
 	@echo "  make firmware-clean   Remove Vitis workspace"
 	@echo "  make clean            Clean all generated build state except artifacts"
 	@echo ""
 	@echo "Defaults:"
 	@echo "  PROJECT=$(TARGET_PROJECT_BASENAME)"
-	@echo "  BIT=$(BIT)"
 	@echo "  XSA=$(XSA)"
 	@echo "  ELF=$(ELF)"
-	@echo "  PSU_INIT=$(PSU_INIT)"
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
 	@echo "  ARTIFACT_DIR=$(ARTIFACT_DIR)"
 	@echo "  TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
 	@echo "  TARGET=custom_xczu47dr_slave builds the slave synchronization bitstream"
 	@echo "  Default TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
-	@echo "  Use TARGET=custom_xczu47dr_bw only for the standalone DDR bandwidth pressure path"
-	@echo "  RUN=cd firmware && TARGET=$(TARGET) ./build.sh program"
+	@echo "  PROGRAM=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
 
 all: hardware firmware artifacts
@@ -206,52 +155,14 @@ impl: xdc-check
 
 bitstream: impl
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_bitstream.tcl -tclargs $(TARGET)
-	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/export_ltx.tcl -tclargs $(TARGET)
-	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 xsa: bitstream
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
+	@for stale in "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"; do test ! -e "$$stale" || { echo "Removing non-production artifact $$stale"; unlink "$$stale"; }; done
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
-
-bitstream-master:
-	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_master VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_master.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_master.ltx"; test -s "$$bit" || { echo "ERROR: master bitstream missing: $$bit"; exit 1; }; if [ "$(ENABLE_ILA)" = "1" ]; then test -s "$$ltx" || { echo "ERROR: master debug probes missing: $$ltx"; exit 1; }; else test ! -e "$$ltx" || { echo "ERROR: production master build unexpectedly contains debug probes: $$ltx"; exit 1; }; fi; echo "MASTER BIT: $$bit"; echo "MASTER SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "MASTER SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; if [ "$(ENABLE_ILA)" = "1" ]; then echo "MASTER LTX: $$ltx"; else echo "MASTER LTX: disabled"; fi
-
-bitstream-slave:
-	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave.ltx"; test -s "$$bit" || { echo "ERROR: slave bitstream missing: $$bit"; exit 1; }; if [ "$(ENABLE_ILA)" = "1" ]; then test -s "$$ltx" || { echo "ERROR: slave debug probes missing: $$ltx"; exit 1; }; else test ! -e "$$ltx" || { echo "ERROR: production slave build unexpectedly contains debug probes: $$ltx"; exit 1; }; fi; echo "SLAVE BIT: $$bit"; echo "SLAVE SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; if [ "$(ENABLE_ILA)" = "1" ]; then echo "SLAVE LTX: $$ltx"; else echo "SLAVE LTX: disabled"; fi
-
-bitstream-slave-trigout:
-	+$(MAKE) $(if $(DUAL_PREPARED),SKIP_CHISEL=1,) TARGET=custom_xczu47dr_slave_trigout VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave-trigout" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave-trigout" bitstream
-	@bit="$(ARTIFACT_DIR)/custom_xczu47dr_slave_trigout.bit"; ltx="$(ARTIFACT_DIR)/custom_xczu47dr_slave_trigout.ltx"; test -s "$$bit" || { echo "ERROR: slave-trigout bitstream missing: $$bit"; exit 1; }; test -s "$$ltx" || { echo "ERROR: slave-trigout debug probes missing: $$ltx"; exit 1; }; echo "SLAVE-TRIGOUT BIT: $$bit"; echo "SLAVE-TRIGOUT SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "SLAVE-TRIGOUT SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; echo "SLAVE-TRIGOUT LTX: $$ltx"
-
-# Both slave variants at once: XS20 as SYNC input, and XS20 as a second Trigger
-# output for the single-board scope measurement.
-bitstream-slave-both: chisel
-	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-slave bitstream-slave-trigout
-
-xsa-master:
-	@test -f "$(VIVADO_DIR)/work-dual/master/custom_xczu47dr_master_rfdc.xpr" || { echo "ERROR: isolated master project is missing; run make bitstream-master first"; exit 1; }
-	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/master" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/master" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_master
-	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
-
-xsa-slave:
-	@test -f "$(VIVADO_DIR)/work-dual/slave/custom_xczu47dr_slave_rfdc.xpr" || { echo "ERROR: isolated slave project is missing; run make bitstream-slave first"; exit 1; }
-	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_DIR)/work-dual/slave" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports-dual/slave" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs custom_xczu47dr_slave
-	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
-
-bitstream-dual: chisel
-	+$(MAKE) -j2 DUAL_PREPARED=1 bitstream-master bitstream-slave
-	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
-	@echo "Dual bitstream build complete"
-	@for bit in "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_master.bit" "$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_slave.bit"; do test -s "$$bit" || exit 1; done
-	@for role in master slave; do bit="$(VIVADO_OUTPUT_DIR)/custom_xczu47dr_$${role}.bit"; echo "$$(printf '%s' "$${role}" | tr '[:lower:]' '[:upper:]') SIZE: $$(wc -c < "$$bit" | tr -d ' ') bytes"; echo -n "$$(printf '%s' "$${role}" | tr '[:lower:]' '[:upper:]') SHA256: "; sha256sum "$$bit" | awk '{print $$1}'; done
-
-bitstream-dual-clean:
-	rm -rf "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual"
 
 hardware:
-	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) BIT=$(BIT) LTX=$(LTX) XSA=$(XSA)"
+	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) XSA=$(XSA)"
 	cd $(VIVADO_DIR) && TARGET=$(TARGET) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh --clean
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
@@ -263,7 +174,6 @@ hardware-fast:
 hardware-clean:
 	@echo "Cleaning Vivado generated state; preserving $(ARTIFACT_DIR)"
 	rm -rf "$(VIVADO_WORK_DIR)" "$(VIVADO_REPORT_DIR)" \
-	       "$(VIVADO_DIR)/work-dual" "$(VIVADO_DIR)/reports-dual" \
 	       "$(VIVADO_DIR)/output" \
 	       "$(VIVADO_DIR)/hardware" "$(VIVADO_DIR)/.Xil"
 	@for generated_dir in "$(VIVADO_DIR)"/work-* "$(VIVADO_DIR)"/reports-*; do \
@@ -300,9 +210,7 @@ firmware-clean:
 artifacts:
 	@test -f "$(XSA)" || { echo "ERROR: missing XSA: $(XSA)"; exit 1; }
 	@test -f "$(ELF)" || { echo "ERROR: missing ELF: $(ELF)"; exit 1; }
-	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PS init script: $(PSU_INIT)"; exit 1; }
-	@du -h "$(XSA)" "$(ELF)" "$(PSU_INIT)"
-	@test ! -e "$(LTX)" || du -h "$(LTX)"
+	@du -h "$(XSA)" "$(ELF)"
 	@test ! -e "$(ARTIFACT_DIR)/SHA256SUMS" || (cd "$(ARTIFACT_DIR)" && sha256sum -c SHA256SUMS)
 
 artifacts-hash:
@@ -312,33 +220,19 @@ artifacts-hash:
 	trap 'rmdir "$$lock"' EXIT; \
 	temporary_file="$(ARTIFACT_DIR)/SHA256SUMS.tmp.$$$$"; \
 	{ for file in \
-		custom_xczu47dr_master.bit custom_xczu47dr_master.ltx custom_xczu47dr_master.xsa custom_xczu47dr_master.elf custom_xczu47dr_master_psu_init.tcl \
-		custom_xczu47dr_slave.bit custom_xczu47dr_slave.ltx custom_xczu47dr_slave.xsa custom_xczu47dr_slave.elf custom_xczu47dr_slave_psu_init.tcl \
-		custom_xczu47dr_bandwidth.bit custom_xczu47dr_bandwidth.ltx custom_xczu47dr_bandwidth.xsa custom_xczu47dr_bandwidth.elf custom_xczu47dr_bandwidth_psu_init.tcl; do \
+		custom_xczu47dr_master.xsa custom_xczu47dr_master.elf \
+		custom_xczu47dr_slave.xsa custom_xczu47dr_slave.elf; do \
 		test -f "$(ARTIFACT_DIR)/$$file" && (cd "$(ARTIFACT_DIR)" && sha256sum "$$file") || true; \
 	done; } > "$$temporary_file"; \
 	mv -f "$$temporary_file" "$(ARTIFACT_DIR)/SHA256SUMS"
 artifacts-clean:
 	@echo "Removing checked-in artifacts under $(ARTIFACT_DIR)"
-	rm -f "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" \
-	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx" \
-	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa" \
-	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf" \
-	      "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"
+	unlink "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa" 2>/dev/null || true
+	unlink "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf" 2>/dev/null || true
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 run program:
-ifeq ($(EXPLICIT_PROGRAM_ARTIFACTS),1)
-	@test -f "$(BIT)" || { echo "ERROR: missing BIT=$(BIT). Run make bitstream first or pass BIT=..."; exit 1; }
-	@test -f "$(ELF)" || { echo "ERROR: missing ELF=$(ELF). Run make firmware first or pass ELF=..."; exit 1; }
-	@test -f "$(PSU_INIT)" || { echo "ERROR: missing PSU_INIT=$(PSU_INIT). Run make firmware-create first or pass PSU_INIT=..."; exit 1; }
-	cd $(FIRMWARE_DIR) && xsct scripts/program.tcl "$(XSA)" "$(ELF)" "$(PSU_INIT)"
-else
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh program
-endif
-
-$(RUN_ARGS):
-	@:
 
 host:
 	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --ip "$(IP)" --port "$(PORT)" --timeout "$(TIMEOUT)" --output-dir "$(HOST_OUTPUT_DIR)"

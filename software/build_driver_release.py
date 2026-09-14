@@ -27,10 +27,8 @@ from dr47 import RFCTRL2_VERSION, __version__  # noqa: E402
 
 
 DOCUMENTS = (
-    ROOT / "docs" / "驱动SDK交付指南.md",
+    ROOT / "docs" / "软件版本说明.md",
     ROOT / "docs" / "API参考.md",
-    ROOT / "docs" / "使用与测试指南.md",
-    ROOT / "docs" / "硬件验收.md",
     ROOT / "software" / "dr47" / "README.md",
 )
 EXAMPLES = tuple(

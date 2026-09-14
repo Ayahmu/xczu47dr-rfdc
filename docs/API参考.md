@@ -1,40 +1,27 @@
-# Python 驱动 API 参考
+# 47DR Python API 参考
 
-本文档只描述第三方程序应使用的稳定接口。当前版本为 `47dr-driver 0.1.0`，
-Python >= 3.10，运行时依赖 `numpy>=1.23`。当前对外版本不包含 TDC API。
+本文面向使用 `47dr-driver` 编写控制程序的开发者。示例使用 Python 3.10 以上版本，
+频率单位为 GHz，时间单位为 ns（波形生成函数中以 `_s` 结尾的参数使用秒），网络
+和 RFDC 操作均通过 UDP 端口 1234 完成。
 
-## 1. 快速示例
+## 安装与导入
 
-```python
-import numpy as np
-from dr47 import BurstSchedule, Dr47Device
-
-iq = np.zeros(1024, dtype="<i2")
-iq[0::2] = 12000
-
-with Dr47Device(
-    ip="10.50.0.101",
-    udp_interface="enp1s0f0",
-    udp_source_ip="10.50.0.10",
-    batch_mode=True,
-) as board:
-    board.set_xy_target_frequency(1, 4.0)
-    board.set_qc_on_off("xy", 1, "on")
-    board.commit()
-    playback = board.configure_playback(
-        {1: iq},
-        schedule=BurstSchedule(20.0, 1000.0, 3),
-        wave_formats={1: "interleaved_iq"},
-    )
-    board.arm_playback(channel_mask=playback.channel_mask)
-    board.trigger_playback()
-    board.abort_playback()
+```bash
+python -m pip install 47dr_driver-0.1.0-py3-none-any.whl
 ```
 
-硬件时间单位是 ns，RF 频率是 GHz，IQ 采样率是 400 MS/s。波形数组为小端
-`int16` 交错 I/Q：`I0,Q0,I1,Q1,...`。
+```python
+from dr47 import Dr47Device, BurstSchedule
+```
 
-## 2. 连接和状态
+SDK ZIP 中的 `examples/` 目录包含模拟器、网络发现、软件 Trigger 和外部 Trigger
+示例。先运行模拟器示例可以在没有板卡时检查安装：
+
+```bash
+python -m dr47.examples.simulator_quickstart
+```
+
+## 连接与身份校验
 
 ### `Dr47Device`
 
@@ -43,243 +30,222 @@ Dr47Device(
     ip="192.168.1.128", port=1234, timeout_s=5.0,
     udp_interface="", udp_source_ip="", retries=2,
     batch_mode=False, sync_role="slave", transport=None,
+    expected_build_profile_id=1,
+    expected_trigger_path_version=3,
+    expected_source_commit_id=None,
 )
 ```
-
-创建对象不会访问板卡；`connect()` 才会发送 HELLO 和 STATUS。
 
 | 参数 | 说明 |
 | --- | --- |
-| `ip`, `port` | 板卡 UDP 地址，端口通常为 1234 |
-| `udp_interface` | 指定实际 10G 网卡；多网卡主机建议填写 |
-| `udp_source_ip` | 指定 socket 源地址；必须已配置在该网卡上 |
-| `timeout_s`, `retries` | 单次等待时间和可重试请求次数 |
-| `batch_mode` | `True` 时 RFDC/增益设置暂存到 `commit()` |
-| `sync_role` | 本地期望值，bitstream 固化的角色不能被软件改变 |
+| `ip`, `port` | 板卡地址和 RFCTRL2 UDP 端口。 |
+| `timeout_s`, `retries` | 请求超时和重试次数。 |
+| `udp_interface`, `udp_source_ip` | 多网卡主机上指定发送网卡和源地址。 |
+| `batch_mode` | 为 `True` 时，RFDC 设置暂存到 `commit()`。 |
+| `sync_role` | 软件期望的角色；只能配置为 `master` 或 `slave`，不能改变 bitstream 固化的角色。 |
+| `expected_*` | 身份保护条件；设为 `None` 可关闭对应检查。 |
+
+构造对象不会访问网络。常用生命周期方法如下：
 
 ```python
-device.connect() -> int
-device.close() -> None
-device.status(refresh=True) -> DeviceStatus
-device.connected -> bool
+device.connect()                 # 返回 RFCTRL2 协议版本
+status = device.status()         # 返回 DeviceStatus
+status_cached = device.status(refresh=False)
+caps = device.capabilities       # DeviceCapabilities
+print(caps.device_uid, caps.build_profile, caps.trigger_path_version)
+device.close()
 ```
 
-`with Dr47Device(...) as device` 会自动连接和关闭。 `status()` 返回最近一次板卡快照；
-`refresh=False` 只读取本地缓存。
+也可以使用工厂函数 `connect(**same_arguments) -> Dr47Device`，或用上下文管理器自动
+关闭连接。`connect()` 会读取 HELLO/STATUS；协议、build profile 或 Trigger 路径版本
+不匹配时抛出 `ProtocolVersionError`。
 
-`connect(**kwargs) -> Dr47Device` 是创建并连接设备的便捷工厂，参数与
-`Dr47Device` 相同；调用方负责在使用后 `close()`。
+`DeviceStatus` 包含 `connected`、`ip`、`port`、`state`、`capabilities` 和 `message`。
+`DeviceCapabilities` 还提供 RFDC/MTS/NCO 状态、同步状态、Trigger 计数、播放状态和
+每通道 `RfdcChannelReadback`。播放状态为 `idle`、`armed`、`prepared`、`running` 或
+`fault`。
 
-### 状态对象
-
-`DeviceStatus` 字段：`connected`、`ip`、`port`、`state`、`capabilities`、`message`。
-
-`DeviceCapabilities` 常用字段：
-
-| 字段 | 含义 |
-| --- | --- |
-| `device_uid`, `build_profile`, `protocol_version` | 板卡身份和协议 |
-| `rfdc_ready`, `dac_mts_ready`, `nco_sync_ready` | RFDC 播放前置状态 |
-| `sync_role`, `sync_mode`, `sync_seen`, `sync_link_ready` | 同步状态 |
-| `trigger_input_count` | XS19 输入事件计数 |
-| `trigger_accepted_count` | 播放器接受的 Trigger 计数 |
-| `trigger_output_count` | XS18 输出事件计数 |
-| `playback_state` | `PlaybackState` 枚举 |
-
-`PlaybackState` 的值为 `idle`、`armed`、`prepared`、`running`、`fault`。
-
-## 3. 网络发现
-
-```python
-from dr47 import discover_boards, provision_board, connect_discovered
-
-boards = discover_boards(
-    interface="enp1s0f0",
-    source_ip="169.254.250.11",
-    source_cidr="169.254.250.11/16",
-)
-```
-
-### `discover_boards(...) -> list[DiscoveredBoard]`
-
-向 `broadcast_ip` 发送只读 `NETWORK_GET`。主要参数为 `interface`、`source_ip`、
-`source_cidr`、`broadcast_ip`、`port`、`timeout_s` 和 `rounds`。发现身份是
-`(device_uid, current_mac)`，不要只按 UID 选择板卡。
-
-`DiscoveredBoard` 常用字段：`device_uid`、`current_ip`、`current_mac`、`port`、
-`build_profile`、`revision`、`interface`、`source_ip`；`as_dict()` 返回可 JSON
-序列化的字典。
-
-### `provision_board(board, ip, mac=None, ...) -> ProvisionedBoard`
-
-设置固定 IP/MAC，重启网络服务，并在新 IP 上验证身份。常用参数：`subnet_mask`、
-`gateway`、`port`、`revision`、`known_boards`。配置前必须为不同板卡分配不同 IP 和
-MAC，并使用返回值中的 `ip` 创建新连接。
-
-### 其他网络方法
-
-```python
-prepare_interface(interface, source_cidr) -> None
-connect_discovered(board, timeout_s=5.0, retries=2) -> Dr47Device
-parse_ip_pool("10.50.0.101-10.50.0.120") -> list[str]
-```
-
-`prepare_interface()` 修改 Linux 网卡状态，需要 `CAP_NET_ADMIN`；原始 UDP 绑定通常
-需要 `CAP_NET_RAW`。产品 CLI `dr47-network` 使用同一组接口。
-
-## 4. RFDC 和通道
-
-```python
-device.set_xy_target_frequency(channel, target_rf_ghz, dac_fs_ghz=6.4) -> dict
-device.set_xy_nco_frequency(channel, frequency_ghz) -> int
-device.set_gain("xy", channel, gain=0.7, gain_type="norm") -> int
-device.set_qc_on_off("xy", channel, "on") -> int
-device.set_qr_on_off("xy", channel, "on") -> int
-device.commit() -> int
-```
-
-- `set_xy_target_frequency()` 输入最终模拟频率，自动选择 NCO 和 Nyquist zone。例如
-  4 GHz -> NCO `-2.4 GHz`、zone 2。
-- `set_xy_nco_frequency()` 直接设置 RFDC NCO，当前范围为 `-3.2..+3.2 GHz`。
-- `set_gain()` 的 `gain_type="norm"` 范围是 `0..1`，映射为 DAC 输出电流。
-- `set_qc_on_off()` 控制输出通道；`set_qr_on_off()` 当前不支持 ADC/DAQ 输入。
-- `batch_mode=True` 时，设置不会立即发送，必须调用 `commit()`。
-- RFDC 配置只能在播放器 `IDLE` 时生效。若重复 `commit()` 或非批量模式下的
-  setter 遇到板端 `0x0006`（播放仍处于 ARM/RUNNING），驱动会发送一次
-  `ABORT_MUTE`，等待板端确认回到 `IDLE` 后自动重试一次；这会停止当前播放。
-  需要保留当前播放时，应先不要修改 RFDC 参数。
-
-`apply_rfdc_config(...)` 可一次提交多通道的 `nco_ghz`、`nyquist_zone`、`phase_deg`、
-`output_current_ma`、`revision` 和 `channel_mask`。普通应用使用上面的通道方法更直观。
-
-## 5. 波形和有限 burst
-
-### 波形工具
+## 网络发现与配置
 
 ```python
 from dr47 import (
-    make_iq_sine_interleaved,
-    make_iq_gaussian_sine_interleaved,
-    place_interleaved_iq_in_record,
-    make_burst_record,
+    discover_boards, connect_discovered, provision_board,
+    prepare_interface, parse_ip_pool,
+)
+
+prepare_interface("enp1s0f0", "169.254.250.11/16")
+boards = discover_boards(
+    interface="enp1s0f0", source_ip="169.254.250.11",
+    source_cidr="169.254.250.11/16",
+)
+board = boards[0]
+device = connect_discovered(board)
+```
+
+| 函数 | 参数和返回值 |
+| --- | --- |
+| `prepare_interface(interface, source_cidr)` | 配置主机网卡地址；需要相应 Linux 网络权限；返回 `None`。 |
+| `discover_boards(interface, source_ip, source_cidr, broadcast_ip, port, timeout_s, rounds)` | 广播发现板卡，返回 `list[DiscoveredBoard]`。身份应使用 `device_uid + current_mac`。 |
+| `connect_discovered(board, timeout_s=5, retries=2)` | 根据发现结果创建并连接 `Dr47Device`。 |
+| `provision_board(board, ip, mac=None, subnet_mask=..., gateway=..., port=..., revision=None, known_boards=(), reject_unverified_conflict=False, verification_source_ip=None)` | 写入固定网络配置并验证，返回 `ProvisionedBoard`。 |
+| `parse_ip_pool(value)` | 将 `10.50.0.101-10.50.0.120` 或逗号分隔地址解析为地址列表。 |
+
+`DiscoveredBoard.as_dict()` 和 `ProvisionedBoard.as_dict()` 可直接用于 JSON。配置新
+地址前必须确认 UID、MAC 和目标地址不会与其他板卡冲突；板卡处于播放状态时网络配置
+可能返回状态码 `0x0006`。
+
+## RFDC 配置
+
+### 高层接口
+
+```python
+device.set_xy_target_frequency(channel=1, target_rf_ghz=4.0, dac_fs_ghz=6.4)
+device.set_gain("xy", 1, gain=0.7, gain_type="norm")
+device.set_qc_on_off("xy", 1, "on")
+device.commit()
+```
+
+| 方法 | 参数 | 返回值和行为 |
+| --- | --- | --- |
+| `set_xy_target_frequency(channel, target_rf_ghz, dac_fs_ghz=6.4)` | 通道 1-8、目标模拟频率和 DAC 采样率。 | 返回 NCO/Nyquist 规划字典；目标频率必须在 `[0, dac_fs_ghz]`。 |
+| `set_xy_nco_frequency(channel, frequency_ghz)` | 通道 1-8，RFDC NCO，范围约 `-3.2..3.2 GHz`。 | 返回状态码。 |
+| `set_gain(channel_type, channel, gain=1.0, gain_type="norm")` | `channel_type` 为 `xy` 或 `z`；`gain_type` 为 `norm`、`dbm`、`code` 或 `volt`。 | 返回状态码；`norm` 取值 `0..1`。 |
+| `set_qc_on_off(channel_type, channel, on_off="on")` | 输出类型、通道和 `on`/`off`。 | 返回状态码。 |
+| `set_qr_on_off(gen_type, channel, on_off="on")` | 读取/DAQ 路径控制；当前硬件不支持 ADC 输入。 | 返回状态码或抛出 `UnsupportedParameterError`。 |
+| `apply_rfdc_config(nco_ghz=None, nyquist_zone=None, phase_deg=None, output_current_ma=None, revision=None, channel_mask=0xff)` | Mapping（键为通道号）或 8 项 Sequence；可一次提交多通道。 | 返回状态码。 |
+| `commit()` | 无参数。批量提交暂存的 RFDC 配置。 | 返回状态码。播放器必须处于 `idle`；忙时会抛出/处理 `DeviceBusyError`。 |
+
+`set_xy_target_frequency(1, 4.0)` 会返回类似 `{"nco_ghz": -2.4,
+"nyquist_zone": 2}` 的结果。4 GHz 的低频 IQ 包络不需要在主机端预先搬移到 RF
+载波。
+
+### 底层 RFCTRL2 方法
+
+需要精确控制协议时可使用 `rfctrl2_hello()`、`rfctrl2_status()`、
+`rfctrl2_rfdc_apply(...)`、`rfctrl2_rfdc_get_config()`、`rfctrl2_arm(...)`、
+`rfctrl2_trigger()`、`rfctrl2_abort_mute()`。这些方法直接使用协议字段，返回解析后
+字典或状态码；一般应用应优先使用上面的高层方法。
+
+## 波形生成与上传
+
+### 波形格式
+
+驱动接受以下格式并统一转换为小端有符号 `int16` 的 `I0,Q0,I1,Q1,...`：
+
+| `wave_format` | 输入形状 |
+| --- | --- |
+| `interleaved_iq` | 一维 `[I0,Q0,I1,Q1,...]`。 |
+| `iq_matrix` | 二维 `N x 2`，列为 I、Q。 |
+| `packed_iq` | 已打包的 IQ 样本。 |
+| `z`、`real` | 一维实数/包络，按驱动规则转换。 |
+
+```python
+from dr47 import (
+    make_iq_sine_interleaved, make_iq_gaussian_sine_interleaved,
+    place_interleaved_iq_in_record, make_burst_record,
+    ezq_wave_to_interleaved_int16,
+)
+
+wave = make_iq_gaussian_sine_interleaved(
+    frequency_hz=50e6, phase_rad=0.0, amplitude=12000,
+    sample_rate_hz=400e6, duration_s=2e-6, fwhm_s=0.6e-6,
+)
+record, info = make_burst_record(
+    wave, first_delay_ns=0, interval_ns=1000, sample_rate_hz=400e6,
 )
 ```
 
-`make_iq_gaussian_sine_interleaved()` 的 `duration_s`、`fwhm_s`、`sample_rate_hz`
-使用秒和 Hz；返回交错 `int16`。`place_interleaved_iq_in_record()` 将波形放入延迟和
-零填充记录。`make_burst_record()` 创建单脉冲周期记录，适合手工构造 burst。
+主要函数参数：
 
-### `BurstSchedule`
+- `make_iq_sine_interleaved(frequency_hz, phase_rad, amplitude, sample_rate_hz, *, sample_count, q_sign=-1)`：生成固定样本数的正弦 IQ。
+- `make_iq_gaussian_sine_interleaved(..., duration_s, *, sample_count=None, fwhm_s=None, q_sign=-1, hls_xy_drag=False, drag_alpha=0.5, drag_delta_hz=-200e6)`：生成高斯包络 IQ，可选 DRAG 修正。
+- `place_interleaved_iq_in_record(active_wave, *, delay_s, record_duration_s, sample_rate_hz)`：将有效波形放入带前置零和尾部零的记录。
+- `make_burst_record(active_wave, *, first_delay_ns, interval_ns, sample_rate_hz=400e6)`：生成一份有限 burst 记录和描述字典。
+- `ezq_wave_to_interleaved_int16(wave, wave_format="packed_iq")`：完成输入格式转换。
 
-```python
-BurstSchedule(first_delay_ns, interval_ns, repetitions, debug_alternate=False)
-```
-
-含义分别是 Trigger 后首次延迟、波形起点到起点间隔、重复次数和调试交替模式。硬件
-使用 50 MHz 调度时钟，时间会向上量化到 20 ns。 `schedule.quantized()` 返回实际的
-`effective_first_delay_ns`、`effective_interval_ns`、`first_delay_cycles`、
-`interval_cycles` 和 `repetitions`。
-
-### `configure_playback(...) -> PlaybackConfig`
+### 上传和播放配置
 
 ```python
-device.configure_playback(
-    channel_waves,
-    schedule,
-    *,
-    wave_formats=None,
-    channel_mask=None,
-    bulk_upload=False,
-    progress_callback=None,
-    packet_pause_s=1e-5,
-    packet_burst=8,
-) -> PlaybackConfig
+cfg = device.configure_playback(
+    {1: wave, 2: wave},
+    BurstSchedule(first_delay_ns=0, interval_ns=1000, repetitions=3),
+    wave_formats={1: "interleaved_iq", 2: "interleaved_iq"},
+    bulk_upload=True,
+)
+device.arm_playback(cfg.channel_mask)
+device.trigger_playback()
+device.abort_playback()
 ```
 
-该方法只上传一份记录，记录尾部补零后由 FPGA 重复播放。 `channel_waves` 是
-`{物理通道: 波形}`；`wave_formats` 支持 `interleaved_iq`、`iq_matrix`、
-`packed_iq` 和 `z`。长记录建议 `bulk_upload=True`。
+`configure_playback(channel_waves, schedule, *, wave_formats=None, channel_mask=None,
+bulk_upload=False, **kwargs)` 会上传记录并返回 `PlaybackConfig`，其字段为
+`schedule`、`channel_mask`、`record_duration_ns` 和 `record_bytes_per_channel`。
+`channel_waves` 是 `{physical_channel: numpy_array_or_list}`，通道范围为 1-8。
 
-`PlaybackConfig` 字段为 `schedule`、`channel_mask`、`record_duration_ns` 和
-`record_bytes_per_channel`。进度回调签名为 `progress_callback(sent_packets, total_packets)`；
-开始时回调 `(0, total_packets)`，每个波形 UDP 包发送后更新一次。
-
-### 播放控制
+需要更细控制时使用：
 
 ```python
-device.arm_playback(channel_mask=None, run_id=None) -> int
-device.trigger_playback() -> int
-device.abort_playback() -> int
+device.upload_waveforms(
+    {1: wave}, channel_sequences=None,
+    wave_formats={1: "interleaved_iq"}, layout="interleaved_512b",
+    base_addr=0, auto_start=True, loop=False,
+    packet_pause_s=1e-5, packet_burst=8,
+    channel_delays=None, instruction_repeats=1,
+    bulk_upload=False, progress_callback=None, schedule=None,
+)
 ```
 
-`arm_playback()` 进入等待状态；软件 Trigger 使用 `trigger_playback()`；测试结束和
-异常清理使用 `abort_playback()`。旧名称 `arm()`、`trigger()`、`abort_mute()`
-仍保留兼容，但新代码建议使用带 `_playback` 后缀的名称。
+`progress_callback(sent_packets, total_packets)` 在开始上传和每个数据包完成后调用。
+`arm_playback(channel_mask=None, run_id=None)` 进入等待 Trigger 状态；
+`trigger_playback()` 发送软件 Trigger；`abort_playback()` 停止播放并静音。旧名称
+`arm()`、`trigger()`、`abort_mute()` 等价但仅用于兼容旧程序。
 
-## 6. 同步和外部 Trigger
+`BurstSchedule(first_delay_ns, interval_ns, repetitions, debug_alternate=False)` 的
+时间在 FPGA 端按 20 ns 向上量化。`first_delay_ns=0` 表示不增加可编程等待；异步
+外部输入仍会有一个 DAC 时钟边界量化。
+
+## 同步与外部 Trigger
 
 ```python
-device.set_sync_mode("external" | "bypass") -> int
-device.bypass_sync() -> int
-device.require_external_sync() -> int
-device.sync(epoch=1) -> int
-device.emit_trigger() -> int
+device.set_sync_mode("bypass")       # 单板、没有 XS20 时
+device.bypass_sync()
+device.arm_playback(channel_mask=0x03)
+# 此后等待 XS19 外部 Trigger
 ```
 
-- 单板 slave 没有 XS20 SYNC 时调用 `bypass_sync()`，然后 ARM 等待 XS19。
-- 双板必须使用 `external`，不能用 bypass 代替同步。
-- `sync()` 只允许固化角色为 master 的板卡发出 XS20 SYNC。
-- `emit_trigger()` 只输出 XS18 脉冲，不等同于本地播放 Trigger。
-
-双板严格同步使用：
-
-```python
-from dr47 import SyncGroup
-result = SyncGroup(master, slave, timeout_s=5.0).sync(epoch=1)
-```
-
-`SyncAlignmentResult` 返回两侧 alignment epoch、SYNC 接收状态、MTS/NCO 就绪状态和耗时。
-XS20、XS18、XS19 接线和参考时钟必须先满足[使用与测试指南](使用与测试指南.md)。
-
-## 7. 模拟器
-
-`SimulatedDr47Device` 继承高层播放 API，不创建 UDP socket，适合无硬件测试：
-
-```python
-from dr47 import SimulatedDr47Device
-
-with SimulatedDr47Device(sync_role="master") as board:
-    print(board.status(refresh=False).capabilities.device_uid)
-```
-
-模拟器不能验证网卡、DDR 吞吐、HMC7044、RFDC 或物理 Trigger 电平。
-
-## 8. 异常
-
-所有驱动异常继承 `DriverError`。常用类型：
-
-| 异常 | 处理方向 |
+| 方法 | 说明 |
 | --- | --- |
-| `TransportTimeout` / `ConnectionError` | 检查 IP、网卡、VLAN 和权限，可重试 |
-| `ProtocolError` / `ProtocolVersionError` | 检查驱动和 bitstream 版本 |
-| `DeviceBusyError` | 等待当前操作结束，不要重复配置 |
-| `DeviceNotReadyError` | 等待 RFDC/MTS/NCO 状态就绪 |
-| `SynchronizationError` / `SyncRequiredError` | 检查角色、模式和 XS20 |
-| `ParameterRangeError` / `WaveformFormatError` | 修正参数或波形数组 |
-| `DiscoveryError` / `ProvisionError` | 检查广播、地址冲突和新 IP 验证 |
-| `UnsupportedCapabilityError` | 当前 bitstream 不具备该能力 |
+| `set_sync_role("master" / "slave")` | 设置协议请求的角色；不能覆盖 bitstream 固化角色。 |
+| `set_sync_mode("external" / "bypass")` | 选择同步门控。单板外部 Trigger 通常使用 `bypass`。 |
+| `bypass_sync()` / `require_external_sync()` | 快捷设置同步模式。 |
+| `sync(epoch=1)` | 主卡发起同步 epoch；slave 调用会失败。 |
+| `emit_trigger()` | 从 XS18 输出一个 Trigger，不会自动启动本地播放。 |
+| `SyncGroup(master, slave, timeout_s=5).sync(epoch=1)` | 执行双板同步并返回 `SyncAlignmentResult`。 |
 
-安全清理模式：
+未准备好的外部 Trigger 不会排队，板卡会立即记录为 skipped/rejected；应用应通过
+`status()` 或诊断快照检查接受计数。
+
+## 诊断与错误处理
 
 ```python
-try:
-    device.connect()
-    # 配置、上传和播放
-finally:
-    if device.connected:
-        device.abort_playback()
-    device.close()
+snapshot = device.read_diagnostics()
+print(snapshot.trigger_to_launch_last, snapshot.launch_to_first_valid_last)
+device.clear_diagnostics(events=0xffffffff, counters=True)
 ```
 
-协议打包函数、UDP 地址布局和 `dr47.tdc` 不属于当前稳定交付 API。需要协议调试时
-应直接阅读 `software/dr47/protocol.py`，不要在业务程序中依赖其内部字段。
+`DiagnosticsSnapshot` 包含触发输入/接受/拒绝计数、capture/launch/playback 时间戳、
+replay 状态、每通道 FIFO 水位、underflow/mute/abort、RFDC 状态和失败阶段、DMA
+chunk/outstanding beat 以及 refill 起止时间。诊断寄存器在硬件侧先锁存，再通过快照
+代次读取，适合定位延迟和状态竞态。
+
+常见异常：`ConnectionError`（网络不可达）、`TransportTimeout`（响应超时）、
+`ProtocolVersionError`（协议/身份不匹配）、`DeviceBusyError`（硬件忙）、
+`DeviceNotReadyError`（未准备）、`ParameterRangeError`（参数越界）、
+`UnsupportedCapabilityError`/`UnsupportedParameterError`（当前板卡不支持）和
+`DeviceStatusError`（板端返回非零状态）。异常对象带有操作名和板端状态码。
+
+## 版本与兼容性
+
+当前公开包不包含 TDC 校准、补偿或 TDC 公共 API。驱动、XSA 和 ELF 应来自同一发布
+版本；`software/load_and_verify.sh` 会从 XSA 提取内嵌 bitstream 与 `psu_init.tcl`，
+不需要额外的 `.bit` 或 `_psu_init.tcl` 文件。

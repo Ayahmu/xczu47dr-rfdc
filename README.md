@@ -6,10 +6,10 @@ XS19 外部 Trigger。
 
 ## 文档入口
 
-- [使用与测试指南](docs/使用与测试指南.md)：安装、烧写、网络和实板测试。
-- [驱动 SDK 交付指南](docs/驱动SDK交付指南.md)：生成和使用对外安装包。
-- [API 参考](docs/API参考.md)：稳定 Python 接口、单位、返回值和异常。
-- [硬件验收](docs/硬件验收.md)：示波器和频谱仪验收项目。
+- [软件版本说明](docs/软件版本说明.md)：版本记录、API、安装、使用和 SDK 交付。
+- [API 接口参考](docs/API参考.md)：完整参数、返回值、错误和使用示例。
+- [硬件固件版本说明](docs/硬件固件版本说明.md)：硬件与固件版本变更记录。
+- [硬件指标](docs/硬件指标.md)：采样率、输入格式、同步和 Trigger 特性。
 - [网页部署说明](software/网页部署说明.md)：部署 FastAPI 和 Vue 控制台。
 
 当前对外驱动不包含 TDC 接口。历史方案文档已从主文档体系移除，避免和当前
@@ -21,7 +21,7 @@ bitstream、脚本及操作流程混用。
 - `firmware/`：ZynqMP 裸机 RFCTRL2 服务。
 - `software/dr47/`：可安装的 Python 驱动和样例。
 - `tests/`：软件、RTL 和构建回归。
-- `artifacts/`：bitstream、XSA、ELF、LTX 和校验值。
+- `artifacts/`：XSA、ELF 和校验值。
 
 ## 常用命令
 
@@ -37,4 +37,4 @@ make test
 make driver-release
 ```
 
-角色、接线和首次网络配置请先看[使用与测试指南](docs/使用与测试指南.md)。
+安装、接线和首次网络配置请先看[软件版本说明](docs/软件版本说明.md)。

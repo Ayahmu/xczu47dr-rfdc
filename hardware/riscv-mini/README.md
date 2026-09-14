@@ -18,4 +18,4 @@
 
  RVCTRL0 和 RVCTRL1 是小控制包，支持 PING、MMIO、PLAY、TRIGGER 和 RFDC
  寄存器操作；响应为 RVRESP1。协议字段和 Python 发送命令见
- [API 参考](../../docs/API参考.md)，不要在这里复制维护完整协议表。
+ [软件版本说明](../../docs/软件版本说明.md)，不要在这里复制维护完整协议表。

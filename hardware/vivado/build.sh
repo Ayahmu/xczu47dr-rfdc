@@ -206,6 +206,12 @@ if [ "$SKIP_BITSTREAM" = false ] && [ "$SKIP_IMPL" = false ] && [ "$SKIP_SYNTH" 
         print_error "XSA export failed"
         exit 1
     fi
+    # XSA is the sole production hardware image.  The bitstream and probes
+    # remain available inside the build tree for the export, but are not
+    # published as duplicate artifacts.
+    rm -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" \
+          "${OUTPUT_DIR}/${OUTPUT_BASENAME}.ltx" \
+          "${OUTPUT_DIR}/${OUTPUT_BASENAME}_psu_init.tcl"
     print_info "Bitstream and XSA generation complete"
 else
     print_warn "Skipping bitstream generation"
@@ -220,11 +226,6 @@ print_info "Project: ${PROJECT_NAME}"
 print_info "Work directory: ${WORK_DIR}"
 print_info "Output directory: ${OUTPUT_DIR}"
 echo ""
-
-if [ -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" ]; then
-    BIT_SIZE=$(du -h "${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit" | cut -f1)
-    print_info "Bitstream: ${OUTPUT_DIR}/${OUTPUT_BASENAME}.bit (${BIT_SIZE})"
-fi
 
 if [ -f "${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa" ]; then
     XSA_SIZE=$(du -h "${OUTPUT_DIR}/${OUTPUT_BASENAME}.xsa" | cut -f1)

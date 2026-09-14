@@ -17,6 +17,7 @@
 - Delivery and quick-start documents must be short and task-oriented. Put implementation detail in the API reference or code only when it is needed.
 - Technical writing must present prerequisites, steps, expected results, and failure handling in a clear order. Avoid history, repeated explanations, speculation, and filler.
 - Important code must explain hardware contracts, timing and unit assumptions, state transitions, non-obvious algorithms, and safety or recovery behavior in detailed comments. Do not comment trivial syntax.
+- Treat user requests as source material, not text to copy verbatim into documentation. Distill the intent, separate user-facing guarantees from internal implementation constraints, and rewrite the result in natural, audience-appropriate language. Do not expose conversational wording, process instructions, or labels such as "user-visible" unless they are genuinely useful to the reader.
 ## Project
 
 - Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers,fallbacks, or migrations.

@@ -36,11 +36,11 @@ ROLE=${1:-slave}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CABLE=${JTAG_CABLE_SERIAL:-210512180082}
 XSA="$REPO/artifacts/custom_xczu47dr_${ROLE}.xsa"
-LTX="$REPO/artifacts/custom_xczu47dr_${ROLE}.ltx"
 ELF="$REPO/artifacts/custom_xczu47dr_${ROLE}.elf"
-PSU="$WORK/psu_init.tcl"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+
+PSU="$WORK/psu_init.tcl"
 BIT="$WORK/${ROLE}.bit"
 
 fail() { echo "FAILED: $*" >&2; exit 1; }
@@ -127,10 +127,6 @@ open_hw_target {localhost:3121/xilinx_tcf/Xilinx/${CABLE}}
 set dev [lindex [get_hw_devices] 0]
 current_hw_device \$dev
 set_property PROGRAM.FILE {${BIT}} \$dev
-if {[file exists {${LTX}}]} {
-  set_property PROBES.FILE {${LTX}} \$dev
-  set_property FULL_PROBES.FILE {${LTX}} \$dev
-}
 program_hw_devices \$dev
 after 4000
 refresh_hw_device \$dev

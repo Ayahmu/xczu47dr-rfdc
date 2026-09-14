@@ -1,8 +1,8 @@
 # dr47 Python 驱动
 
 这是直接通过 UDP 控制 FPGA 中 RFCTRL2 服务的驱动包，不依赖网页服务。
-安装和板级流程请看[使用与测试指南](../../docs/使用与测试指南.md)，完整接口请看
-[API 参考](../../docs/API参考.md)。
+安装和板级流程请看[软件版本说明](../../docs/软件版本说明.md)，完整接口请看
+[API 接口参考](../../docs/API参考.md)。
 
 当前 `0.1.0` 对外交付范围不包含 TDC 校准、补偿或诊断；发布 wheel 会移除
 `dr47.tdc`。仓库中保留的相关研发代码和底层寄存器入口不属于当前公共 API。
@@ -40,7 +40,7 @@ Trigger。脚本不会调用软件 `trigger()`，也不会从 XS18 输出 Trigge
 `network_discovery_example.py` 和 `single_board_software_trigger_example.py`。
 安装 wheel 后可用 `python -m dr47.examples.<模块名>` 直接运行。
 
-对外 SDK 交付请先阅读 [47DR 驱动 SDK 交付指南](../../docs/驱动SDK交付指南.md)；
+对外 SDK 交付请先阅读 [软件版本说明](../../docs/软件版本说明.md)；
 运行 `make driver-release` 会在 `dist/` 生成 wheel 和包含文档/样例的 ZIP 包。
 
 ## 本地验证

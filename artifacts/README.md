@@ -10,11 +10,11 @@
 每个角色必须成套使用：
 
 ~~~text
-custom_xczu47dr_master.bit  .xsa  .elf  _psu_init.tcl
-custom_xczu47dr_slave.bit   .xsa  .elf  _psu_init.tcl
+custom_xczu47dr_master.xsa  .elf
+custom_xczu47dr_slave.xsa   .elf
 ~~~
 
-XSA 是 ZIP 兼容的硬件平台归档，内部包含 `*.tmp.bit` 和 PS 初始化文件；它用于 Vitis/软件平台创建。独立 `.bit` 仍需保留，用于直接通过 JTAG 烧写 FPGA。
+XSA 是 ZIP 兼容的硬件平台归档，内部包含 `*.tmp.bit` 和 `psu_init.tcl`；烧写脚本会自动提取它们。
 
 主卡 XS20 输出，从卡 XS20 输入。不要把两个角色的文件混用。校验现有文件：
 
@@ -30,5 +30,5 @@ JTAG_CABLE_SERIAL=<序列号> TARGET=custom_xczu47dr_slave make program
 ~~~
 
 `make program` 不会重新综合，也不会创建 Vitis 工程；它直接下载对应角色的
-bitstream 和 ELF。烧写后板卡网络回到临时地址，需按[使用与测试指南](../docs/使用与测试指南.md)
+XSA 和 ELF。烧写后板卡网络回到临时地址，需按[软件版本说明](../docs/软件版本说明.md)
 重新发现和配置 IP。
