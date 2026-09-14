@@ -209,7 +209,12 @@ module tdc_event_capture #(
   // edges are bubbles caused by sampling the asynchronous carry chain. The
   // selected highest boundary remains the physical edge; retain only hard
   // invalid thermometer cases here.
-  wire sample_bad = !head_s2 || !boundary_found || sample_full;
+  // More than one falling edge in a group is an invalid thermometer sample
+  // (the isolated low island is a bubble).  Keep the event, but classify it
+  // as a bubble and clear the decoded tap rather than accepting a false
+  // physical edge.
+  wire sample_bad = !head_s2 || !boundary_found || sample_full ||
+                    (|group_multi_boundary);
   wire [TAP_WIDTH-1:0] decoded_tap = {encoded_group, encoded_local};
   reg armed;
   reg valid_s3;
