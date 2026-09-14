@@ -1,3 +1,62 @@
+// Explicit XPM simple-dual-port RAM used by the short-record replay cache.
+// Inference from a wide register array is not reliable when the same array is
+// written by the capture process and read through a combinational mux; XPM
+// makes the BRAM resource and its one-cycle read latency unambiguous.
+module replay_cache_ram #(
+    parameter integer DEPTH = 256,
+    parameter integer ADDR_WIDTH = (DEPTH <= 1) ? 1 : $clog2(DEPTH)
+) (
+    input  wire                  clk,
+    input  wire                  wr_en,
+    input  wire [ADDR_WIDTH-1:0] wr_addr,
+    input  wire [255:0]          wr_data,
+    input  wire                  rd_en,
+    input  wire [ADDR_WIDTH-1:0] rd_addr,
+    output wire [255:0]          rd_data
+);
+  wire xpm_sbiterr;
+  wire xpm_dbiterr;
+  xpm_memory_sdpram #(
+      .MEMORY_SIZE(256 * DEPTH),
+      .MEMORY_PRIMITIVE("block"),
+      .CLOCKING_MODE("common_clock"),
+      .ECC_MODE("no_ecc"),
+      .MEMORY_INIT_FILE("none"),
+      .MEMORY_INIT_PARAM(""),
+      .USE_MEM_INIT(0),
+      .MESSAGE_CONTROL(0),
+      .USE_EMBEDDED_CONSTRAINT(0),
+      .MEMORY_OPTIMIZATION("true"),
+      .CASCADE_HEIGHT(0),
+      .SIM_ASSERT_CHK(0),
+      .WRITE_DATA_WIDTH_A(256),
+      .BYTE_WRITE_WIDTH_A(256),
+      .ADDR_WIDTH_A(ADDR_WIDTH),
+      .READ_DATA_WIDTH_B(256),
+      .ADDR_WIDTH_B(ADDR_WIDTH),
+      .READ_RESET_VALUE_B("0"),
+      .READ_LATENCY_B(1),
+      .WRITE_MODE_B("read_first")
+  ) xpm_i (
+      .sleep(1'b0),
+      .clka(clk),
+      .ena(wr_en),
+      .wea(wr_en),
+      .addra(wr_addr),
+      .dina(wr_data),
+      .injectsbiterra(1'b0),
+      .injectdbiterra(1'b0),
+      .clkb(clk),
+      .rstb(1'b0),
+      .enb(rd_en),
+      .regceb(1'b1),
+      .addrb(rd_addr),
+      .doutb(rd_data),
+      .sbiterrb(xpm_sbiterr),
+      .dbiterrb(xpm_dbiterr)
+  );
+endmodule
+
 module Top #(
     parameter integer IS_MASTER = 1,
     // 1 = XS20/TRIG_3 mirrors the XS18 Trigger output instead of carrying SYNC.
@@ -2376,21 +2435,11 @@ module Top #(
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
   wire [15:0] pc_replay_index;
-  // Use synchronous block-RAM read ports.  A combinational read of eight
-  // 256-bit memories turns the cache into a very large LUT mux and can make
-  // the otherwise modest design impossible to place.  The one-cycle read
-  // pipeline is primed before READY is exposed, so an accepted Trigger still
-  // starts at replay beat zero and never waits for DDR.
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch1 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch2 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch3 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch4 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch5 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch6 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch7 [0:REPLAY_CACHE_BEATS-1];
-  (* ram_style = "block" *) reg [255:0] replay_mem_ch8 [0:REPLAY_CACHE_BEATS-1];
-  reg [255:0] replay_rd_ch1, replay_rd_ch2, replay_rd_ch3, replay_rd_ch4;
-  reg [255:0] replay_rd_ch5, replay_rd_ch6, replay_rd_ch7, replay_rd_ch8;
+  wire [255:0] replay_mem_ch1, replay_mem_ch2, replay_mem_ch3, replay_mem_ch4;
+  wire [255:0] replay_mem_ch5, replay_mem_ch6, replay_mem_ch7, replay_mem_ch8;
+  reg [15:0] replay_read_addr_dac;
+  wire [255:0] replay_rd_ch1, replay_rd_ch2, replay_rd_ch3, replay_rd_ch4;
+  wire [255:0] replay_rd_ch5, replay_rd_ch6, replay_rd_ch7, replay_rd_ch8;
   reg replay_prev_active_dac;
   reg replay_prime_valid_dac;
   reg [15:0] replay_capture_count;
@@ -2433,6 +2482,62 @@ module Top #(
        (replay_capture_done_mask[5] || !ch6_arm_dac || (dac_in_ch6_tvalid && dac_ch6_ready)) &&
        (replay_capture_done_mask[6] || !ch7_arm_dac || (dac_in_ch7_tvalid && dac_ch7_ready)) &&
        (replay_capture_done_mask[7] || !ch8_arm_dac || (dac_in_ch8_tvalid && dac_ch8_ready)));
+
+  wire replay_ram_wr_en = replay_capture_fire &&
+      (replay_capture_count < REPLAY_CACHE_BEATS);
+  // XPM address ports are sized from REPLAY_CACHE_BEATS.  Keep the top-level
+  // counter wider so the saturation comparison remains explicit, then slice
+  // only at the RAM boundary to avoid width-extension warnings.
+  wire [15:0] replay_ram_wr_addr = replay_capture_count;
+  // Issue the beat-zero read on the same DAC edge that accepts an RFCTRL2
+  // Trigger.  `pc_replay_active` is registered by dac_play_ctrl and therefore
+  // is still low on that edge; omitting the trigger term would leave the RAM
+  // idle until the following cycle and shift the first replay beat.
+  wire replay_trigger_accept = dac_hw_rfctrl2_trigger && rfctrl2_prepared_dac &&
+      !pc_source_started;
+  wire replay_ram_rd_en = replay_cache_ready_dac &&
+      (pc_replay_active || replay_trigger_accept);
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch1_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch1_arm_dac && !replay_capture_done_mask[0]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch1_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch1));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch2_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch2_arm_dac && !replay_capture_done_mask[1]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch2_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch2));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch3_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch3_arm_dac && !replay_capture_done_mask[2]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch3_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch3));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch4_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch4_arm_dac && !replay_capture_done_mask[3]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch4_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch4));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch5_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch5_arm_dac && !replay_capture_done_mask[4]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch5_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch5));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch6_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch6_arm_dac && !replay_capture_done_mask[5]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch6_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch6));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch7_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch7_arm_dac && !replay_capture_done_mask[6]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch7_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch7));
+  replay_cache_ram #(.DEPTH(REPLAY_CACHE_BEATS)) replay_ram_ch8_i (
+      .clk(dac_axis_clk), .wr_en(replay_ram_wr_en && ch8_arm_dac && !replay_capture_done_mask[7]),
+      .wr_addr(replay_ram_wr_addr), .wr_data(dac_in_ch8_tdata), .rd_en(replay_ram_rd_en),
+      .rd_addr(replay_read_addr_dac), .rd_data(replay_mem_ch8));
+
+  assign replay_rd_ch1 = replay_mem_ch1;
+  assign replay_rd_ch2 = replay_mem_ch2;
+  assign replay_rd_ch3 = replay_mem_ch3;
+  assign replay_rd_ch4 = replay_mem_ch4;
+  assign replay_rd_ch5 = replay_mem_ch5;
+  assign replay_rd_ch6 = replay_mem_ch6;
+  assign replay_rd_ch7 = replay_mem_ch7;
+  assign replay_rd_ch8 = replay_mem_ch8;
   // BRAM reads have one cycle of latency.  Hold the replay gate closed until
   // beat zero has been loaded, then prefetch index+1 on every subsequent
   // cycle.  This prevents a duplicate first beat while keeping the accepted
@@ -2597,14 +2702,6 @@ module Top #(
         replay_cache_ready_dac <= 1'b0;
       end
       if (replay_capture_fire && replay_capture_count < REPLAY_CACHE_BEATS) begin
-        if (!replay_capture_done_mask[0]) replay_mem_ch1[replay_capture_count] <= dac_in_ch1_tdata;
-        if (!replay_capture_done_mask[1]) replay_mem_ch2[replay_capture_count] <= dac_in_ch2_tdata;
-        if (!replay_capture_done_mask[2]) replay_mem_ch3[replay_capture_count] <= dac_in_ch3_tdata;
-        if (!replay_capture_done_mask[3]) replay_mem_ch4[replay_capture_count] <= dac_in_ch4_tdata;
-        if (!replay_capture_done_mask[4]) replay_mem_ch5[replay_capture_count] <= dac_in_ch5_tdata;
-        if (!replay_capture_done_mask[5]) replay_mem_ch6[replay_capture_count] <= dac_in_ch6_tdata;
-        if (!replay_capture_done_mask[6]) replay_mem_ch7[replay_capture_count] <= dac_in_ch7_tdata;
-        if (!replay_capture_done_mask[7]) replay_mem_ch8[replay_capture_count] <= dac_in_ch8_tdata;
         if (!replay_capture_done_mask[0] && ch1_arm_dac && (replay_capture_count + 1 >= ch1_len_dac)) replay_capture_done_mask[0] <= 1'b1;
         if (!replay_capture_done_mask[1] && ch2_arm_dac && (replay_capture_count + 1 >= ch2_len_dac)) replay_capture_done_mask[1] <= 1'b1;
         if (!replay_capture_done_mask[2] && ch3_arm_dac && (replay_capture_count + 1 >= ch3_len_dac)) replay_capture_done_mask[2] <= 1'b1;
@@ -2622,40 +2719,23 @@ module Top #(
 
   always @(posedge dac_axis_clk or negedge dac_rst_n) begin
     if (!dac_rst_n) begin
-      replay_rd_ch1 <= 256'd0;
-      replay_rd_ch2 <= 256'd0;
-      replay_rd_ch3 <= 256'd0;
-      replay_rd_ch4 <= 256'd0;
-      replay_rd_ch5 <= 256'd0;
-      replay_rd_ch6 <= 256'd0;
-      replay_rd_ch7 <= 256'd0;
-      replay_rd_ch8 <= 256'd0;
+      replay_read_addr_dac <= 16'd0;
       replay_prev_active_dac <= 1'b0;
       replay_prime_valid_dac <= 1'b0;
     end else begin
       replay_prev_active_dac <= pc_replay_active;
       if (!pc_replay_active || !replay_cache_ready_dac) begin
+        replay_read_addr_dac <= 16'd0;
         replay_prime_valid_dac <= 1'b0;
       end else if (!replay_prev_active_dac) begin
-        // A newly accepted Trigger always starts at replay beat zero.
-        replay_rd_ch1 <= replay_mem_ch1[0];
-        replay_rd_ch2 <= replay_mem_ch2[0];
-        replay_rd_ch3 <= replay_mem_ch3[0];
-        replay_rd_ch4 <= replay_mem_ch4[0];
-        replay_rd_ch5 <= replay_mem_ch5[0];
-        replay_rd_ch6 <= replay_mem_ch6[0];
-        replay_rd_ch7 <= replay_mem_ch7[0];
-        replay_rd_ch8 <= replay_mem_ch8[0];
+        // The RAM samples address zero on this edge and presents beat zero
+        // during the following cycle.  Queue address one for the next edge.
+        replay_read_addr_dac <= (REPLAY_CACHE_BEATS > 1) ? 16'd1 : 16'd0;
         replay_prime_valid_dac <= 1'b1;
-      end else if (pc_replay_index + 16'd1 < REPLAY_CACHE_BEATS) begin
-        replay_rd_ch1 <= replay_mem_ch1[pc_replay_index + 16'd1];
-        replay_rd_ch2 <= replay_mem_ch2[pc_replay_index + 16'd1];
-        replay_rd_ch3 <= replay_mem_ch3[pc_replay_index + 16'd1];
-        replay_rd_ch4 <= replay_mem_ch4[pc_replay_index + 16'd1];
-        replay_rd_ch5 <= replay_mem_ch5[pc_replay_index + 16'd1];
-        replay_rd_ch6 <= replay_mem_ch6[pc_replay_index + 16'd1];
-        replay_rd_ch7 <= replay_mem_ch7[pc_replay_index + 16'd1];
-        replay_rd_ch8 <= replay_mem_ch8[pc_replay_index + 16'd1];
+      end else if (pc_replay_index + 16'd2 < REPLAY_CACHE_BEATS) begin
+        // The current registered RAM output is consumed this cycle.  Read
+        // index+1 on the next edge; account for the one-cycle RAM pipeline.
+        replay_read_addr_dac <= pc_replay_index + 16'd2;
       end
     end
   end
