@@ -10,9 +10,11 @@ ROOT := $(CURDIR)
 
 VIVADO_DIR := $(ROOT)/hardware/vivado
 ARTIFACT_DIR ?= $(ROOT)/artifacts
-VIVADO_WORK_DIR ?= $(VIVADO_DIR)/work
+# Keep role-specific Vivado state separate.  This prevents an independently
+# started master and slave build from opening or replacing the same .xpr/runs.
+VIVADO_WORK_DIR ?= $(VIVADO_DIR)/work/$(TARGET)
 VIVADO_OUTPUT_DIR ?= $(ARTIFACT_DIR)
-VIVADO_REPORT_DIR ?= $(VIVADO_DIR)/reports
+VIVADO_REPORT_DIR ?= $(VIVADO_DIR)/reports/$(TARGET)
 CHISEL_DIR := $(ROOT)/hardware/chisel
 FIRMWARE_DIR := $(ROOT)/firmware
 SOFTWARE_DIR := $(ROOT)/software
@@ -34,7 +36,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 # and 13 test modules die on import.  Prefer the repo venv when it exists.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
+.PHONY: help all test driver-test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa xsa-master xsa-slave firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -58,7 +60,9 @@ help:
 	@echo "  make impl             Run Vivado implementation"
 	@echo "  make bitstream        Generate the selected production bitstream internally"
 	@echo "  make xdc-check        Verify XDC get_pins constraints against the synthesized netlist"
-	@echo "  make xsa              Export XSA"
+	@echo "  make xsa              Export XSA for TARGET (default: master)"
+	@echo "  make xsa-master       Export only the master XSA"
+	@echo "  make xsa-slave        Export only the slave XSA"
 	@echo "  make firmware-create  Create Vitis platform/application"
 	@echo "  make firmware-build   Build firmware ELF"
 	@echo ""
@@ -157,9 +161,19 @@ bitstream: impl
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/run_bitstream.tcl -tclargs $(TARGET)
 
 xsa: bitstream
+	@echo "INFO: Exporting TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME)"
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
 	@for stale in "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"; do test ! -e "$$stale" || { echo "Removing non-production artifact $$stale"; unlink "$$stale"; }; done
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
+
+# These aliases intentionally recurse with a fixed TARGET.  A plain `make xsa`
+# never expands to both roles; build both explicitly, and choose whether to
+# run them sequentially or in parallel, only when that is actually desired.
+xsa-master:
+	+$(MAKE) --no-print-directory TARGET=custom_xczu47dr_master xsa
+
+xsa-slave:
+	+$(MAKE) --no-print-directory TARGET=custom_xczu47dr_slave xsa
 
 hardware:
 	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) XSA=$(XSA)"
@@ -173,7 +187,7 @@ hardware-fast:
 
 hardware-clean:
 	@echo "Cleaning Vivado generated state; preserving $(ARTIFACT_DIR)"
-	rm -rf "$(VIVADO_WORK_DIR)" "$(VIVADO_REPORT_DIR)" \
+	rm -rf "$(VIVADO_DIR)/work" "$(VIVADO_DIR)/reports" \
 	       "$(VIVADO_DIR)/output" \
 	       "$(VIVADO_DIR)/hardware" "$(VIVADO_DIR)/.Xil"
 	@for generated_dir in "$(VIVADO_DIR)"/work-* "$(VIVADO_DIR)"/reports-*; do \

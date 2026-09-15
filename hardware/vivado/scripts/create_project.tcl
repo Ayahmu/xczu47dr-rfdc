@@ -5,6 +5,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 source "${script_path}/build_options.tcl"
+source "${script_path}/build_identity.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -36,12 +37,8 @@ set enable_ila [expr {[build_option_get ENABLE_ILA 0] ne "0"}]
 # RTL compile.  The Top module consumes these preprocessor defines, so a
 # STATUS/HELLO response can be tied back to this project without relying on a
 # hand-maintained constant in Verilog.
-set repo_root [file normalize "${script_path}/../../.."]
-set source_commit "00000000"
-if {[catch {exec git -C ${repo_root} rev-parse --verify HEAD} git_head] == 0} {
-    set source_commit [string range [string trim ${git_head}] 0 7]
-}
-set build_profile_id [expr {$is_bandwidth_target ? 3 : 1}]
+set source_commit [rf2_identity_source_commit ${script_path}]
+set build_profile_id [rf2_identity_profile_id ${target}]
 set trigger_path_version 3
 
 puts "INFO: Creating Vivado project..."
@@ -95,9 +92,7 @@ lappend define_list RF2_SOURCE_COMMIT_ID=32'h${source_commit}
 set_property verilog_define ${define_list} [current_fileset]
 
 set build_manifest_file "${proj_dir}/build_manifest.json"
-set manifest_fd [open ${build_manifest_file} w]
-puts ${manifest_fd} "{\"target\":\"${target}\",\"protocol_version\":3,\"build_profile_id\":${build_profile_id},\"trigger_path_version\":${trigger_path_version},\"source_commit\":\"${source_commit}\",\"ila_enabled\":${enable_ila}}"
-close ${manifest_fd}
+rf2_identity_write_manifest ${build_manifest_file} ${target} ${source_commit} ${build_profile_id} ${trigger_path_version} ${enable_ila}
 
 set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
 set ddr_generated_config "${vivado_dir}/../chisel/generated/ddr_custom_xczu47dr_config.tcl"

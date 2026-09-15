@@ -8,7 +8,6 @@
 
  - custom_xczu47dr_master：XS20 为输出。
  - custom_xczu47dr_slave：XS20 为输入。
- - custom_xczu47dr_bw：独立带宽测试顶层，不包含正常 RFDC 播放角色。
  - XS18 (TRIG_1) 为 Trigger 输出，XS19 (TRIG_2) 为 Trigger 输入。
  - RFDC 为 6.4 GS/s、16 倍插值、400 MS/s IQ、50 MHz AXIS。
  - XS17 提供两板共同 250 MHz 参考；HMC7044 通过 R1=25 产生 10 MHz PLL1 PFD，
@@ -28,18 +27,21 @@
  make synth TARGET=custom_xczu47dr_slave
  make impl TARGET=custom_xczu47dr_slave
  make bitstream TARGET=custom_xczu47dr_slave
- make xsa TARGET=custom_xczu47dr_slave
+ make xsa TARGET=custom_xczu47dr_slave  # 每次只构建这个 TARGET
  ~~~
 
- 双板一次构建：
+ 需要构建另一个角色时，单独执行：
 
  ~~~bash
- make bitstream-dual
- make bitstream-dual-clean       # 只清理双板生成的工程和报告
+ make xsa-master
+ make xsa-slave
  ~~~
 
- 每个目标的输出都使用角色前缀，随后由 make firmware 生成匹配 ELF。不要把主卡
- bitstream 与从卡 XSA/ELF 混搭。
+ `make xsa` 默认只构建 master；通过 `TARGET=custom_xczu47dr_slave` 或上面的
+ 快捷目标构建 slave。两个角色的 Vivado 工程和报告分别位于
+ `hardware/vivado/work/<TARGET>` 与 `hardware/vivado/reports/<TARGET>`，不会共用
+ 同一个工程状态。每个目标的输出都使用角色前缀，随后由 `make firmware` 生成匹配
+ ELF。不要把主卡 bitstream 与从卡 XSA/ELF 混搭。
 
  ## 调试重点
 

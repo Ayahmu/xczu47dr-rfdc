@@ -5,6 +5,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 source "${script_path}/build_options.tcl"
+source "${script_path}/build_identity.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -22,6 +23,8 @@ set output_dir [expr {[info exists ::env(VIVADO_OUTPUT_DIR)] ? $::env(VIVADO_OUT
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+set manifest_file "${proj_dir}/build_manifest.json"
+rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Keep the parent-only XXV model out of implementation/bitstream generation.
@@ -44,7 +47,19 @@ set impl_dir "${proj_dir}/${proj_name}.runs/impl_1"
 set manual_bit_file "${impl_dir}/${proj_name}.bit"
 set existing_bit_files [glob -nocomplain ${impl_dir}/*.bit]
 set manual_bitstream 0
+set bit_generated 0
+set valid_bit_files [list]
+foreach candidate ${existing_bit_files} {
+    set candidate_manifest "${candidate}.manifest.json"
+    if {[file exists ${candidate_manifest}] &&
+        ![catch {rf2_identity_validate_manifest ${candidate_manifest} ${target} ${script_path}}]} {
+        lappend valid_bit_files ${candidate}
+    }
+}
 if {[file exists ${manual_bit_file}]} {
+    if {[lsearch -exact ${valid_bit_files} ${manual_bit_file}] < 0} {
+        error "stale or unstamped implementation bitstream: ${manual_bit_file}; rerun implementation"
+    }
     # run_impl_manual.tcl writes a checked routed design and bitstream
     # directly because the project-managed impl_1 run cannot bind the
     # protected XXV Ethernet DCP to the parent black-box cell.
@@ -55,8 +70,13 @@ if {[file exists ${manual_bit_file}]} {
     puts "INFO: Generating bitstream..."
     launch_runs impl_1 -to_step write_bitstream -jobs 8
     wait_on_run impl_1
+    set bit_generated 1
 } else {
-    puts "INFO: Reusing existing bitstream: [lindex $existing_bit_files 0]"
+    if {[llength ${valid_bit_files}] == 0} {
+        error "existing implementation bitstream has no matching build manifest; rerun implementation"
+    }
+    set existing_bit_files ${valid_bit_files}
+    puts "INFO: Reusing identity-checked bitstream: [lindex ${existing_bit_files} 0]"
 }
 
 # Check bitstream generation status
@@ -82,6 +102,16 @@ if {[llength $bit_files] == 0} {
     puts "ERROR: Bitstream file not found!"
     exit 1
 }
+set selected_bit [lindex ${bit_files} 0]
+set selected_manifest "${selected_bit}.manifest.json"
+if {![file exists ${selected_manifest}]} {
+    if {${bit_generated}} {
+        rf2_identity_stamp ${selected_bit} ${manifest_file}
+    } else {
+        error "bitstream is missing its build identity sidecar: ${selected_bit}"
+    }
+}
+rf2_identity_validate_manifest ${selected_manifest} ${target} ${script_path}
 puts "INFO: Bitstream generated internally for XSA export; no standalone image published"
 
 set timing_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_postroute_physopted.rpt"

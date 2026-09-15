@@ -9,6 +9,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
 source "${script_path}/build_options.tcl"
+source "${script_path}/build_identity.tcl"
 source "${script_path}/check_tdc_physical.tcl"
 source "${script_path}/restore_xxv_timing.tcl"
 
@@ -31,6 +32,8 @@ if {![file exists ${proj_file}]} {
     error "Missing Vivado project: ${proj_file}. Run make vivado-project first."
 }
 open_project ${proj_file}
+set manifest_file "${proj_dir}/build_manifest.json"
+rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Synthesis creates only synth_1/TopCustomXczu47dr.tcl.  Generate the
@@ -44,7 +47,8 @@ if {![file exists ${generated_tcl}]} {
     error "Vivado did not generate implementation Tcl: ${generated_tcl}"
 }
 close_project
-set previous_outputs [concat [glob -nocomplain ${impl_dir}/TopCustomXczu47dr_*.dcp] [glob -nocomplain ${impl_dir}/*.bit]]
+set previous_outputs [concat [glob -nocomplain ${impl_dir}/TopCustomXczu47dr_*.dcp] \
+    [glob -nocomplain ${impl_dir}/*.bit] [glob -nocomplain ${impl_dir}/*.manifest.json]]
 if {[llength $previous_outputs]} {
     set archive ${impl_dir}/previous_manual_[clock seconds]
     file mkdir $archive
@@ -140,7 +144,7 @@ proc profile_script {base_script profile} {
     return ${script}
 }
 
-proc verify_implementation {impl_dir proj_name} {
+proc verify_implementation {impl_dir proj_name target script_path} {
     set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
     if {![file exists ${implemented_dcp}]} {
         set implemented_dcp "${impl_dir}/TopCustomXczu47dr_routed.dcp"
@@ -148,6 +152,8 @@ proc verify_implementation {impl_dir proj_name} {
     if {![file exists ${implemented_dcp}]} {
         error "No routed implementation checkpoint found in ${impl_dir}"
     }
+    set dcp_manifest "${implemented_dcp}.manifest.json"
+    rf2_identity_validate_manifest ${dcp_manifest} ${target} ${script_path}
     puts "INFO: Verifying implemented checkpoint ${implemented_dcp}"
     open_checkpoint ${implemented_dcp}
     report_timing_summary -delay_type min_max -report_unconstrained -file "${impl_dir}/tdc_final_timing.rpt"
@@ -212,7 +218,10 @@ foreach profile ${impl_profiles} {
     }
     catch {close_project -quiet}
     open_project ${proj_file}
-    if {[verify_implementation ${impl_dir} ${proj_name}]} {
+    foreach dcp [glob -nocomplain ${impl_dir}/TopCustomXczu47dr_*.dcp] {
+        rf2_identity_stamp ${dcp} ${manifest_file}
+    }
+    if {[verify_implementation ${impl_dir} ${proj_name} ${target} ${script_path}]} {
         set implementation_ok 1
         set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
         if {![file exists ${implemented_dcp}]} {
@@ -229,5 +238,6 @@ if {!${implementation_ok}} {
 set bit_file "${impl_dir}/${proj_name}.bit"
 puts "INFO: Writing bitstream ${bit_file}"
 write_bitstream -force ${bit_file}
+rf2_identity_stamp ${bit_file} ${manifest_file}
 puts "INFO: Implementation and bitstream complete"
 close_project

@@ -16,6 +16,7 @@ set firmware_dir [file normalize [file join $script_dir ".."]]
 set target custom_xczu47dr_master
 set download_elf_only 0
 set extracted_psu_file ""
+set extracted_manifest_file ""
 if {[info exists ::env(DOWNLOAD_ELF_ONLY)] && $::env(DOWNLOAD_ELF_ONLY) eq "1"} {
     set download_elf_only 1
 }
@@ -74,6 +75,30 @@ if {[string tolower [file extension $image_file]] eq ".xsa"} {
         set psu_init_file $extracted_psu_file
         puts "Using embedded PS init [lindex $psu_candidates 0] from XSA"
     }
+    set manifest_candidates [list]
+    foreach member [split $listing "\n"] {
+        if {[string equal [string trim $member] "build_manifest.json"]} {
+            lappend manifest_candidates [string trim $member]
+        }
+    }
+    if {[llength $manifest_candidates] != 1} {
+        error "XSA must contain build_manifest.json with RFCTRL2 identity"
+    }
+    set extracted_manifest_file [file join [file dirname $image_file] ".program_[pid].build_manifest.json"]
+    set manifest_out [open $extracted_manifest_file w]
+    fconfigure $manifest_out -translation binary
+    puts -nonewline $manifest_out [exec unzip -p $image_file [lindex $manifest_candidates 0]]
+    close $manifest_out
+    set manifest_in [open $extracted_manifest_file r]
+    set manifest_text [read $manifest_in]
+    close $manifest_in
+    foreach {key expected} [list target $target protocol_version 3 trigger_path_version 3 build_profile_id 1] {
+        set pattern [format {"%s"[[:space:]]*:[[:space:]]*"?([^",\}]+)} $key]
+        if {![regexp $pattern $manifest_text -> actual] || $actual ne "$expected"} {
+            error "XSA build identity mismatch for ${key}"
+        }
+    }
+    puts "Using RFCTRL2 build identity manifest from XSA"
 }
 if {$psu_init_file eq "" && !$download_elf_only} {
     error "standalone bitstream programming requires an explicit psu_init.tcl; use the production XSA instead"
@@ -87,6 +112,10 @@ proc cleanup_extracted_bit {} {
     global extracted_psu_file
     if {$extracted_psu_file ne "" && [file exists $extracted_psu_file]} {
         catch {file delete -force $extracted_psu_file}
+    }
+    global extracted_manifest_file
+    if {$extracted_manifest_file ne "" && [file exists $extracted_manifest_file]} {
+        catch {file delete -force $extracted_manifest_file}
     }
 }
 

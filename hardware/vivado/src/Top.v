@@ -782,13 +782,9 @@ module Top #(
 `else
   localparam [31:0] RF2_SOURCE_COMMIT_ID = 32'h00000000;
 `endif
-  // RFCTRL2 v3 identity: protocol/path version is exported in STATUS/HELLO
-  // and is checked by the host before any state-changing operation.
-`ifdef RF2_TRIGGER_PATH_VERSION
-  localparam [31:0] RF2_TRIGGER_PATH_VERSION = `RF2_TRIGGER_PATH_VERSION;
-`else
+  // RFCTRL2 v3 identity: the trigger-path contract is a hardware constant.
+  // It must not be changed by a stale project define or an ad-hoc build.
   localparam [31:0] RF2_TRIGGER_PATH_VERSION = 32'd3;
-`endif
   assign network_status_flags = {
       25'd0,
       sync_seen_ddr,

@@ -4,6 +4,7 @@ set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/reference_xxv_dcp.tcl"
+source "${script_path}/build_identity.tcl"
 
 proc ooc_run_complete {run_name} {
     set run_obj [get_runs -quiet $run_name]
@@ -47,6 +48,8 @@ set proj_file "${proj_dir}/${proj_name}.xpr"
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+set manifest_file "${proj_dir}/build_manifest.json"
+rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 # Reuse the last successful synthesis checkpoint when available.  The
@@ -200,17 +203,7 @@ set ila_requested [expr {[lsearch -exact ${synth_defines} ENABLE_ILA] >= 0}]
 if {!${ila_requested} && [llength ${synth_ila_cells}] > 0} {
     error "production synthesis unexpectedly contains ILA cells"
 }
-set manifest_file "${proj_dir}/build_manifest.json"
-if {![file exists ${manifest_file}]} {
-    error "missing build manifest: ${manifest_file}"
-}
-set manifest_fd [open ${manifest_file} r]
-set manifest_text [read ${manifest_fd}]
-close ${manifest_fd}
-if {[string first "\"protocol_version\":3" ${manifest_text}] < 0 ||
-    [string first "\"trigger_path_version\":3" ${manifest_text}] < 0} {
-    error "build manifest protocol/trigger identity mismatch"
-}
+rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 set synth_dcp [file join ${proj_dir} ${proj_name}.runs synth_1 [target_config_get ${target} top_module].dcp]
 if {[file exists ${synth_dcp}]} {
     file copy -force ${manifest_file} "${synth_dcp}.manifest.json"

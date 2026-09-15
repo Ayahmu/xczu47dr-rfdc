@@ -42,6 +42,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 PSU="$WORK/psu_init.tcl"
 BIT="$WORK/${ROLE}.bit"
+MANIFEST="$WORK/build_manifest.json"
+PYTHON_BIN="${PYTHON:-$REPO/.venv/bin/python}"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN=python3
+fi
 
 fail() { echo "FAILED: $*" >&2; exit 1; }
 
@@ -56,8 +61,41 @@ done
 member=$(unzip -Z1 "$XSA" | awk '/\.tmp\.bit$/ {print; n++} END {if (n != 1) exit 1}') || fail "XSA must contain exactly one embedded .tmp.bit"
 unzip -p "$XSA" "$member" > "$BIT" || fail "cannot extract embedded bitstream"
 unzip -p "$XSA" psu_init.tcl > "$PSU" || fail "XSA does not contain psu_init.tcl"
+unzip -p "$XSA" build_manifest.json > "$MANIFEST" || fail "XSA does not contain build_manifest.json; rebuild the production XSA"
+EXPECTED_SOURCE_COMMIT=$(
+  "$PYTHON_BIN" - "$MANIFEST" "$ROLE" <<'PY'
+import json
+import sys
+
+manifest_path, role = sys.argv[1:]
+try:
+    with open(manifest_path, encoding="utf-8") as stream:
+        manifest = json.load(stream)
+except (OSError, ValueError) as exc:
+    print(f"invalid XSA build manifest: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+expected_target = f"custom_xczu47dr_{role}"
+checks = {
+    "target": manifest.get("target") == expected_target,
+    "protocol_version": int(manifest.get("protocol_version", 0)) == 3,
+    "trigger_path_version": int(manifest.get("trigger_path_version", 0)) == 3,
+    "build_profile_id": int(manifest.get("build_profile_id", 0)) == 1,
+    "ila_enabled": not bool(manifest.get("ila_enabled", True)),
+}
+if not all(checks.values()):
+    bad = ", ".join(name for name, ok in checks.items() if not ok)
+    print(f"incompatible XSA build manifest ({bad})", file=sys.stderr)
+    raise SystemExit(1)
+source = str(manifest.get("source_commit", "")).lower()
+if len(source) != 8 or any(ch not in "0123456789abcdef" for ch in source):
+    print("build manifest has no valid source_commit", file=sys.stderr)
+    raise SystemExit(1)
+print(source)
+PY
+) || fail "XSA build identity validation failed"
 echo "role   : $ROLE"
 echo "bit    : $(sha256sum "$BIT" | cut -c1-16)  $(wc -c <"$BIT") bytes"
+echo "source : $EXPECTED_SOURCE_COMMIT  trigger_path=3"
 
 # ---------------------------------------------------------------- psu_init ----
 # DDRC STAT is at 0xFD070004; bits [2:0] are the operating mode.  1 = normal,
@@ -146,9 +184,18 @@ close_hw_manager
 TCL
 
 echo "== 2/4 programming PL (no PS reset) =="
-vivado -mode batch -notrace -source "$WORK/prog.tcl" 2>&1 | grep -E "^===|^ERROR" || true
+set +e
+vivado -mode batch -notrace -source "$WORK/prog.tcl" >"$WORK/pl-program.log" 2>&1
+PL_STATUS=$?
+set -e
+grep -E "^===|^ERROR|ERROR:" "$WORK/pl-program.log" || true
+if [ "$PL_STATUS" -ne 0 ]; then
+  echo "Vivado exited with status $PL_STATUS; full diagnostic follows:" >&2
+  sed -n '1,240p' "$WORK/pl-program.log" >&2
+  fail "PL programming failed"
+fi
 
-python3 - "$WORK/v.csv" <<'PY'
+"$PYTHON_BIN" - "$WORK/v.csv" <<'PY'
 import csv, sys, pathlib
 p = pathlib.Path(sys.argv[1])
 if not p.exists():
@@ -174,13 +221,45 @@ fi
 
 echo "== 4/4 discovering board IP (changes with the bitstream) =="
 sleep 10
-PYTHONPATH="$REPO/software" python3 - <<'PY'
+DISCOVERY_INTERFACE="${DISCOVERY_INTERFACE:-enp1s0f0}"
+DISCOVERY_SOURCE_IP="${DISCOVERY_SOURCE_IP:-169.254.250.11}"
+DISCOVERY_SOURCE_CIDR="${DISCOVERY_SOURCE_CIDR:-169.254.250.11/16}"
+DISCOVERY_BROADCAST_IP="${DISCOVERY_BROADCAST_IP:-169.254.255.255}"
+PYTHONPATH="$REPO/software" "$PYTHON_BIN" - "$ROLE" "$EXPECTED_SOURCE_COMMIT" \
+    "$DISCOVERY_INTERFACE" "$DISCOVERY_SOURCE_IP" "$DISCOVERY_SOURCE_CIDR" "$DISCOVERY_BROADCAST_IP" <<'PY'
+import sys
+
 from dr47.network import discover_boards
-bs = discover_boards(interface="enp1s0f0", source_ip="169.254.250.11",
-                     source_cidr="169.254.250.11/16",
-                     broadcast_ip="169.254.255.255", port=1234)
+from dr47.device import Dr47Device
+
+role, source_hex, interface, source_ip, source_cidr, broadcast_ip = sys.argv[1:]
+expected_source = int(source_hex, 16)
+bs = discover_boards(interface=interface, source_ip=source_ip,
+                     source_cidr=source_cidr, broadcast_ip=broadcast_ip,
+                     port=1234)
 if not bs:
-    print("  no board answered the broadcast")
+    raise SystemExit("no board answered the broadcast")
+verified = False
 for b in bs:
     print(f"  RFSOC_BOARD_IP={b.current_ip}   MAC={b.current_mac}  UID={b.device_uid}")
+    device = Dr47Device(
+        b.current_ip, 1234, timeout_s=3, udp_interface=interface,
+        udp_source_ip=source_ip, expected_build_profile_id=1,
+        expected_trigger_path_version=3,
+        expected_source_commit_id=expected_source,
+        sync_role=role,
+    )
+    try:
+        device.connect()
+        caps = device.capabilities
+        print(f"  HELLO source=0x{caps.source_commit_id:08x} trigger_path={caps.trigger_path_version} role={caps.sync_role}")
+        if caps.sync_role != role:
+            continue
+        verified = True
+    except Exception as exc:
+        print(f"  identity check failed for {b.current_ip}: {exc}", file=sys.stderr)
+    finally:
+        device.close()
+if not verified:
+    raise SystemExit("no discovered board matched the XSA build identity and role")
 PY

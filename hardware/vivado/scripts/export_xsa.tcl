@@ -3,6 +3,7 @@
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
+source "${script_path}/build_identity.tcl"
 
 set target "custom_xczu47dr_master"
 if {$argc > 0} {
@@ -21,6 +22,8 @@ set impl_dir "${proj_dir}/${proj_name}.runs/impl_1"
 
 puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
+set manifest_file "${proj_dir}/build_manifest.json"
+rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 
 # Create output directory
 file mkdir ${output_dir}
@@ -38,6 +41,20 @@ if {![file exists ${implemented_dcp}]} {
     puts "ERROR: no routed implementation checkpoint found in ${impl_dir}"
     puts "ERROR: run the corresponding bitstream target before exporting XSA"
     exit 1
+}
+rf2_identity_validate_manifest "${implemented_dcp}.manifest.json" ${target} ${script_path}
+set bit_candidates [glob -nocomplain ${impl_dir}/*.bit]
+set selected_bit ""
+foreach candidate ${bit_candidates} {
+    set candidate_manifest "${candidate}.manifest.json"
+    if {[file exists ${candidate_manifest}] &&
+        ![catch {rf2_identity_validate_manifest ${candidate_manifest} ${target} ${script_path}}]} {
+        set selected_bit ${candidate}
+        break
+    }
+}
+if {${selected_bit} eq ""} {
+    error "no identity-checked implementation bitstream found in ${impl_dir}"
 }
 puts "INFO: Opening implemented checkpoint ${implemented_dcp}"
 open_checkpoint ${implemented_dcp}
@@ -57,6 +74,8 @@ if {[file exists ${xsa_tmp}]} {
 }
 
 if {[file exists ${xsa_file}]} {
+    rf2_identity_embed_manifest ${xsa_file} ${manifest_file}
+    rf2_identity_verify_xsa_bit ${xsa_file} ${selected_bit}
     set xsa_size [file size ${xsa_file}]
     set xsa_size_mb [expr {$xsa_size / 1024.0 / 1024.0}]
     puts "INFO: XSA exported successfully"

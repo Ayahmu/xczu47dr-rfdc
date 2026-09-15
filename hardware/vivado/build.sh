@@ -104,6 +104,42 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# A Vivado project records the source identity at creation time.  Reusing a
+# project after checking out another revision would otherwise compile the new
+# RTL with the old Verilog defines and can export a mixed-identity bitstream.
+PROJECT_FILE="${WORK_DIR}/${PROJECT_NAME}.xpr"
+MANIFEST_FILE="${WORK_DIR}/build_manifest.json"
+SOURCE_COMMIT="$(git -C "${SCRIPT_DIR}/../.." rev-parse --verify HEAD 2>/dev/null | cut -c1-8 || true)"
+if [ "$CLEAN_FIRST" = false ] && [ -f "${PROJECT_FILE}" ]; then
+    manifest_matches=false
+    if [ -s "${MANIFEST_FILE}" ] && [ -n "${SOURCE_COMMIT}" ] && command -v python3 >/dev/null 2>&1; then
+        if python3 - "${MANIFEST_FILE}" "${TARGET}" "${SOURCE_COMMIT}" <<'PY'
+import json
+import sys
+
+path, target, source = sys.argv[1:]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+ok = (
+    data.get("target") == target
+    and int(data.get("protocol_version", 0)) == 3
+    and int(data.get("trigger_path_version", 0)) == 3
+    and str(data.get("source_commit", "")).lower() == source.lower()
+)
+raise SystemExit(0 if ok else 1)
+PY
+        then
+            manifest_matches=true
+        fi
+    fi
+    if [ "$manifest_matches" != true ]; then
+        print_warn "Existing Vivado project identity does not match ${SOURCE_COMMIT:-current HEAD}; recreating it"
+        CLEAN_FIRST=true
+    fi
+fi
+
 # Clean if requested
 if [ "$CLEAN_FIRST" = true ]; then
     print_warn "Cleaning previous build..."
@@ -136,7 +172,6 @@ fi
 cd "${SCRIPT_DIR}"
 
 # Step 2: Create Vivado Project (or use existing)
-PROJECT_FILE="${WORK_DIR}/${PROJECT_NAME}.xpr"
 if [ "$CLEAN_FIRST" = false ] && [ -f "${PROJECT_FILE}" ]; then
     print_step "Step 2/5: Using existing Vivado project..."
     print_info "Found existing project: ${PROJECT_FILE}"
