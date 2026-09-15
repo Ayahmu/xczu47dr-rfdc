@@ -328,7 +328,7 @@ if {!$download_elf_only} {
     psu_init
 
     puts "Programming FPGA..."
-    select_board_target $target fpga
+    select_board_target $target pl
     fpga ${bit_file}
 
     puts "Configuring PS-PL isolation and resets..."
