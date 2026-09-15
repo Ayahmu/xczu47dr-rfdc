@@ -50,13 +50,18 @@ if {[string tolower [file extension $image_file]] eq ".xsa"} {
     if {[llength $candidates] != 1} {
         error "XSA must contain exactly one *.tmp.bit (found [llength $candidates])"
     }
-    set extracted_bit_file [file join [file dirname $image_file] ".program_[pid].bit"]
-    set out [open $extracted_bit_file w]
-    fconfigure $out -translation binary
-    puts -nonewline $out [exec unzip -p $image_file [lindex $candidates 0]]
-    close $out
+    set xsa_extract_dir [file join [file dirname $image_file] ".program_[pid].xsa"]
+    file mkdir $xsa_extract_dir
+    set bit_member [lindex $candidates 0]
+    if {[catch {exec unzip -o -q $image_file $bit_member -d $xsa_extract_dir} err]} {
+        error "failed to extract ${bit_member} from XSA: ${err}"
+    }
+    set extracted_bit_file [file join $xsa_extract_dir $bit_member]
+    if {![file exists $extracted_bit_file]} {
+        error "extracted bitstream not found: ${extracted_bit_file}"
+    }
     set bit_file $extracted_bit_file
-    puts "Using embedded bitstream [lindex $candidates 0] from XSA"
+    puts "Using embedded bitstream ${bit_member} from XSA"
     if {$argc < 3} {
         set psu_candidates [list]
         foreach member [split $listing "\n"] {
@@ -67,13 +72,16 @@ if {[string tolower [file extension $image_file]] eq ".xsa"} {
         if {[llength $psu_candidates] != 1} {
             error "XSA must contain psu_init.tcl when no external PS init file is provided"
         }
-        set extracted_psu_file [file join [file dirname $image_file] ".program_[pid].psu_init.tcl"]
-        set psu_out [open $extracted_psu_file w]
-        fconfigure $psu_out -translation binary
-        puts -nonewline $psu_out [exec unzip -p $image_file [lindex $psu_candidates 0]]
-        close $psu_out
+        set psu_member [lindex $psu_candidates 0]
+        if {[catch {exec unzip -o -q $image_file $psu_member -d $xsa_extract_dir} err]} {
+            error "failed to extract ${psu_member} from XSA: ${err}"
+        }
+        set extracted_psu_file [file join $xsa_extract_dir $psu_member]
+        if {![file exists $extracted_psu_file]} {
+            error "extracted psu_init not found: ${extracted_psu_file}"
+        }
         set psu_init_file $extracted_psu_file
-        puts "Using embedded PS init [lindex $psu_candidates 0] from XSA"
+        puts "Using embedded PS init ${psu_member} from XSA"
     }
     set manifest_candidates [list]
     foreach member [split $listing "\n"] {
@@ -84,11 +92,14 @@ if {[string tolower [file extension $image_file]] eq ".xsa"} {
     if {[llength $manifest_candidates] != 1} {
         error "XSA must contain build_manifest.json with RFCTRL2 identity"
     }
-    set extracted_manifest_file [file join [file dirname $image_file] ".program_[pid].build_manifest.json"]
-    set manifest_out [open $extracted_manifest_file w]
-    fconfigure $manifest_out -translation binary
-    puts -nonewline $manifest_out [exec unzip -p $image_file [lindex $manifest_candidates 0]]
-    close $manifest_out
+    set manifest_member [lindex $manifest_candidates 0]
+    if {[catch {exec unzip -o -q $image_file $manifest_member -d $xsa_extract_dir} err]} {
+        error "failed to extract ${manifest_member} from XSA: ${err}"
+    }
+    set extracted_manifest_file [file join $xsa_extract_dir $manifest_member]
+    if {![file exists $extracted_manifest_file]} {
+        error "extracted build manifest not found: ${extracted_manifest_file}"
+    }
     set manifest_in [open $extracted_manifest_file r]
     set manifest_text [read $manifest_in]
     close $manifest_in
@@ -107,16 +118,11 @@ if {$psu_init_file eq "" && !$download_elf_only} {
 proc cleanup_extracted_bit {} {
     global extracted_bit_file
     if {$extracted_bit_file ne "" && [file exists $extracted_bit_file]} {
-        catch {file delete -force $extracted_bit_file}
+        set extract_dir [file dirname $extracted_bit_file]
+        catch {file delete -force $extract_dir}
     }
     global extracted_psu_file
-    if {$extracted_psu_file ne "" && [file exists $extracted_psu_file]} {
-        catch {file delete -force $extracted_psu_file}
-    }
     global extracted_manifest_file
-    if {$extracted_manifest_file ne "" && [file exists $extracted_manifest_file]} {
-        catch {file delete -force $extracted_manifest_file}
-    }
 }
 
 proc board_target_filter {target role} {
