@@ -99,13 +99,18 @@ module tb_pl_riscv_control_v1;
   reg [31:0] request_current [0:7];
   integer channel;
   integer packet_beat;
+  integer sync_case;
+  reg [3:0] sync_flags = 4'b1011;
   wire tdc_valid, tdc_write;
   wire [15:0] tdc_address;
   wire [31:0] tdc_wdata;
   reg tdc_ready = 0;
   reg [31:0] tdc_rdata = 0;
 
-  pl_riscv_control_v1 #(.TDC_REG_TIMEOUT_CYCLES(32)) dut (
+  pl_riscv_control_v1 #(
+    .TDC_REG_TIMEOUT_CYCLES(32),
+    .SOURCE_COMMIT_ID(32'h89ABCDEF)
+  ) dut (
     .clk(clk),
     .rst_n(rst_n),
     .rvctrl_tvalid(rvctrl_tvalid),
@@ -150,8 +155,8 @@ module tb_pl_riscv_control_v1;
     .playback_armed(1'b0),
     .playback_prepared(playback_prepared),
     .playback_running(1'b0),
-    .sync_role_master(1'b1), .sync_bypass(1'b0), .sync_seen(1'b1),
-    .sync_link_ready(1'b1), .sync_align_busy(1'b0), .sync_align_failed(1'b0),
+    .sync_role_master(sync_flags[3]), .sync_bypass(sync_flags[2]), .sync_seen(sync_flags[0]),
+    .sync_link_ready(sync_flags[1]), .sync_align_busy(1'b0), .sync_align_failed(1'b0),
     .sync_alignment_epoch(6'd0), .sync_alignment_error(16'd0),
     .trigger_input_count(32'd0), .trigger_accepted_count(32'd0),
     .trigger_output_count(32'd0),
@@ -317,6 +322,19 @@ module tb_pl_riscv_control_v1;
     end
   endtask
 
+  // Assert the actual serialized words, not just a software-generated
+  // payload: a 31-bit sync field used to shift version 3 down to version 1.
+  task check_status_identity(input [3:0] expected_flags);
+    begin
+      check_condition(resp_words[12][63:32] === 32'd3,
+                      "HELLO/STATUS trigger path version must occupy bits 63:32");
+      check_condition(resp_words[12][31:0] === {28'd0, expected_flags},
+                      "HELLO/STATUS sync flags must not overlap the identity word");
+      check_condition(resp_words[16] === 64'h89ABCDEF00010000,
+                      "HELLO/STATUS source commit and build profile mismatch");
+    end
+  endtask
+
   task wait_for_response_count(input integer expected_count);
     integer timeout_cycles;
     begin
@@ -416,12 +434,34 @@ module tb_pl_riscv_control_v1;
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 STATUS magic mismatch");
     check_condition(resp_words[1] == 64'h0000000200000003, "RFRESP2 STATUS header mismatch");
     check_condition(resp_words[2] == 64'h000000800000008A, "RFRESP2 STATUS sequence mismatch");
+    check_status_identity(sync_flags);
     check_condition(resp_words[17] == 64'h0000000004D2890A, "RFRESP2 STATUS TDC fields mismatch");
     check_condition(resp_words[7] == 64'h0000000200000003, "RFRESP2 STATUS playback config/fifo-valid debug mismatch");
     check_condition(resp_words[8] == 64'h000000050000000F, "RFRESP2 STATUS executor/fifo-ready debug mismatch");
     check_condition(resp_words[9] == 64'h0000001200000034, "RFRESP2 STATUS counters debug mismatch");
     check_condition(resp_words[10] == 64'h0000000300000001, "RFRESP2 STATUS prefill/active/pending debug mismatch");
     check_condition(resp_words[11] == 64'h00000007000000F5, "RFRESP2 STATUS MTS/NCO sync debug mismatch");
+
+    // Both operations share the status serializer. Cover both roles and
+    // every combination of bypass/ready/seen without relaxing host checks.
+    for (sync_case = 0; sync_case < 16; sync_case = sync_case + 1) begin
+      sync_flags = sync_case[3:0];
+      resp_count = 0;
+      send_rv_beat(64'h0000000100000003, 1'b1, 1'b0, 32'hA0000004);
+      send_rv_beat(64'h00000000000000B0 + sync_case, 1'b0, 1'b1, 32'hA0000004);
+      wait_for_response_count(19);
+      check_condition(resp_count == 19, "RFCTRL2 HELLO response length mismatch");
+      check_condition(resp_words[1] == 64'h0000000100000003, "RFCTRL2 HELLO header mismatch");
+      check_status_identity(sync_flags);
+      resp_count = 0;
+      send_rv_beat(64'h0000000200000003, 1'b1, 1'b0, 32'hA0000004);
+      send_rv_beat(64'h00000000000000C0 + sync_case, 1'b0, 1'b1, 32'hA0000004);
+      wait_for_response_count(19);
+      check_condition(resp_count == 19, "RFCTRL2 STATUS response length mismatch");
+      check_condition(resp_words[1] == 64'h0000000200000003, "RFCTRL2 STATUS header mismatch");
+      check_status_identity(sync_flags);
+    end
+    sync_flags = 4'b1011;
 
     resp_count = 0;
     send_rv_beat(64'h0000001100000003, 1'b1, 1'b0, 32'hA0000008);

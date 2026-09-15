@@ -639,10 +639,11 @@ module pl_riscv_control_v1 #(
             nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
             1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
         };
-        // STATUS identity is intentionally in the reserved high halves so
-        // the established low-word sync layout remains stable.
+        // Payload bytes 72..75 are the 32-bit sync flags; bytes 76..79
+        // are the trigger-path version. Four flags require 28 padding bits:
+        // a 31-bit low field shifts version 3 to 1 in the host's high word.
         resp_words[12] <= {TRIGGER_PATH_VERSION,
-                            27'd0, sync_role_master, sync_bypass,
+                            28'd0, sync_role_master, sync_bypass,
                             sync_link_ready, sync_seen};
         resp_words[13] <= {trigger_accepted_count, trigger_input_count};
         resp_words[14] <= {32'd0, trigger_output_count};
