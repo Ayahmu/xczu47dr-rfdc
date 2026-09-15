@@ -145,7 +145,7 @@ proc rf2_identity_payload_sha256 {bit_file} {
     fconfigure ${out} -translation binary
     puts -nonewline ${out} ${payload}
     close ${out}
-    set hash [string trim [lindex [split [exec sha256sum ${tmp}] "\n"] 0]]
+    set hash [lindex [split [string trim [lindex [split [exec sha256sum ${tmp}] "\n"] 0]] " "] 0]
     file delete -force ${tmp}
     return ${hash}
 }
@@ -160,18 +160,25 @@ proc rf2_identity_verify_xsa_bit {xsa_file bit_file} {
     if {[llength ${members}] != 1} {
         error "XSA must contain exactly one *.tmp.bit (found [llength ${members}])"
     }
-    set extracted [file join [file dirname ${xsa_file}] ".verify_bit_[pid].bit"]
-    set out [open ${extracted} w]
-    fconfigure ${out} -translation binary
-    puts -nonewline ${out} [exec unzip -p ${xsa_file} [lindex ${members} 0]]
-    close ${out}
+    set tmpdir [file join [file dirname ${xsa_file}] ".xsa_verify_[pid]_[clock clicks]"]
+    file mkdir ${tmpdir}
+    set member [lindex ${members} 0]
+    if {[catch {exec unzip -o -q ${xsa_file} ${member} -d ${tmpdir}} err]} {
+        file delete -force ${tmpdir}
+        error "failed to extract ${member} from ${xsa_file}: ${err}"
+    }
+    set extracted [file join ${tmpdir} ${member}]
+    if {![file exists ${extracted}]} {
+        file delete -force ${tmpdir}
+        error "extracted member not found: ${extracted}"
+    }
 
     # Raw .bit files are not reproducible because the header date/time changes
     # on every write_bitstream invocation.  Compare only the configuration
     # payload, which is deterministic for the same implemented checkpoint.
     set expected_hash [rf2_identity_payload_sha256 ${bit_file}]
     set actual_hash [rf2_identity_payload_sha256 ${extracted}]
-    file delete -force ${extracted}
+    file delete -force ${tmpdir}
     if {${expected_hash} ne ${actual_hash}} {
         error "XSA embedded bitstream payload does not match the identity-checked implementation bitstream"
     }
