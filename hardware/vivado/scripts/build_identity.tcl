@@ -102,6 +102,54 @@ proc rf2_identity_embed_manifest {xsa_file manifest_file} {
     }
 }
 
+proc rf2_identity_bitstream_payload {bit_file} {
+    if {![file exists ${bit_file}]} {
+        error "missing bitstream: ${bit_file}"
+    }
+    set fh [open ${bit_file} rb]
+    fconfigure ${fh} -translation binary
+    set data [read ${fh}]
+    close ${fh}
+
+    # Xilinx .bit layout: 13-byte preamble, then typed fields.  Fields a/b/c/d
+    # use a 2-byte length; field e uses a 4-byte length and carries the actual
+    # configuration payload.  The date/time fields c/d are intentionally
+    # excluded so two writes of the same implemented design compare equal.
+    set len [string length ${data}]
+    set pos 13
+    while {${pos} < ${len}} {
+        set typ [string index ${data} ${pos}]
+        incr pos
+        if {${typ} eq "e"} {
+            set payload_len 0
+            for {set k 0} {${k} < 4} {incr k} {
+                set byte [scan [string index ${data} [expr {${pos} + ${k}}]] %c]
+                set payload_len [expr {(${payload_len} << 8) | ${byte}}]
+            }
+            incr pos 4
+            return [string range ${data} ${pos} [expr {${pos} + ${payload_len} - 1}]]
+        }
+        set hi [scan [string index ${data} ${pos}] %c]
+        set lo [scan [string index ${data} [expr {${pos} + 1}]] %c]
+        set field_len [expr {${hi} * 256 + ${lo}}]
+        incr pos 2
+        incr pos ${field_len}
+    }
+    error "bitstream field e not found in ${bit_file}"
+}
+
+proc rf2_identity_payload_sha256 {bit_file} {
+    set payload [rf2_identity_bitstream_payload ${bit_file}]
+    set tmp [file join [file dirname ${bit_file}] ".bit_payload_[pid]_[clock clicks].bin"]
+    set out [open ${tmp} w]
+    fconfigure ${out} -translation binary
+    puts -nonewline ${out} ${payload}
+    close ${out}
+    set hash [string trim [lindex [split [exec sha256sum ${tmp}] "\n"] 0]]
+    file delete -force ${tmp}
+    return ${hash}
+}
+
 proc rf2_identity_verify_xsa_bit {xsa_file bit_file} {
     set members [list]
     foreach member [split [exec unzip -Z1 ${xsa_file}] "\n"] {
@@ -117,10 +165,14 @@ proc rf2_identity_verify_xsa_bit {xsa_file bit_file} {
     fconfigure ${out} -translation binary
     puts -nonewline ${out} [exec unzip -p ${xsa_file} [lindex ${members} 0]]
     close ${out}
-    set expected_hash [string trim [lindex [split [exec sha256sum ${bit_file}] "\n"] 0]]
-    set actual_hash [string trim [lindex [split [exec sha256sum ${extracted}] "\n"] 0]]
+
+    # Raw .bit files are not reproducible because the header date/time changes
+    # on every write_bitstream invocation.  Compare only the configuration
+    # payload, which is deterministic for the same implemented checkpoint.
+    set expected_hash [rf2_identity_payload_sha256 ${bit_file}]
+    set actual_hash [rf2_identity_payload_sha256 ${extracted}]
     file delete -force ${extracted}
-    if {[lindex [split ${expected_hash}] 0] ne [lindex [split ${actual_hash}] 0]} {
-        error "XSA embedded bitstream does not match the identity-checked implementation bitstream"
+    if {${expected_hash} ne ${actual_hash}} {
+        error "XSA embedded bitstream payload does not match the identity-checked implementation bitstream"
     }
 }
