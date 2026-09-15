@@ -217,19 +217,19 @@ module dac_play_ctrl #(
   wire ch7_fire = ch7_allow && (replay_valid || ch7_fifo_tvalid) && dac_ch7_ready_in;
   wire ch8_fire = ch8_allow && (replay_valid || ch8_fifo_tvalid) && dac_ch8_ready_in;
 
-  // underflow：播放已经真正 started、门已开、DAC 已 ready，但 FIFO 当拍无数据。
-  // ch*_allow also becomes true while RFCTRL2 is merely PREPARED, before a
-  // software/external Trigger has opened the output gate.  Counting that
-  // pre-trigger idle window as an underflow creates false sticky faults during
-  // boot and ARM.  A replay beat is local BRAM data, not FIFO data.
-  wire ch1_underflow_now = started && ch1_allow && dac_ch1_ready_in && !replay_valid && !ch1_fifo_tvalid;
-  wire ch2_underflow_now = started && ch2_allow && dac_ch2_ready_in && !replay_valid && !ch2_fifo_tvalid;
-  wire ch3_underflow_now = started && ch3_allow && dac_ch3_ready_in && !replay_valid && !ch3_fifo_tvalid;
-  wire ch4_underflow_now = started && ch4_allow && dac_ch4_ready_in && !replay_valid && !ch4_fifo_tvalid;
-  wire ch5_underflow_now = started && ch5_allow && dac_ch5_ready_in && !replay_valid && !ch5_fifo_tvalid;
-  wire ch6_underflow_now = started && ch6_allow && dac_ch6_ready_in && !replay_valid && !ch6_fifo_tvalid;
-  wire ch7_underflow_now = started && ch7_allow && dac_ch7_ready_in && !replay_valid && !ch7_fifo_tvalid;
-  wire ch8_underflow_now = started && ch8_allow && dac_ch8_ready_in && !replay_valid && !ch8_fifo_tvalid;
+  // underflow：门已开、DAC 已 ready，但 FIFO 当拍无数据。
+  // RF-DAC AXIS 不用 tvalid 选通，这一拍会被当成显式零样本送进 RFDC，
+  // 落在 fabric beat 节拍上，因此必须 fail closed 而不是继续播放。
+  // A replay beat is local BRAM data, not FIFO data.  Do not report a false
+  // underflow while a short waveform is being replayed from the cache.
+  wire ch1_underflow_now = ch1_allow && dac_ch1_ready_in && !replay_valid && !ch1_fifo_tvalid;
+  wire ch2_underflow_now = ch2_allow && dac_ch2_ready_in && !replay_valid && !ch2_fifo_tvalid;
+  wire ch3_underflow_now = ch3_allow && dac_ch3_ready_in && !replay_valid && !ch3_fifo_tvalid;
+  wire ch4_underflow_now = ch4_allow && dac_ch4_ready_in && !replay_valid && !ch4_fifo_tvalid;
+  wire ch5_underflow_now = ch5_allow && dac_ch5_ready_in && !replay_valid && !ch5_fifo_tvalid;
+  wire ch6_underflow_now = ch6_allow && dac_ch6_ready_in && !replay_valid && !ch6_fifo_tvalid;
+  wire ch7_underflow_now = ch7_allow && dac_ch7_ready_in && !replay_valid && !ch7_fifo_tvalid;
+  wire ch8_underflow_now = ch8_allow && dac_ch8_ready_in && !replay_valid && !ch8_fifo_tvalid;
   wire any_underflow_now = ch1_underflow_now || ch2_underflow_now ||
                            ch3_underflow_now || ch4_underflow_now ||
                            ch5_underflow_now || ch6_underflow_now ||

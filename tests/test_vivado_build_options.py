@@ -88,6 +88,13 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         )
         self.assertNotIn("        ch4.\n", top)
 
+    def test_playback_diagnostic_wires_have_explicit_widths(self):
+        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertIn("wire        pc_replay_active;", top)
+        self.assertIn("wire [7:0]  pc_underflow_seen;", top)
+
     def test_external_trigger_launch_has_no_fixed_dac_scheduler(self):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
             encoding="utf-8", errors="ignore"

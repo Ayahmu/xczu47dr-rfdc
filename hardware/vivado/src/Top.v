@@ -2433,6 +2433,8 @@ module Top #(
 
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
+  wire        pc_replay_active;
+  wire [7:0]  pc_underflow_seen;
   wire [15:0] pc_replay_index;
   wire [255:0] replay_mem_ch1, replay_mem_ch2, replay_mem_ch3, replay_mem_ch4;
   wire [255:0] replay_mem_ch5, replay_mem_ch6, replay_mem_ch7, replay_mem_ch8;
