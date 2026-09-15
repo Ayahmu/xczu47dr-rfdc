@@ -172,6 +172,11 @@ module tb_dac_play_ctrl;
     // intentionally empty first so PREPARED cannot be reported prematurely.
     @(negedge clk); abort = 1'b1;
     @(negedge clk); abort = 1'b0;
+    repeat (2) @(posedge clk);
+    if (prepared || dbg_started || ch1_allow) begin
+      $error("ABORT must clear the RFCTRL2 prepared session");
+      $finish;
+    end
     @(negedge clk);
     auto_start = 1'b0;
     cfg_seq_id = 16'd3;
@@ -181,8 +186,8 @@ module tb_dac_play_ctrl;
     prepare = 1'b1;
     @(negedge clk); prepare = 1'b0;
     repeat (3) @(posedge clk);
-    if (prepared || dbg_started || ch1_allow) begin
-      $error("RFCTRL2 PREPARED must wait for the first FIFO beat with all output gates closed");
+    if (prepared || dbg_started || ch1_allow || dbg_underflow_seen != 8'd0) begin
+      $error("RFCTRL2 PREPARED must wait for the first FIFO beat with all output gates closed and no underflow");
       $finish;
     end
 

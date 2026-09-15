@@ -217,19 +217,19 @@ module dac_play_ctrl #(
   wire ch7_fire = ch7_allow && (replay_valid || ch7_fifo_tvalid) && dac_ch7_ready_in;
   wire ch8_fire = ch8_allow && (replay_valid || ch8_fifo_tvalid) && dac_ch8_ready_in;
 
-  // underflow：门已开、DAC 已 ready，但 FIFO 当拍无数据。
-  // RF-DAC AXIS 不用 tvalid 选通，这一拍会被当成显式零样本送进 RFDC，
-  // 落在 fabric beat 节拍上，因此必须 fail closed 而不是继续播放。
-  // A replay beat is local BRAM data, not FIFO data.  Do not report a false
-  // underflow while a short waveform is being replayed from the cache.
-  wire ch1_underflow_now = ch1_allow && dac_ch1_ready_in && !replay_valid && !ch1_fifo_tvalid;
-  wire ch2_underflow_now = ch2_allow && dac_ch2_ready_in && !replay_valid && !ch2_fifo_tvalid;
-  wire ch3_underflow_now = ch3_allow && dac_ch3_ready_in && !replay_valid && !ch3_fifo_tvalid;
-  wire ch4_underflow_now = ch4_allow && dac_ch4_ready_in && !replay_valid && !ch4_fifo_tvalid;
-  wire ch5_underflow_now = ch5_allow && dac_ch5_ready_in && !replay_valid && !ch5_fifo_tvalid;
-  wire ch6_underflow_now = ch6_allow && dac_ch6_ready_in && !replay_valid && !ch6_fifo_tvalid;
-  wire ch7_underflow_now = ch7_allow && dac_ch7_ready_in && !replay_valid && !ch7_fifo_tvalid;
-  wire ch8_underflow_now = ch8_allow && dac_ch8_ready_in && !replay_valid && !ch8_fifo_tvalid;
+  // underflow：播放已经真正 started、门已开、DAC 已 ready，但 FIFO 当拍无数据。
+  // ch*_allow also becomes true while RFCTRL2 is merely PREPARED, before a
+  // software/external Trigger has opened the output gate.  Counting that
+  // pre-trigger idle window as an underflow creates false sticky faults during
+  // boot and ARM.  A replay beat is local BRAM data, not FIFO data.
+  wire ch1_underflow_now = started && ch1_allow && dac_ch1_ready_in && !replay_valid && !ch1_fifo_tvalid;
+  wire ch2_underflow_now = started && ch2_allow && dac_ch2_ready_in && !replay_valid && !ch2_fifo_tvalid;
+  wire ch3_underflow_now = started && ch3_allow && dac_ch3_ready_in && !replay_valid && !ch3_fifo_tvalid;
+  wire ch4_underflow_now = started && ch4_allow && dac_ch4_ready_in && !replay_valid && !ch4_fifo_tvalid;
+  wire ch5_underflow_now = started && ch5_allow && dac_ch5_ready_in && !replay_valid && !ch5_fifo_tvalid;
+  wire ch6_underflow_now = started && ch6_allow && dac_ch6_ready_in && !replay_valid && !ch6_fifo_tvalid;
+  wire ch7_underflow_now = started && ch7_allow && dac_ch7_ready_in && !replay_valid && !ch7_fifo_tvalid;
+  wire ch8_underflow_now = started && ch8_allow && dac_ch8_ready_in && !replay_valid && !ch8_fifo_tvalid;
   wire any_underflow_now = ch1_underflow_now || ch2_underflow_now ||
                            ch3_underflow_now || ch4_underflow_now ||
                            ch5_underflow_now || ch6_underflow_now ||
@@ -323,6 +323,27 @@ module dac_play_ctrl #(
       dbg_done_pulse <= 1'b0;
       replay_active_r <= 1'b0;
       replay_index_r <= 16'd0;
+      cfg_seen       <= 1'b0;
+      last_seq_id    <= 16'd0;
+    end else if (!armed && prepared) begin
+      // rfctrl2_playback_controller clears its DAC-domain armed latch on
+      // ABORT/MUTE.  Keep this controller fail-safe if the one-cycle abort
+      // pulse is observed by the CDC controller but missed by this state
+      // machine: an unarmed session must never remain PREPARED.
+      started       <= 1'b0;
+      start_pending <= 1'b0;
+      trigger_pending <= 1'b0;
+      prepare_wait_cfg <= 1'b0;
+      prepare_wait_warm <= 1'b0;
+      loop_refill_pending <= 1'b0;
+      burst_complete_pending <= 1'b0;
+      prepared      <= 1'b0;
+      ch1_active <= 1'b0; ch2_active <= 1'b0; ch3_active <= 1'b0; ch4_active <= 1'b0;
+      ch5_active <= 1'b0; ch6_active <= 1'b0; ch7_active <= 1'b0; ch8_active <= 1'b0;
+      replay_active_r <= 1'b0;
+      replay_index_r <= 16'd0;
+      cfg_seen       <= 1'b0;
+      last_seq_id    <= 16'd0;
     end else begin
       if (diag_clear_counters === 1'b1) begin
         dbg_underflow_seen <= 8'd0;
