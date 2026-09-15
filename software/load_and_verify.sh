@@ -162,7 +162,10 @@ cat > "$WORK/prog.tcl" <<TCL
 open_hw_manager
 connect_hw_server -allow_non_jtag -url localhost:3121
 open_hw_target {localhost:3121/xilinx_tcf/Xilinx/${CABLE}}
-set dev [lindex [get_hw_devices] 0]
+set devs [get_hw_devices -quiet -filter {NAME =~ "*xczu47dr*"}]
+if {[llength \$devs] == 0} { set devs [get_hw_devices -quiet] }
+set dev [lindex \$devs 0]
+if {\$dev eq ""} { puts "===ERROR no FPGA device found==="; close_hw_manager; exit 1 }
 current_hw_device \$dev
 set_property PROGRAM.FILE {${BIT}} \$dev
 program_hw_devices \$dev
