@@ -85,6 +85,19 @@ module tb_sync_bypass;
       $finish;
     end
 
+    // A short local replay can return PREPARED too quickly for the HMC-domain
+    // forwarding re-arm synchronizer. Local bypass commands must nevertheless
+    // remain repeatable without requiring an external PREPARED-low interval.
+    repeat (2) begin
+      @(negedge ddr_clk); trigger_request_ddr = 1'b1;
+      @(negedge ddr_clk); trigger_request_ddr = 1'b0;
+      repeat (16) @(posedge hmc_pl_clk);
+    end
+    if (trigger_accepted_count != 32'd4 || accepted != 4) begin
+      $display("FAIL: bypass did not accept repeat local Triggers count=%0d accepted_count=%0d", accepted, trigger_accepted_count);
+      $finish;
+    end
+
     // Returning to external mode closes the local software path again.  A
     // host Trigger must not launch until a real XS20 SYNC is received.
     sync_bypass = 1'b0;
@@ -92,7 +105,7 @@ module tb_sync_bypass;
     @(negedge ddr_clk); trigger_request_ddr = 1'b1;
     @(negedge ddr_clk); trigger_request_ddr = 1'b0;
     repeat (16) @(posedge hmc_pl_clk);
-    if (trigger_accepted_count != 32'd2) begin
+    if (trigger_accepted_count != 32'd4) begin
       $display("FAIL: external-mode slave accepted local Trigger count=%0d", trigger_accepted_count);
       $finish;
     end
