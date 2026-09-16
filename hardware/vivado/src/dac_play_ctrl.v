@@ -528,7 +528,8 @@ module dac_play_ctrl #(
           replay_index_r <= 16'd0;
         end
 
-        if(loop_refill_pending && !started && loop_refill_warm) begin
+        if(loop_refill_pending && !started &&
+           (loop_refill_warm || replay_cache_ready_clean)) begin
           started <= !burst_complete_pending;
           start_pending <= 1'b0;
           trigger_pending <= 1'b0;
@@ -556,6 +557,7 @@ module dac_play_ctrl #(
       // snapshot or a fresh configuration commit.
       if (!started && replay_cache_ready_clean && cfg_seen && !prepare_wait_cfg &&
           !prepare_wait_warm && !loop_refill_pending && !burst_complete_pending &&
+          !(rfctrl2_trigger || trig_pulse) &&
           (ch1_arm || ch2_arm || ch3_arm || ch4_arm || ch5_arm || ch6_arm || ch7_arm || ch8_arm)) begin
         prepared <= 1'b1;
       end

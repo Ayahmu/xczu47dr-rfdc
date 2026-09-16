@@ -142,7 +142,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/dac_play_ctrl.v",
                 ROOT / "tests/tb_dac_play_ctrl.sv",
             ],
-            "PASS: dac_play_ctrl preserves legacy startup and loops from refill-safe FIFO state",
+            "PASS: dac_play_ctrl preserves legacy startup, refill loops, and short replay re-arm",
         )
 
     def test_dac_play_finite_burst_and_debug_alternate(self):

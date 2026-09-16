@@ -16,6 +16,9 @@ module tb_dac_play_ctrl;
   reg ch1_fifo_tvalid = 1'b1;
   reg ch1_fifo_prog_empty = 1'b1;
   reg dac_ch1_ready_in = 1'b1;
+  reg replay_cache_ready = 1'b0;
+  reg [31:0] repeat_limit = 32'd0;
+  reg debug_alternate = 1'b0;
 
   wire ch1_allow;
   wire dbg_started;
@@ -40,6 +43,9 @@ module tb_dac_play_ctrl;
     .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start),
     .loop_enable(loop_enable),
+    .replay_cache_ready(replay_cache_ready),
+    .repeat_limit(repeat_limit),
+    .debug_alternate(debug_alternate),
     .ch1_delay_cycles(32'd0),
     .ch2_delay_cycles(32'd0),
     .ch3_delay_cycles(32'd0),
@@ -251,7 +257,30 @@ module tb_dac_play_ctrl;
       $finish;
     end
 
-    $display("PASS: dac_play_ctrl preserves legacy startup and loops from refill-safe FIFO state");
+    // A short replay-cache frame has no FIFO tvalid after its first capture.
+    // Its finite repeat must still return to PREPARED and accept another
+    // RFCTRL2 Trigger without waiting for a nonexistent DDR refill.
+    @(negedge clk); abort = 1'b1;
+    @(negedge clk); abort = 1'b0;
+    repeat (2) @(posedge clk);
+    @(negedge clk);
+    replay_cache_ready = 1'b1;
+    auto_start = 1'b0; loop_enable = 1'b1; repeat_limit = 32'd1; cfg_seq_id = 16'd5;
+    ch1_len_beats = 32'd4; ch1_fifo_tvalid = 1'b0; ch1_fifo_prog_empty = 1'b1;
+    armed = 1'b1; prepare = 1'b1;
+    @(negedge clk); prepare = 1'b0;
+    wait (prepared == 1'b1);
+    @(negedge clk); rfctrl2_trigger = 1'b1;
+    @(negedge clk); rfctrl2_trigger = 1'b0;
+    wait (dbg_started == 1'b1);
+    wait (dbg_started == 1'b0);
+    wait (prepared == 1'b1);
+    if (dbg_underflow_seen != 8'd0) begin
+      $error("replay-cache finite frame must complete without FIFO underflow");
+      $finish;
+    end
+
+    $display("PASS: dac_play_ctrl preserves legacy startup, refill loops, and short replay re-arm");
     $finish;
   end
 endmodule

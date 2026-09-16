@@ -282,7 +282,8 @@ module sync_trigger_link #(
         // duplicate propagation. A slave's local bypass Trigger is already a
         // one-shot RFCTRL2 command and must remain repeatable even when a
         // short replay frame does not expose a long PREPARED-low window.
-        trigger_wait_rearm_hmc <= external_trigger_accept_hmc || role_master;
+        trigger_wait_rearm_hmc <= external_trigger_accept_hmc ||
+                                   role_master || local_trigger_accept_hmc;
         trigger_seen_unprepared_hmc <= 1'b0;
         launch_count <= role_master ? MASTER_LAUNCH_DELAY_CYCLES : SLAVE_LAUNCH_DELAY_CYCLES;
         if (role_master) begin

@@ -99,6 +99,10 @@ module tb_sync_bypass;
     // forwarding re-arm synchronizer. Local bypass commands must nevertheless
     // remain repeatable without requiring an external PREPARED-low interval.
     repeat (2) begin
+      playback_prepared = 1'b0;
+      repeat (6) @(posedge hmc_pl_clk);
+      playback_prepared = 1'b1;
+      repeat (6) @(posedge hmc_pl_clk);
       @(negedge ddr_clk); trigger_request_ddr = 1'b1;
       @(negedge ddr_clk); trigger_request_ddr = 1'b0;
       repeat (16) @(posedge hmc_pl_clk);
