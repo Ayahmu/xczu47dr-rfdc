@@ -181,7 +181,8 @@ module sync_trigger_link #(
   // must remain driven by XS19, so a host Trigger command is rejected.
   wire local_trigger_accept_hmc =
       (role_master || bypass_hmc_sync[1]) &&
-      trigger_request_hmc_pulse && trigger_allowed_hmc;
+      trigger_request_hmc_pulse && trigger_allowed_hmc &&
+      playback_prepared_hmc_sync[1];
   wire external_trigger_accept_hmc = !role_master && trigger_in_rise_hmc && trigger_allowed_hmc;
   wire any_trigger_accept_hmc = local_trigger_accept_hmc || external_trigger_accept_hmc ||
                                 (dac_trigger_start && trigger_allowed_hmc);

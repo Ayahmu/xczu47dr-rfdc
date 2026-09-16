@@ -52,6 +52,16 @@ module tb_sync_bypass;
     repeat (3) @(posedge pl_clk);
     sync_bypass = 1'b1;
     repeat (3) @(posedge pl_clk);
+    playback_prepared = 1'b0;
+    @(negedge ddr_clk); trigger_request_ddr = 1'b1;
+    @(negedge ddr_clk); trigger_request_ddr = 1'b0;
+    repeat (16) @(posedge hmc_pl_clk);
+    if (trigger_accepted_count != 32'd0) begin
+      $display("FAIL: bypass accepted local Trigger before PREPARED count=%0d", trigger_accepted_count);
+      $finish;
+    end
+    playback_prepared = 1'b1;
+    repeat (3) @(posedge hmc_pl_clk);
     if (sync_seen || !sync_ready) begin
       $display("FAIL: bypass did not open the trigger gate without fabricating XS20 SYNC");
       $finish;
