@@ -1509,8 +1509,9 @@ module Top #(
   // hmc->dac toggle lands at one of 48 phases inside the 20 ns DAC period and
   // spreads the launch over ~19.6 ns regardless of how clean XS19 is.
   //
-  // Host-command Triggers still take the hmc_pl_clk path; the external flag
-  // below is what keeps the two from launching the same event twice.
+  // Host commands still update HMC link status/counters. In slave bypass their
+  // local launch crosses directly from DDR to DAC; external and multi-board
+  // events remain on the HMC path. The external flag keeps the paths distinct.
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] trig_event_ext_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_bypass_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_ready_dac_sync_ff;
@@ -1601,8 +1602,7 @@ module Top #(
   wire dac_trigger_request =
       tdc_mode_dac ? 1'b0 : IS_MASTER ? role_trigger_dac_pulse
                 : (sync_bypass_dac_sync_ff[2]
-                   ? (dac_direct_trigger_pulse |
-                      rfctrl2_local_trigger_dac_pulse)
+                   ? dac_direct_trigger_pulse
                    : (dac_direct_trigger_pulse |
                       (role_trigger_dac_pulse && !legacy_event_is_external_dac)));
   // No programmable launch delay is inserted here.  Abort/mute has priority
@@ -2606,6 +2606,8 @@ module Top #(
     .rst_n(dac_rst_n),
     .trigger(tdc_mode_dac ? 1'b0 : ps_trigger_dac_sync),
     .rfctrl2_trigger(dac_hw_rfctrl2_trigger && rfctrl2_prepared_dac),
+    .rfctrl2_bypass_trigger(!tdc_mode_dac && sync_bypass_dac_sync_ff[2] &&
+                            rfctrl2_local_trigger_dac_pulse),
     .prepare(rfctrl2_play_prepare),
     .abort(rfctrl2_play_abort | (tdc_mode_dac && (tdc_fault || tdc_runtime_fault))),
     .diag_clear_events(diag_clear_events_dac),

@@ -19,7 +19,7 @@ module tb_dac_play_burst;
 
   dac_play_ctrl dut(
     .clk(clk), .rst_n(rst_n), .trigger(trigger), .rfctrl2_trigger(rfctrl2_trigger),
-    .prepare(prepare), .abort(abort), .armed(armed), .cfg_seq_id(cfg_seq_id),
+    .rfctrl2_bypass_trigger(1'b0), .prepare(prepare), .abort(abort), .armed(armed), .cfg_seq_id(cfg_seq_id),
     .auto_start(auto_start), .loop_enable(1'b1), .repeat_limit(repeat_limit),
     .debug_alternate(debug_alternate),
     .ch1_delay_cycles(0), .ch2_delay_cycles(0), .ch3_delay_cycles(0), .ch4_delay_cycles(0),

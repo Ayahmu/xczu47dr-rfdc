@@ -102,6 +102,7 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertIn("rfctrl2_local_trigger_toggle_ddr", top)
         self.assertIn("rfctrl2_local_trigger_dac_pulse", top)
         self.assertIn("sync_bypass_dac_sync_ff[2]", top)
+        self.assertIn("rfctrl2_bypass_trigger", top)
         self.assertIn("rfctrl2_local_trigger_dac_pulse", top[top.index("wire dac_trigger_request"):])
 
     def test_external_trigger_launch_has_no_fixed_dac_scheduler(self):

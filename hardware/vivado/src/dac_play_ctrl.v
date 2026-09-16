@@ -13,7 +13,8 @@ module dac_play_ctrl #(
     input  wire        rst_n,
 
     input  wire        trigger,      // 旧 GPIO/RVCTRL 路径的 DAC 域同步 trigger 电平
-    input  wire        rfctrl2_trigger, // RFCTRL2 专用、DAC 域单周期 trigger
+    input  wire        rfctrl2_trigger, // HMC/event path DAC-domain single-cycle trigger
+    input  wire        rfctrl2_bypass_trigger, // slave bypass DDR-to-DAC local trigger
     input  wire        prepare,      // RFCTRL2 ARM 到达 DAC 域后的单周期 prepare
     input  wire        abort,        // DAC 域同步后的 emergency mute pulse
     input  wire        diag_clear_events,
@@ -121,6 +122,7 @@ module dac_play_ctrl #(
   reg started;
   reg start_pending;
   reg trigger_pending;
+  reg rfctrl2_bypass_pending;
   reg prepare_wait_cfg;
   reg prepare_wait_warm;
   reg loop_refill_pending;
@@ -251,6 +253,7 @@ module dac_play_ctrl #(
       started     <= 1'b0;
       start_pending <= 1'b0;
       trigger_pending <= 1'b0;
+      rfctrl2_bypass_pending <= 1'b0;
       prepare_wait_cfg <= 1'b0;
       prepare_wait_warm <= 1'b0;
       loop_refill_pending <= 1'b0;
@@ -304,6 +307,7 @@ module dac_play_ctrl #(
       started       <= 1'b0;
       start_pending <= 1'b0;
       trigger_pending <= 1'b0;
+      rfctrl2_bypass_pending <= 1'b0;
       prepare_wait_cfg <= 1'b0;
       prepare_wait_warm <= 1'b0;
       loop_refill_pending <= 1'b0;
@@ -333,6 +337,7 @@ module dac_play_ctrl #(
       started       <= 1'b0;
       start_pending <= 1'b0;
       trigger_pending <= 1'b0;
+      rfctrl2_bypass_pending <= 1'b0;
       prepare_wait_cfg <= 1'b0;
       prepare_wait_warm <= 1'b0;
       loop_refill_pending <= 1'b0;
@@ -448,10 +453,20 @@ module dac_play_ctrl #(
           end
         end
 
+        // The HMC status domain accepts a local bypass command only while
+        // its synchronized PREPARED state is true.  The dedicated DDR-to-DAC
+        // event can still arrive a few DAC clocks before this controller sees
+        // the same re-armed state; retain that one accepted event until it can
+        // launch, instead of silently dropping a repeat short-frame Trigger.
+        if (rfctrl2_bypass_trigger &&
+            !(prepared && !started && debug_trigger_admit)) begin
+          rfctrl2_bypass_pending <= 1'b1;
+        end
+
         // In the RFCTRL2 path configuration is captured while PREPARED.
         // Trigger never waits for FIFO data; replay mode only reloads the
         // already cached beat counters and resets its local read pointer.
-        if((trig_pulse || rfctrl2_trigger) && debug_alternate_clean) begin
+        if((trig_pulse || rfctrl2_trigger || rfctrl2_bypass_trigger) && debug_alternate_clean) begin
           if(!debug_phase) begin
             debug_phase <= 1'b1;
             dbg_trigger_skipped_count <= dbg_trigger_skipped_count + 32'd1;
@@ -459,11 +474,12 @@ module dac_play_ctrl #(
             debug_phase <= 1'b0;
             dbg_trigger_admitted_count <= dbg_trigger_admitted_count + 32'd1;
           end
-        end else if(trig_pulse || rfctrl2_trigger) begin
+        end else if(trig_pulse || rfctrl2_trigger || rfctrl2_bypass_trigger) begin
           dbg_trigger_admitted_count <= dbg_trigger_admitted_count + 32'd1;
         end
 
-        if(rfctrl2_trigger && prepared && !started && debug_trigger_admit) begin
+        if((rfctrl2_trigger || rfctrl2_bypass_trigger || rfctrl2_bypass_pending) &&
+           prepared && !started && debug_trigger_admit) begin
           // A replay Trigger starts a fresh pass over the immutable DAC-domain
           // cache.  The first pass decremented beats*/delay* to zero; reload
           // them here so every subsequent Trigger emits the complete record
@@ -480,6 +496,7 @@ module dac_play_ctrl #(
           prepared <= 1'b0;
           replay_active_r <= replay_cache_ready_clean;
           replay_index_r <= 16'd0;
+          rfctrl2_bypass_pending <= 1'b0;
         end
 
         if(trig_pulse && !started && !start_pending && !prepare_active && debug_trigger_admit) begin

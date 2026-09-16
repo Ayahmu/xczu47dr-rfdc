@@ -5,6 +5,7 @@ module tb_dac_play_ctrl;
   reg rst_n = 1'b0;
   reg trigger = 1'b0;
   reg rfctrl2_trigger = 1'b0;
+  reg rfctrl2_bypass_trigger = 1'b0;
   reg prepare = 1'b0;
   reg abort = 1'b0;
   reg armed = 1'b0;
@@ -37,6 +38,7 @@ module tb_dac_play_ctrl;
     .rst_n(rst_n),
     .trigger(trigger),
     .rfctrl2_trigger(rfctrl2_trigger),
+    .rfctrl2_bypass_trigger(rfctrl2_bypass_trigger),
     .prepare(prepare),
     .abort(abort),
     .armed(armed),
@@ -270,8 +272,8 @@ module tb_dac_play_ctrl;
     armed = 1'b1; prepare = 1'b1;
     @(negedge clk); prepare = 1'b0;
     wait (prepared == 1'b1);
-    @(negedge clk); rfctrl2_trigger = 1'b1;
-    @(negedge clk); rfctrl2_trigger = 1'b0;
+    @(negedge clk); rfctrl2_bypass_trigger = 1'b1;
+    @(negedge clk); rfctrl2_bypass_trigger = 1'b0;
     wait (dbg_started == 1'b1);
     wait (dbg_started == 1'b0);
     wait (prepared == 1'b1);
