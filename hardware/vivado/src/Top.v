@@ -283,6 +283,10 @@ module Top #(
   reg diag_snapshot_prepared_dac, diag_snapshot_output_permitted_dac;
   reg [7:0] diag_snapshot_underflow_mask_dac;
   reg diag_snapshot_replay_ready_dac, diag_snapshot_replay_active_dac;
+  // Playback diagnostics are consumed by the held snapshot above and by the
+  // DAC-domain ILA below; declare the actual bus widths before either use.
+  wire        pc_replay_active;
+  wire [7:0]  pc_underflow_seen;
   reg diag_snapshot_ack_pending_dac;
   reg [511:0] diag_snapshot_hold_dac;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [511:0] diag_snapshot_hold_meta_ddr;
@@ -2433,8 +2437,6 @@ module Top #(
 
   // ===== NEW: play_ctrl debug wires (接 ILA 用) =====
   wire        pc_trig_pulse, pc_new_cfg, pc_trig_start;
-  wire        pc_replay_active;
-  wire [7:0]  pc_underflow_seen;
   wire [15:0] pc_replay_index;
   wire [255:0] replay_mem_ch1, replay_mem_ch2, replay_mem_ch3, replay_mem_ch4;
   wire [255:0] replay_mem_ch5, replay_mem_ch6, replay_mem_ch7, replay_mem_ch8;
