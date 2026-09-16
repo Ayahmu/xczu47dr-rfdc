@@ -95,6 +95,15 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertIn("wire        pc_replay_active;", top)
         self.assertIn("wire [7:0]  pc_underflow_seen;", top)
 
+    def test_slave_bypass_uses_direct_local_trigger_cdc(self):
+        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        self.assertIn("rfctrl2_local_trigger_toggle_ddr", top)
+        self.assertIn("rfctrl2_local_trigger_dac_pulse", top)
+        self.assertIn("sync_bypass_dac_sync_ff[2]", top)
+        self.assertIn("rfctrl2_local_trigger_dac_pulse", top[top.index("wire dac_trigger_request"):])
+
     def test_external_trigger_launch_has_no_fixed_dac_scheduler(self):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
             encoding="utf-8", errors="ignore"

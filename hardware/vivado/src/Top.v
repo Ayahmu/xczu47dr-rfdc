@@ -1451,6 +1451,12 @@ module Top #(
   // external XS20 SYNC state (or the explicit runtime bypass).
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_event_ddr_sync_ff;
   reg role_trigger_event_ddr_seen;
+  // Slave-bypass software Triggers use a dedicated DDR-to-DAC toggle. The
+  // HMC link still owns role/event counters, but a local bypass command must
+  // not depend on the HMC event toggle surviving a short replay-frame edge.
+  reg rfctrl2_local_trigger_toggle_ddr;
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] rfctrl2_local_trigger_toggle_dac_sync_ff;
+  reg rfctrl2_local_trigger_toggle_dac_seen;
   // The physical Trigger event is created in HMC PL_CLK. Transfer that event
   // toggle directly to the DAC domain; PS pl_clk is not in this path.
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_toggle_sync_ff;
@@ -1459,28 +1465,42 @@ module Top #(
     if(!ddr4_ui_aresetn) begin
       role_trigger_event_ddr_sync_ff <= 3'b000;
       role_trigger_event_ddr_seen <= 1'b0;
+      rfctrl2_local_trigger_toggle_ddr <= 1'b0;
     end else begin
       role_trigger_event_ddr_sync_ff <= {
           role_trigger_event_ddr_sync_ff[1:0], trigger_event_toggle_hmc
       };
       role_trigger_event_ddr_seen <= role_trigger_event_ddr_sync_ff[2];
+      if (rfctrl2_trigger_pulse)
+        rfctrl2_local_trigger_toggle_ddr <= ~rfctrl2_local_trigger_toggle_ddr;
     end
   end
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
     if(!clk104_aresetn) begin
       role_trigger_dac_toggle_sync_ff <= 3'b000;
       role_trigger_dac_toggle_seen <= 1'b0;
+      rfctrl2_local_trigger_toggle_dac_sync_ff <= 3'b000;
+      rfctrl2_local_trigger_toggle_dac_seen <= 1'b0;
     end else begin
       role_trigger_dac_toggle_sync_ff <= {
           role_trigger_dac_toggle_sync_ff[1:0], trigger_event_toggle_hmc
       };
       role_trigger_dac_toggle_seen <= role_trigger_dac_toggle_sync_ff[2];
+      rfctrl2_local_trigger_toggle_dac_sync_ff <= {
+          rfctrl2_local_trigger_toggle_dac_sync_ff[1:0],
+          rfctrl2_local_trigger_toggle_ddr
+      };
+      rfctrl2_local_trigger_toggle_dac_seen <=
+          rfctrl2_local_trigger_toggle_dac_sync_ff[2];
     end
   end
   wire hmc_trigger_event_ddr =
       role_trigger_event_ddr_sync_ff[2] != role_trigger_event_ddr_seen;
   wire role_trigger_dac_pulse =
       role_trigger_dac_toggle_sync_ff[2] != role_trigger_dac_toggle_seen;
+  wire rfctrl2_local_trigger_dac_pulse =
+      rfctrl2_local_trigger_toggle_dac_sync_ff[2] !=
+      rfctrl2_local_trigger_toggle_dac_seen;
 
   // ---- Direct DAC-domain capture of the external Trigger (XS19/TRIG_2) ----
   // The hmc_pl_clk detour above is kept alive as a measurement reference, but
@@ -1580,8 +1600,11 @@ module Top #(
   // directly and let dac_play_ctrl sample the request on the next DAC edge.
   wire dac_trigger_request =
       tdc_mode_dac ? 1'b0 : IS_MASTER ? role_trigger_dac_pulse
-                : (dac_direct_trigger_pulse |
-                   (role_trigger_dac_pulse && !legacy_event_is_external_dac));
+                : (sync_bypass_dac_sync_ff[2]
+                   ? (dac_direct_trigger_pulse |
+                      rfctrl2_local_trigger_dac_pulse)
+                   : (dac_direct_trigger_pulse |
+                      (role_trigger_dac_pulse && !legacy_event_is_external_dac)));
   // No programmable launch delay is inserted here.  Abort/mute has priority
   // in dac_play_ctrl; masking the request as well prevents a request that is
   // present during the mute pulse from becoming a stale start on the next
