@@ -4,7 +4,7 @@ set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 
-set target "custom_xczu47dr_master"
+set target "custom_xczu47dr_waveform"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -32,7 +32,7 @@ set preflight_bd_files [list]
 
 # RTL elaboration still needs the generated HDL wrappers for standalone IP.
 # Generating output products here is much cheaper than launching OOC synthesis.
-foreach ip_name {axis_async_fifo_256 axi_datamover_0 axis_data_fifo_1 fifo64} {
+foreach ip_name {axis_async_fifo_256 fifo64} {
     set ip [get_ips -quiet $ip_name]
     if {[llength $ip] == 0} {
         error "Missing required standalone IP: ${ip_name}"
@@ -86,6 +86,27 @@ foreach ip_name {rfdc_custom_xczu47dr_ip ddr_custom_xczu47dr_ip} {
     lappend preflight_stub_files $preflight_stub
 }
 
+# VIO is generated as an OOC IP for the master-only debug sync request.  RTL
+# preflight does not consume its checkpoint, so expose the generated black-box
+# declaration just like the other project-level IPs.  The real project still
+# retains the XCI and checkpoint for synthesis/implementation.
+if {[llength [get_ips -quiet vio_0]] > 0} {
+    set vio_generated_stub [file normalize "${proj_dir}/ip/vio_0/vio_0_bmstub.v"]
+    if {![file exists $vio_generated_stub]} {
+        error "Missing generated VIO stub: ${vio_generated_stub}"
+    }
+    set vio_preflight_stub [file normalize "${report_dir}/vio_0_preflight_stub.v"]
+    set old_vio_preflight_file [get_files -quiet -all $vio_preflight_stub]
+    if {[llength $old_vio_preflight_file] > 0} {
+        remove_files $old_vio_preflight_file
+    }
+    file copy -force $vio_generated_stub $vio_preflight_stub
+    puts "INFO: Adding current preflight stub for vio_0"
+    add_files -norecurse $vio_preflight_stub
+    set_property USED_IN_SYNTHESIS true [get_files $vio_preflight_stub]
+    lappend preflight_stub_files $vio_preflight_stub
+}
+
 # The reference XXV Ethernet IP is intentionally kept as an OOC checkpoint
 # for the real build.  ``synth_design -rtl`` does not consume that checkpoint,
 # so provide its generated black-box declaration for elaboration.  Depending
@@ -129,7 +150,8 @@ lappend preflight_stub_files $xxv_preflight_stub
 foreach ip_name {ila_s_axi_01 ila_udp_ddr ila_dac_axis ila_hmc_event} {
     set ip [get_ips -quiet $ip_name]
     if {[llength $ip] == 0} {
-        error "Missing required ILA IP: ${ip_name}"
+        puts "INFO: Optional ILA IP not present, skipping ${ip_name}"
+        continue
     }
     generate_target all $ip
     set generated_stub [file normalize \

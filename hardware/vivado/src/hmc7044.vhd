@@ -21,8 +21,12 @@ USE IEEE.STD_LOGIC_ARITH.ALL;
 --   CLKIN1 / XS17 250 MHz   0x2F      0x5A      25        10 MHz
 --   CLKIN1 / XS17 10 MHz    0x2F      0x5A      1         10 MHz
 --
--- This file is the 250 MHz build: USE_EXTERNAL_* selects the XS17 path and the
--- R1 divider is programmed to 25, so PLL1 always closes on a 10 MHz PFD.
+-- This file programs the HMC7044 reference-clock profile.  The external XS17
+-- reference frequency is selected by the REFERENCE_MHZ generic (250 or 10):
+--   * 250 MHz: R1 = 250/10 = 25  -> PLL1 PFD 10 MHz
+--   *  10 MHz: R1 =  10/10 =  1  -> PLL1 PFD 10 MHz
+-- PLL1 always closes on a 10 MHz PFD, so N1 (0x26 = 0x0A) and every downstream
+-- divider stay identical for both profiles.
 --
 -- PLL2 runs the High VCO core at 3.072 GHz (0x03[4:3] = 01; the "11" setting at
 -- 0x37 is reserved and must not be used).  That single VCO frequency is what
@@ -41,7 +45,8 @@ USE IEEE.STD_LOGIC_ARITH.ALL;
 entity hmc7044 is
 
 generic(
-PLL2_SETTLE_TICKS : positive := 2500000
+PLL2_SETTLE_TICKS : positive := 2500000;
+REFERENCE_MHZ : positive := 250
 );
 port(
 clk   :	IN	STD_LOGIC;
@@ -240,7 +245,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				--	config_reg <= x"0021" & x"04";	  --R1 DIVIDER[7:0]
 
 					if USE_EXTERNAL_250MHZ = '1' then
-						config_reg <= x"0021" & x"19"; -- XS17 250MHz / R1=25 -> 10MHz PLL1 PFD
+						config_reg <= x"0021" & std_logic_vector(to_unsigned(REFERENCE_MHZ/10, 8));
 					else
 						config_reg <= x"0021" & x"01"; -- existing 100MHz reference
 					end if;

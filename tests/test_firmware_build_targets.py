@@ -1,9 +1,4 @@
-"""firmware/build.sh 的目标路径解析测试。
-
-custom_xczu47dr_slave_trigout 和 custom_xczu47dr_slave 只差 PL generics，固件路径
-仍应复用 slave workspace 和 ELF。生产烧写入口现在统一使用 XSA，PS 初始化脚本从
-XSA 提取，不再维护独立 bitstream 或 psu_init 产物。
-"""
+"""firmware/build.sh 的唯一 waveform target 路径解析测试。"""
 
 import os
 import shutil
@@ -15,13 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SH = REPO_ROOT / "firmware" / "build.sh"
 
 EXPECTED = {
-    "custom_xczu47dr_master": {
-        "ELF": "custom_xczu47dr_master.elf",
-        "WORKSPACE": "custom_xczu47dr_master",
-    },
-    "custom_xczu47dr_slave": {
-        "ELF": "custom_xczu47dr_slave.elf",
-        "WORKSPACE": "custom_xczu47dr_slave",
+    "custom_xczu47dr_waveform": {
+        "ELF": "custom_xczu47dr_waveform.elf",
+        "WORKSPACE": "custom_xczu47dr_waveform",
     },
 }
 
@@ -52,7 +43,7 @@ def _resolve(target: str) -> dict:
 @unittest.skipUnless(shutil.which("tclsh"), "tclsh not installed")
 class FirmwareBuildTargetPathTests(unittest.TestCase):
     def test_every_supported_target_resolves(self):
-        """两个生产目标都必须能解析，不能落进 Unsupported TARGET 分支。"""
+        """唯一生产目标必须能解析，不能落进 Unsupported TARGET 分支。"""
         for target, expected in EXPECTED.items():
             with self.subTest(target=target):
                 values = _resolve(target)
@@ -68,7 +59,7 @@ class FirmwareBuildTargetPathTests(unittest.TestCase):
         """ARTIFACT_DIR 覆盖必须仍然生效——修复只取 basename，不能写死路径。"""
         env = dict(
             os.environ,
-            TARGET="custom_xczu47dr_slave",
+            TARGET="custom_xczu47dr_waveform",
             DRY_RUN="1",
             ARTIFACT_DIR="/tmp/xczu47dr-artifact-override",
         )
@@ -82,7 +73,7 @@ class FirmwareBuildTargetPathTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
-            "/tmp/xczu47dr-artifact-override/custom_xczu47dr_slave.elf",
+            "/tmp/xczu47dr-artifact-override/custom_xczu47dr_waveform.elf",
             result.stdout,
         )
 

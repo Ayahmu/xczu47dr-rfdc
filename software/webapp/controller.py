@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import uuid
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -105,7 +106,7 @@ class BoardGateway:
                         board_id=board.id,
                         state=BoardState.IDLE if self.simulation else BoardState.OFFLINE,
                         online=self.simulation,
-                        protocol_version=2 if self.simulation else 0,
+                        protocol_version=driver.RFCTRL2_VERSION if self.simulation else 0,
                         hmc_locked=True if self.simulation else None,
                         rfdc_ready=True if self.simulation else None,
                         rfdc_capabilities=(
@@ -168,14 +169,41 @@ class BoardGateway:
             return [self._statuses[board_id].model_copy(deep=True) for board_id in board_ids]
 
     def refresh(self, board_id: str) -> BoardStatus:
+        """Refresh RFDC/network health and the independent waveform snapshot.
+
+        RFCTRL2 STATUS remains the board-health/control-plane source.  Playback
+        state is never inferred from its legacy executor fields; it is read from
+        WAVECTR0/WAVERSP0 STATUS using the currently observed session (or zero
+        when no session has been registered yet).
+        """
         board = self.profile(board_id)
         if self.simulation:
-            physical_link = True
             simulated = self._simulated_rfdc.get(board_id, {})
+            waveform = simulated.get("waveform", {})
+            waveform_response = {
+                "status": driver.WAVE_STATUS_OK,
+                "session": int(waveform.get("session", 0)),
+                "descriptor": int(waveform.get("descriptor", 0)),
+                "state": int(waveform.get("state", driver.WAVEFORM_STATE_ID)),
+                "state_name": driver.WAVEFORM_STATE_NAMES.get(
+                    int(waveform.get("state", driver.WAVEFORM_STATE_ID)), "idle"
+                ),
+                "current_beat": int(waveform.get("current_beat", 0)),
+                "loop_position": int(waveform.get("loop_position", 0)),
+                "loop_count": int(waveform.get("loop_count", 0)),
+                "fifo_levels": tuple(waveform.get("fifo_levels", (0,) * 8)),
+                "error_count": int(waveform.get("error_count", 0)),
+                "underflow_count": int(waveform.get("underflow_count", 0)),
+                "trigger_seen_count": int(waveform.get("trigger_seen_count", 0)),
+                "trigger_dropped_count": int(waveform.get("trigger_dropped_count", 0)),
+                "trigger_fire_count": int(waveform.get("trigger_fire_count", 0)),
+            }
+            waveform_fields = self._waveform_status_fields(waveform_response)
             return self._set_status(
                 board_id,
+                **waveform_fields,
                 online=True,
-                protocol_version=2,
+                protocol_version=driver.RFCTRL2_VERSION,
                 hmc_locked=True,
                 rfdc_ready=True,
                 rfdc_capabilities=(
@@ -190,9 +218,6 @@ class BoardGateway:
                 nco_sync_ready=bool(simulated.get("nco_sync_ready", True)),
                 nco_sync_epoch=int(simulated.get("nco_sync_epoch", 1)),
                 rfdc_last_revision=int(simulated.get("revision", 0)),
-                playback_armed=bool(simulated.get("playback_armed", False)),
-                playback_prepared=bool(simulated.get("playback_prepared", False)),
-                playback_running=bool(simulated.get("playback_running", False)),
                 physical_link=True,
                 udp_interface=board.udp_interface,
                 udp_source_ip=board.udp_source_ip,
@@ -203,7 +228,9 @@ class BoardGateway:
                 network_revision=board.network_revision,
                 network_apply_status=board.network_apply_status,
                 network_apply_error=board.network_apply_error,
+                message=f"waveform {waveform_response['state_name']}",
             )
+
         path_error = udp_path_error(board)
         interface_info = next((item for item in list_udp_interfaces() if item.name == board.udp_interface), None)
         physical_link = interface_info.carrier if interface_info else False
@@ -227,9 +254,12 @@ class BoardGateway:
                 active_ip=board.active_ip or board.ip,
                 message=message,
             )
+
         try:
+            current = self.status(board_id, refresh=False)
             with self._board_control_lock(board_id):
                 response = None
+                waveform_response = None
                 used_bootstrap = False
                 responding_address = ""
                 last_error: Exception | None = None
@@ -240,17 +270,27 @@ class BoardGateway:
                     controller = self._controller(board, timeout_s=0.5, address=address)
                     try:
                         response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
+                        if int(response.get("status", 1)) != driver.RF2_STATUS_OK:
+                            raise RuntimeError(
+                                f"RFCTRL2 status returned 0x{int(response.get('status', 1)):04X}"
+                            )
+                        # connect() establishes the driver-side RFCTRL2 session
+                        # required by the independent waveform protocol.
+                        controller.connect()
+                        waveform_response = controller.waveform_status(
+                            session=int(current.waveform_session) & 0xFFFFFFFF
+                        )
+                        self._waveform_state(waveform_response, "STATUS")
                         used_bootstrap = address == board.bootstrap_ip
                         responding_address = address
                         break
-                    except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+                    except (OSError, RuntimeError, ValueError, TimeoutError, driver.DriverError) as exc:
                         last_error = exc
                     finally:
                         controller.close()
-                if response is None:
-                    raise last_error or TimeoutError("RFCTRL2 status timeout")
-            if int(response.get("status", 1)) != 0:
-                raise RuntimeError(f"RFCTRL2 status returned 0x{int(response['status']):04X}")
+                if response is None or waveform_response is None:
+                    raise last_error or TimeoutError("board status timeout")
+
             decoded = driver.parse_rfctrl2_status_payload(response)
             network_response = None
             recovered_ip = board.active_ip or board.ip
@@ -289,16 +329,7 @@ class BoardGateway:
                         network_configured = True
                 else:
                     network_configured = recovered_ip != board.bootstrap_ip
-            current = self.status(board_id, refresh=False)
-            if decoded["running"]:
-                state = BoardState.RUNNING
-            elif decoded["prepared"] or decoded["armed"]:
-                state = BoardState.ARMED
-            else:
-                # A successful RFCTRL2 STATUS response is authoritative for
-                # playback state. Do not retain an old FAULT/ARMED state after
-                # a board reboot has cleared the hardware executor.
-                state = BoardState.IDLE
+
             apply_status = board.network_apply_status
             apply_error = board.network_apply_error
             if network_configured:
@@ -306,15 +337,24 @@ class BoardGateway:
                 apply_error = ""
                 if board.network_apply_status != "applied" or board.network_apply_error:
                     self._persist_network_state(board_id, status=apply_status, error=apply_error)
+
+            waveform_fields = self._waveform_status_fields(waveform_response)
+            state_name = str(waveform_response.get("state_name", "unknown"))
+            message = (
+                f"waveform {state_name}; RFDC tiles are not ready"
+                if not decoded.get("rfdc_ready")
+                else f"waveform {state_name}"
+            )
             return self._set_status(
                 board_id,
-                state=state,
+                **waveform_fields,
                 online=True,
-                protocol_version=int(response.get("version", 2)),
-                rfdc_ready=bool(decoded["rfdc_ready"]),
-                rfdc_capabilities=int(decoded["capabilities"]),
-                rfdc_config_valid_mask=int(decoded["config_valid_mask"]) & 0xFF,
-                rfdc_config_busy=bool(decoded["rfdc_busy"]),
+                protocol_version=int(response.get("version", driver.RFCTRL2_VERSION)),
+                hmc_locked=bool(decoded.get("hmc_locked", False)),
+                rfdc_ready=bool(decoded.get("rfdc_ready")),
+                rfdc_capabilities=int(decoded.get("capabilities", 0)),
+                rfdc_config_valid_mask=int(decoded.get("config_valid_mask", 0)) & 0xFF,
+                rfdc_config_busy=bool(decoded.get("rfdc_busy", False)),
                 dac_mts_required=bool(decoded.get("dac_mts_required")),
                 dac_mts_ready=bool(decoded.get("dac_mts_ready")),
                 dac_mts_failed=bool(decoded.get("dac_mts_failed")),
@@ -322,10 +362,6 @@ class BoardGateway:
                 dac_mts_error=int(decoded.get("dac_mts_error", 0)) & 0xFFFF,
                 nco_sync_ready=bool(decoded.get("nco_sync_ready")),
                 nco_sync_epoch=int(decoded.get("nco_sync_epoch", 0)) & 0xFFFFFFFF,
-                playback_armed=bool(decoded["armed"]),
-                playback_prepared=bool(decoded["prepared"]),
-                playback_running=bool(decoded["running"]),
-                **self._playback_debug_status(decoded),
                 physical_link=physical_link,
                 udp_interface=board.udp_interface,
                 udp_source_ip=board.udp_source_ip,
@@ -336,21 +372,11 @@ class BoardGateway:
                 network_revision=recovered_revision,
                 network_apply_status=apply_status,
                 network_apply_error=apply_error,
-                rfdc_last_revision=int(decoded["last_revision"]),
-                rfdc_last_error=int(decoded["last_error"]),
-                rfdc_last_error_stage=int(decoded["last_error_stage"]),
-                rfdc_last_error_address=int(decoded["last_error_addr"]),
-                message=(
-                    "RFCTRL2 PREPARED; waiting for TRIGGER"
-                    if decoded["prepared"]
-                    else "RFCTRL2 ARM accepted; prefetching waveform"
-                    if decoded["armed"]
-                    else "RFCTRL2 online; RFDC tiles are not ready"
-                    if not decoded["rfdc_ready"]
-                    else "RFCTRL2 PL RFDC control ready"
-                    if int(decoded["capabilities"]) & driver.RF2_CAP_PL_RFDC_CONFIG
-                    else "RFCTRL2 online; bitstream does not advertise PL RFDC configuration"
-                ),
+                rfdc_last_revision=int(decoded.get("last_revision", 0)),
+                rfdc_last_error=int(decoded.get("last_error", 0)),
+                rfdc_last_error_stage=int(decoded.get("last_error_stage", 0)),
+                rfdc_last_error_address=int(decoded.get("last_error_addr", 0)),
+                message=message,
             )
         except OSError as exc:
             return self._set_status(
@@ -390,222 +416,209 @@ class BoardGateway:
     def mark_state(self, board_id: str, state: BoardState, message: str = "") -> BoardStatus:
         return self._set_status(board_id, state=state, message=message)
 
-    def arm(self, board_id: str, run_token: int, channel_mask: int) -> None:
-        board = self.profile(board_id)
-        if self.simulation:
-            current = self.status(board_id, refresh=False)
-            if current.playback_armed or current.playback_running:
-                raise RuntimeError("board is already armed; ABORT_MUTE before re-arming")
-            valid_mask = int(self._simulated_rfdc.get(board_id, {}).get("config_valid_mask", 0xFF))
-            if channel_mask & ~valid_mask:
-                raise RuntimeError(
-                    f"ARM mask 0x{channel_mask:02X} is not configured by PL (valid 0x{valid_mask:02X})"
-                )
-            self._simulated_rfdc.setdefault(board_id, {}).update({
-                "playback_armed": True,
-                "playback_prepared": True,
-                "playback_running": False,
-            })
-            self._set_status(
-                board_id,
-                state=BoardState.ARMED,
-                online=True,
-                playback_armed=True,
-                playback_prepared=True,
-                playback_running=False,
-                message="simulated RFCTRL2 PREPARED; waiting for TRIGGER",
-            )
-            return
-        with self._board_control_lock(board_id):
-            status = self.refresh(board_id)
-            if status.playback_armed or status.playback_running:
-                raise RuntimeError("board is already armed; ABORT_MUTE before re-arming")
-            if not status.rfdc_capabilities & driver.RF2_CAP_PL_RFDC_CONFIG:
-                raise RuntimeError("installed bitstream does not support PL RFDC runtime configuration")
-            if not status.dac_mts_required or not status.dac_mts_ready or status.dac_mts_failed:
-                raise RuntimeError(
-                    "DAC MTS is not ready; refusing ARM "
-                    f"(required={int(status.dac_mts_required)}, ready={int(status.dac_mts_ready)}, "
-                    f"failed={int(status.dac_mts_failed)}, error=0x{status.dac_mts_error:04X})"
-                )
-            if not status.nco_sync_ready:
-                raise RuntimeError("NCO RTS synchronization has not completed; apply RFDC configuration before ARM")
-            if channel_mask & ~status.rfdc_config_valid_mask:
-                raise RuntimeError(
-                    f"ARM mask 0x{channel_mask:02X} is not a subset of PL config_valid_mask "
-                    f"0x{status.rfdc_config_valid_mask:02X}"
-                )
-            controller = self._controller(board)
-            try:
-                response = controller.rfctrl2_arm(run_token, channel_mask=channel_mask, seq=self._next_sequence(), wait_response=True)
-                self._require_ok(response, "ARM")
-                deadline = time.monotonic() + max(
-                    0.1, float(os.environ.get("RFSOC_WEB_ARM_PREPARE_TIMEOUT_S", "15"))
-                )
-                prepared_status = None
-                while time.monotonic() < deadline:
-                    status_response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
-                    self._require_ok(status_response, "STATUS after ARM")
-                    decoded = driver.parse_rfctrl2_status_payload(status_response)
-                    prepared_status = decoded
-                    self._set_status(
-                        board_id,
-                        state=BoardState.RUNNING if decoded["running"] else BoardState.ARMED,
-                        online=True,
-                        protocol_version=2,
-                        playback_armed=bool(decoded["armed"]),
-                        playback_prepared=bool(decoded["prepared"]),
-                        playback_running=bool(decoded["running"]),
-                        **self._playback_debug_status(decoded),
-                        message=(
-                            "RFCTRL2 PREPARED; waiting for TRIGGER"
-                            if decoded["prepared"]
-                            else "RFCTRL2 ARM accepted; prefetching waveform"
-                        ),
-                    )
-                    if decoded["prepared"]:
-                        break
-                    time.sleep(0.002)
-                if not prepared_status or not prepared_status["prepared"]:
-                    try:
-                        mute_response = controller.rfctrl2_abort_mute(
-                            seq=self._next_sequence(), wait_response=True
-                        )
-                        self._require_ok(mute_response, "ABORT_MUTE after PREPARE timeout")
-                    except Exception:
-                        pass
-                    raise TimeoutError(
-                        "ARM accepted but PL did not reach PREPARED before timeout; "
-                        f"{self._status_debug(prepared_status)}"
-                    )
-            finally:
-                controller.close()
-        self._set_status(
-            board_id,
-            state=BoardState.ARMED,
-            online=True,
-            protocol_version=2,
-            playback_armed=True,
-            playback_prepared=True,
-            playback_running=False,
-            message="RFCTRL2 PREPARED; waiting for TRIGGER",
-        )
+    def register_waveform_session(self, board_id: str, session: int, descriptor: int = 0) -> None:
+        """Register a simulator-side descriptor after host artifact generation.
+
+        Live boards return this identity from COMMIT.  Simulation keeps the same
+        session/generation contract so web actions cannot accidentally operate on
+        a different uploaded waveform.
+        """
+        session = int(session) & 0xFFFFFFFF
+        if session == 0:
+            raise ValueError("waveform session must be non-zero")
+        self._simulated_rfdc.setdefault(board_id, {})["waveform"] = {
+            "session": session,
+            "descriptor": int(descriptor) & 0xFFFFFFFF,
+            "state": driver.WAVEFORM_STATE_WAIT_TRIGGER,
+            "current_beat": 0,
+            "loop_position": 0,
+            "loop_count": 1,
+            "fifo_levels": (0,) * 8,
+            "error_count": 0,
+            "underflow_count": 0,
+            "trigger_seen_count": 0,
+            "trigger_dropped_count": 0,
+            "trigger_fire_count": 0,
+        }
 
     @staticmethod
-    def _trigger_progress_observed(
-        decoded: dict | None,
-        baseline_ddr_read_counter: int = 0,
-        baseline_play_config_mask: int = 0,
-    ) -> bool:
-        if not decoded:
-            return False
-        return (
-            bool(decoded.get("running"))
-            or int(decoded.get("play_executor_state", 0)) == 3
-            or int(decoded.get("play_ddr_read_counter", 0)) > int(baseline_ddr_read_counter)
-            or (
-                int(baseline_play_config_mask) != 0
-                and bool(decoded.get("armed"))
-                and not bool(decoded.get("prepared"))
-                and not bool(decoded.get("running"))
-                and int(decoded.get("play_config_channel_mask", 0)) == 0
-                and int(decoded.get("play_fifo_valid_mask", 0)) == 0
-                and not bool(decoded.get("play_active_valid"))
-                and not bool(decoded.get("play_pending_valid"))
-                and int(decoded.get("play_executor_state", 0)) == 0
+    def _waveform_state(response: object, operation: str) -> str:
+        if not isinstance(response, dict):
+            raise RuntimeError(f"waveform {operation} returned no response")
+        if int(response.get("status", 1)) != driver.WAVE_STATUS_OK:
+            raise RuntimeError(
+                f"waveform {operation} failed with status 0x{int(response.get('status', 1)):04X}"
+                + (f" ({response.get('error_code')})" if response.get("error_code") else "")
             )
+        return str(response.get("state_name") or driver.WAVEFORM_STATE_NAMES.get(int(response.get("state", -1)), "unknown"))
+
+    @classmethod
+    def _waveform_status_fields(cls, response: dict) -> dict:
+        state_name = cls._waveform_state(response, "STATUS")
+        # READY retains the committed descriptor for explicit STOP/replay, but
+        # it is not an armed playback condition.  Host-side RFDC/network guards
+        # must only reject states that can actually consume DAC data or are
+        # waiting as an admitted playback.
+        armed = state_name in {"prefetch", "wait_trigger", "playing", "draining"}
+        prepared = state_name == "wait_trigger"
+        running = state_name in {"playing", "draining"}
+        board_state = (
+            BoardState.RUNNING if running else
+            BoardState.ARMED if armed else
+            BoardState.READY if state_name in {"ready", "done"} else
+            BoardState.FAULT if state_name == "error" else
+            BoardState.IDLE
+        )
+        return {
+            "state": board_state,
+            "playback_armed": armed,
+            "playback_prepared": prepared,
+            "playback_running": running,
+            "waveform_session": int(response.get("session", 0)),
+            "waveform_descriptor": int(response.get("descriptor", 0)),
+            "waveform_current_beat": int(response.get("current_beat", 0)),
+            "waveform_loop_position": int(response.get("loop_position", 0)),
+            "waveform_loop_count": int(response.get("loop_count", 0)),
+            "waveform_fifo_levels": [int(value) for value in response.get("fifo_levels", ())],
+            "error_count": int(response.get("error_count", 0)),
+            "underflow_count": int(response.get("underflow_count", 0)),
+            "underflow_mask": 0xFF if int(response.get("underflow_count", 0)) else 0,
+            "trigger_seen_count": int(response.get("trigger_seen_count", 0)),
+            "trigger_dropped_count": int(response.get("trigger_dropped_count", 0)),
+            "trigger_fire_count": int(response.get("trigger_fire_count", 0)),
+        }
+
+    def _set_waveform_status(self, board_id: str, response: dict, *, message: str = "") -> BoardStatus:
+        state_name = self._waveform_state(response, "STATUS")
+        return self._set_status(
+            board_id,
+            **self._waveform_status_fields(response),
+            online=True,
+            protocol_version=driver.RFCTRL2_VERSION,
+            message=message or f"waveform {state_name}",
         )
 
-    def manual_trigger(self, board_id: str, *, expect_sustained: bool = True) -> None:
+    def arm(self, board_id: str, *, session: int) -> None:
+        """Validate that COMMIT's prefetch reached a safe trigger point.
+
+        The v2 waveform protocol has no ARM opcode.  COMMIT starts prefetch;
+        this method only observes the descriptor identified by ``session``.
+        """
         board = self.profile(board_id)
+        session = int(session) & 0xFFFFFFFF
+        if session == 0:
+            raise ValueError("waveform session must be non-zero")
         if self.simulation:
-            simulated = self._simulated_rfdc.setdefault(board_id, {})
-            simulated.update({
-                "playback_armed": True,
-                "playback_prepared": False,
-                "playback_running": True,
-                "trigger_count": int(simulated.get("trigger_count", 0)) + 1,
-            })
-            self._set_status(
-                board_id,
-                state=BoardState.RUNNING,
-                online=True,
-                playback_armed=True,
-                playback_prepared=False,
-                playback_running=True,
-                message="simulated manual trigger",
-            )
+            waveform = self._simulated_rfdc.get(board_id, {}).get("waveform")
+            if not waveform or int(waveform["session"]) != session:
+                raise RuntimeError(f"{board_id}: waveform session mismatch")
+            if int(waveform["state"]) not in (driver.WAVEFORM_STATE_PREFETCH, driver.WAVEFORM_STATE_WAIT_TRIGGER):
+                raise RuntimeError(f"{board_id}: waveform is not in PREFETCH/WAIT_TRIGGER")
+            self._set_waveform_status(board_id, {
+                "status": driver.WAVE_STATUS_OK, "session": session,
+                "descriptor": waveform["descriptor"], "state": waveform["state"],
+                "state_name": driver.WAVEFORM_STATE_NAMES[waveform["state"]],
+            }, message="waveform prefetch ready; waiting for trigger")
             return
         with self._board_control_lock(board_id):
-            status = self.refresh(board_id)
-            if not status.playback_prepared:
-                raise RuntimeError("RFCTRL2 TRIGGER requires the board to reach PREPARED first")
-            baseline_ddr_read_counter = status.play_ddr_read_counter
             controller = self._controller(board)
             try:
-                response = controller.rfctrl2_trigger(seq=self._next_sequence(), wait_response=True)
-                self._require_ok(response, "TRIGGER")
-                deadline = time.monotonic() + max(
-                    0.1, float(os.environ.get("RFSOC_WEB_TRIGGER_RUNNING_TIMEOUT_S", "1.0"))
-                )
-                running_status = None
-                trigger_seen = False
-                while time.monotonic() < deadline:
-                    status_response = controller.rfctrl2_status(seq=self._next_sequence(), wait_response=True)
-                    self._require_ok(status_response, "STATUS after TRIGGER")
-                    decoded = driver.parse_rfctrl2_status_payload(status_response)
-                    running_status = decoded
-                    trigger_seen = trigger_seen or self._trigger_progress_observed(
-                        decoded,
-                        baseline_ddr_read_counter,
-                        status.play_config_channel_mask,
+                controller.connect()
+                response = controller.waveform_status(session=session)
+                state_name = self._waveform_state(response, "STATUS")
+                if state_name not in {"prefetch", "wait_trigger"}:
+                    raise RuntimeError(
+                        f"{board_id}: waveform session 0x{session:08X} is {state_name}, expected PREFETCH/WAIT_TRIGGER"
                     )
-                    self._set_status(
-                        board_id,
-                        state=BoardState.RUNNING if decoded["running"] else BoardState.ARMED,
-                        online=True,
-                        protocol_version=2,
-                        playback_armed=bool(decoded["armed"]),
-                        playback_prepared=bool(decoded["prepared"]),
-                        playback_running=bool(decoded["running"]),
-                        **self._playback_debug_status(decoded),
-                        message=(
-                            "RFCTRL2 TRIGGER confirmed; playback gate opened"
-                            if decoded["running"]
-                            else "RFCTRL2 TRIGGER accepted; waiting for playback gate"
-                        ),
-                    )
-                    if decoded["running"]:
-                        break
-                    if not expect_sustained and trigger_seen:
-                        break
-                    time.sleep(0.002)
-                if not running_status or (expect_sustained and not running_status["running"]) or (
-                    not expect_sustained and not trigger_seen
-                ):
-                    try:
-                        mute_response = controller.rfctrl2_abort_mute(
-                            seq=self._next_sequence(), wait_response=True
-                        )
-                        self._require_ok(mute_response, "ABORT_MUTE after TRIGGER timeout")
-                    except Exception:
-                        pass
-                    raise TimeoutError(
-                        "TRIGGER accepted but PL did not reach RUNNING before timeout; "
-                        f"{self._status_debug(running_status)}"
-                    )
+                self._set_waveform_status(board_id, response, message="waveform prefetch ready; waiting for trigger")
             finally:
                 controller.close()
-        self._set_status(
-            board_id,
-            state=BoardState.RUNNING,
-            online=True,
-            protocol_version=2,
-            playback_armed=True,
-            playback_prepared=False,
-            playback_running=True,
-            message="RFCTRL2 TRIGGER confirmed; playback gate opened",
-        )
+
+    def manual_trigger(self, board_id: str, *, session: int, expect_sustained: bool = True) -> None:
+        """Start the committed descriptor through the v2 PLAY command."""
+        del expect_sustained  # v2 PLAY is edge-triggered; duration is a descriptor property.
+        board = self.profile(board_id)
+        session = int(session) & 0xFFFFFFFF
+        if session == 0:
+            raise ValueError("waveform session must be non-zero")
+        if self.simulation:
+            waveform = self._simulated_rfdc.get(board_id, {}).get("waveform")
+            if not waveform or int(waveform["session"]) != session:
+                raise RuntimeError(f"{board_id}: waveform session mismatch")
+            if int(waveform["state"]) != driver.WAVEFORM_STATE_WAIT_TRIGGER:
+                raise RuntimeError(f"{board_id}: waveform PLAY requires WAIT_TRIGGER")
+            waveform["state"] = driver.WAVEFORM_STATE_PLAYING
+            waveform["trigger_fire_count"] += 1
+            self._set_waveform_status(board_id, {
+                "status": driver.WAVE_STATUS_OK, "session": session,
+                "descriptor": waveform["descriptor"], "state": waveform["state"],
+                "state_name": driver.WAVEFORM_STATE_NAMES[waveform["state"]],
+                "trigger_fire_count": waveform["trigger_fire_count"],
+            }, message="waveform PLAY accepted")
+            return
+        with self._board_control_lock(board_id):
+            controller = self._controller(board)
+            try:
+                controller.connect()
+                response = controller.play(session=session)
+                self._waveform_state(response, "PLAY")
+                status_response = controller.waveform_status(session=session)
+                state_name = self._waveform_state(status_response, "STATUS")
+                if state_name not in {"playing", "draining", "done"}:
+                    raise RuntimeError(
+                        f"{board_id}: waveform PLAY did not enter PLAYING/DRAINING/DONE (state={state_name})"
+                    )
+                self._set_waveform_status(board_id, status_response, message="waveform PLAY accepted")
+            finally:
+                controller.close()
+
+    def mute(self, board_id: str, *, session: int) -> None:
+        """Stop playback and return the committed descriptor to READY."""
+        board = self.profile(board_id)
+        session = int(session) & 0xFFFFFFFF
+        if session == 0:
+            raise ValueError("waveform session must be non-zero")
+        if self.simulation:
+            waveform = self._simulated_rfdc.get(board_id, {}).get("waveform")
+            if not waveform or int(waveform["session"]) != session:
+                raise RuntimeError(f"{board_id}: waveform session mismatch")
+            waveform["state"] = driver.WAVEFORM_STATE_READY
+            self._set_waveform_status(board_id, {
+                "status": driver.WAVE_STATUS_OK, "session": session,
+                "descriptor": waveform["descriptor"], "state": waveform["state"],
+                "state_name": "ready",
+            }, message="waveform STOP accepted")
+            return
+        with self._board_control_lock(board_id):
+            controller = self._controller(board)
+            try:
+                controller.connect()
+                response = controller.stop(session=session)
+                self._waveform_state(response, "STOP")
+                self._set_waveform_status(board_id, response, message="waveform STOP accepted")
+            finally:
+                controller.close()
+
+    def abort(self, board_id: str, *, session: int = 0) -> None:
+        """Abort a waveform session and clear its descriptor."""
+        board = self.profile(board_id)
+        session = int(session) & 0xFFFFFFFF
+        if self.simulation:
+            waveform = self._simulated_rfdc.get(board_id, {}).get("waveform")
+            if session and waveform and int(waveform["session"]) != session:
+                raise RuntimeError(f"{board_id}: waveform session mismatch")
+            self._simulated_rfdc.setdefault(board_id, {}).pop("waveform", None)
+            self._set_status(board_id, state=BoardState.IDLE, playback_armed=False, playback_prepared=False, playback_running=False, waveform_session=0, waveform_descriptor=0, message="waveform ABORT accepted")
+            return
+        with self._board_control_lock(board_id):
+            controller = self._controller(board)
+            try:
+                controller.connect()
+                response = controller.abort(session=session)
+                self._waveform_state(response, "ABORT")
+                self._set_waveform_status(board_id, response, message="waveform ABORT accepted")
+            finally:
+                controller.close()
 
     def wait_for_loop_prepared(
         self,
@@ -657,41 +670,6 @@ class BoardGateway:
             if remaining > 0:
                 time.sleep(min(poll_s, remaining))
         return False
-
-    def mute(self, board_id: str) -> None:
-        board = self.profile(board_id)
-        if self.simulation:
-            self._simulated_rfdc.setdefault(board_id, {}).update({
-                "playback_armed": False,
-                "playback_prepared": False,
-                "playback_running": False,
-            })
-            self._set_status(
-                board_id,
-                state=BoardState.MUTED,
-                online=True,
-                playback_armed=False,
-                playback_prepared=False,
-                playback_running=False,
-                message="simulated mute",
-            )
-            return
-        with self._board_control_lock(board_id):
-            controller = self._controller(board)
-            try:
-                response = controller.rfctrl2_abort_mute(seq=self._next_sequence(), wait_response=True)
-            finally:
-                controller.close()
-        self._require_ok(response, "ABORT_MUTE")
-        self._set_status(
-            board_id,
-            state=BoardState.MUTED,
-            online=True,
-            playback_armed=False,
-            playback_prepared=False,
-            playback_running=False,
-            message="mute accepted",
-        )
 
     def rfdc_apply(self, board_id: str, channels, revision: int, channel_mask: int) -> dict:
         board = self.profile(board_id)
@@ -1233,7 +1211,10 @@ class RunCoordinator:
             request = self.store.get_request(run_id)
             try:
                 for job in request.jobs:
-                    self.boards.arm(job.board_id, int(run_id, 16), self._channel_mask_for_job(job))
+                    self.boards.arm(
+                        job.board_id,
+                        session=self._waveform_session(record, job.board_id),
+                    )
             except Exception as exc:
                 self._fault(run_id, str(exc))
                 raise
@@ -1259,7 +1240,10 @@ class RunCoordinator:
                 if record.dry_run:
                     self.boards.mark_state(job.board_id, BoardState.ARMED, "dry-run loaded waveform armed")
                 else:
-                    self.boards.arm(job.board_id, int(run_id, 16), channel_mask)
+                    self.boards.arm(
+                        job.board_id,
+                        session=self._waveform_session(record, job.board_id),
+                    )
             self._event(run_id, "loaded waveform armed" if request.execution_mode == "single" else "synchronized loaded waveform armed")
             return record
         except Exception as exc:
@@ -1275,7 +1259,11 @@ class RunCoordinator:
                 if record.dry_run:
                     self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run loaded waveform triggered")
                 else:
-                    self.boards.manual_trigger(board_id, expect_sustained=expect_sustained)
+                    self.boards.manual_trigger(
+                        board_id,
+                        session=self._waveform_session(record, board_id),
+                        expect_sustained=expect_sustained,
+                    )
             self._event(run_id, "loaded waveform triggered" if request.execution_mode == "single" else "synchronized master triggered")
             return record
         except Exception as exc:
@@ -1292,7 +1280,10 @@ class RunCoordinator:
                 if record.dry_run:
                     self.boards.mark_state(board_id, BoardState.MUTED, "dry-run loaded waveform muted")
                 else:
-                    self.boards.mute(board_id)
+                    self.boards.mute(
+                        board_id,
+                        session=self._waveform_session(record, board_id),
+                    )
             except Exception as exc:
                 errors.append(f"{board_id}: {exc}")
         self._event(run_id, "loaded waveform muted" if not errors else "; ".join(errors), "warning" if errors else "info")
@@ -1308,7 +1299,10 @@ class RunCoordinator:
                     self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run trigger")
             else:
                 for board_id in self._trigger_board_ids(self.store.get_request(run_id)):
-                    self.boards.manual_trigger(board_id)
+                    self.boards.manual_trigger(
+                        board_id,
+                        session=self._waveform_session(record, board_id),
+                    )
         except Exception as exc:
             self._fault(run_id, str(exc))
             raise
@@ -1323,7 +1317,10 @@ class RunCoordinator:
         if not record.dry_run:
             for board_id in record.board_ids:
                 try:
-                    self.boards.mute(board_id)
+                    self.boards.mute(
+                        board_id,
+                        session=self._waveform_session(record, board_id),
+                    )
                 except Exception as exc:  # best-effort emergency action
                     errors.append(f"{board_id}: {exc}")
         record = self.store.update(run_id, RunState.ABORTED, 1.0, "; ".join(errors))
@@ -1370,6 +1367,8 @@ class RunCoordinator:
                     self._event(run_id, f"simulating upload to {board.name}" if self.boards.simulation else f"uploading {board.name}")
                     self._publish_run(record)
                 result = gui_model.WaveformController().run(config, connection)
+                if not request.dry_run:
+                    record = self._record_waveform_session(run_id, board_id, result)
                 for line in result.log_lines[-5:]:
                     self._event(run_id, f"{board.id}: {line}")
                 if not request.dry_run:
@@ -1398,12 +1397,19 @@ class RunCoordinator:
                     if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.ARMED, "dry-run one-shot armed")
                     else:
-                        self.boards.arm(board_id, int(run_id, 16), self._channel_mask_for_job(job))
+                        self.boards.arm(
+                            board_id,
+                            session=self._waveform_session(record, board_id),
+                        )
                 for board_id in self._trigger_board_ids(request):
                     if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.RUNNING, "dry-run one-shot triggered")
                     else:
-                        self.boards.manual_trigger(board_id, expect_sustained=continuous_sine)
+                        self.boards.manual_trigger(
+                            board_id,
+                            session=self._waveform_session(record, board_id),
+                            expect_sustained=continuous_sine,
+                        )
                         status = self.boards.status(board_id, refresh=False)
                         self._event(run_id, f"{board_id}: {self._board_playback_summary(status)}")
                 if continuous_sine and request.one_shot_duration_ms <= 0:
@@ -1418,7 +1424,10 @@ class RunCoordinator:
                     if record.dry_run:
                         self.boards.mark_state(board_id, BoardState.MUTED, "dry-run one-shot muted")
                     else:
-                        self.boards.mute(board_id)
+                        self.boards.mute(
+                            board_id,
+                            session=self._waveform_session(record, board_id),
+                        )
                 if continuous_sine:
                     self._event(run_id, f"continuous playback triggered once for {request.one_shot_duration_ms:g} ms and muted")
                 elif request.jobs[0].waveform.loop:
@@ -1442,7 +1451,10 @@ class RunCoordinator:
         if not record.dry_run:
             for board_id in record.board_ids:
                 try:
-                    self.boards.mute(board_id)
+                    self.boards.mute(
+                        board_id,
+                        session=self._waveform_session(record, board_id),
+                    )
                 except Exception:
                     pass
         try:
@@ -1453,6 +1465,61 @@ class RunCoordinator:
         self._event(run_id, message, "error")
         self._publish_run(record)
         self._release_group(run_id)
+
+    @staticmethod
+    def _simulation_waveform_identity(run_id: str, board_id: str) -> tuple[int, int]:
+        seed = f"{run_id}:{board_id}".encode("utf-8")
+        session = zlib.crc32(b"waveform-session:" + seed) & 0xFFFFFFFF
+        descriptor = zlib.crc32(b"waveform-descriptor:" + seed) & 0xFFFFFFFF
+        return session or 1, descriptor or 1
+
+    def _record_waveform_session(self, run_id: str, board_id: str, result) -> RunRecord:
+        """Persist the descriptor session returned by COMMIT before exposing READY.
+
+        Simulation does not transmit UDP, so it creates the same non-zero identity
+        contract locally and registers it with the board gateway.  A live upload
+        without a COMMIT identity is a protocol failure; never substitute the run
+        id because the hardware session is independently allocated by the device.
+        """
+        record = self._require(run_id)
+        upload_result = getattr(result, "upload_result", None)
+        if upload_result is not None:
+            try:
+                session = int(upload_result["session"]) & 0xFFFFFFFF
+                descriptor = int(upload_result["descriptor"]) & 0xFFFFFFFF
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(f"{board_id}: COMMIT did not return a valid waveform session/descriptor") from exc
+            if session == 0 or descriptor == 0:
+                raise RuntimeError(f"{board_id}: COMMIT returned zero waveform session/descriptor")
+        elif self.boards.simulation:
+            session, descriptor = self._simulation_waveform_identity(run_id, board_id)
+        else:
+            raise RuntimeError(f"{board_id}: waveform upload did not return a COMMIT session")
+
+        sessions = dict(record.waveform_sessions)
+        previous = sessions.get(board_id)
+        if previous is not None and int(previous) != session:
+            raise RuntimeError(
+                f"{board_id}: waveform session changed during run "
+                f"(0x{int(previous) & 0xFFFFFFFF:08X} -> 0x{session:08X})"
+            )
+        sessions[board_id] = session
+        updated = self.store.set_waveform_sessions(run_id, sessions)
+        if self.boards.simulation:
+            self.boards.register_waveform_session(board_id, session, descriptor)
+        return updated
+
+    @staticmethod
+    def _waveform_session(record: RunRecord, board_id: str) -> int:
+        if board_id not in record.board_ids:
+            raise RuntimeError(f"{board_id}: board is not part of run {record.id}")
+        try:
+            session = int(record.waveform_sessions[board_id]) & 0xFFFFFFFF
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"{board_id}: waveform session is missing for run {record.id}") from exc
+        if session == 0:
+            raise RuntimeError(f"{board_id}: waveform session is zero for run {record.id}")
+        return session
 
     def _channel_mask(self, request: RunCreateRequest) -> int:
         return self._channel_mask_for_job(request.jobs[0])

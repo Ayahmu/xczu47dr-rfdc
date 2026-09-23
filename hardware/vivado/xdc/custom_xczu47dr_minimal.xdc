@@ -35,12 +35,6 @@ set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
 set_false_path -to [get_ports TRIG_1]
 set_false_path -from [get_ports TRIG_2]
 set_false_path -to [get_ports TRIG_3]
-# XS20/TRIG_3 is a combinational passthrough to HMC7044 SYNC on the slave;
-# that bounded path is constrained in custom_xczu47dr_slave.xdc.  The first
-# synchronizer stage still crosses reference/pl domains and is deliberately
-# false-pathed for metastability.
-set_false_path -to [get_pins -quiet top_i/sync_trigger_link_i/sync_role_i/sync_in_sync_reg[0]/D]
-
 # PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
 set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_P_0]
@@ -86,13 +80,9 @@ set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get
 # First-stage synchronizer inputs that cross unrelated clocks.  Only stage 0 is
 # asynchronous; downstream stages stay timed.
 #
-# These names must track Top.v / sync_trigger_link.v.  Six of them had silently
-# gone dead after renames - including the hmc_pl_clk -> dac_axis_clk Trigger CDC
-# (role_trigger_dac_sync_ff vs the actual role_trigger_dac_toggle_sync_ff) -
-# because "-quiet" makes an empty match indistinguishable from success.  The
-# names below have been checked against the RTL; scripts/check_xdc_pins.tcl
-# re-checks them against a synthesized netlist, since XDC files do not allow the
-# foreach/if needed to self-check here.
+# These names track the remaining RFDC/TDC diagnostic synchronizers in Top.v.
+# The retired multi-board sync-trigger hierarchy is intentionally absent from
+# this single-board waveform target.
 set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_ddr_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_dac_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/udp_trigger_dac_sync_ff_reg[0]/D]
@@ -101,21 +91,6 @@ set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_dac_toggle_sync_ff
 set_false_path -quiet -to [get_pins -quiet top_i/trig_event_ext_dac_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_bypass_dac_sync_ff_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_dac_sync_ff_reg[0]/D]
-# dac_ext_trigger_capture needs no first-stage exception: TRIG_2 drives the
-# asynchronous PRE of trig_latch (covered by "set_false_path -from
-# [get_ports TRIG_2]" above), and trig_latch -> latch_sync_ff[0] is an ordinary
-# same-clock dac_axis_clk path that must stay timed.  ASYNC_REG on latch_sync_ff
-# is what handles the metastability, since PRE can fire at any phase.
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_done_pl_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_request_pl_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_request_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/sync_vio_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_request_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/emit_trigger_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/trigger_in_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/playback_prepared_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/bypass_hmc_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_trigger_link_i/ready_hmc_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_ddr_sync_reg[0]/D]
@@ -134,6 +109,16 @@ set_false_path -quiet -to [get_pins -quiet top_i/trigger_output_count_ddr_meta_r
 # Single-DDR bring-up constraints adapted from the user-provided XCZU47DR
 # reference project MIG implementation. The custom card uses a 64-bit C0 DDR4
 # interface matching MT40A1G16RC-062E and the reference x64/AXI512 design.
+# The generated DDR4 IP's electrical XDC is scoped to its OOC hierarchy.  The
+# Chisel wrapper renames only the byte-mask port (dm_dbi_n -> dm_n), so keep
+# the complete top-level electrical contract here rather than importing that
+# scoped XDC globally into the parent project.
+set_property IOSTANDARD POD12_DCI [get_ports {c0_ddr4_dq[*] c0_ddr4_dm_n[*]}]
+set_property IOSTANDARD DIFF_POD12_DCI [get_ports {c0_ddr4_dqs_c[*] c0_ddr4_dqs_t[*]}]
+set_property IOSTANDARD SSTL12_DCI [get_ports {c0_ddr4_adr[*] c0_ddr4_ba[*] c0_ddr4_bg[*] c0_ddr4_act_n c0_ddr4_cke[*] c0_ddr4_cs_n[*] c0_ddr4_odt[*]}]
+set_property IOSTANDARD DIFF_SSTL12_DCI [get_ports {c0_ddr4_ck_c[*] c0_ddr4_ck_t[*]}]
+set_property IOSTANDARD DIFF_SSTL12 [get_ports {c0_sys_clk_p c0_sys_clk_n}]
+set_property IOSTANDARD LVCMOS12 [get_ports c0_ddr4_reset_n]
 set_property PACKAGE_PIN AN11 [get_ports c0_sys_clk_p]
 set_property PACKAGE_PIN AP11 [get_ports c0_sys_clk_n]
 set_property PACKAGE_PIN AR9 [get_ports c0_ddr4_act_n]

@@ -22,6 +22,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 import host  # noqa: E402
 import waveform_tools  # noqa: E402
+from dr47.device import Dr47Device  # noqa: E402
+from dr47.protocol import WAVE_DAC_FRAME_BYTES  # noqa: E402
 
 
 CHANNELS = (1, 2, 3, 4, 5, 6, 7, 8)
@@ -376,60 +378,49 @@ def confirm_programming(args: argparse.Namespace) -> bool:
 
 
 def send_artifacts_to_board(args: argparse.Namespace) -> None:
+    """Upload one descriptor and optionally issue PLAY for its COMMIT session."""
     waves = {channel: load_waveform(args.artifact_dir, channel) for channel in CHANNELS}
-    channel_lengths = {channel: waveform_tools.waveform_length_bytes(wave) for channel, wave in waves.items()}
     metadata = load_metadata(args.artifact_dir)
     layout = str(metadata.get("layout", host.DEFAULT_DDR_LAYOUT))
-    if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
-        layout = host.DEFAULT_DDR_LAYOUT
-    ctrl = host.RFSocController(
+    if layout != host.DDR_LAYOUT_INTERLEAVED_512B:
+        raise ValueError(
+            "ILA upload requires the unified interleaved_512b waveform layout; "
+            f"got {layout!r}"
+        )
+    ctrl = Dr47Device(
         args.ip,
         port=args.port,
-        transport="udp",
         udp_interface=args.udp_interface,
         udp_source_ip=args.udp_source_ip,
         timeout_s=float(args.timeout_s),
     )
     try:
-        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-            ctrl.upload_waveform_udp_interleaved(
-                waves,
-                base_addr=host.DDR_BASE,
-                dump_path=str(args.out_dir / f"{args.report_prefix}_interleaved_upload_hex.txt"),
-            )
-            channel_addrs = {channel: 0 for channel in CHANNELS}
-        else:
-            channel_addrs = {}
-            for channel, wave in sorted(waves.items()):
-                if layout == host.DDR_LAYOUT_TILED:
-                    channel_addrs[channel] = host.tiled_channel_base_addr(channel)
-                    ctrl.upload_waveform_udp_tiled(
-                        wave,
-                        channel,
-                        host.DDR_BASE,
-                        str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
-                    )
-                else:
-                    channel_addrs[channel] = host.DDR_CH_ADDR[channel - 1]
-                    ctrl.upload_waveform_udp(
-                        wave,
-                        channel_addrs[channel],
-                        str(args.out_dir / f"{args.report_prefix}_ch{channel}_upload_hex.txt"),
-                    )
+        ctrl.connect()
+        result = ctrl.upload_waveforms(
+            waves,
+            channel_mask=0xFF,
+            loop_count=2 if bool(args.loop) else 1,
+            wave_formats={channel: "interleaved_iq" for channel in CHANNELS},
+        )
         if args.post_upload_sleep_s > 0:
             time.sleep(args.post_upload_sleep_s)
-        commands = waveform_tools.build_play_commands(
-            loop=args.loop,
-            auto_start=not args.wait_for_trigger,
-            channel_addrs=channel_addrs,
-            channel_lengths=channel_lengths,
-            layout=layout,
-        )
-        ctrl.send_instructions(commands)
-        if args.wait_for_trigger:
-            ctrl.trigger()
+        if not args.wait_for_trigger:
+            ctrl.play(session=int(result["session"]))
     finally:
         ctrl.close()
+
+
+def _zero_interleaved_chunks(total_bytes: int, chunk_bytes: int = 1024):
+    """Yield aligned zero-filled DATA payloads for the max-length diagnostic."""
+    if total_bytes <= 0 or total_bytes % WAVE_DAC_FRAME_BYTES:
+        raise ValueError("total_bytes must be a positive multiple of the DAC frame size")
+    if chunk_bytes < WAVE_DAC_FRAME_BYTES:
+        chunk_bytes = WAVE_DAC_FRAME_BYTES
+    chunk_bytes -= chunk_bytes % WAVE_DAC_FRAME_BYTES
+    zero = bytes(chunk_bytes)
+    for offset in range(0, total_bytes, chunk_bytes):
+        size = min(chunk_bytes, total_bytes - offset)
+        yield offset, zero[:size]
 
 
 def send_max_length_to_board(args: argparse.Namespace) -> None:
@@ -456,35 +447,28 @@ def send_max_length_to_board(args: argparse.Namespace) -> None:
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    ctrl = host.RFSocController(
+    total_beats = total_bytes // WAVE_DAC_FRAME_BYTES
+    ctrl = Dr47Device(
         args.ip,
         port=args.port,
-        transport="udp",
         udp_interface=args.udp_interface,
         udp_source_ip=args.udp_source_ip,
         timeout_s=float(args.timeout_s),
     )
     try:
-        ctrl.upload_max_length_udp(
-            bytes_per_channel,
-            base_addr=host.DDR_BASE,
-            beats_per_datagram=int(args.max_length_beats_per_datagram),
-            marker_bytes_per_channel=4096,
-            batch_pause_s=max(0.0, float(args.max_length_batch_pause_us)) * 1e-6,
+        ctrl.connect()
+        result = ctrl.upload_interleaved_chunks(
+            _zero_interleaved_chunks(total_bytes),
+            total_bytes=total_bytes,
+            total_beats=total_beats,
+            channel_mask=0xFF,
+            loop_count=1,
+            packet_pause_s=max(0.0, float(args.max_length_batch_pause_us)) * 1e-6,
         )
         if args.post_upload_sleep_s > 0:
             time.sleep(args.post_upload_sleep_s)
-        ctrl.send_instructions(
-            waveform_tools.build_play_commands(
-                loop=False,
-                auto_start=not args.wait_for_trigger,
-                channel_lengths={channel: bytes_per_channel for channel in CHANNELS},
-                channel_delays={channel: 0 for channel in CHANNELS},
-                layout=host.DDR_LAYOUT_INTERLEAVED_512B,
-            )
-        )
-        if args.wait_for_trigger:
-            ctrl.trigger()
+        if not args.wait_for_trigger:
+            ctrl.play(session=int(result["session"]))
     finally:
         ctrl.close()
 

@@ -26,10 +26,10 @@ if {$mode eq "dead"} {
 
 proc target_config_get {target key} {
   switch -- $key {
-    project_basename { return "custom_xczu47dr_slave_rfdc" }
+    project_basename { return "custom_xczu47dr_waveform_rfdc" }
     top_module       { return "TopCustomXczu47dr" }
     xdc_files        { return [list xdc/custom_xczu47dr_minimal.xdc \
-                                   xdc/custom_xczu47dr_slave.xdc] }
+                                   xdc/custom_xczu47dr_waveform.xdc] }
   }
   error "harness: unexpected target_config key $key"
 }
@@ -48,7 +48,7 @@ proc get_clocks args {
   return [list]
 }
 
-set argv [list custom_xczu47dr_slave]
+set argv [list custom_xczu47dr_waveform]
 set argc 1
 cd ${repo}/hardware/vivado
 source scripts/check_xdc_pins.tcl

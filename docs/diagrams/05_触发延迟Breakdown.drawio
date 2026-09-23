@@ -1,0 +1,84 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="title" value="触发 → RF 输出延迟分解（两种触发模式对照）" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="40" y="4" width="900" height="32" as="geometry"/>
+    </mxCell>
+    <mxCell id="gRaw" value="直接模式（原始触发，有抖动）" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=16;fontStyle=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1">
+      <mxGeometry x="40" y="50" width="1800" height="150" as="geometry"/>
+    </mxCell>
+    <mxCell id="r1" value="触发信号采样&#10;延迟 0–20 ns（抖动 ±20 ns）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gRaw">
+      <mxGeometry x="20" y="48" width="380" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="r2" value="控制器 → 输出门控&#10;1 周期 · 抖动 0" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gRaw">
+      <mxGeometry x="450" y="48" width="300" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="r3" value="首个数据拍输出&#10;1 周期 · 抖动 0" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gRaw">
+      <mxGeometry x="800" y="48" width="300" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="r4" value="数模转换固有流水线&#10;常量 · 抖动 0" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gRaw">
+      <mxGeometry x="1150" y="48" width="300" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="rsum" value="总延迟 ≈ 20–40 ns + 常量，主要抖动 = 20 ns 采样量化" style="whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=14;fontStyle=1;verticalAlign=middle;" vertex="1" parent="gRaw">
+      <mxGeometry x="1500" y="48" width="280" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="gDet" value="确定性模式（TDC 补偿，抖动数十皮秒）" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=16;fontStyle=1;fillColor=#E1D5E7;strokeColor=#9673A6;" vertex="1" parent="1">
+      <mxGeometry x="40" y="250" width="2100" height="150" as="geometry"/>
+    </mxCell>
+    <mxCell id="d1" value="TDC 精密测时&#10;≈ 25 ns" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="20" y="48" width="240" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="d2" value="事件跨时钟&#10;1–2 周期" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="290" y="48" width="200" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="d3" value="调度等待&#10;≈ 640 ns（固定）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="520" y="48" width="260" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="d4" value="启动 → 门控&#10;1 周期（2.5 ns 网格）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="810" y="48" width="240" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="d5" value="分数延迟滤波&#10;140 ns（7 拍）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="1080" y="48" width="200" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="d6" value="相位旋转&#10;60 ns（3 拍）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="1310" y="48" width="200" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="d7" value="数模转换固有流水线&#10;常量" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gDet">
+      <mxGeometry x="1540" y="48" width="240" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="dsum" value="总延迟 ≈ 640 ns + 200 ns + 常量" style="whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;fontStyle=1;verticalAlign=middle;" vertex="1" parent="gDet">
+      <mxGeometry x="1810" y="48" width="270" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_r1" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gRaw" source="r1" target="r2">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_r2" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gRaw" source="r2" target="r3">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_r3" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gRaw" source="r3" target="r4">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_d1" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gDet" source="d1" target="d2">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_d2" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gDet" source="d2" target="d3">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_d3" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gDet" source="d3" target="d4">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_d4" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gDet" source="d4" target="d5">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_d5" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gDet" source="d5" target="d6">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_d6" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="gDet" source="d6" target="d7">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e_rd" value="抖动从 ~20 ns 降到数十皮秒" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=15;fontStyle=1;strokeWidth=2;strokeColor=#B85450;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="gRaw" target="gDet">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>

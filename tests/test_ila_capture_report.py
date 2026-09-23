@@ -197,7 +197,7 @@ class IlaCaptureReportTests(unittest.TestCase):
         self.assertIn("hardware CW mode", markdown)
         self.assertTrue(all(channel["status"] == "PASS" for channel in details["channels"]))
 
-    def test_send_artifacts_to_board_uses_actual_channel_lengths(self):
+    def test_send_artifacts_to_board_uses_descriptor_commit_and_session_play(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             artifact_dir = root / "artifacts"
@@ -211,8 +211,12 @@ class IlaCaptureReportTests(unittest.TestCase):
                 )
 
             controller = mock.Mock()
-            controller.close = mock.Mock()
-            with mock.patch.object(ila_capture_report.host, "RFSocController", return_value=controller):
+            controller.upload_waveforms.return_value = {
+                "session": 0x1234,
+                "descriptor": 0x55,
+                "state": 4,
+            }
+            with mock.patch.object(ila_capture_report, "Dr47Device", return_value=controller):
                 args = argparse.Namespace(
                     artifact_dir=artifact_dir,
                     ip="192.0.2.10",
@@ -229,14 +233,15 @@ class IlaCaptureReportTests(unittest.TestCase):
 
                 ila_capture_report.send_artifacts_to_board(args)
 
-            commands = controller.send_instructions.call_args.args[0]
-            play_lengths = {
-                command[1]: command[2]
-                for command in commands
-                if command[0] == 2
-            }
-            self.assertEqual(play_lengths[1], 32)
-            self.assertEqual(play_lengths[8], 256)
+            controller.connect.assert_called_once_with()
+            controller.upload_waveforms.assert_called_once()
+            upload_args, upload_kwargs = controller.upload_waveforms.call_args
+            self.assertEqual(set(upload_args[0]), set(range(1, 9)))
+            self.assertEqual(upload_kwargs["channel_mask"], 0xFF)
+            self.assertEqual(upload_kwargs["loop_count"], 1)
+            self.assertEqual(set(upload_kwargs["wave_formats"]), set(range(1, 9)))
+            controller.play.assert_called_once_with(session=0x1234)
+            controller.close.assert_called_once_with()
 
 
 if __name__ == "__main__":

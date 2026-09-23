@@ -103,7 +103,7 @@ def collect_calibration(device, *, seconds: float = 3.0) -> dict:
     if seconds < 1.0 or not np.isfinite(seconds):
         raise ValueError("Calibration acquisition must last at least one second")
     check_identity(device)
-    device.abort_mute()
+    device.abort()
     _wait_idle(device)
     device.write_tdc_register(CONTROL, 0)
     clear_statistics(device)

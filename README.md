@@ -1,8 +1,7 @@
 # XCZU47DR RFDC 波形项目
 
 本仓库包含 XCZU47DR FPGA 逻辑、裸机固件和 Python 驱动。当前分支使用 XS17
-的 250 MHz 外部参考，支持 DDR 波形播放、主从同步，以及 slave bypass 模式下的
-XS19 外部 Trigger。
+的 250 MHz 外部参考，支持单板 DDR 波形播放和 XS19 外部 Trigger。
 
 ## 文档入口
 
@@ -26,11 +25,11 @@ bitstream、脚本及操作流程混用。
 ## 常用命令
 
 ```bash
-# 使用已有生产产物烧写 slave（也可传 master）
-JTAG_CABLE_SERIAL=<序列号> ./software/load_and_verify.sh slave
+# 使用唯一单板目标加载已有生产产物
+JTAG_CABLE_SERIAL=<序列号> ./software/load_and_verify.sh custom_xczu47dr_waveform
 
-# 运行当前 slave 外部 Trigger 测试
-.venv/bin/python software/dr47/examples/hardware_slave_bypass_external_trigger_test.py
+# 运行单板外部 Trigger 测试
+.venv/bin/python software/dr47/examples/waveform_external_trigger_example.py
 
 # 运行回归或生成对外 SDK
 make test

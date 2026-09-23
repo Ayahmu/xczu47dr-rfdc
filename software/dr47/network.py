@@ -260,7 +260,7 @@ def _recover_playback_for_network_apply(
     """Stop stale playback after NETWORK_APPLY reports an unsafe state.
 
     NETWORK_APPLY is deliberately rejected by the PL while any playback flag
-    is asserted.  ABORT_MUTE is the one control operation that remains valid in
+    is asserted.  ABORT is the one control operation that remains valid in
     that state, so use it only after the board has explicitly returned
     ``RF2_STATUS_UNSAFE_STATE`` instead of interrupting an idle provisioning
     path unconditionally.
@@ -269,7 +269,7 @@ def _recover_playback_for_network_apply(
     try:
         if not device.connected:
             device.connect()
-        device.abort_mute()
+        device.abort()
         deadline = time.monotonic() + _NETWORK_IDLE_TIMEOUT_S
         last_state = "unknown"
         while time.monotonic() < deadline:

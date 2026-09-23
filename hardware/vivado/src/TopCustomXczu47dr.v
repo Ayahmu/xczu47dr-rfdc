@@ -6,7 +6,9 @@ module TopCustomXczu47dr #(
     parameter integer XS20_TRIG_OUT = 0,
     // 1 = emit the XS18/XS20 pulse from dac_axis_clk (same domain as the RF
     // launch) so a single-board loopback measures ~0 jitter.
-    parameter integer TRIG_EMIT_DAC = 0
+    parameter integer TRIG_EMIT_DAC = 0,
+    // External XS17 reference frequency in MHz (250 or 10).
+    parameter integer REFERENCE_MHZ = 250
 ) (
     // HMC7044 clock chip control (SPI interface)
     output RESET_H7044_H_0,
@@ -84,7 +86,8 @@ module TopCustomXczu47dr #(
   Top #(
       .IS_MASTER(IS_MASTER),
       .XS20_TRIG_OUT(XS20_TRIG_OUT),
-      .TRIG_EMIT_DAC(TRIG_EMIT_DAC)
+      .TRIG_EMIT_DAC(TRIG_EMIT_DAC),
+      .REFERENCE_MHZ(REFERENCE_MHZ)
   ) top_i (
       .TRIG_1(TRIG_1),
       .TRIG_2(TRIG_2),

@@ -7,7 +7,7 @@ from typing import Any, Literal, Mapping
 
 import numpy as np
 
-from .errors import ParameterRangeError, UnsupportedSequenceError, WaveformFormatError
+from .errors import ParameterRangeError, WaveformFormatError
 from .protocol import (
     BEAT_BYTES,
     CHANNEL_ROLES,
@@ -19,15 +19,7 @@ from .protocol import (
     DDR_SUPERBLOCK_BYTES,
     DDR_TILE_BYTES,
     DDR_TILE_CHANNELS,
-    PLAY_FLAG_INTERLEAVED,
-    PLAY_FLAG_LOOP,
-    PLAY_FLAG_TILED,
-    REPEAT_FLAG_DEBUG_ALTERNATE,
-    CMD_REPEAT,
-    UDP_BULK_SAFE_MAX_BEATS,
     UDP_WAVE_BULK_MAGIC,
-    UDP_WAVE_DDR_MAGIC,
-    UDP_WAVE_INSTR_MAGIC,
     align_bytes_to_beat,
     require_beat_aligned,
     validate_udp_bulk_beats,
@@ -181,50 +173,6 @@ def place_interleaved_iq_in_record(
     return record
 
 
-def make_burst_record(
-    active_wave: np.ndarray | list,
-    *,
-    first_delay_ns: float,
-    interval_ns: float,
-    sample_rate_hz: float = DEFAULT_WAVEFORM_SAMPLE_RATE_HZ,
-) -> tuple[np.ndarray, dict[str, float | int]]:
-    """Create one zero-filled record whose length is the requested burst period.
-
-    Timing is quantized upward to the 20 ns DAC fabric clock. The returned
-    record contains exactly one active waveform; the hardware loop replays it
-    once per period, so storage does not scale with repeat count.
-    """
-    from .playback import BurstSchedule
-
-    active = np.asarray(active_wave, dtype=np.int16).reshape(-1)
-    if active.size == 0 or active.size % 2:
-        raise WaveformFormatError("active IQ waveform must contain I/Q samples")
-    schedule = BurstSchedule(first_delay_ns, interval_ns, 1).quantized()
-    sample_rate = float(sample_rate_hz)
-    if sample_rate <= 0.0:
-        raise ParameterRangeError("sample_rate_hz must be positive")
-    active_complex = active.size // 2
-    first_complex = int(round(schedule.effective_first_delay_ns * 1e-9 * sample_rate))
-    period_complex = int(round(schedule.effective_interval_ns * 1e-9 * sample_rate))
-    active_duration_ns = active_complex / sample_rate * 1e9
-    if period_complex < first_complex + active_complex:
-        raise ParameterRangeError(
-            "interval_ns must contain first_delay_ns plus the active waveform"
-        )
-    record = np.zeros(period_complex * 2, dtype=np.int16)
-    start = first_complex * 2
-    record[start:start + active.size] = active
-    return record, {
-        "requested_first_delay_ns": schedule.requested_first_delay_ns,
-        "requested_interval_ns": schedule.requested_interval_ns,
-        "effective_first_delay_ns": schedule.effective_first_delay_ns,
-        "effective_interval_ns": schedule.effective_interval_ns,
-        "first_delay_cycles": schedule.first_delay_cycles,
-        "interval_cycles": schedule.interval_cycles,
-        "active_duration_ns": active_duration_ns,
-    }
-
-
 def waveform_bytes(wave: np.ndarray | list) -> bytes:
     return np.ascontiguousarray(wave, dtype="<i2").tobytes()
 
@@ -328,39 +276,6 @@ def interleaved_channel_lane_addr(channel: int, base_addr: int = DDR_BASE) -> in
     return interleaved_ddr_addr(channel, 0, base_addr)
 
 
-def iter_udp_waveform_packets(
-    wave_bytes: bytes | np.ndarray,
-    ddr_addr: int,
-    sample_count: int | None = None,
-):
-    if isinstance(wave_bytes, np.ndarray):
-        samples = _normalize_int16(wave_bytes, sample_count)
-        payload = waveform_bytes(samples)
-    else:
-        payload = bytes(wave_bytes)
-    payload += b"\x00" * ((-len(payload)) % BEAT_BYTES)
-    base = require_beat_aligned(ddr_addr, "ddr_addr") & 0xFFFFFFFFFFFFFFFF
-    for offset in range(0, len(payload), BEAT_BYTES):
-        words = struct.unpack_from("<QQQQ", payload, offset)
-        yield struct.pack("<QQQQQQ", UDP_WAVE_DDR_MAGIC, base + offset, *words)
-
-
-def iter_tiled_udp_waveform_packets(
-    wave_bytes: bytes | np.ndarray,
-    channel: int,
-    base_addr: int = DDR_BASE,
-    sample_count: int | None = None,
-):
-    if isinstance(wave_bytes, np.ndarray):
-        payload = waveform_bytes(_normalize_int16(wave_bytes, sample_count))
-    else:
-        payload = bytes(wave_bytes)
-    payload += b"\x00" * ((-len(payload)) % BEAT_BYTES)
-    for offset in range(0, len(payload), BEAT_BYTES):
-        words = struct.unpack_from("<QQQQ", payload, offset)
-        yield struct.pack("<QQQQQQ", UDP_WAVE_DDR_MAGIC, tiled_ddr_addr(channel, offset, base_addr), *words)
-
-
 def pack_interleaved_512b_waveforms(channel_waves: Mapping[int, np.ndarray | list]) -> tuple[bytes, int]:
     """Pack eight channel-local streams into 512-bit ``CH1..CH8`` lanes."""
     if not channel_waves:
@@ -384,252 +299,6 @@ def pack_interleaved_512b_waveforms(channel_waves: Mapping[int, np.ndarray | lis
             start = beat_index * DDR_INTERLEAVED_LANE_BYTES
             image[beat_index * DDR_INTERLEAVED_BEAT_BYTES + (channel - 1) * DDR_INTERLEAVED_LANE_BYTES: beat_index * DDR_INTERLEAVED_BEAT_BYTES + channel * DDR_INTERLEAVED_LANE_BYTES] = packed[channel][start:start + DDR_INTERLEAVED_LANE_BYTES]
     return bytes(image), max_samples
-
-
-def _interleaved_channel_arrays(
-    channel_waves: Mapping[int, np.ndarray | list],
-) -> tuple[dict[int, np.ndarray], int]:
-    """Normalize channel arrays without allocating the full interleaved image."""
-
-    if not channel_waves:
-        return {}, 0
-    normalized: dict[int, np.ndarray] = {}
-    max_samples = 0
-    for channel in range(1, DDR_INTERLEAVED_CHANNELS + 1):
-        wave = channel_waves.get(channel)
-        arr = (
-            np.asarray(wave, dtype="<i2").reshape(-1)
-            if wave is not None
-            else np.zeros(0, dtype="<i2")
-        )
-        normalized[channel] = arr
-        max_samples = max(max_samples, int(arr.size))
-    # Each 256-bit DDR write contains four int16 samples from four adjacent
-    # interleaved lanes.  Keep the same padding contract as the full packer.
-    max_samples = align_bytes_to_beat(max_samples * 2) // 2
-    return normalized, max_samples
-
-
-def _interleaved_write_payload(
-    normalized: Mapping[int, np.ndarray],
-    max_samples: int,
-    write_index: int,
-) -> bytes:
-    """Return one 32-byte AXI write from the logical interleaved image."""
-
-    # pack_interleaved_512b_waveforms lays out channels 1..8 as two adjacent
-    # 32-byte writes for every group of four int16 samples.
-    image_beat = int(write_index) // 2
-    channel_group = int(write_index) & 1
-    sample_start = image_beat * 4
-    values = np.zeros(16, dtype="<i2")
-    for channel in range(1 + channel_group * 4, 5 + channel_group * 4):
-        arr = normalized[channel]
-        if sample_start >= arr.size:
-            continue
-        channel_offset = (channel - 1 - channel_group * 4) * 4
-        available = min(4, arr.size - sample_start)
-        values[channel_offset:channel_offset + available] = arr[
-            sample_start:sample_start + available
-        ]
-    # max_samples is a whole interleaved beat, so every write is complete.
-    del max_samples
-    return values.tobytes()
-
-
-def _iter_interleaved_write_payloads(
-    channel_waves: Mapping[int, np.ndarray | list],
-):
-    normalized, max_samples = _interleaved_channel_arrays(channel_waves)
-    if not normalized:
-        return
-    write_count = (max_samples // 4) * 2
-    for write_index in range(write_count):
-        yield _interleaved_write_payload(normalized, max_samples, write_index)
-
-
-def iter_interleaved_udp_waveform_packets(
-    channel_waves: Mapping[int, np.ndarray | list],
-    base_addr: int = DDR_BASE,
-):
-    """Yield legacy one-AXI-write UDP packets using bounded memory."""
-
-    base = require_beat_aligned(base_addr, "base_addr") & 0xFFFFFFFFFFFFFFFF
-    for write_index, payload in enumerate(_iter_interleaved_write_payloads(channel_waves)):
-        words = struct.unpack("<QQQQ", payload)
-        yield struct.pack(
-            "<QQQQQQ", UDP_WAVE_DDR_MAGIC, base + write_index * BEAT_BYTES, *words
-        )
-
-
-def iter_interleaved_udp_bulk_packets(
-    channel_waves: Mapping[int, np.ndarray | list],
-    base_addr: int = DDR_BASE,
-    beats_per_datagram: int = UDP_BULK_SAFE_MAX_BEATS,
-):
-    """Yield bulk UDP packets for large interleaved uploads.
-
-    The PL bulk parser accepts up to four 256-bit writes per datagram.  The
-    iterator deliberately builds only one datagram at a time, so a long record
-    can be uploaded without constructing the complete multi-channel DDR image.
-    """
-
-    beats = validate_udp_bulk_beats(beats_per_datagram)
-    base = require_beat_aligned(base_addr, "base_addr") & 0xFFFFFFFFFFFFFFFF
-    payloads = _iter_interleaved_write_payloads(channel_waves)
-    offset = 0
-    while True:
-        chunk = []
-        for _ in range(beats):
-            try:
-                chunk.append(next(payloads))
-            except StopIteration:
-                break
-        if not chunk:
-            return
-        payload = b"".join(chunk)
-        yield struct.pack(
-            "<QQQ", UDP_WAVE_BULK_MAGIC, base + offset, len(payload) // 8
-        ) + payload
-        offset += len(payload)
-
-
-def ezq_sequence_rows(sequence: np.ndarray | list) -> np.ndarray:
-    rows = np.asarray(sequence, dtype="<u2")
-    if rows.size == 0:
-        return rows.reshape(0, 4)
-    if rows.ndim == 1:
-        if rows.size % 4:
-            raise WaveformFormatError("flat ez-Q seq must contain a multiple of 4 words")
-        return rows.reshape(-1, 4)
-    if rows.ndim == 2 and rows.shape[1] == 4:
-        return np.ascontiguousarray(rows, dtype="<u2")
-    raise WaveformFormatError("ez-Q seq must be a flat 4-word list or an (n, 4) array")
-
-
-def ezq_sequence_flags(sequence: np.ndarray | list) -> dict[str, bool]:
-    rows = ezq_sequence_rows(sequence)
-    funcs = ((rows[:, 3] >> 11) & 0xF).tolist() if rows.size else []
-    return {
-        "has_trigger": 8 in funcs,
-        "has_loop_start": 1 in funcs,
-        "has_loop_end": 2 in funcs,
-        "has_delay": 4 in funcs,
-        "has_stop": any(bool(x) for x in ((rows[:, 3] >> 15) & 1).tolist()) if rows.size else False,
-    }
-
-
-def pack_udp_instruction_packet(commands: list[list[int] | tuple[int, ...]]) -> bytes:
-    if not commands:
-        raise WaveformFormatError("instruction packet must contain at least one command")
-    data = bytearray()
-    for command in commands:
-        if len(command) < 4:
-            raise WaveformFormatError("each instruction must contain op, channel, value and address")
-        op, channel, value, address = map(int, command[:4])
-        flags = int(command[4]) if len(command) > 4 else 0
-        if op == 2:
-            require_beat_aligned(value, "PLAY length")
-            require_beat_aligned(address, "PLAY addr")
-        if op == CMD_REPEAT:
-            if value <= 0 or value > 0xFFFFFFFF:
-                raise ParameterRangeError("REPEAT count must be in 1..2^32-1")
-            if address != 0:
-                raise ParameterRangeError("REPEAT address must be zero")
-        word0 = (channel & 0xF) << 4 | (op & 0xF) | ((flags & 0x7) << 8)
-        data += struct.pack("<IIII", word0, value & 0xFFFFFFFF, address & 0xFFFFFFFF, (address >> 32) & 0xFFFFFFFF)
-    return struct.pack("<QQ", UDP_WAVE_INSTR_MAGIC, len(data) // 8) + data
-
-
-def sequence_to_play_commands(
-    sequence: np.ndarray | list,
-    *,
-    channel: int,
-    wave_format: str = "packed_iq",
-    base_addr: int = DDR_BASE,
-) -> tuple[list[list[int]], dict[str, Any]]:
-    """Translate supported ez-Q rows into the current three-op executor.
-
-    The current PL has no instruction-level conditional/jump engine.  A loop
-    spanning the complete sequence is represented by the executor's END loop
-    flag; all other nested or partial loops are rejected explicitly.
-    """
-    rows = ezq_sequence_rows(sequence)
-    if not 1 <= int(channel) <= 8:
-        raise ParameterRangeError("channel must be in 1..8")
-    # Every uploaded channel is represented as an I/Q pair in the current
-    # RFDC DDR image.  A Z real sample therefore becomes I=value,Q=0 and still
-    # occupies four bytes.
-    sample_bytes = 4
-    commands: list[list[int]] = []
-    waits_for_trigger = False
-    loop_starts: list[int] = []
-    loop_ends: list[int] = []
-    loop_command_start: int | None = None
-    loop_count = 0
-    infinite_loop = False
-    for index, row in enumerate(rows.tolist()):
-        address_units, length_units, count, control = (int(item) for item in row)
-        # The stop bit terminates the ez-Q program; it is represented by the
-        # WAVEINS0 END command below rather than a zero-length PLAY.
-        if control & 0x8000:
-            break
-        func = (control >> 11) & 0xF
-        level = (control >> 8) & 0x3
-        has_trigger = bool((control >> 10) & 1)
-        if has_trigger:
-            waits_for_trigger = True
-        if func == 0:  # direct play
-            length = align_bytes_to_beat(length_units * sample_bytes)
-            addr = int(base_addr) + address_units * sample_bytes
-            commands.append([2, int(channel), length, addr, PLAY_FLAG_INTERLEAVED])
-        elif func == 4:  # delay
-            commands.append([1, int(channel), max(0, count), 0])
-        elif func == 8:  # external trigger: END auto-start is the hardware equivalent
-            waits_for_trigger = True
-        elif func == 1:
-            loop_starts.append(index)
-            if level != 0:
-                raise UnsupportedSequenceError("nested ez-Q loops are not supported by WAVEINS0")
-            if loop_command_start is not None:
-                raise UnsupportedSequenceError("nested ez-Q loops are not supported by WAVEINS0")
-            loop_command_start = len(commands)
-            loop_count = count
-            if loop_count <= 0:
-                infinite_loop = True
-        elif func == 2:
-            loop_ends.append(index)
-            if level != 0:
-                raise UnsupportedSequenceError("nested ez-Q loops are not supported by WAVEINS0")
-            if loop_command_start is None:
-                raise UnsupportedSequenceError("ez-Q loop end has no matching loop start")
-            if not infinite_loop:
-                if loop_count > 1024:
-                    raise UnsupportedSequenceError("finite ez-Q loop counts above 1024 are not supported")
-                body = commands[loop_command_start:]
-                if loop_count > 1:
-                    commands.extend(body * (loop_count - 1))
-            loop_command_start = None
-        elif func == 15 and (control & 0x8000):
-            pass
-        elif func == 0 and (control & 0x8000):
-            pass
-        else:
-            raise UnsupportedSequenceError(
-                f"ez-Q sequence instruction func={func} at row {index} is not supported"
-            )
-        if control & 0x8000:
-            break
-    if loop_starts or loop_ends:
-        if len(loop_starts) != 1 or len(loop_ends) != 1 or loop_starts[0] >= loop_ends[0]:
-            raise UnsupportedSequenceError("only one complete top-level ez-Q loop is supported")
-    commands.append([3, 15 if waits_for_trigger is False else 0, 0, 0, PLAY_FLAG_LOOP if infinite_loop else 0])
-    return commands, {
-        "wait_for_trigger": waits_for_trigger,
-        "loop": bool(infinite_loop),
-        "loop_count": loop_count if loop_starts else 1,
-        "rows": rows,
-    }
 
 
 def iter_max_length_udp_batches(

@@ -17,27 +17,78 @@ from .errors import ParameterRangeError, ProtocolError, ProtocolVersionError
 UDP_RFCTRL2_MAGIC = 0x00324C5254434652
 UDP_RFRESP2_MAGIC = 0x0032505345524652
 RFCTRL2_VERSION = 3
-
 RF2_OP_HELLO = 0x01
 RF2_OP_STATUS = 0x02
-RF2_OP_RFDC_APPLY = 0x03
-RF2_OP_UPLOAD_BEGIN = 0x04
-RF2_OP_UPLOAD_COMMIT = 0x05
-RF2_OP_ARM = 0x06
 RF2_OP_SYNC_EPOCH = 0x07
 RF2_OP_START_AT = 0x08
-RF2_OP_TRIGGER = 0x09
-RF2_OP_ABORT_MUTE = 0x0A
+
+RF2_OP_RFDC_APPLY = 0x03
+# RFCTRL2 keeps the board-wide RFDC/network control plane. Playback has its own
+# deliberately small wire contract below; no ARM/TRIGGER/ABORT_MUTE aliases are
+# accepted by the waveform parser.
 RF2_OP_RFDC_GET_CONFIG = 0x0B
 RF2_OP_NETWORK_GET = 0x0C
 RF2_OP_NETWORK_APPLY = 0x0D
 RF2_OP_NETWORK_RESTART = 0x0E
-RF2_OP_SET_SYNC_ROLE = 0x0F
-RF2_OP_EMIT_TRIGGER = 0x10
 RF2_OP_TDC_REG = 0x11
 RF2_OP_DIAG_SNAPSHOT = 0x12
 RF2_OP_DIAG_CONTROL = 0x13
 
+# Unified single-board waveform control protocol.
+WAVE_CTRL_MAGIC = 0x5741564543545230  # ASCII "WAVECTR0"
+WAVE_RESP_MAGIC = 0x5741564552535030  # ASCII "WAVERSP0"
+WAVE_PROTOCOL_VERSION = 1
+WAVE_OP_BEGIN = 0x01
+WAVE_OP_DATA = 0x02
+WAVE_OP_COMMIT = 0x03
+WAVE_OP_PLAY = 0x04
+WAVE_OP_PAUSE = 0x05
+WAVE_OP_STOP = 0x06
+WAVE_OP_ABORT = 0x07
+WAVE_OP_STATUS = 0x08
+
+WAVE_STATUS_OK = 0
+WAVE_STATUS_BAD_VERSION = 1
+WAVE_STATUS_BAD_REQUEST = 2
+WAVE_STATUS_BUSY = 3
+WAVE_STATUS_INCOMPLETE = 4
+WAVE_STATUS_SEQUENCE = 5
+WAVE_STATUS_OFFSET = 6
+WAVE_STATUS_CRC = 7
+WAVE_STATUS_RANGE = 8
+WAVE_STATUS_AXI_ERROR = 9
+WAVE_STATUS_TIMEOUT = 10
+WAVE_STATUS_UNSAFE = 11
+
+WAVE_LAYOUT_INTERLEAVED_512B = 1
+WAVEFORM_STATE_ID = 0
+WAVEFORM_STATE_UPLOAD = 1
+WAVEFORM_STATE_READY = 2
+WAVEFORM_STATE_PREFETCH = 3
+WAVEFORM_STATE_WAIT_TRIGGER = 4
+WAVEFORM_STATE_PLAYING = 5
+WAVEFORM_STATE_DRAINING = 6
+WAVEFORM_STATE_DONE = 7
+WAVEFORM_STATE_ERROR = 8
+WAVEFORM_STATE_NAMES = {
+    WAVEFORM_STATE_ID: "idle", WAVEFORM_STATE_UPLOAD: "upload",
+    WAVEFORM_STATE_READY: "ready", WAVEFORM_STATE_PREFETCH: "prefetch",
+    WAVEFORM_STATE_WAIT_TRIGGER: "wait_trigger", WAVEFORM_STATE_PLAYING: "playing",
+    WAVEFORM_STATE_DRAINING: "draining", WAVEFORM_STATE_DONE: "done",
+    WAVEFORM_STATE_ERROR: "error",
+}
+WAVE_ERROR_NONE = 0
+WAVE_ERROR_UNDERFLOW = 1
+WAVE_ERROR_AXI = 2
+WAVE_ERROR_TIMEOUT = 3
+WAVE_ERROR_RESET = 4
+WAVE_CTRL_HEADER_BYTES = 24
+WAVE_DATA_HEADER_BYTES = 24
+WAVE_RESPONSE_HEADER_BYTES = 24
+WAVE_RESPONSE_COMMON_BYTES = 28
+WAVE_RESPONSE_DATA_BYTES = 60
+WAVE_RESPONSE_STATUS_BYTES = 80
+WAVE_DAC_FRAME_BYTES = 8 * 32  # Eight 32-byte DAC beats; four 64-byte DDR beats.
 RF2_CAP_PL_RFDC_CONFIG = 0x00010000
 RF2_CAP_RFDC_GET_CONFIG = 0x00020000
 RF2_CAP_NETWORK_CONFIG = 0x00040000
@@ -83,17 +134,6 @@ RF2_STATUS_AXI_ERROR = 0x0008
 RF2_STATUS_AXI_TIMEOUT = 0x0009
 RF2_STATUS_READBACK = 0x000A
 RF2_STATUS_PARTIAL = 0x000B
-
-RF2_SYNC_ROLE_SLAVE = 0
-RF2_SYNC_ROLE_MASTER = 1
-RF2_SYNC_MODE_EXTERNAL = 0
-RF2_SYNC_MODE_BYPASS = 1
-RF2_SYNC_STATUS_SEEN = 0x00000001
-RF2_SYNC_STATUS_READY = 0x00000002
-RF2_SYNC_STATUS_BYPASS = 0x00000004
-RF2_SYNC_STATUS_ROLE_MASTER = 0x00000008
-RF2_SYNC_STATUS_INPUT_HIGH = 0x00000010
-RF2_SYNC_STATUS_OUTPUT_HIGH = 0x00000020
 
 RFDC_APPLY_CHANNELS = 8
 RFDC_APPLY_REQUEST_HEADER_BYTES = 8
@@ -189,17 +229,163 @@ def pack_rfctrl2_diag_control(events: int = 0, counters: bool = False, seq: int 
     return pack_rfctrl2_packet(RF2_OP_DIAG_CONTROL, struct.pack("<II", int(events) & 0xFFFFFFFF, flags), seq=seq)
 
 
-def pack_rfctrl2_arm(run_id: int, channel_mask: int = 0xFF, seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_ARM, struct.pack("<II", int(run_id) & 0xFFFFFFFF, int(channel_mask) & 0xFF), seq=seq)
+def crc32(payload: bytes) -> int:
+    import zlib
+    return zlib.crc32(bytes(payload)) & 0xFFFFFFFF
 
 
-def pack_rfctrl2_trigger(seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_TRIGGER, seq=seq)
+def _wave_uint(value: int, bits: int, name: str, *, nonzero: bool = False) -> int:
+    """Validate wire integers without silently rounding or masking overflow."""
+    try:
+        result = operator.index(value)
+    except TypeError as exc:
+        raise ParameterRangeError(f"{name} must be an integer") from exc
+    if isinstance(value, bool) or not int(nonzero) <= result < 1 << bits:
+        raise ParameterRangeError(f"{name} is outside unsigned {bits}-bit range")
+    return result
 
 
-def pack_rfctrl2_abort_mute(seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_ABORT_MUTE, seq=seq)
+def _pack_wave_packet(opcode: int, payload: bytes = b"", *, seq: int = 1, flags: int = 0) -> bytes:
+    raw = bytes(payload)
+    padded = raw + b"\x00" * ((-len(raw)) % 8)
+    hdr0 = (_wave_uint(opcode, 32, "opcode") << 32) | (_wave_uint(flags, 16, "flags") << 16) | WAVE_PROTOCOL_VERSION
+    hdr1 = (len(raw) << 32) | _wave_uint(seq, 32, "seq")
+    return struct.pack("<QQQ", WAVE_CTRL_MAGIC, hdr0, hdr1) + padded
 
+
+def pack_wave_begin(*, session: int, total_bytes: int, channel_mask: int,
+                    total_beats: int, loop_count: int = 1,
+                    layout: int = WAVE_LAYOUT_INTERLEAVED_512B, seq: int = 1) -> bytes:
+    session = _wave_uint(session, 32, "session", nonzero=True)
+    total_bytes = _wave_uint(total_bytes, 64, "total_bytes", nonzero=True)
+    total_beats = _wave_uint(total_beats, 32, "total_beats", nonzero=True)
+    channel_mask = _wave_uint(channel_mask, 8, "channel_mask", nonzero=True)
+    loop_count = _wave_uint(loop_count, 32, "loop_count", nonzero=True)
+    layout = _wave_uint(layout, 8, "layout")
+    if total_bytes > DDR_MAX_INTERLEAVED_BYTES or total_bytes != total_beats * WAVE_DAC_FRAME_BYTES:
+        raise ParameterRangeError("total_bytes must equal total_beats * 8 * 32 and fit DDR capacity")
+    if layout != WAVE_LAYOUT_INTERLEAVED_512B:
+        raise ParameterRangeError("only eight-lane interleaved layout 1 is supported")
+    payload = struct.pack("<IQBBHIII", session, total_bytes, channel_mask,
+                          layout, 0, total_beats, loop_count, DDR_INTERLEAVED_BEAT_BYTES)
+    return _pack_wave_packet(WAVE_OP_BEGIN, payload, seq=seq)
+
+
+def pack_wave_data(*, session: int, packet_seq: int, byte_offset: int,
+                   payload: bytes, seq: int = 1) -> bytes:
+    raw = bytes(payload)
+    session = _wave_uint(session, 32, "session", nonzero=True)
+    packet_seq = _wave_uint(packet_seq, 32, "packet_seq")
+    byte_offset = _wave_uint(byte_offset, 64, "byte_offset")
+    max_data = ((UDP_MAX_PAYLOAD_BYTES - WAVE_CTRL_HEADER_BYTES - WAVE_DATA_HEADER_BYTES)
+                // BEAT_BYTES) * BEAT_BYTES
+    if not raw or len(raw) > max_data or len(raw) % BEAT_BYTES:
+        raise ParameterRangeError(f"DATA must contain 32-byte multiples in 32..{max_data}")
+    if byte_offset % BEAT_BYTES or byte_offset + len(raw) > 1 << 64:
+        raise ParameterRangeError("DATA offset must be 32-byte aligned without address overflow")
+    header = struct.pack("<IIQII", session, packet_seq, byte_offset, len(raw), crc32(raw))
+    return _pack_wave_packet(WAVE_OP_DATA, header + raw, seq=seq)
+
+
+def pack_wave_command(opcode: int, *, session: int = 0, seq: int = 1) -> bytes:
+    opcode = _wave_uint(opcode, 32, "opcode")
+    if opcode not in {WAVE_OP_COMMIT, WAVE_OP_PLAY, WAVE_OP_PAUSE, WAVE_OP_STOP, WAVE_OP_ABORT, WAVE_OP_STATUS}:
+        raise ParameterRangeError(f"unsupported waveform command opcode: {opcode}")
+    return _pack_wave_packet(opcode, struct.pack("<I", _wave_uint(session, 32, "session")), seq=seq)
+
+
+def pack_wave_commit(*, session: int, seq: int = 1) -> bytes:
+    return pack_wave_command(WAVE_OP_COMMIT, session=session, seq=seq)
+
+
+def pack_wave_play(*, session: int = 0, seq: int = 1) -> bytes:
+    return pack_wave_command(WAVE_OP_PLAY, session=session, seq=seq)
+
+
+def pack_wave_pause(*, session: int = 0, seq: int = 1) -> bytes:
+    return pack_wave_command(WAVE_OP_PAUSE, session=session, seq=seq)
+
+
+def pack_wave_stop(*, session: int = 0, seq: int = 1) -> bytes:
+    return pack_wave_command(WAVE_OP_STOP, session=session, seq=seq)
+
+
+def pack_wave_abort(*, session: int = 0, seq: int = 1) -> bytes:
+    return pack_wave_command(WAVE_OP_ABORT, session=session, seq=seq)
+
+
+def pack_wave_status(*, session: int = 0, seq: int = 1) -> bytes:
+    return pack_wave_command(WAVE_OP_STATUS, session=session, seq=seq)
+
+
+def parse_wave_response(packet: bytes, *, validate_version: bool = True) -> dict:
+    """Decode one exact, 64-bit-word-padded WAVERSP0 datagram.
+
+    Envelope byte order/magic/opcodes are unchanged. DATA has a 32-byte
+    extension: ACK, next sequence, uint64 received/first-error offsets, and
+    expected/actual CRC32. Length mismatches are protocol errors, never raw
+    struct.error exceptions or partially populated successful responses.
+    """
+    raw = bytes(packet)
+    if len(raw) < WAVE_RESPONSE_HEADER_BYTES:
+        raise ProtocolError("waveform response header is truncated")
+    magic, hdr0, hdr1 = struct.unpack_from("<QQQ", raw)
+    if magic != WAVE_RESP_MAGIC:
+        raise ProtocolError(f"unexpected waveform response magic 0x{magic:016X}")
+    version, opcode = hdr0 & 0xFFFF, hdr0 >> 32
+    if validate_version and version != WAVE_PROTOCOL_VERSION:
+        raise ProtocolVersionError(f"waveform protocol version {version} is not supported")
+    if not WAVE_OP_BEGIN <= opcode <= WAVE_OP_STATUS:
+        raise ProtocolError(f"unknown waveform response opcode {opcode}")
+    size = hdr1 >> 32
+    if opcode == WAVE_OP_DATA:
+        expected = WAVE_RESPONSE_DATA_BYTES
+    elif opcode == WAVE_OP_STATUS:
+        expected = WAVE_RESPONSE_STATUS_BYTES
+    else:
+        expected = WAVE_RESPONSE_COMMON_BYTES
+    if size != expected:
+        raise ProtocolError(f"waveform opcode {opcode} requires {expected} payload bytes, got {size}")
+    padded_end = WAVE_RESPONSE_HEADER_BYTES + ((size + 7) & ~7)
+    if len(raw) != padded_end:
+        raise ProtocolError("waveform response datagram length does not match its envelope")
+    if any(raw[WAVE_RESPONSE_HEADER_BYTES + size:]):
+        raise ProtocolError("waveform response has nonzero padding")
+    payload = raw[WAVE_RESPONSE_HEADER_BYTES:WAVE_RESPONSE_HEADER_BYTES + size]
+    session, state, status, error_code, descriptor, error_offset = struct.unpack_from("<IIIIIQ", payload)
+    if state not in WAVEFORM_STATE_NAMES:
+        raise ProtocolError(f"unknown waveform state {state}")
+    if status != (hdr0 >> 16) & 0xFFFF:
+        raise ProtocolError("waveform response header and payload status disagree")
+    result = {"version": version, "opcode": opcode, "flags": (hdr0 >> 16) & 0xFFFF,
+              "seq": hdr1 & 0xFFFFFFFF, "payload_bytes": size, "payload": payload,
+              "session": session, "state": state, "state_name": WAVEFORM_STATE_NAMES[state],
+              "status": status, "error_code": error_code, "descriptor": descriptor,
+              "error_offset": error_offset}
+    if opcode == WAVE_OP_DATA:
+        values = struct.unpack_from("<IIQQII", payload, WAVE_RESPONSE_COMMON_BYTES)
+        result.update(zip(("ack_packet_seq", "next_expected_sequence", "received_bytes",
+                           "first_error_offset", "expected_crc", "actual_crc"), values))
+    elif opcode == WAVE_OP_STATUS:
+        (current_beat, loop_position, loop_count, status_meta,
+         *status_tail) = struct.unpack_from("<IIII8HIIIII", payload,
+                                             WAVE_RESPONSE_COMMON_BYTES)
+        fifo_levels = tuple(status_tail[:8])
+        error_count, underflow_count, trigger_seen_count, trigger_dropped_count, trigger_fire_count = status_tail[8:]
+        result.update({
+            "current_beat": current_beat,
+            "loop_position": loop_position,
+            "loop_count": loop_count,
+            "channel_mask": status_meta & 0xFF,
+            "layout": (status_meta >> 8) & 0xFF,
+            "fifo_levels": fifo_levels,
+            "error_count": error_count,
+            "underflow_count": underflow_count,
+            "trigger_seen_count": trigger_seen_count,
+            "trigger_dropped_count": trigger_dropped_count,
+            "trigger_fire_count": trigger_fire_count,
+        })
+    return result
 
 def pack_rfctrl2_sync_epoch(epoch: int, seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_SYNC_EPOCH, struct.pack("<Q", int(epoch) & 0xFFFFFFFFFFFFFFFF), seq=seq)
@@ -207,24 +393,6 @@ def pack_rfctrl2_sync_epoch(epoch: int, seq: int = 1) -> bytes:
 
 def pack_rfctrl2_start_at(start_tick: int, seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_START_AT, struct.pack("<Q", int(start_tick) & 0xFFFFFFFFFFFFFFFF), seq=seq)
-
-
-def pack_rfctrl2_set_sync_role(role: int, mode: int = RF2_SYNC_MODE_EXTERNAL, seq: int = 1) -> bytes:
-    role_value = int(role)
-    mode_value = int(mode)
-    if role_value not in {RF2_SYNC_ROLE_SLAVE, RF2_SYNC_ROLE_MASTER}:
-        raise ParameterRangeError("sync role must be 0 (slave) or 1 (master)")
-    if mode_value not in {RF2_SYNC_MODE_EXTERNAL, RF2_SYNC_MODE_BYPASS}:
-        raise ParameterRangeError("sync mode must be 0 (external) or 1 (bypass)")
-    return pack_rfctrl2_packet(
-        RF2_OP_SET_SYNC_ROLE,
-        struct.pack("<II", role_value, mode_value),
-        seq=seq,
-    )
-
-
-def pack_rfctrl2_emit_trigger(seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_EMIT_TRIGGER, seq=seq)
 
 
 def pack_rfctrl2_tdc_register(address: int, *, write: bool = False, data: int = 0, seq: int = 1) -> bytes:
@@ -396,10 +564,7 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         "dac_mts_required": False, "dac_mts_ready": False,
         "dac_mts_failed": False, "dac_mts_tile_mask": 0, "dac_mts_error": 0,
         "nco_sync_ready": False, "nco_sync_epoch": 0,
-        "sync_status": 0, "sync_role": "slave", "sync_mode": "external",
-        "sync_seen": False, "sync_link_ready": False,
-        "sync_align_busy": False, "sync_align_failed": False,
-        "sync_alignment_epoch": 0, "sync_alignment_error": 0,
+        "sync_status": 0,
         "trigger_input_count": 0, "trigger_accepted_count": 0,
         "trigger_output_count": 0,
         "ext_trigger_phase_slot": 0, "ext_trigger_phase_valid": False,
@@ -440,23 +605,12 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         # The identity extension shares this word with the legacy sync flags:
         # upper 32 bits carry the trigger path version.
         result["trigger_path_version"] = (struct.unpack_from("<Q", payload, 72)[0] >> 32) & 0xFFFFFFFF
-        result["sync_seen"] = bool(result["sync_status"] & RF2_SYNC_STATUS_SEEN)
-        result["sync_link_ready"] = bool(result["sync_status"] & RF2_SYNC_STATUS_READY)
-        result["sync_mode"] = "bypass" if result["sync_status"] & RF2_SYNC_STATUS_BYPASS else "external"
-        result["sync_role"] = "master" if result["sync_status"] & RF2_SYNC_STATUS_ROLE_MASTER else "slave"
     if len(payload) >= 88:
         result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)
     if len(payload) >= 96:
         result["trigger_output_count"] = struct.unpack_from("<I", payload, 88)[0]
     # STATUS extensions are appended after the legacy 96-byte payload.  A
     # short response therefore remains fully usable with default values.
-    if len(payload) >= 104:
-        alignment_word = struct.unpack_from("<Q", payload, 96)[0]
-        result["sync_alignment_epoch"] = alignment_word & 0x3F
-        result["sync_align_busy"] = bool((alignment_word >> 22) & 1)
-        result["sync_align_failed"] = bool((alignment_word >> 23) & 1)
-    if len(payload) >= 112:
-        result["sync_alignment_error"] = struct.unpack_from("<I", payload, 104)[0] & 0xFFFF
     if len(payload) >= 112:
         identity_word = struct.unpack_from("<Q", payload, 104)[0]
         result["source_commit_id"] = (identity_word >> 32) & 0xFFFFFFFF
@@ -642,5 +796,5 @@ def require_beat_aligned(value: int, name: str = "value") -> int:
 
 
 __all__ = [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "PLAY_", "REPEAT_", "CMD_", "CHANNEL_", "WAVE", "pack_", "parse_", "align_", "require_", "normalize_", "validate_"))] + [
-    "BEAT_BYTES", "FIXED_DATA_BYTES", "CHANNEL_ROLES", "DDR_BASE", "DDR_TILE_BYTES", "DDR_TILE_CHANNELS",
+    "BEAT_BYTES", "FIXED_DATA_BYTES", "CHANNEL_ROLES", "DDR_BASE", "DDR_TILE_BYTES", "DDR_TILE_CHANNELS", "crc32",
 ]

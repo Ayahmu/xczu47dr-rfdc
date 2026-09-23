@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-TARGET ?= custom_xczu47dr_master
-ALLOWED_TARGETS := custom_xczu47dr_master custom_xczu47dr_slave
+TARGET ?= custom_xczu47dr_waveform
+ALLOWED_TARGETS := custom_xczu47dr_waveform
 ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
@@ -10,8 +10,7 @@ ROOT := $(CURDIR)
 
 VIVADO_DIR := $(ROOT)/hardware/vivado
 ARTIFACT_DIR ?= $(ROOT)/artifacts
-# Keep role-specific Vivado state separate.  This prevents an independently
-# started master and slave build from opening or replacing the same .xpr/runs.
+# Keep the waveform Vivado state isolated from any older local build tree.
 VIVADO_WORK_DIR ?= $(VIVADO_DIR)/work/$(TARGET)
 VIVADO_OUTPUT_DIR ?= $(ARTIFACT_DIR)
 VIVADO_REPORT_DIR ?= $(VIVADO_DIR)/reports/$(TARGET)
@@ -36,7 +35,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 # and 13 test modules die on import.  Prefer the repo venv when it exists.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa xsa-master xsa-slave firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
+.PHONY: help all test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -60,9 +59,7 @@ help:
 	@echo "  make impl             Run Vivado implementation"
 	@echo "  make bitstream        Generate the selected production bitstream internally"
 	@echo "  make xdc-check        Verify XDC get_pins constraints against the synthesized netlist"
-	@echo "  make xsa              Export XSA for TARGET (default: master)"
-	@echo "  make xsa-master       Export only the master XSA"
-	@echo "  make xsa-slave        Export only the slave XSA"
+	@echo "  make xsa              Export the waveform XSA"
 	@echo "  make firmware-create  Create Vitis platform/application"
 	@echo "  make firmware-build   Build firmware ELF"
 	@echo ""
@@ -86,9 +83,7 @@ help:
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
 	@echo "  ARTIFACT_DIR=$(ARTIFACT_DIR)"
-	@echo "  TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
-	@echo "  TARGET=custom_xczu47dr_slave builds the slave synchronization bitstream"
-	@echo "  Default TARGET=custom_xczu47dr_master builds the master synchronization bitstream"
+	@echo "  TARGET=custom_xczu47dr_waveform is the only production target"
 	@echo "  PROGRAM=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
 
@@ -102,9 +97,6 @@ test:
 	$(PYTHON) -m unittest discover -s tests
 	bash -n software/capture_uart.sh
 	bash -n firmware/build.sh
-
-driver-test:
-	$(PYTHON) -m unittest tests.test_dr47_driver
 
 driver-wheel:
 	mkdir -p "$(ROOT)/dist"
@@ -166,15 +158,6 @@ xsa: bitstream
 	@for stale in "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"; do test ! -e "$$stale" || { echo "Removing non-production artifact $$stale"; unlink "$$stale"; }; done
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
-# These aliases intentionally recurse with a fixed TARGET.  A plain `make xsa`
-# never expands to both roles; build both explicitly, and choose whether to
-# run them sequentially or in parallel, only when that is actually desired.
-xsa-master:
-	+$(MAKE) --no-print-directory TARGET=custom_xczu47dr_master xsa
-
-xsa-slave:
-	+$(MAKE) --no-print-directory TARGET=custom_xczu47dr_slave xsa
-
 hardware:
 	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) XSA=$(XSA)"
 	cd $(VIVADO_DIR) && TARGET=$(TARGET) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh --clean
@@ -234,8 +217,7 @@ artifacts-hash:
 	trap 'rmdir "$$lock"' EXIT; \
 	temporary_file="$(ARTIFACT_DIR)/SHA256SUMS.tmp.$$$$"; \
 	{ for file in \
-		custom_xczu47dr_master.xsa custom_xczu47dr_master.elf \
-		custom_xczu47dr_slave.xsa custom_xczu47dr_slave.elf; do \
+		custom_xczu47dr_waveform.xsa custom_xczu47dr_waveform.elf; do \
 		test -f "$(ARTIFACT_DIR)/$$file" && (cd "$(ARTIFACT_DIR)" && sha256sum "$$file") || true; \
 	done; } > "$$temporary_file"; \
 	mv -f "$$temporary_file" "$(ARTIFACT_DIR)/SHA256SUMS"

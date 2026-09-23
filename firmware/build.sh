@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIRMWARE_DIR="${SCRIPT_DIR}"
 PROJECT_ROOT="$(dirname "${FIRMWARE_DIR}")"
-TARGET="${TARGET:-custom_xczu47dr_master}"
+TARGET="${TARGET:-custom_xczu47dr_waveform}"
 SRC_DIR="${FIRMWARE_DIR}/src"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -46,7 +46,7 @@ XSA_FILE="${ARTIFACT_DIR}/${TARGET_OUTPUT_BASENAME}.xsa"
 ELF_FILE="${ARTIFACT_DIR}/$(basename "${ELF_RELATIVE}")"
 
 case "${TARGET}" in
-    custom_xczu47dr_master|custom_xczu47dr_slave)
+    custom_xczu47dr_waveform)
         BOARD_DEFINE="BOARD_CUSTOM_XCZU47DR"
         ;;
     *)

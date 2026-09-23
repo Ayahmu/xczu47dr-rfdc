@@ -7,7 +7,7 @@ source "${script_path}/reference_xxv_dcp.tcl"
 source "${script_path}/build_options.tcl"
 source "${script_path}/build_identity.tcl"
 
-set target "custom_xczu47dr_master"
+set target "custom_xczu47dr_waveform"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -25,12 +25,7 @@ set target_board_part [target_config_get $target board_part]
 set target_top_module [target_config_get $target top_module]
 set target_generics [target_config_get $target generics]
 set is_bandwidth_target [expr {$target eq "custom_xczu47dr_bw"}]
-set is_master_target [expr {$target eq "custom_xczu47dr_master"}]
-# Every slave variant, including custom_xczu47dr_slave_trigout.  Matching the
-# plain name exactly used to drop variants into the master branch below, which
-# defined CUSTOM_XCZU47DR_MASTER and made Top.v instantiate a vio_0 that was
-# never generated for a non-master target.
-set is_slave_target [expr {[string match "custom_xczu47dr_slave*" $target]}]
+set is_waveform_target [expr {$target eq "custom_xczu47dr_waveform"}]
 set enable_ila [expr {[build_option_get ENABLE_ILA 0] ne "0"}]
 
 # Stamp the exact source revision and protocol identity into every generated
@@ -80,10 +75,14 @@ set_property simulator_language Mixed [current_project]
 puts "INFO: Enabling target Verilog define"
 if {$is_bandwidth_target} {
     set define_list {CUSTOM_XCZU47DR_BW}
-} elseif {$is_slave_target} {
-    set define_list {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_SLAVE}
+} elseif {$is_waveform_target} {
+    set define_list {CUSTOM_XCZU47DR}
 } else {
-    set define_list {CUSTOM_XCZU47DR CUSTOM_XCZU47DR_MASTER}
+}
+if {!$is_bandwidth_target && !$is_waveform_target} {
+    # Kept only so this shared script fails loudly if a non-production target
+    # is reintroduced without explicitly defining its compile contract.
+    error "non-production target compile defines are not supported"
 }
 if {$enable_ila} { lappend define_list ENABLE_ILA }
 lappend define_list RF2_BUILD_PROFILE_ID=32'd${build_profile_id}
@@ -137,30 +136,7 @@ if {!$is_bandwidth_target} {
 
 }
 
-if {$is_master_target} {
-    puts "INFO: Creating VIO control for the master HMC7044 SYNC sequence"
-    set vio_ip_dir "${generated_ip_dir}"
-    file mkdir ${vio_ip_dir}
-    create_ip -force -name vio -vendor xilinx.com -library ip -version 3.0 \
-        -module_name vio_0 -dir ${vio_ip_dir}
-    set vio_ip [get_ips vio_0]
-    set_property -dict [list \
-        CONFIG.C_NUM_PROBE_IN {0} \
-        CONFIG.C_NUM_PROBE_OUT {1} \
-        CONFIG.C_PROBE_OUT0_WIDTH {1} \
-        CONFIG.C_PROBE_OUT0_INIT_VAL {0x0} \
-    ] ${vio_ip}
-    set vio_ip_file [get_files -quiet "${vio_ip_dir}/vio_0/vio_0.xci"]
-    if {[llength ${vio_ip_file}] == 0} {
-        puts "ERROR: VIO IP XCI not found after create_ip"
-        exit 1
-    }
-    generate_target all ${vio_ip_file}
-    set_property include_dirs [list \
-        "${vio_ip_dir}/vio_0/hdl" \
-        "${vio_ip_dir}/vio_0/hdl/verilog" \
-    ] [get_filesets sources_1]
-}
+
     
 puts "INFO: Creating project-level DDR4 IP outside block design"
 set ddr_ip_dir "${generated_ip_dir}"
@@ -204,11 +180,6 @@ if {[file exists ${src_dir}]} {
     set filtered_rtl_files [list]
     foreach rtl_file $rtl_files {
         set rtl_tail [file tail $rtl_file]
-        # The tiled executor is retained for standalone RTL simulations only;
-        # production Top.v uses the interleaved 512-bit executor.
-        if {$rtl_tail eq "waveform_system_top.v"} {
-            continue
-        }
         set is_bw_file [expr {$rtl_tail in {
             "TopBandwidthCore.v"
             "TopBandwidthXczu47dr.v"
@@ -219,15 +190,30 @@ if {[file exists ${src_dir}]} {
         set is_rfdc_file [expr {$rtl_tail in {
             "Top.v"
             "TopCustomXczu47dr.v"
-            "waveform_interleaved_system_top.v"
-            "dac_play_ctrl.v"
-            "udp_waveform_ddr_writer.v"
-            "udp64_to_axis128_instr.v"
+            "waveform_playback_controller.v"
+            "waveform_trigger_cdc.v"
+            "waveform_status_cdc.v"
+            "waveform_upload_writer.v"
+            "waveform_fifo_mask_adapter.v"
             "hmc7044.vhd"
             "axis_async_fifo_256_stub.v"
             "rfdc_custom_xczu47dr_ip_stub.v"
         }}]
         if {$rtl_tail eq "design_1_wrapper.v" || $rtl_tail eq "axis_128_to_256.v"} {
+            continue
+        }
+        # The waveform product has one descriptor/DDR writer.  These retired
+        # instruction/data-writer sources must not enter the Vivado source set
+        # even though they remain in the checkout for diagnostics and history.
+        if {$is_waveform_target && $rtl_tail in {
+            "udp_waveform_ddr_writer.v"
+            "udp64_to_axis128_instr.v"
+            "sync_trigger_link.v"
+            "dac_trigger_emitter.v"
+            "dac_ext_trigger_capture.v"
+            "dac_trigger_latency_probe.v"
+        }} {
+            puts "INFO: Excluding retired waveform RTL: ${rtl_tail}"
             continue
         }
         if {$is_bandwidth_target && $is_rfdc_file} {
@@ -271,62 +257,25 @@ if {[file exists ${xxv_src_dir}] && ![file exists ${xxv_local_dir}]} {
 set xxv_xci "${xxv_local_dir}/xxv_ethernet.xci"
 if {!$is_bandwidth_target && [file exists ${xxv_xci}]} {
     puts "INFO: Adding reference XXV Ethernet IP: ${xxv_xci}"
-    # Put the XCI in a dedicated BlockSrcs fileset. This is the project
-    # structure used by Vivado for an OOC IP and creates the
-    # xxv_ethernet_synth_1 child run consumed by the parent synthesis run.
-    set xxv_fileset [create_fileset -blockset xxv_ethernet]
-    add_files -fileset ${xxv_fileset} -norecurse ${xxv_xci}
+    # Keep the XCI in the normal project source set. Vivado can then carry
+    # the managed IP identity, constraints, and OOC checkpoint into the
+    # parent synthesis/implementation flow. A hand-injected
+    # read_checkpoint -cell is deliberately not used: it loses the XCI
+    # provenance and creates Vivado 12-5469/Project 1-840 critical warnings.
+    read_ip ${xxv_xci}
     set xxv_ip [get_ips -quiet xxv_ethernet]
-    if {[llength ${xxv_ip}] == 0} {
+    if {[llength ${xxv_ip}] != 1} {
         puts "ERROR: Managed XXV Ethernet IP was not imported"
         exit 1
     }
-    # The checked-in XCI is already configured with an OUT_OF_CONTEXT
-    # synthesis flow.  A BlockSrcs fileset lets Vivado create the singular
-    # xxv_ethernet_synth_1 child run from that immutable IP metadata.
     generate_target all ${xxv_ip}
-
-    # Keep a generated black-box declaration in the parent sourceset as well.
-    # The reference DCP supplies the implementation netlist, but Vivado's
-    # parent RTL compile does not always import the module declaration from a
-    # BlockSrcs/OOC fileset after a clean project creation.  This declaration
-    # is harmless for implementation and makes parent synthesis deterministic.
-    set xxv_stub_candidates [list \
-        [file normalize "${generated_ip_dir}/xxv_ethernet_1/xxv_ethernet_bmstub.v"] \
-        [file normalize "${proj_dir}/work/ip/xxv_ethernet_1/xxv_ethernet_bmstub.v"]]
-    set xxv_stub_file ""
-    foreach candidate ${xxv_stub_candidates} {
-        if {[file exists ${candidate}]} {
-            set xxv_stub_file ${candidate}
-            break
-        }
+    set xxv_xci_file [get_files -quiet -all ${xxv_xci}]
+    if {[llength ${xxv_xci_file}] == 1} {
+        set_property USED_IN_SYNTHESIS true ${xxv_xci_file}
+        set_property USED_IN_IMPLEMENTATION true ${xxv_xci_file}
+        set_property generate_synth_checkpoint true ${xxv_xci_file}
     }
-    if {$xxv_stub_file ne ""} {
-        # BLOCK_STUB is interpreted specially when an XCI with an OOC run is
-        # present and can make Vivado omit the declaration from parent RTL
-        # compile order.  Make a normal black-box copy for the parent run;
-        # the original generated bmstub remains owned by the IP fileset.
-        # Keep the parent copy outside Vivado's generated-IP tree; files under
-        # that tree are auto-disabled when the XCI is imported.
-        set xxv_parent_stub [file normalize "${proj_dir}/xxv_ethernet_parent_stub.v"]
-        set xxv_in [open ${xxv_stub_file} r]
-        set xxv_stub_text [read ${xxv_in}]
-        close ${xxv_in}
-        regsub -all {\(\*\s*BLOCK_STUB\s*=\s*"true"\s*\*\)} ${xxv_stub_text} {} xxv_stub_text
-        set xxv_out [open ${xxv_parent_stub} w]
-        puts -nonewline ${xxv_out} ${xxv_stub_text}
-        close ${xxv_out}
-        add_files -fileset sources_1 -norecurse ${xxv_parent_stub}
-        set xxv_parent_obj [get_files -quiet -all ${xxv_parent_stub}]
-        if {[llength ${xxv_parent_obj}] > 0} {
-            set_property IS_ENABLED true ${xxv_parent_obj}
-            set_property USED_IN_SYNTHESIS true ${xxv_parent_obj}
-            set_property USED_IN_IMPLEMENTATION true ${xxv_parent_obj}
-        }
-        puts "INFO: Added XXV Ethernet parent black-box declaration: ${xxv_parent_stub}"
-    } else {
-        puts "WARN: Generated XXV Ethernet black-box declaration not found"
-    }
+    puts "INFO: XXV Ethernet XCI is managed by the parent project"
 } else {
     puts "WARN: Reference XXV Ethernet IP not found: ${xxv_xci}"
 }
@@ -370,26 +319,6 @@ if {[llength $resolved_xdc_files] > 0} {
 
 # Create standalone IP cores
 puts "INFO: Creating standalone IP cores..."
-
-# Create AXI DataMover IP
-set datamover_script "${script_path}/axi_datamover_0.tcl"
-if {[file exists ${datamover_script}]} {
-    source ${datamover_script}
-    generate_target all [get_ips axi_datamover_0]
-    puts "INFO: AXI DataMover IP created"
-} else {
-    puts "WARN: AXI DataMover script not found: ${datamover_script}"
-}
-
-# Create instruction FIFO IP used by waveform_system_top.v
-set instr_fifo_script "${script_path}/axis_data_fifo_1.tcl"
-if {[file exists ${instr_fifo_script}]} {
-    source ${instr_fifo_script}
-    generate_target all [get_ips axis_data_fifo_1]
-    puts "INFO: AXIS Data FIFO IP created"
-} else {
-    puts "WARN: AXIS Data FIFO script not found: ${instr_fifo_script}"
-}
 
 # Create AXIS Async FIFO IP
 set async_fifo_script "${script_path}/axis_async_fifo_256.tcl"
@@ -521,10 +450,13 @@ if {$target_generics ne ""} {
 }
 update_compile_order -fileset sources_1
 
-# Vivado may generate a Design_Linking-only XXV checkpoint while creating the
-# project.  Restore the bitstream-capable reference after all IP targets have
-# been generated, using this target's isolated project directory.
-restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+# The generated XXV OOC view in this Vivado installation is a
+# Design_Linking-only encrypted cellview and cannot be used by write_bitstream.
+# Keep the XCI as the managed project/IP contract, but restore the known
+# bitstream-capable checkpoint into that managed OOC location before any parent
+# synthesis or implementation run can consume it.  This is intentionally not a
+# cell-level read_checkpoint injection.
+prepare_reference_xxv_ooc_run ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 puts "INFO: Project creation complete"
 puts "INFO: Project file: ${proj_dir}/${proj_name}.xpr"

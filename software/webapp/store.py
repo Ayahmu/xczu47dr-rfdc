@@ -55,7 +55,8 @@ class RunStore:
                     completion_mode TEXT NOT NULL DEFAULT 'upload',
                     playback_mode TEXT NOT NULL DEFAULT 'single',
                     execution_mode TEXT NOT NULL DEFAULT 'single',
-                    loaded INTEGER NOT NULL DEFAULT 0
+                    loaded INTEGER NOT NULL DEFAULT 0,
+                    waveform_sessions_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +71,7 @@ class RunStore:
             self._ensure_column(connection, "runs", "playback_mode", "TEXT NOT NULL DEFAULT 'single'")
             self._ensure_column(connection, "runs", "execution_mode", "TEXT NOT NULL DEFAULT 'single'")
             self._ensure_column(connection, "runs", "loaded", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "runs", "waveform_sessions_json", "TEXT NOT NULL DEFAULT '{}'")
             # Dry runs only generate and validate host artifacts. Older versions
             # incorrectly marked them as if data had been uploaded to a board.
             connection.execute("UPDATE runs SET loaded=0 WHERE dry_run=1 AND loaded!=0")
@@ -101,8 +103,8 @@ class RunStore:
                 """INSERT INTO runs(
                     id, name, state, dry_run, board_ids, start_mode, created_at,
                     updated_at, artifact_dir, progress, error, request_json,
-                    completion_mode, playback_mode, execution_mode, loaded
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    completion_mode, playback_mode, execution_mode, loaded, waveform_sessions_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
                     record.name,
@@ -120,8 +122,21 @@ class RunStore:
                     request.playback_mode,
                     request.execution_mode,
                     0,
+                    json.dumps({}, sort_keys=True),
                 ),
             )
+        return record
+
+    def set_waveform_sessions(self, run_id: str, sessions: dict[str, int]) -> RunRecord:
+        normalized = {str(board_id): int(session) & 0xFFFFFFFF for board_id, session in sessions.items()}
+        with self._lock, self._connection() as connection:
+            connection.execute(
+                "UPDATE runs SET waveform_sessions_json=?, updated_at=? WHERE id=?",
+                (json.dumps(normalized, sort_keys=True), utc_now(), run_id),
+            )
+        record = self.get(run_id)
+        if record is None:
+            raise KeyError(run_id)
         return record
 
     def update(self, run_id: str, state: RunState, progress: float, error: str = "") -> RunRecord:
@@ -241,4 +256,5 @@ class RunStore:
             completion_mode=row["completion_mode"] if "completion_mode" in row.keys() else "upload",
             playback_mode=row["playback_mode"] if "playback_mode" in row.keys() else "single",
             loaded=bool(row["loaded"]) if "loaded" in row.keys() else False,
+            waveform_sessions=(json.loads(row["waveform_sessions_json"]) if "waveform_sessions_json" in row.keys() and row["waveform_sessions_json"] else {}),
         )

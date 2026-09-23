@@ -1,7 +1,12 @@
-# Vivado target matrix for supported builds.
+# Vivado target configuration for the single-board waveform product.
+#
+# There is intentionally one production target.  Synchronization/master/slave
+# playback variants were removed from the release flow; the Top parameter is
+# kept only for the board clock initialization contract and is not a target
+# selector.
 
 proc target_config_allowed_targets {} {
-    return [list custom_xczu47dr_master custom_xczu47dr_slave]
+    return [list custom_xczu47dr_waveform]
 }
 
 proc target_config_exists {target} {
@@ -9,7 +14,7 @@ proc target_config_exists {target} {
 }
 
 proc target_config_error {target} {
-    error "Unsupported TARGET=${target}. Allowed targets: [join [target_config_allowed_targets] {, }]"
+    error "Unsupported TARGET=${target}. Allowed target: custom_xczu47dr_waveform"
 }
 
 proc target_config_load {target} {
@@ -17,43 +22,22 @@ proc target_config_load {target} {
         target_config_error $target
     }
 
-    switch -- $target {
-        custom_xczu47dr_master {
-            return [dict create \
-                target custom_xczu47dr_master \
-                project_basename custom_xczu47dr_master_rfdc \
-                part xczu47dr-ffvg1517-2-i \
-                part_query *xczu47dr*ffvg1517* \
-                board_part {} \
-                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_master.xdc constraints/tdc_placement.xdc constraints/tdc_timing.xdc] \
-                top_module TopCustomXczu47dr \
-                output_basename custom_xczu47dr_master \
-                firmware_workspace firmware/workspace/custom_xczu47dr_master \
-                firmware_app rfdc_app \
-                firmware_elf artifacts/custom_xczu47dr_master.elf \
-                workspace_psu_init firmware/workspace/custom_xczu47dr_master/hw_platform/hw/psu_init.tcl \
-                clock_policy external_250mhz_xs17 \
-                generics {IS_MASTER=1}]
-        }
-        custom_xczu47dr_slave {
-            return [dict create \
-                target custom_xczu47dr_slave \
-                project_basename custom_xczu47dr_slave_rfdc \
-                part xczu47dr-ffvg1517-2-i \
-                part_query *xczu47dr*ffvg1517* \
-                board_part {} \
-                xdc_files [list xdc/custom_xczu47dr_minimal.xdc xdc/custom_xczu47dr_slave.xdc constraints/tdc_placement.xdc constraints/tdc_timing.xdc] \
-                top_module TopCustomXczu47dr \
-                output_basename custom_xczu47dr_slave \
-                firmware_workspace firmware/workspace/custom_xczu47dr_slave \
-                firmware_app rfdc_app \
-                firmware_elf artifacts/custom_xczu47dr_slave.elf \
-                workspace_psu_init firmware/workspace/custom_xczu47dr_slave/hw_platform/hw/psu_init.tcl \
-                clock_policy external_250mhz_xs17 \
-                generics {IS_MASTER=0}]
-        }
-        }
-    }
+    return [dict create \
+        target custom_xczu47dr_waveform \
+        project_basename custom_xczu47dr_waveform_rfdc \
+        part xczu47dr-ffvg1517-2-i \
+        part_query *xczu47dr*ffvg1517* \
+        board_part {} \
+        xdc_files [list xdc/custom_xczu47dr_minimal.xdc constraints/tdc_placement.xdc constraints/tdc_timing.xdc] \
+        top_module TopCustomXczu47dr \
+        output_basename custom_xczu47dr_waveform \
+        firmware_workspace firmware/workspace/custom_xczu47dr_waveform \
+        firmware_app rfdc_app \
+        firmware_elf artifacts/custom_xczu47dr_waveform.elf \
+        workspace_psu_init firmware/workspace/custom_xczu47dr_waveform/hw_platform/hw/psu_init.tcl \
+        clock_policy external_250mhz_xs17 \
+        generics {REFERENCE_MHZ=250}]
+}
 
 proc target_config_get {target key} {
     set cfg [target_config_load $target]
@@ -72,7 +56,7 @@ proc target_config_print {target} {
 }
 
 if {[info exists argv0] && [file normalize [info script]] eq [file normalize $argv0]} {
-    set target custom_xczu47dr_master
+    set target custom_xczu47dr_waveform
     if {[llength $argv] > 0} {
         set target [lindex $argv 0]
     }

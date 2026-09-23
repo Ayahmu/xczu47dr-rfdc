@@ -1126,50 +1126,32 @@ class WaveformModelTests(unittest.TestCase):
             self.assertEqual(metadata["layout"], host.DDR_LAYOUT_INTERLEAVED_512B)
             self.assertEqual(metadata["expected_rfdc_beats_per_channel"], (64 * 1024 * 1024) // host.BEAT_BYTES)
 
-    def test_extreme_playback_send_uses_bulk_upload_and_play_commands(self):
+    def test_extreme_playback_commits_descriptor_and_uses_waveform_play(self):
         instances = []
 
         class FakeController:
             def __init__(self, ip, port, timeout_s, transport, udp_interface, udp_source_ip):
                 self.args = (ip, port, timeout_s, transport, udp_interface, udp_source_ip)
+                self.connect_calls = 0
                 self.mailbox_calls = []
                 self.upload_calls = []
-                self.instruction_calls = []
+                self.play_calls = []
                 self.closed = False
                 instances.append(self)
 
-            def upload_rfdc_nco_mailbox(self, nco, zones):
-                self.mailbox_calls.append((nco, zones))
+            def connect(self):
+                self.connect_calls += 1
 
-            def upload_max_length_udp(
-                self,
-                bytes_per_channel,
-                base_addr,
-                beats_per_datagram,
-                marker_bytes_per_channel,
-                pattern,
-                sine_freq_hz,
-                sine_amplitude,
-                use_waveform_cache,
-                waveform_cache_dir,
-                force_waveform_cache,
-            ):
-                self.upload_calls.append((
-                    bytes_per_channel,
-                    base_addr,
-                    beats_per_datagram,
-                    marker_bytes_per_channel,
-                    pattern,
-                    sine_freq_hz,
-                    sine_amplitude,
-                    use_waveform_cache,
-                    waveform_cache_dir,
-                    force_waveform_cache,
-                ))
-                return 123
+            def apply_rfdc_config(self, **kwargs):
+                self.mailbox_calls.append(kwargs)
 
-            def send_instructions(self, commands):
-                self.instruction_calls.append(commands)
+            def upload_interleaved_chunks(self, chunks, **kwargs):
+                first = next(iter(chunks))
+                self.upload_calls.append((first, kwargs))
+                return {"session": 17, "packet_count": 32}
+
+            def play(self, *, session):
+                self.play_calls.append(session)
 
             def close(self):
                 self.closed = True
@@ -1180,7 +1162,7 @@ class WaveformModelTests(unittest.TestCase):
                 bytes_per_channel="4096",
                 beats_per_datagram=host.DEFAULT_UDP_BULK_BEATS,
                 marker_bytes_per_channel=4096,
-                wait_for_trigger=True,
+                wait_for_trigger=False,
                 dry_run=False,
             )
             waveform = waveform_model.WaveformConfig(mode="ezq-quantum", output_dir=Path(temp_dir), dry_run=True)
@@ -1202,27 +1184,20 @@ class WaveformModelTests(unittest.TestCase):
 
         ctrl = instances[0]
         self.assertFalse(result.dry_run)
-        self.assertEqual(result.datagrams, 123)
+        self.assertEqual(result.datagrams, 32)
+        self.assertEqual(ctrl.connect_calls, 1)
         self.assertEqual(ctrl.args, ("192.0.2.90", 9090, 2.0, "udp", "eth-test", "192.0.2.2"))
-        self.assertEqual(
-            ctrl.upload_calls,
-            [(
-                4096,
-                host.DDR_BASE,
-                host.DEFAULT_UDP_BULK_BEATS,
-                4096,
-                host.MAX_LENGTH_PATTERN_LOWFREQ_SINE,
-                10.0,
-                4096,
-                True,
-                Path(temp_dir) / "waveform_cache",
-                False,
-            )],
-        )
-        self.assertEqual(len(ctrl.mailbox_calls), 1)
-        self.assertEqual(len(ctrl.instruction_calls), 1)
-        self.assertEqual(ctrl.instruction_calls[0][-1][1], 0)
-        self.assertEqual(ctrl.instruction_calls[0][1], [2, 1, 4096, 0, host.PLAY_FLAG_INTERLEAVED])
+        first, upload_kwargs = ctrl.upload_calls[0]
+        self.assertEqual(first[0], 0)
+        # The producer yields four 64-byte DDR beats per chunk; the driver
+        # fragments that payload into 1 KiB DATA packets before COMMIT.
+        self.assertEqual(len(first[1]), host.DEFAULT_UDP_BULK_BEATS * host.DDR_INTERLEAVED_BEAT_BYTES)
+        self.assertEqual(upload_kwargs["total_bytes"], 4096 * 8)
+        self.assertEqual(upload_kwargs["total_beats"], 4096 // 32)
+        self.assertEqual(upload_kwargs["channel_mask"], 0xFF)
+        self.assertEqual(upload_kwargs["loop_count"], 1)
+        self.assertEqual(upload_kwargs["packet_bytes"], 1024)
+        self.assertEqual(ctrl.play_calls, [17])
         self.assertTrue(ctrl.closed)
 
     def test_send_uses_upload_helper_with_connection_settings(self):

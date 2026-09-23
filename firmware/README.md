@@ -15,9 +15,9 @@
  从仓库根目录执行：
 
  ~~~bash
- make firmware TARGET=custom_xczu47dr_master
- make firmware TARGET=custom_xczu47dr_slave
- JTAG_CABLE_SERIAL=<序列号> TARGET=custom_xczu47dr_slave make program
+ make firmware TARGET=custom_xczu47dr_waveform
+ make firmware TARGET=custom_xczu47dr_waveform
+ JTAG_CABLE_SERIAL=<序列号> TARGET=custom_xczu47dr_waveform make program
  ~~~
 
  也可在本目录使用 ./build.sh create|build|rebuild|program|clean。program 使用
@@ -33,8 +33,8 @@
  scripts/program.tcl                JTAG 下载 bitstream/ELF
  ~~~
 
- 主卡和从卡共用一套 C 源码；本分支固件将 XS17 外部参考定义为 250 MHz，HMC7044
- 内部 R1=25 后 PLL1 PFD 仍为 10 MHz。角色只由对应 XSA 和构建目标决定 XS20 方向。
+ 固件固定使用 XS17 外部 250 MHz 参考；HMC7044 内部 R1=25 后 PLL1 PFD 仍为 10 MHz。
+ 播放链路是单板模式，XS20 不参与播放控制。
  启动日志通过
  115200 波特率串口查看；串口是诊断手段，不是运行时 RFDC 配置确认手段。
 

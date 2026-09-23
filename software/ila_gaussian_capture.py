@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""主卡单板 ILA 高斯包络抓取验证脚本。
+"""单板 ILA 高斯包络抓取验证脚本。
 
 背景与目标
 ----------
 历史上曾观察到：``top_i/dac_ch1_valid_gated`` 已经置 1，但 RFDC 输入端
 ``top_i/dac_in_ch1_tdata`` 一直是 ``0x00010000...`` 这类常数，导致示波器上看不到
-正确的高斯波形。本脚本专门用于在 ILA 里确认：主卡播放一段 0 Hz 基带高斯包络时，
+正确的高斯波形。本脚本专门用于在 ILA 里确认：单板播放一段 0 Hz 基带高斯包络时，
 真正进入 RFDC 的 ``top_i/rfdc_ch1_tdata`` 是否呈现出「先为零 -> 高斯包络 -> 再回零」
 的变化过程，而不是恒定值。
 
@@ -14,21 +14,20 @@
 * ``top_i/rfdc_ch1_tdata``：最终送入 RFDC 的 CH1 数据（256 bit / 一个字）。
 * ``top_i/rfdc_ch1_tvalid``：该字的有效标志。
 * ``top_i/dac_ch1_valid_gated``：DDR 执行器输出的有效标志（与 ch1_allow 相与）。
-* ``top_i/pc_started``：DAC 域播放启动标志，作为 ILA 触发源。注意不能用
-  ``pc_trig_start``：那是旧 GPIO/RVCTRL 路径专用的触发脉冲，RFCTRL2 软件
-  ``trigger()`` 走的是 ``rfctrl2_trigger`` 路径，会直接把 ``started`` 拉高而
-  不会产生 ``trig_start``，因此用 ``pc_trig_start`` 永远抓不到 RFCTRL2 播放。
+* ``top_i/pc_started``：DAC 域播放启动标志，作为 ILA 触发源。它表示新版
+  WAVECTR0 `PLAY` 或被接受的外部 Trigger 已经使播放状态机启动；不使用旧的
+  GPIO/RVCTRL 播放脉冲作为触发条件。
 * ``top_i/pc_trig_pulse``、``top_i/pc_ch1_fire_count``、``top_i/pc_underflow_seen``、
   ``top_i/pc_done_pulse``：辅助状态，便于判断播放是否真正发生。
 
 工作流程
 --------
-1. 后台启动 Vivado：连接 hw_server，选中主卡 JTAG，套用主卡 ltx，找到带
+1. 后台启动 Vivado：连接 hw_server，选中主卡 JTAG，套用单板 ltx，找到带
    ``rfdc_ch1_tdata`` 探针的 ILA，把触发设为 ``pc_started`` 上升沿，然后
    ``run_hw_ila`` 并写一个 ``armed`` 标记文件，进入 ``wait_on_hw_ila`` 阻塞。
 2. Python 等待 ``armed`` 文件出现，说明 ILA 已经就绪。
-3. Python 通过 ``dr47`` 驱动向主卡上传 0 Hz 基带高斯包络，然后 ARM + 软件
-   ``trigger()``。主卡无需先 ``sync()`` 即可本地播放。
+3. Python 通过 ``dr47`` 驱动向单板上传 0 Hz 基带高斯包络，COMMIT 后等待
+   PREFETCH，再用 WAVECTR0 ``PLAY`` 启动。单板播放不依赖双板同步。
 4. 触发沿到达后 Vivado 完成抓取并写出 CSV；Python 解析 CSV，把 ``rfdc_ch1_tdata``
    解码成 int16 样本，确认存在一段非零且幅度呈钟形的高斯包络。
 
@@ -57,7 +56,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from dr47.device import Dr47Device  # noqa: E402
-from dr47.sequence import make_single_trigger_sequence  # noqa: E402
 from dr47.waveforms import (  # noqa: E402
     iq_duration_to_interleaved_sample_count,
     make_iq_gaussian_sine_interleaved,
@@ -69,12 +67,13 @@ from dr47.waveforms import (  # noqa: E402
 BOARD_PORT = 1234
 NETWORK_INTERFACE = "enp1s0f0"
 CONTROL_SOURCE_IP = "169.254.250.11"
-MASTER_TARGET_IP = "169.254.100.101"  # 082 = master
+BOARD_IP = "169.254.149.60"
 
 # ---- JTAG / Vivado 配置 -----------------------------------------------------
 HW_SERVER = "localhost:3121"
-JTAG_TARGET = "localhost:3121/xilinx_tcf/Xilinx/210512180082"
-MASTER_LTX = str(SCRIPT_DIR.parent / "artifacts" / "custom_xczu47dr_master.ltx")
+JTAG_SERIAL = "210512180082"
+JTAG_TARGET = f"localhost:3121/xilinx_tcf/Xilinx/{JTAG_SERIAL}"
+LTX_PATH = str(SCRIPT_DIR.parent / "artifacts" / "custom_xczu47dr_waveform.ltx")
 VIVADO_BIN = "vivado"
 CAPTURE_DEPTH = 4096
 TRIGGER_POSITION = 1024
@@ -92,7 +91,7 @@ WAVEFORM_AMPLITUDE = 0.2
 GAIN = 0.2
 CHANNEL_MASK = 0x01
 
-# 抓取时关注的 ILA 探针名（与当前主卡 ltx 里的真实名称一致）。
+# 抓取时关注的 ILA 探针名（与当前单板 ltx 里的真实名称一致）。
 PROBE_TDATA = "top_i/rfdc_ch1_tdata"
 PROBE_TVALID = "top_i/rfdc_ch1_tvalid"
 PROBE_VALID_GATED = "top_i/dac_ch1_valid_gated"
@@ -141,7 +140,7 @@ def _write_capture_tcl(armed_path: Path, csv_path: Path) -> Path:
         f"open_hw_target {JTAG_TARGET}",
         "set dev [lindex [get_hw_devices] 0]",
         "current_hw_device $dev",
-        f"set_property PROBES.FILE {{{MASTER_LTX}}} $dev",
+        f"set_property PROBES.FILE {{{LTX_PATH}}} $dev",
         "refresh_hw_device $dev",
         "set ilas [get_hw_ilas -of_objects $dev]",
         "set ila {}",
@@ -288,11 +287,11 @@ def _wait_armed(armed_path: Path, process: subprocess.Popen, timeout_s: int = 12
 
 
 def _play_gaussian() -> None:
-    """通过 dr47 向主卡上传 0 Hz 高斯包络并 ARM + 触发一次。"""
+    """通过 WAVECTR0 向单板上传 0 Hz 高斯包络并发送一次 WAVECTR0 PLAY。"""
 
     record = _make_gaussian_record()
     device = Dr47Device(
-        ip=MASTER_TARGET_IP,
+        ip=BOARD_IP,
         port=BOARD_PORT,
         udp_interface=NETWORK_INTERFACE,
         udp_source_ip=CONTROL_SOURCE_IP,
@@ -302,7 +301,7 @@ def _play_gaussian() -> None:
     )
     try:
         device.connect()
-        print("已连接主卡，等待 RFDC 就绪。", flush=True)
+        print("已连接单板，等待 RFDC 就绪。", flush=True)
         deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
             caps = device.status(refresh=True).capabilities
@@ -314,50 +313,33 @@ def _play_gaussian() -> None:
         else:
             raise AssertionError("主卡 RFDC 未就绪")
 
-        device.require_external_sync()
         device.set_xy_nco_frequency(1, RF_NCO_GHZ)
         device.set_gain("xy", 1, GAIN, gain_type="norm")
         device.set_qc_on_off("xy", 1, "on")
         device.commit()
         print("上传高斯包络并等待 DDR 预取。", flush=True)
-        device.upload_waveforms(
+        uploaded = device.upload_waveforms(
             {1: record},
-        channel_sequences={1: make_single_trigger_sequence(int(record.size // 2))},
+            channel_mask=CHANNEL_MASK,
+            loop_count=1,
             wave_formats={1: "interleaved_iq"},
-            auto_start=False,
-            loop=False,
-            instruction_repeats=1,
         )
-        # 等待 DDR executor 接收 PLAY/END 并完成波形预取，避免触发时数据尚未就绪。
+        session = int(uploaded["session"])
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
-            raw = device.status(refresh=True).capabilities.raw
-            channel_mask = int(raw.get("play_config_channel_mask", 0)) & 0xFF
-            pending = bool(raw.get("play_pending_valid", False))
-            prefill = bool(raw.get("play_prefill_ready", False))
-            if (channel_mask & CHANNEL_MASK) == CHANNEL_MASK and pending and prefill:
+            if device.status(refresh=True).state.value == "wait_trigger":
                 break
             time.sleep(0.02)
         else:
-            raise AssertionError("波形配置未就绪")
+            raise AssertionError("波形预取未进入 WAIT_TRIGGER")
 
-        print("ARM 主卡并等待 PREPARED。", flush=True)
-        device.arm(channel_mask=CHANNEL_MASK)
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if device.status(refresh=True).state.value == "prepared":
-                break
-            time.sleep(0.02)
-        else:
-            raise AssertionError("主卡未进入 PREPARED")
-
-        print("发送软件 TRIGGER。", flush=True)
-        device.trigger()
-        print("已通过 dr47 上传高斯包络并触发主卡播放。", flush=True)
+        print("发送 WAVECTR0 PLAY。", flush=True)
+        device.play(session=session)
+        print("已通过 dr47 上传高斯包络并启动单板播放。", flush=True)
     finally:
         try:
             if device.connected:
-                device.abort_mute()
+                device.abort()
         except Exception:
             pass
         device.close()
@@ -386,7 +368,7 @@ def main() -> int:
     )
     try:
         _wait_armed(armed_path, process)
-        print("ILA 已就绪，开始上传并触发主卡播放。", flush=True)
+        print("ILA 已就绪，开始上传并触发单板播放。", flush=True)
         _play_gaussian()
         process.wait(timeout=120)
     except Exception:

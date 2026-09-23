@@ -1,0 +1,164 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="title" value="XCZU47DR 单板波形系统 — 模块交互时序图（三大数据流）" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="40" y="4" width="1100" height="32" as="geometry"/>
+    </mxCell>
+    <mxCell id="host" value="上位机（10G 网络）" style="whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="eth" value="以太网收发（MAC+UDP）" style="whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="250" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="upload" value="波形写入（校验/打包）" style="whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="460" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="sm" value="总线互联（AXI 交换）" style="whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="670" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="ddr" value="DDR4 存储（控制器+颗粒）" style="whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="880" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="rd" value="DDR 读取引擎（512 位读）" style="whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="1090" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="fifo" value="8 通道缓冲（跨时钟 FIFO）" style="whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="1300" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="tdc" value="触发调度器（定时对齐）" style="whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="1510" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="fir" value="分数延迟滤波（细调延迟）" style="whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="1720" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="rot" value="相位旋转校正（载波对齐）" style="whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="1930" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="rfdc" value="RF 数模转换器（8 通道）" style="whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="2140" y="100" width="150" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="n1" value="① 上传路径（配置期，慢）" style="whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="190" width="1020" height="34" as="geometry"/>
+    </mxCell>
+    <mxCell id="n2" value="② 回放路径（触发期，快）" style="whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="460" y="420" width="1830" height="34" as="geometry"/>
+    </mxCell>
+    <mxCell id="n3" value="③ 确定性触发补偿（旁路）" style="whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="1500" y="690" width="790" height="34" as="geometry"/>
+    </mxCell>
+    <mxCell id="m1" value="1. 波形数据包" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="host" target="eth">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="115" y="260"/>
+          <mxPoint x="325" y="260"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m2" value="2. 64 位 UDP 字" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="eth" target="upload">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="325" y="300"/>
+          <mxPoint x="535" y="300"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m3" value="3. 256 位总线写" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="upload" target="sm">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="535" y="340"/>
+          <mxPoint x="745" y="340"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m4" value="4. 写入 DDR" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="sm" target="ddr">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="745" y="380"/>
+          <mxPoint x="955" y="380"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m5" value="5. 512 位突发读请求" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="rd" target="sm">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1165" y="490"/>
+          <mxPoint x="745" y="490"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m6" value="6. 读 DDR" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="sm" target="ddr">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="745" y="530"/>
+          <mxPoint x="955" y="530"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m7" value="7. 512 位读回" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;dashed=1;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="ddr" target="rd">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="955" y="570"/>
+          <mxPoint x="1165" y="570"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m8" value="8. 2048 位帧 = 8 通道 ×256 位" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="rd" target="fifo">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1165" y="610"/>
+          <mxPoint x="1375" y="610"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m9" value="9. 8 通道 ×256 位（直接模式）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="fifo" target="rfdc">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1375" y="650"/>
+          <mxPoint x="2215" y="650"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m10" value="10. 启动脉冲（固定 640 ns 调度）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="tdc" target="rd">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1585" y="760"/>
+          <mxPoint x="1165" y="760"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m11" value="11. 粗延迟 + 细相位" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="tdc" target="fir">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1585" y="800"/>
+          <mxPoint x="1795" y="800"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m12" value="12. 延迟后数据（7 拍 · 140 ns）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="fir" target="rot">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1795" y="840"/>
+          <mxPoint x="2005" y="840"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m13" value="13. 相位校正数据（3 拍 · 60 ns）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="rot" target="rfdc">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="2005" y="880"/>
+          <mxPoint x="2215" y="880"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="m14" value="14. 8 通道模拟输出（16 倍插值）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=14;dashed=1;strokeColor=#D79B00;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0;entryY=0.5;" edge="1" parent="1" source="rfdc" target="host">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="2215" y="920"/>
+          <mxPoint x="20" y="920"/>
+          <mxPoint x="20" y="130"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+  </root>
+</mxGraphModel>

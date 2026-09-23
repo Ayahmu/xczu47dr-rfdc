@@ -123,6 +123,16 @@ class BoardStatus(BaseModel):
     playback_armed: bool = False
     playback_prepared: bool = False
     playback_running: bool = False
+    waveform_session: int = 0
+    waveform_descriptor: int = 0
+    waveform_current_beat: int = 0
+    waveform_loop_position: int = 0
+    waveform_loop_count: int = 0
+    waveform_fifo_levels: list[int] = Field(default_factory=list)
+    trigger_seen_count: int = 0
+    trigger_dropped_count: int = 0
+    trigger_fire_count: int = 0
+    underflow_count: int = 0
     play_config_channel_mask: int = 0
     play_fifo_valid_mask: int = 0
     play_fifo_ready_mask: int = 0
@@ -692,6 +702,7 @@ class RunRecord(BaseModel):
     completion_mode: str = "upload"
     playback_mode: str = "single"
     loaded: bool = False
+    waveform_sessions: dict[str, int] = Field(default_factory=dict)
 
 
 class TestKind(str, Enum):

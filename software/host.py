@@ -192,19 +192,12 @@ RV1_OP_STATUS_READ = 0x0000000A
 RF2_OP_HELLO = 0x00000001
 RF2_OP_STATUS = 0x00000002
 RF2_OP_RFDC_APPLY = 0x00000003
-RF2_OP_UPLOAD_BEGIN = 0x00000004
-RF2_OP_UPLOAD_COMMIT = 0x00000005
-RF2_OP_ARM = 0x00000006
 RF2_OP_SYNC_EPOCH = 0x00000007
 RF2_OP_START_AT = 0x00000008
-RF2_OP_TRIGGER = 0x00000009
-RF2_OP_ABORT_MUTE = 0x0000000A
 RF2_OP_RFDC_GET_CONFIG = 0x0000000B
 RF2_OP_NETWORK_GET = 0x0000000C
 RF2_OP_NETWORK_APPLY = 0x0000000D
 RF2_OP_NETWORK_RESTART = 0x0000000E
-RF2_OP_SET_SYNC_ROLE = 0x0000000F
-RF2_OP_EMIT_TRIGGER = 0x00000010
 RF2_OP_TDC_REG = 0x00000011
 RF2_OP_DIAG_SNAPSHOT = 0x00000012
 RF2_OP_DIAG_CONTROL = 0x00000013
@@ -845,28 +838,12 @@ def parse_rfctrl2_network_response(response: dict) -> dict:
     return result
 
 
-def pack_rfctrl2_arm(run_id: int, channel_mask: int = 0xFF, seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(
-        RF2_OP_ARM,
-        struct.pack("<II", int(run_id) & 0xFFFFFFFF, int(channel_mask) & 0xFF),
-        seq=seq,
-    )
-
-
 def pack_rfctrl2_sync_epoch(epoch: int, seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_SYNC_EPOCH, struct.pack("<Q", int(epoch) & 0xFFFFFFFFFFFFFFFF), seq=seq)
 
 
 def pack_rfctrl2_start_at(start_tick: int, seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_START_AT, struct.pack("<Q", int(start_tick) & 0xFFFFFFFFFFFFFFFF), seq=seq)
-
-
-def pack_rfctrl2_trigger(seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_TRIGGER, seq=seq)
-
-
-def pack_rfctrl2_abort_mute(seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_ABORT_MUTE, seq=seq)
 
 
 def parse_rfresp2_packet(packet: bytes) -> dict[str, int | bytes]:
@@ -1467,20 +1444,25 @@ def iter_max_length_udp_batches(
         ) + payload
 
 
-def iter_max_length_udp_batches_from_cache(
+def iter_max_length_payload_chunks_from_cache(
     cache_path: str | Path,
     bytes_per_channel: int,
-    base_addr: int = DDR_BASE,
-    beats_per_datagram: int = DEFAULT_UDP_BULK_BEATS,
+    chunk_beats: int = 8192,
 ):
+    """Yield raw ``(beat_index, payload)`` chunks from a max-length cache."""
     bytes_per_channel = require_beat_aligned(int(bytes_per_channel), "bytes_per_channel")
-    base_addr = require_beat_aligned(base_addr, "base_addr")
-    beats_per_datagram = validate_udp_bulk_beats(beats_per_datagram)
+    if bytes_per_channel <= 0 or bytes_per_channel > DDR_MAX_BYTES_PER_CHANNEL:
+        raise ValueError(
+            f"bytes_per_channel must be in [32, {DDR_MAX_BYTES_PER_CHANNEL}], got {bytes_per_channel}"
+        )
+    chunk_beats = int(chunk_beats)
+    if chunk_beats <= 0:
+        raise ValueError("chunk_beats must be positive")
     expected_size = bytes_per_channel * DDR_INTERLEAVED_CHANNELS
     path = Path(cache_path).expanduser()
     if path.stat().st_size != expected_size:
         raise ValueError(f"cache file size {path.stat().st_size} does not match expected {expected_size}")
-    chunk_bytes = beats_per_datagram * DDR_INTERLEAVED_BEAT_BYTES
+    chunk_bytes = chunk_beats * DDR_INTERLEAVED_BEAT_BYTES
     beat_index = 0
     read_bytes = 0
     with path.open("rb") as f:
@@ -1490,17 +1472,32 @@ def iter_max_length_udp_batches_from_cache(
                 break
             if len(payload) % DDR_INTERLEAVED_BEAT_BYTES != 0:
                 raise ValueError("cache chunk is not 512-bit beat aligned")
-            yield struct.pack(
-                "<QQQ",
-                UDP_WAVE_BULK_MAGIC,
-                base_addr + beat_index * DDR_INTERLEAVED_BEAT_BYTES,
-                len(payload) // 8,
-            ) + payload
+            yield beat_index, payload
             beats = len(payload) // DDR_INTERLEAVED_BEAT_BYTES
             beat_index += beats
             read_bytes += len(payload)
     if read_bytes != expected_size:
         raise RuntimeError(f"cache read {read_bytes} bytes, expected {expected_size}")
+
+
+def iter_max_length_udp_batches_from_cache(
+    cache_path: str | Path,
+    bytes_per_channel: int,
+    base_addr: int = DDR_BASE,
+    beats_per_datagram: int = DEFAULT_UDP_BULK_BEATS,
+):
+    bytes_per_channel = require_beat_aligned(int(bytes_per_channel), "bytes_per_channel")
+    base_addr = require_beat_aligned(base_addr, "base_addr")
+    beats_per_datagram = validate_udp_bulk_beats(beats_per_datagram)
+    for beat_index, payload in iter_max_length_payload_chunks_from_cache(
+        cache_path, bytes_per_channel, chunk_beats=beats_per_datagram
+    ):
+        yield struct.pack(
+            "<QQQ",
+            UDP_WAVE_BULK_MAGIC,
+            base_addr + beat_index * DDR_INTERLEAVED_BEAT_BYTES,
+            len(payload) // 8,
+        ) + payload
 
 
 def decode_udp_waveform_packet(packet: bytes) -> tuple[int, int, bytes]:
@@ -1913,20 +1910,11 @@ class RFSocController:
         )
         return parse_rfctrl2_network_response(response) if wait_response else response
 
-    def rfctrl2_arm(self, run_id: int, channel_mask: int = 0xFF, seq: int = 1, wait_response: bool = True):
-        return self._send_rfctrl2(pack_rfctrl2_arm(run_id, channel_mask, seq), RF2_OP_ARM, seq, wait_response)
-
     def rfctrl2_sync_epoch(self, epoch: int, seq: int = 1, wait_response: bool = True):
         return self._send_rfctrl2(pack_rfctrl2_sync_epoch(epoch, seq), RF2_OP_SYNC_EPOCH, seq, wait_response)
 
     def rfctrl2_start_at(self, start_tick: int, seq: int = 1, wait_response: bool = True):
         return self._send_rfctrl2(pack_rfctrl2_start_at(start_tick, seq), RF2_OP_START_AT, seq, wait_response)
-
-    def rfctrl2_trigger(self, seq: int = 1, wait_response: bool = True):
-        return self._send_rfctrl2(pack_rfctrl2_trigger(seq), RF2_OP_TRIGGER, seq, wait_response)
-
-    def rfctrl2_abort_mute(self, seq: int = 1, wait_response: bool = True):
-        return self._send_rfctrl2(pack_rfctrl2_abort_mute(seq), RF2_OP_ABORT_MUTE, seq, wait_response)
 
     @staticmethod
     def _save_hex_text(byte_data: bytes, filepath: str, bytes_per_line: int = 16, style: str = "hexdump"):
@@ -1946,67 +1934,9 @@ class RFSocController:
             else:
                 raise ValueError(f"Unknown style: {style}")
 
-    def upload_waveform(self, data_int16: np.ndarray, ddr_addr: int,
-                        dump_path: str, dump_style: str = "hexdump"):
-        """TCP 路径：type=0 payload = [uint64 ddr_addr] + [wave bytes...]"""
-        wave_bytes = np.ascontiguousarray(data_int16, dtype="<i2").tobytes()
-        self._save_hex_text(wave_bytes, dump_path, bytes_per_line=16, style=dump_style)
-        print(f"[dump] {dump_path}  ({len(wave_bytes)} bytes)")
 
-        payload = struct.pack("<Q", int(ddr_addr) & 0xFFFFFFFFFFFFFFFF) + wave_bytes
-        print(f"[upload] addr=0x{ddr_addr:016X}, payload={len(payload)} bytes (8+{len(wave_bytes)})")
-        return self._send_packet(0, payload)
 
-    def upload_waveform_udp(self, data_int16: np.ndarray, ddr_addr: int,
-                            dump_path: str, dump_style: str = "hexdump"):
-        wave_bytes = np.ascontiguousarray(data_int16, dtype="<i2").tobytes()
-        self._save_hex_text(wave_bytes, dump_path, bytes_per_line=16, style=dump_style)
 
-        packet_count = 0
-        for packet in iter_udp_waveform_packets(wave_bytes, ddr_addr):
-            self.sock.sendto(packet, (self.ip, self.port))
-            packet_count += 1
-            if packet_count % 8 == 0:
-                time.sleep(0.00001)
-
-        print(f"[udp-upload] addr=0x{ddr_addr:016X}, wave={len(wave_bytes)} bytes, packets={packet_count}")
-        return packet_count
-
-    def upload_waveform_udp_tiled(self, data_int16: np.ndarray, channel: int,
-                                  base_addr: int, dump_path: str,
-                                  dump_style: str = "hexdump"):
-        wave_bytes = np.ascontiguousarray(data_int16, dtype="<i2").tobytes()
-        self._save_hex_text(wave_bytes, dump_path, bytes_per_line=16, style=dump_style)
-
-        packet_count = 0
-        for packet in iter_tiled_udp_waveform_packets(wave_bytes, channel, base_addr=base_addr):
-            self.sock.sendto(packet, (self.ip, self.port))
-            packet_count += 1
-            if packet_count % 8 == 0:
-                time.sleep(0.00001)
-
-        first_addr = tiled_channel_base_addr(channel, base_addr=base_addr)
-        print(f"[udp-upload:tiled] ch={channel}, tile0=0x{first_addr:016X}, wave={len(wave_bytes)} bytes, packets={packet_count}")
-        return packet_count
-
-    def upload_waveform_udp_interleaved(self, channel_waves: dict[int, np.ndarray],
-                                        base_addr: int, dump_path: str,
-                                        dump_style: str = "hexdump"):
-        payload_bytes, logical_samples = pack_interleaved_512b_waveforms(channel_waves)
-        self._save_hex_text(payload_bytes, dump_path, bytes_per_line=16, style=dump_style)
-
-        packet_count = 0
-        for packet in iter_interleaved_udp_waveform_packets(channel_waves, base_addr=base_addr):
-            self.sock.sendto(packet, (self.ip, self.port))
-            packet_count += 1
-            if packet_count % 8 == 0:
-                time.sleep(0.00001)
-
-        print(
-            f"[udp-upload:interleaved_512b] base=0x{base_addr:016X}, "
-            f"bytes={len(payload_bytes)}, logical_samples={logical_samples}, packets={packet_count}"
-        )
-        return packet_count
 
     def upload_max_length_udp(
         self,
@@ -2119,26 +2049,7 @@ class RFSocController:
             packet_count += 1
         return packet_count
 
-    def upload_waveform_interleaved(self, channel_waves: dict[int, np.ndarray],
-                                    ddr_addr: int, dump_path: str,
-                                    dump_style: str = "hexdump"):
-        payload_bytes, logical_samples = pack_interleaved_512b_waveforms(channel_waves)
-        self._save_hex_text(payload_bytes, dump_path, bytes_per_line=16, style=dump_style)
-        payload = struct.pack("<Q", int(ddr_addr) & 0xFFFFFFFFFFFFFFFF) + payload_bytes
-        print(
-            f"[upload:interleaved_512b] addr=0x{ddr_addr:016X}, "
-            f"bytes={len(payload_bytes)}, logical_samples={logical_samples}"
-        )
-        return self._send_packet(0, payload)
 
-    def send_instructions(self, cmd_list):
-        """type=1：每条 16B：w0/w1/w2/w3"""
-        packet = pack_udp_instruction_packet(cmd_list)
-        payload_bytes = len(packet) - 16
-        print(f"[instr] Sending {len(cmd_list)} instructions, {payload_bytes} bytes")
-        if self.transport == "udp":
-            return self.send_udp_words(packet)
-        return self._send_packet(1, packet[16:])
 
     def warm_udp_control_path(self, seq: int | None = None):
         """Send an acknowledged control packet before fire-and-forget UDP writes."""
@@ -2148,17 +2059,6 @@ class RFSocController:
             seq = (int(time.time() * 1000.0) ^ id(self)) & 0xFFFFFFFF or 1
         return self.rvctrl1_ping(seq=seq, wait_response=True)
 
-    def trigger(self):
-        """Issue a playback trigger.
-
-        The PL UDP receiver consumes raw 64-bit words, so the UDP path uses a
-        single reserved word instead of the legacy type/length packet header.
-        """
-        if self.transport == "udp":
-            print("[trig] UDP TRIGGER1")
-            return self.send_udp_words(struct.pack("<Q", UDP_TRIGGER_WORD))
-        print("[trig] GO")
-        return self._send_packet(2, b"GO")
 
 
 # ============================================================
@@ -2244,69 +2144,49 @@ def main():
             print(f"[dry-run] generated waveform artifacts in {output_dir.resolve()}")
             return 0
 
+        if args.transport != "udp":
+            raise SystemExit("the unified WAVECTR0 waveform path supports UDP only")
+        if args.ddr_layout != DDR_LAYOUT_INTERLEAVED_512B:
+            raise SystemExit("the unified WAVECTR0 waveform path requires interleaved_512b layout")
+
+        device = Dr47Device(
+            args.ip,
+            port=args.port,
+            timeout_s=args.timeout,
+            udp_interface=args.udp_interface,
+            udp_source_ip=args.udp_source_ip,
+        )
         try:
-            ctrl = RFSocController(
-                args.ip,
-                port=args.port,
-                timeout_s=args.timeout,
-                transport=args.transport,
-                udp_interface=args.udp_interface,
-                udp_source_ip=args.udp_source_ip,
+            device.connect()
+            channel_waves = {channel: tone for channel in channels}
+            channel_mask = sum(1 << (channel - 1) for channel in channels)
+            result = device.upload_waveforms(
+                channel_waves,
+                channel_mask=channel_mask,
+                loop_count=1,
+                wave_formats={channel: "interleaved_iq" for channel in channels},
             )
-        except OSError as exc:
+            print(
+                f"[waveform] WAVECTR0 descriptor committed: session={int(result['session'])}, "
+                f"beats={int(result['total_beats'])}, packets={int(result['packet_count'])}"
+            )
+            if args.udp_write_settle_s > 0:
+                print(f"[waveform] waiting {args.udp_write_settle_s:.3f}s for prefetch")
+                time.sleep(args.udp_write_settle_s)
+            if args.wait_for_trigger:
+                print("[waveform] waiting for external TRIG_2")
+            else:
+                device.play(session=int(result["session"]))
+                print("[waveform] software PLAY accepted")
+            print("Done.")
+            return 0
+        except (OSError, TimeoutError) as exc:
             raise SystemExit(
                 f"Unable to connect to RFSoC board at {args.ip}:{args.port}: {exc}. "
                 "Use --dry-run for offline validation or set RFSOC_BOARD_IP/RFSOC_BOARD_PORT."
             ) from exc
-
-        try:
-            end_channel = 0 if (args.transport == "tcp" or args.wait_for_trigger) else 15
-
-            # 每个使能通道：DELAY 0 + PLAY(tone_bytes, ddr_addr)
-            cmds = []
-            for ch in channels:
-                if args.ddr_layout == DDR_LAYOUT_INTERLEAVED_512B:
-                    addr = 0
-                    play_flags = PLAY_FLAG_INTERLEAVED
-                elif args.ddr_layout == DDR_LAYOUT_TILED:
-                    addr = tiled_channel_base_addr(ch)
-                    play_flags = PLAY_FLAG_TILED
-                else:
-                    addr = DDR_CH_ADDR[ch - 1]
-                    play_flags = 0
-                cmds.append([1, ch, 0, 0])
-                cmds.append([2, ch, tone_bytes, addr, play_flags])
-            cmds.append([3, end_channel, 0, 0])
-
-            if args.ddr_layout == DDR_LAYOUT_INTERLEAVED_512B:
-                channel_waves = {ch: tone for ch in channels}
-                dump = "interleaved_waveform_hex.txt"
-                if args.transport == "tcp":
-                    ctrl.upload_waveform_interleaved(channel_waves, ddr_addr=DDR_BASE, dump_path=dump)
-                else:
-                    ctrl.upload_waveform_udp_interleaved(channel_waves, base_addr=DDR_BASE, dump_path=dump)
-            else:
-                for ch in channels:
-                    addr = tiled_channel_base_addr(ch) if args.ddr_layout == DDR_LAYOUT_TILED else DDR_CH_ADDR[ch - 1]
-                    dump = f"ch{ch}_waveform_hex.txt"
-                    if args.transport == "tcp":
-                        ctrl.upload_waveform(tone, ddr_addr=addr, dump_path=dump)
-                    elif args.ddr_layout == DDR_LAYOUT_TILED:
-                        ctrl.upload_waveform_udp_tiled(tone, channel=ch, base_addr=DDR_BASE, dump_path=dump)
-                    else:
-                        ctrl.upload_waveform_udp(tone, ddr_addr=addr, dump_path=dump)
-
-            if args.transport != "tcp" and args.udp_write_settle_s > 0:
-                print(f"[udp-upload] waiting {args.udp_write_settle_s:.3f}s for DDR write completion")
-                time.sleep(args.udp_write_settle_s)
-
-            ctrl.send_instructions(cmds)
-            if args.transport == "tcp":
-                ctrl.trigger()
-            print("Done.")
-            return 0
         finally:
-            ctrl.close()
+            device.close()
     finally:
         os.chdir(old_cwd)
 

@@ -15,18 +15,18 @@ python -m pip install -e software/dr47
 
 ## 板级测试入口
 
-`dr47/examples/` 目前只保留一个测试脚本：从卡跳过 XS20 SYNC 门控，等待
-XS19 外部 Trigger，并同时播放 CH1/CH2。板卡 IP、主机网卡、源 IP、频率、
-脉冲和 Trigger 数量都直接写在脚本顶部，不接受命令行参数或环境变量。
+`dr47/examples/` 提供两个单板 WAVECTR0 示例：外部 XS19 Trigger 和软件 PLAY。
+板卡 IP、主机网卡、源 IP、频率、脉冲和 Trigger 参数都直接写在脚本顶部，
+不接受命令行参数或环境变量。
 
 ~~~bash
-.venv/bin/python software/dr47/examples/hardware_slave_bypass_external_trigger_test.py
+.venv/bin/python software/dr47/examples/waveform_external_trigger_example.py
+.venv/bin/python software/dr47/examples/waveform_software_play_example.py
 ~~~
 
 ## 常用工具
 
 - `send_waveform_udp.py`：生成并上传 CH1-CH8 波形。
-- `sync_two_boards.py`：双板 SYNC/Trigger 编排。
 - `dr47-network`：发现、配置和查询板卡。
 - `webapp/`：FastAPI 后端；`webui/`：Vue 前端。
 

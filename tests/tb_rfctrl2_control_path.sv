@@ -85,17 +85,8 @@ module tb_rfctrl2_control_path;
     .rvctrl_tlast(rvctrl_tlast),
     .rvctrl_word_count(rvctrl_word_count),
     .rvctrl_protocol(rvctrl_protocol),
-    .m_instr_tdata(),
-    .m_instr_tvalid(),
-    .m_instr_tready(1'b1),
-    .trigger_pulse(),
-    .rfctrl2_arm_pulse(),
-    .rfctrl2_trigger_pulse(),
-    .rfctrl2_abort_mute_pulse(),
     .rfctrl2_sync_epoch_pulse(),
     .rfctrl2_epoch(),
-    .rfctrl2_start_valid(),
-    .rfctrl2_start_tick(),
     .rfdc_apply_start(),
     .rfdc_apply_sequence(),
     .rfdc_apply_revision(),
@@ -260,7 +251,7 @@ module tb_rfctrl2_control_path;
     check_condition(responses[10] == 64'h0000000300000001, "prefill/active/pending debug mismatch");
     check_condition(responses[11] == 64'h00000007000000F5, "MTS/NCO synchronization debug mismatch");
 
-    $display("PASS: full RFCTRL2 STATUS payload crosses the UDP writer and PL control response path");
+    $display("PASS: waveform STATUS payload crosses the UDP writer and PL control response path");
     $finish;
   end
 endmodule

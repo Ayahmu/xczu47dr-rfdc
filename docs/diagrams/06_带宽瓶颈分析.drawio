@@ -1,0 +1,57 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="legend" value="带宽瓶颈分析 — 回放数据通路（DDR4 → RF 数模转换）" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="40" y="4" width="1000" height="32" as="geometry"/>
+    </mxCell>
+    <mxCell id="gSrc" value="数据源" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+      <mxGeometry x="40" y="60" width="330" height="180" as="geometry"/>
+    </mxCell>
+    <mxCell id="nDdr" value="DDR4 存储总线&#10;64 位 @ 2400 MT/s&#10;峰值 19.2 GB/s" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=14;" vertex="1" parent="gSrc">
+      <mxGeometry x="25" y="46" width="280" height="108" as="geometry"/>
+    </mxCell>
+    <mxCell id="gPipe" value="回放数据通路" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#FFE6CC;strokeColor=#D79B00;" vertex="1" parent="1">
+      <mxGeometry x="420" y="60" width="1180" height="180" as="geometry"/>
+    </mxCell>
+    <mxCell id="nMig" value="存储器读接口&#10;512 位 @ 300.12 MHz&#10;峰值 19.2 GB/s" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gPipe">
+      <mxGeometry x="25" y="46" width="250" height="108" as="geometry"/>
+    </mxCell>
+    <mxCell id="nFrame" value="8 通道波形帧&#10;2048 位 @ 300.12 MHz&#10;上限 76.8 GB/s（非瓶颈）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gPipe">
+      <mxGeometry x="305" y="46" width="280" height="108" as="geometry"/>
+    </mxCell>
+    <mxCell id="nFifo" value="8 通道跨时钟缓冲&#10;每通道 256 位 · 300M → 50M&#10;12.8 GB/s（消费率）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gPipe">
+      <mxGeometry x="615" y="46" width="280" height="108" as="geometry"/>
+    </mxCell>
+    <mxCell id="nRfdc" value="数模转换输入&#10;每通道 256 位 @ 50 MHz&#10;12.8 GB/s 消费端" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gPipe">
+      <mxGeometry x="925" y="46" width="225" height="108" as="geometry"/>
+    </mxCell>
+    <mxCell id="nBottleneck" value="★ 唯一硬瓶颈&#10;回放需求 12.8 GB/s ÷ DDR4 峰值 19.2 GB/s = 占用率 66.7%&#10;单帧 256 字节突发，对存储体交错/刷新敏感" style="whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=15;fontStyle=1;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="420" y="290" width="640" height="100" as="geometry"/>
+    </mxCell>
+    <mxCell id="nUpload" value="上传（10G 网络）≈ 1.2 GB/s ≪ 回放 12.8 GB/s&#10;→ 无法边传边放，必须先传后放&#10;→ DDR4 是波形缓冲，不要求上传追平回放" style="whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="40" y="290" width="340" height="100" as="geometry"/>
+    </mxCell>
+    <mxCell id="nBuffer" value="缓冲余量：深度 1024 拍 = 20.48 µs，&#10;预取水位 768 拍 = 15.36 µs —&#10;足以吸收读抖动，但 66.7% 占空比的持续供给需板级长跑验证" style="whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="1100" y="290" width="500" height="100" as="geometry"/>
+    </mxCell>
+    <mxCell id="be1" value="读" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="nDdr" target="nMig">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="be2" value="组装" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gPipe" source="nMig" target="nFrame">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="be3" value="跨时钟" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gPipe" source="nFrame" target="nFifo">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="be4" value="消费" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gPipe" source="nFifo" target="nRfdc">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="be5" value="66.7%" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#B85450;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="nMig" target="nBottleneck">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="be6" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#82B366;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="nFifo" target="nBuffer">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>

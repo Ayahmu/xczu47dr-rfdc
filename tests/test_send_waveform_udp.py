@@ -37,9 +37,25 @@ class SendWaveformUdpTests(unittest.TestCase):
         self.assertEqual(metadata["expected_datamover_beats"], 134_201_344)
         self.assertAlmostEqual(metadata["expected_duration_s"], 0.67100672)
 
-    def test_max_length_cli_streams_without_allocating_channel_arrays(self):
+    def test_max_length_cli_commits_stream_descriptor_without_instruction_playback(self):
+        calls = []
+
+        class FakeDevice:
+            def __init__(self, *args, **kwargs):
+                calls.append(("init", args, kwargs))
+
+            def connect(self):
+                calls.append(("connect",))
+
+            def upload_interleaved_chunks(self, chunks, **kwargs):
+                first = next(iter(chunks))
+                calls.append(("upload", first, kwargs))
+                return {"session": 9, "packet_count": 4}
+
+            def close(self):
+                calls.append(("close",))
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            controller = mock.Mock()
             argv = [
                 "send_waveform_udp.py",
                 "max-length",
@@ -48,70 +64,29 @@ class SendWaveformUdpTests(unittest.TestCase):
                 "--output-dir", temp_dir,
             ]
             with mock.patch.object(sys, "argv", argv), \
-                 mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                 mock.patch.object(send_waveform_udp, "Dr47Device", FakeDevice):
                 self.assertEqual(send_waveform_udp.main(), 0)
 
-            controller.upload_max_length_udp.assert_called_once()
-            self.assertEqual(controller.upload_max_length_udp.call_args.args[0], 4096)
-            commands = controller.send_instructions.call_args.args[0]
-            play_commands = [command for command in commands if command[0] == 2]
-            self.assertEqual(len(play_commands), 8)
-            self.assertTrue(all(command[2] == 4096 for command in play_commands))
-            self.assertEqual(commands[-1], [3, 0, 0, 0, 0])
+            upload = next(call for call in calls if call[0] == "upload")
+            self.assertEqual(upload[1][0], 0)
+            # The CLI cache producer uses 8192 DDR beats per producer chunk;
+            # Dr47Device fragments that large chunk into protocol DATA packets.
+            self.assertEqual(len(upload[1][1]), 4096 * 8)
+            self.assertEqual(upload[2]["total_bytes"], 4096 * 8)
+            self.assertEqual(upload[2]["total_beats"], 4096 // 32)
+            self.assertEqual(upload[2]["channel_mask"], 0xFF)
+            self.assertEqual(upload[2]["loop_count"], 1)
+            self.assertNotIn("send_instructions", {call[0] for call in calls})
             metadata_path = Path(temp_dir) / "max_length_metadata.json"
             self.assertTrue(metadata_path.exists())
 
-    def test_rvctrl_cli_commands_use_control_packet_path(self):
-        cases = [
-            (
-                ["send_waveform_udp.py", "rvctrl-ping", "--seq", "11"],
-                "rvctrl_ping",
-                (11,),
-            ),
-            (
-                ["send_waveform_udp.py", "rvctrl-play", "--bytes-per-channel", "4KiB", "--seq", "12", "--auto-start", "--loop"],
-                "rvctrl_play_interleaved",
-                (4096,),
-            ),
-            (
-                ["send_waveform_udp.py", "rvctrl-trigger", "--seq", "13"],
-                "rvctrl_trigger",
-                (13,),
-            ),
-        ]
-
-        for argv, method_name, first_args in cases:
-            with self.subTest(method_name=method_name):
-                controller = mock.Mock()
-                with mock.patch.object(sys, "argv", argv), \
-                     mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
-                    self.assertEqual(send_waveform_udp.main(), 0)
-
-                method = getattr(controller, method_name)
-                method.assert_called_once()
-                for index, expected in enumerate(first_args):
-                    self.assertEqual(method.call_args.args[index], expected)
-
-    def test_rvctrl_play_cli_passes_auto_start_and_loop_flags(self):
-        controller = mock.Mock()
-        argv = [
-            "send_waveform_udp.py",
-            "rvctrl-play",
-            "--bytes-per-channel", "4096",
-            "--seq", "14",
-            "--auto-start",
-            "--loop",
-        ]
-        with mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
-            self.assertEqual(send_waveform_udp.main(), 0)
-
-        controller.rvctrl_play_interleaved.assert_called_once_with(
-            4096,
-            seq=14,
-            auto_start=True,
-            loop=True,
-        )
+    def test_obsolete_playback_cli_commands_are_rejected(self):
+        parser = send_waveform_udp.build_parser()
+        for mode in ("rvctrl-play", "rvctrl-trigger", "rvctrl1-play", "rvctrl1-trigger"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(SystemExit) as raised:
+                    parser.parse_args([mode])
+                self.assertEqual(raised.exception.code, 2)
 
     def test_rvctrl1_cli_commands_use_control_packet_path(self):
         cases = [
@@ -158,28 +133,6 @@ class SendWaveformUdpTests(unittest.TestCase):
                 method.assert_called_once()
                 for index, expected in enumerate(expected_args):
                     self.assertEqual(method.call_args.args[index], expected)
-
-    def test_rvctrl1_play_cli_passes_auto_start_and_loop_flags(self):
-        controller = mock.Mock()
-        argv = [
-            "send_waveform_udp.py",
-            "rvctrl1-play",
-            "--bytes-per-channel", "4096",
-            "--seq", "25",
-            "--auto-start",
-            "--loop",
-        ]
-        with mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
-            self.assertEqual(send_waveform_udp.main(), 0)
-
-        controller.rvctrl1_play_interleaved.assert_called_once_with(
-            4096,
-            seq=25,
-            auto_start=True,
-            loop=True,
-            wait_response=False,
-        )
 
     def test_max_length_cli_dry_run_does_not_generate_cache_unless_requested(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -472,7 +425,25 @@ class SendWaveformUdpTests(unittest.TestCase):
                 channel_format="interleaved_iq",
                 stem="ezq",
             )
-            controller = mock.Mock()
+            calls = []
+
+            class FakeDevice:
+                def __init__(self, *args, **kwargs):
+                    calls.append(("init", args, kwargs))
+
+                def connect(self):
+                    calls.append(("connect",))
+
+                def upload_waveforms(self, waves, **kwargs):
+                    calls.append(("upload", dict(waves), kwargs))
+                    return {"session": 11}
+
+                def play(self, *, session):
+                    calls.append(("play", session))
+
+                def close(self):
+                    calls.append(("close",))
+
             argv = [
                 "send_waveform_udp.py",
                 "ezq",
@@ -484,11 +455,14 @@ class SendWaveformUdpTests(unittest.TestCase):
             ]
 
             with mock.patch.object(sys, "argv", argv), \
-                 mock.patch.object(send_waveform_udp.host, "RFSocController", return_value=controller):
+                 mock.patch.object(send_waveform_udp, "Dr47Device", FakeDevice):
                 self.assertEqual(send_waveform_udp.main(), 0)
 
-            commands = controller.send_instructions.call_args.args[0]
-            self.assertEqual(commands[-1], [3, 15, 0, 0, 1])
+            upload = next(call for call in calls if call[0] == "upload")
+            self.assertEqual(upload[2]["channel_mask"], 0x01)
+            self.assertEqual(upload[2]["loop_count"], 2)
+            self.assertEqual([call for call in calls if call[0] == "play"], [("play", 11)])
+            self.assertNotIn("send_instructions", {call[0] for call in calls})
 
 
 if __name__ == "__main__":

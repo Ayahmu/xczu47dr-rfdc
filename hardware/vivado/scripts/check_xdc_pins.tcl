@@ -19,14 +19,14 @@
 #
 # Usage (after synthesis, from hardware/vivado):
 #   vivado -mode batch -notrace -source scripts/check_xdc_pins.tcl \
-#          -tclargs custom_xczu47dr_slave
+#          -tclargs custom_xczu47dr_waveform
 
 set script_folder [file dirname [file normalize [info script]]]
 if {![llength [info commands target_config_get]]} {
   source "${script_folder}/target_config.tcl"
 }
 
-set target "custom_xczu47dr_slave"
+set target "custom_xczu47dr_waveform"
 if {[info exists argc] && $argc > 0} {
   set target [lindex $argv 0]
 }

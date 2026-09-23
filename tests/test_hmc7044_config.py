@@ -40,8 +40,9 @@ class Hmc7044ConfigTests(unittest.TestCase):
 
     def test_firmware_psu_init_paths_match_vitis_output_layout(self):
         text = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
-        self.assertIn("custom_xczu47dr_master/hw_platform/hw/psu_init.tcl", text)
-        self.assertIn("custom_xczu47dr_slave/hw_platform/hw/psu_init.tcl", text)
+        self.assertIn("custom_xczu47dr_waveform/hw_platform/hw/psu_init.tcl", text)
+        self.assertNotIn("custom_xczu47dr_master", text)
+        self.assertNotIn("custom_xczu47dr_slave", text)
         self.assertNotIn("hw_platform/export/hw_platform/hw/psu_init.tcl", text)
 
     def test_external_250mhz_register_branch_uses_clkin1_and_divide_by_25(self):
@@ -50,11 +51,24 @@ class Hmc7044ConfigTests(unittest.TestCase):
         expected_writes = (
             'x"0003" & x"2F"',
             'x"0005" & x"5A"',
-            'x"0021" & x"19"',
             'x"0026" & x"0A"',
         )
         for write in expected_writes:
             self.assertIn(write, text)
+
+    def test_reference_mhz_generic_computes_r1_for_10mhz_pfd(self):
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+        # R1 is now REFERENCE_MHZ/10 (250->25, 10->1) rather than a hardcoded 0x19.
+        self.assertIn("REFERENCE_MHZ : positive := 250", text)
+        self.assertRegex(
+            text,
+            r'config_reg\s*<=\s*x"0021"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
+        )
+        # Top/TopCustomXczu47dr carry the generic and target_config drives it.
+        top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
+        self.assertRegex(top, r"parameter integer REFERENCE_MHZ = 250")
+        target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
+        self.assertIn("generics {REFERENCE_MHZ=250}", target_config)
 
     def test_external_250mhz_selects_high_vco_core_for_3072_ghz(self):
         regs = _hmc7044_registers()
@@ -69,7 +83,7 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertRegex(
             text,
             r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then\s*'
-            r'config_reg\s*<=\s*x"0021"\s*&\s*x"19"',
+            r'config_reg\s*<=\s*x"0021"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
         )
         self.assertRegex(
             text,
@@ -77,7 +91,9 @@ class Hmc7044ConfigTests(unittest.TestCase):
             r'config_reg\s*<=\s*x"0026"\s*&\s*x"0A"',
         )
 
-        r1 = 0x19
+        # R1 = REFERENCE_MHZ/10; with the 250 MHz default, R1=25 and N1=10 keep
+        # the PLL1 PFD at 10 MHz and the VCXO at 100 MHz.
+        r1 = 25
         n1 = 0x0A
         self.assertEqual(250_000_000 / r1, 10_000_000)
         self.assertEqual((250_000_000 / r1) * n1, VCXO_HZ)
@@ -100,42 +116,39 @@ class Hmc7044ConfigTests(unittest.TestCase):
         # 0x0014: input clock priority restored to the XS17 baseline.
         self.assertEqual(regs[0x0014], 0x36)
 
-    def test_two_board_sync_requires_mts_and_software_sync_gate(self):
+    def test_single_board_waveform_retains_rfdc_mts_but_not_two_board_playback_gate(self):
         firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         rfctrl2 = RFCTRL2_RTL.read_text(encoding="utf-8", errors="ignore")
         host = HOST_SOFTWARE.read_text(encoding="utf-8", errors="ignore")
 
+        # RFDC MTS/NCO alignment is still a board-local diagnostic/configuration
+        # responsibility.  It must not be confused with the retired two-board
+        # playback admission path.
         self.assertIn("XRFdc_MultiConverter_Sync", firmware)
         self.assertIn("SysRef_Enable = 1", firmware)
         self.assertIn("Align_DAC_NCO_To_SYSREF", firmware)
         self.assertIn("FW_STATUS_NCO_SYNC_READY", firmware)
         self.assertIn("Publish_DAC_NCO_Sync_Ready", firmware)
-        # 启动阶段不再等待 XS20；运行时由 PL epoch 触发 MTS/NCO 重对齐。
         self.assertIn("SYNC_EVENT_EPOCH_MASK", firmware)
         self.assertIn("HMC7044_SYNC_SETTLE_US", firmware)
         self.assertIn("Reinitialize_RFDC_For_Sync", firmware)
         self.assertIn("Read_Sync_Event_Epoch", firmware)
-        self.assertIn("rfctrl2_sync_epoch_pulse", top)
-        self.assertIn(".sync_done", top)
-        self.assertIn("firmware_nco_sync_ready", top)
-        self.assertIn("rfdc_nco_runtime_required", top)
         self.assertIn("dac_mts", rfctrl2.lower())
         self.assertIn("dac_mts", host.lower())
         self.assertIn("RF2_NET_STATUS_HMC_DONE", host)
         self.assertIn("rfctrl2_sync_epoch", host)
+        self.assertIn("waveform_playback_path", top)
+        self.assertNotIn("sync_trigger_link_i", top)
+        self.assertNotIn("dac_trigger_emitter_i", top)
 
-    def test_physical_sync_and_trigger_use_hmc_pl_clk_domain(self):
+    def test_physical_clock_domain_is_local_and_legacy_sync_link_is_not_instantiated(self):
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
-        sync_link = (REPO_ROOT / "hardware" / "vivado" / "src" / "sync_trigger_link.v").read_text(
-            encoding="utf-8", errors="ignore"
-        )
         self.assertIn("IBUFDS", top)
-        self.assertIn("hmc_pl_clk", top)
-        self.assertIn(".hmc_pl_clk", top)
-        self.assertIn("input  wire hmc_pl_clk", sync_link)
-        self.assertIn(".clk         (hmc_pl_clk)", sync_link)
-        self.assertNotIn("trigger_in_pl_sync", sync_link)
+        self.assertIn("wire hmc_pl_clk", top)
+        self.assertIn("BUFG hmc_pl_clk_bufg_i", top)
+        self.assertNotIn("sync_trigger_link_i", top)
+        self.assertNotIn("trigger_in_pl_sync", top)
 
     def test_hmc_pl_clk_constraint_matches_96mhz_output(self):
         xdc = (REPO_ROOT / "hardware" / "vivado" / "xdc" / "custom_xczu47dr_minimal.xdc").read_text(

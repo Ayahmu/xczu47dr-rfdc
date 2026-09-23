@@ -161,3 +161,9 @@ clockInfo.txt
 FinalUnmatchedCellsToUnplace.txt
 iter_*_CongestedCLBsAndNets.txt
 artifacts/tdc_20260907/TDC_20260907_slave.zip
+
+# Isolated waveform migration verification environment.
+.venv-waveform/
+
+# Local source baselines and verification logs (not release artifacts).
+/build/audit/

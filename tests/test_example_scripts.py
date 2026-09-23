@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "software/dr47/examples"
-SCRIPT_NAME = "hardware_slave_bypass_external_trigger_test.py"
+SCRIPT_NAME = "waveform_external_trigger_example.py"
 
 
 def called_methods(tree: ast.AST) -> set[str]:
@@ -24,9 +24,9 @@ class ExampleScriptTests(unittest.TestCase):
     def test_only_one_hardware_test_remains(self):
         scripts = {
             path.name
-            for path in EXAMPLES.glob("hardware_*_test.py")
+            for path in EXAMPLES.glob("waveform_*_example.py")
         }
-        self.assertEqual(scripts, {SCRIPT_NAME})
+        self.assertEqual(scripts, {"waveform_external_trigger_example.py", "waveform_software_play_example.py"})
 
     def test_configuration_is_defined_in_source(self):
         text = (EXAMPLES / SCRIPT_NAME).read_text(encoding="utf-8")
@@ -46,17 +46,20 @@ class ExampleScriptTests(unittest.TestCase):
             )
         )
 
-    def test_bypasses_sync_and_only_waits_for_external_trigger(self):
+    def test_uses_single_board_waveform_protocol_and_external_trigger(self):
         text = (EXAMPLES / SCRIPT_NAME).read_text(encoding="utf-8")
         tree = ast.parse(text)
         methods = called_methods(tree)
 
-        self.assertIn("bypass_sync", methods)
-        self.assertIn("configure_playback", methods)
-        self.assertIn("arm_playback", methods)
-        self.assertIn("abort_playback", methods)
-        self.assertIn("trigger_input_count", text)
-        self.assertIn("trigger_accepted_count", text)
+        self.assertIn("upload_waveforms", methods)
+        self.assertIn("waveform_status", methods)
+        self.assertIn("stop", methods)
+        self.assertIn("WAVECTR0", text)
+        self.assertIn("external XS19 Trigger", text)
+        self.assertNotIn("bypass_sync", text)
+        self.assertNotIn("sync_role", text)
+        self.assertNotIn("arm_playback", text)
+        self.assertNotIn("abort_playback", text)
         self.assertNotIn("trigger", methods)
         self.assertNotIn("trigger_playback", methods)
         self.assertNotIn("emit_trigger", methods)

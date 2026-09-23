@@ -323,7 +323,7 @@ class WebAppApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "RUNNING")
         aborted = self.client.post("/api/boards/board-a/abort", headers=self.headers)
         self.assertEqual(aborted.status_code, 200, aborted.text)
-        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "READY")
 
     def test_completed_upload_releases_run_lock_for_next_task(self):
         first = self.client.post("/api/runs", json=run_payload(), headers=self.headers)
@@ -418,12 +418,13 @@ class WebAppApiTests(unittest.TestCase):
         from software.webapp.models import RunCreateRequest
         request = RunCreateRequest.model_validate(payload)
         record = services.runs.create(request)
+        services.store.set_waveform_sessions(record.id, {"board-a": 0x1234})
 
         services.runs._fault(record.id, "simulated failure")
 
         self.assertEqual(
             services.boards.mute.call_args_list,
-            [call("board-a")],
+            [call("board-a", session=0x1234)],
         )
 
     def test_max_length_dry_run_completes_with_metadata(self):
@@ -490,7 +491,7 @@ class WebAppApiTests(unittest.TestCase):
         record = self.wait_done(created.json()["id"])
         self.assertEqual(record["completion_mode"], "one_shot")
         self.assertFalse(record["loaded"])
-        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "READY")
         self.assertIsNone(self.client.get("/api/boards/board-a/loaded-waveform").json())
 
     def test_live_continuous_sine_triggers_once_mutes_and_releases_board(self):
@@ -509,7 +510,7 @@ class WebAppApiTests(unittest.TestCase):
         messages = [event["message"] for event in events]
         self.assertTrue(any("continuous playback triggered once" in message for message in messages))
         self.assertFalse(any("loop playback sent" in message for message in messages))
-        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "READY")
         next_run = self.client.post("/api/runs", json=run_payload(dry_run=False), headers=self.headers)
         self.assertEqual(next_run.status_code, 202, next_run.text)
 
@@ -536,7 +537,7 @@ class WebAppApiTests(unittest.TestCase):
         stopped = self.client.post("/api/boards/board-a/abort", headers=self.headers)
         self.assertEqual(stopped.status_code, 200, stopped.text)
         self.assertEqual(stopped.json()["state"], "ABORTED")
-        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "MUTED")
+        self.assertEqual(self.client.get("/api/boards/board-a/status?refresh=false").json()["state"], "READY")
 
     def test_continuous_playback_rejects_non_loop_and_accepts_other_waveforms(self):
         not_loop = run_payload(waveform=manual_waveform_payload(loop=False))

@@ -15,7 +15,6 @@ if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
 import dr47 as driver  # noqa: E402
-import waveform_tools  # noqa: E402
 
 from .models import (  # noqa: E402
     MaxLengthTestCreateRequest,
@@ -265,39 +264,50 @@ class MaxLengthService:
                 retries=2,
             )
             try:
-                self.store.update(test_id, state=MaxLengthTestState.UPLOADING, progress=0.0, bytes_per_channel=bytes_per_channel, physical_bytes=physical_bytes)
+                self.store.update(
+                    test_id, state=MaxLengthTestState.UPLOADING, progress=0.0,
+                    bytes_per_channel=bytes_per_channel, physical_bytes=physical_bytes,
+                )
                 upload_start = time.monotonic()
-                sent_bytes = 0
-                datagram_count = 0
-                last_progress = 0.0
-                for datagram in driver.iter_max_length_udp_batches(
-                    bytes_per_channel,
-                    base_addr=driver.DDR_BASE,
-                    beats_per_datagram=request.beats_per_datagram or driver.UDP_BULK_SAFE_MAX_BEATS,
-                    pattern=request.pattern,
-                    sine_freq_hz=request.sine_freq_hz,
-                    sine_amplitude=request.sine_amplitude,
-                ):
+                chunk_beats = request.beats_per_datagram or driver.UDP_BULK_SAFE_MAX_BEATS
+
+                def on_upload_progress(sent_packets: int, total_packets: int) -> None:
                     if stop.is_set():
                         raise RuntimeError("max-length test aborted during upload")
-                    controller.transport.send(datagram)
-                    datagram_count += 1
-                    sent_bytes += len(datagram) - 24
-                    if sent_bytes - last_progress >= 256 * 1024 * 1024 or sent_bytes == physical_bytes:
-                        last_progress = sent_bytes
-                        self.store.update(
-                            test_id,
-                            progress=min(1.0, sent_bytes / physical_bytes),
-                            datagrams=datagram_count,
-                            upload_elapsed_s=time.monotonic() - upload_start,
-                            upload_mbps=(sent_bytes / max(time.monotonic() - upload_start, 1e-9)) / 1e6,
-                        )
+                    elapsed = max(time.monotonic() - upload_start, 1e-9)
+                    sent_bytes = min(physical_bytes, sent_packets * 1024)
+                    self.store.update(
+                        test_id,
+                        progress=min(1.0, sent_packets / max(total_packets, 1)),
+                        datagrams=sent_packets,
+                        upload_elapsed_s=elapsed,
+                        upload_mbps=(sent_bytes / elapsed) / 1e6,
+                    )
+                    if sent_packets == total_packets or sent_packets % 256 == 0:
                         self.events.publish({"type": "max_length.progress", "data": self.store.get(test_id).model_dump(mode="json")})
+
+                committed = controller.upload_interleaved_chunks(
+                    driver.iter_max_length_payload_chunks(
+                        bytes_per_channel,
+                        chunk_beats=chunk_beats,
+                        marker_bytes_per_channel=4096,
+                        pattern=request.pattern,
+                        sine_freq_hz=request.sine_freq_hz,
+                        sine_amplitude=request.sine_amplitude,
+                    ),
+                    total_bytes=physical_bytes,
+                    total_beats=physical_bytes // 256,
+                    channel_mask=0xFF,
+                    loop_count=1,
+                    packet_bytes=1024,
+                    progress_callback=on_upload_progress,
+                )
                 upload_elapsed = max(time.monotonic() - upload_start, 1e-9)
+                packet_count = int(committed["packet_count"])
                 self.store.update(
                     test_id,
                     progress=1.0,
-                    datagrams=datagram_count,
+                    datagrams=packet_count,
                     upload_elapsed_s=upload_elapsed,
                     upload_mbps=(physical_bytes / upload_elapsed) / 1e6,
                     theoretical_duration_s=theoretical_duration_s,
@@ -305,67 +315,45 @@ class MaxLengthService:
 
                 if stop.is_set():
                     raise RuntimeError("max-length test aborted after upload")
-                lengths = {channel: bytes_per_channel for channel in range(1, 9)}
-                controller.send_instructions(
-                    waveform_tools.build_play_commands(
-                        loop=False,
-                        auto_start=False,
-                        channel_lengths=lengths,
-                        channel_delays={channel: 0 for channel in range(1, 9)},
-                        layout=driver.DDR_LAYOUT_INTERLEAVED_512B,
-                    )
-                )
+                session = int(committed["session"])
                 self.store.update(test_id, state=MaxLengthTestState.PLAYING, progress=0.95)
-                arm = controller.rfctrl2_arm(
-                    int(test_id, 16) & 0xFFFFFFFF,
-                    channel_mask=0xFF,
-                    wait_response=True,
-                )
-                self._require_ok(arm, "ARM")
-                prepared = self._wait_prepared(controller, stop)
-                if not prepared:
-                    raise RuntimeError("max-length ARM did not reach PREPARED")
-                trigger = controller.rfctrl2_trigger(wait_response=True)
-                self._require_ok(trigger, "TRIGGER")
+                if request.auto_trigger:
+                    controller.play(session=session)
+                else:
+                    # The descriptor is committed and PREFETCH starts automatically;
+                    # external TRIG_2 is the only accepted start event in this mode.
+                    self.events.publish({"type": "max_length.waiting_for_trigger", "data": self.store.get(test_id).model_dump(mode="json")})
 
                 play_start = None
-                read_start = 0
-                read_end = 0
-                bad_start = 0
-                bad_end = 0
-                underflow = 0
                 timeout_s = max(30.0, theoretical_duration_s * 4.0 + 10.0)
                 deadline = time.monotonic() + timeout_s
                 while time.monotonic() < deadline:
                     if stop.is_set():
                         raise RuntimeError("max-length test aborted during playback")
-                    response = controller.rfctrl2_status(wait_response=True)
-                    decoded = driver.parse_rfctrl2_status_payload(response)
-                    if decoded["running"]:
-                        if play_start is None:
-                            play_start = time.monotonic()
-                            read_start = int(decoded["play_ddr_read_counter"]) & 0xFFFFFFFF
-                            bad_start = int(decoded["play_bad_instr_count"]) & 0xFFFFFFFF
-                    elif play_start is not None:
-                        read_end = int(decoded["play_ddr_read_counter"]) & 0xFFFFFFFF
-                        bad_end = int(decoded["play_bad_instr_count"]) & 0xFFFFFFFF
-                        underflow = int(decoded.get("underflow_mask", 0)) & 0xFFFF
+                    decoded = controller.waveform_status(session=session)
+                    state_name = str(decoded.get("state_name", ""))
+                    if state_name == "playing" and play_start is None:
+                        play_start = time.monotonic()
+                    if play_start is not None and state_name in {"done", "error", "idle"}:
+                        underflow = int(decoded.get("underflow_count", 0))
                         self.store.update(
                             test_id,
-                            state=MaxLengthTestState.COMPLETED,
+                            state=MaxLengthTestState.COMPLETED if state_name == "done" else MaxLengthTestState.FAILED,
                             progress=1.0,
                             play_elapsed_s=time.monotonic() - play_start,
-                            read_counter=(read_end - read_start) & 0xFFFFFFFF,
-                            bad_instr_count=(bad_end - bad_start) & 0xFFFFFFFF,
+                            read_counter=int(decoded.get("current_beat", 0)),
+                            bad_instr_count=int(decoded.get("error_count", 0)),
                             underflow_mask=underflow,
+                            error="" if state_name == "done" else f"waveform state={state_name}",
                         )
-                        self.events.publish({"type": "max_length.completed", "data": self.store.get(test_id).model_dump(mode="json")})
+                        event_type = "max_length.completed" if state_name == "done" else "max_length.failed"
+                        self.events.publish({"type": event_type, "data": self.store.get(test_id).model_dump(mode="json")})
                         return
                     time.sleep(0.02)
                 raise TimeoutError("max-length playback did not complete within timeout")
             finally:
                 try:
-                    controller.rfctrl2_abort_mute(wait_response=True)
+                    controller.stop(session=locals().get("session", 0))
                 except Exception:
                     pass
                 controller.close()
@@ -386,20 +374,3 @@ class MaxLengthService:
             auto_trigger=record.auto_trigger,
             dry_run=record.dry_run,
         )
-
-    @staticmethod
-    def _require_ok(response: dict, operation: str) -> None:
-        if int(response.get("status", 1)) != driver.RF2_STATUS_OK:
-            raise RuntimeError(f"RFCTRL2 {operation} failed with status 0x{int(response.get('status', 1)):04X}")
-
-    def _wait_prepared(self, controller: driver.Dr47Device, stop: threading.Event, timeout_s: float = 30.0) -> bool:
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if stop.is_set():
-                return False
-            response = controller.rfctrl2_status(wait_response=True)
-            decoded = driver.parse_rfctrl2_status_payload(response)
-            if decoded["prepared"]:
-                return True
-            time.sleep(0.02)
-        return False

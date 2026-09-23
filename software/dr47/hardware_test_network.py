@@ -1,8 +1,9 @@
-"""Shared network enrollment used by the three board-level wave tests.
+"""Single-board network enrollment used by hardware wave tests.
 
 The hardware tests deliberately keep their settings as module constants.  This
-module contains only the common implementation: broadcast discovery, role/UID
-selection, NETWORK_APPLY, NETWORK_RESTART, and verification at the assigned IP.
+module contains only the common implementation: broadcast discovery, stable
+UID/MAC selection, NETWORK_APPLY, NETWORK_RESTART, and verification at the
+assigned IP.  Board identity is not coupled to a retired master/slave role.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from typing import Sequence
 from .errors import DriverError
 from .network import (
     DiscoveredBoard,
-    connect_discovered,
     discover_boards,
     provision_board,
 )
@@ -23,7 +23,7 @@ from .network import (
 class BoardNetworkAssignment:
     """Network identity requested by one hardware test.
 
-    ``device_uid`` may be left empty when the requested hardware role is unique.
+    ``device_uid`` may be left empty when the requested board is unique.
     ``match_mac`` can be supplied when a board must be selected deterministically
     from several boards that report the same UID. ``mac`` remains the optional
     MAC to apply during network provisioning; leave it empty to preserve the
@@ -31,7 +31,6 @@ class BoardNetworkAssignment:
     """
 
     label: str
-    sync_role: str
     ip: str
     device_uid: str = ""
     mac: str | None = None
@@ -45,46 +44,24 @@ class EnrolledBoard:
     """Verified board identity returned to a hardware wave test."""
 
     label: str
-    sync_role: str
     device_uid: str
     ip: str
     mac: str
     port: int
 
 
-def _read_discovered_roles(boards: Sequence[DiscoveredBoard]) -> dict[tuple[str, str], str]:
-    """连接每块发现的板，按复合身份读取 bitstream 声明的主从角色。"""
-
-    roles: dict[tuple[str, str], str] = {}
-    for board in boards:
-        device = connect_discovered(board, timeout_s=1.0, retries=2)
-        try:
-            role = str(device.status(refresh=False).capabilities.sync_role)
-            roles[board.identity_key] = role
-            print(
-                f"发现板卡：UID={board.device_uid}，临时IP={board.current_ip}，"
-                f"MAC={board.current_mac}，角色={role}"
-            )
-        finally:
-            device.close()
-    return roles
-
-
 def _select_board(
     boards: Sequence[DiscoveredBoard],
-    roles: dict[tuple[str, str], str],
     assignment: BoardNetworkAssignment,
     used_boards: set[tuple[str, str]],
 ) -> DiscoveredBoard:
-    """按角色、可选 UID/MAC 从发现结果中选择唯一板卡。"""
-    expected_role = assignment.sync_role.strip().lower()
+    """Select one discovered board by stable identity, never by sync role."""
     expected_uid = assignment.device_uid.strip().lower()
     expected_mac = assignment.match_mac.strip().lower()
     candidates = [
         board
         for board in boards
         if board.identity_key not in used_boards
-        and roles.get(board.identity_key, "").lower() == expected_role
         and (not expected_uid or board.device_uid.lower() == expected_uid)
         and (not expected_mac or board.current_mac.lower() == expected_mac)
     ]
@@ -95,17 +72,13 @@ def _select_board(
         if assignment.match_mac:
             identity_parts.append(f"MAC={assignment.match_mac}")
         identity = ", ".join(identity_parts) if identity_parts else "任意身份"
-        raise DriverError(
-            f"没有发现符合 {assignment.label} 的板卡：角色={expected_role}，{identity}"
-        )
+        raise DriverError(f"没有发现符合 {assignment.label} 的板卡：{identity}")
     if len(candidates) > 1:
         identities = ", ".join(
             f"UID={board.device_uid}/MAC={board.current_mac}" for board in candidates
         )
-        raise DriverError(f"发现多块角色为 {expected_role} 的板卡（{identities}）；请填写 MAC")
+        raise DriverError(f"发现多块匹配 {assignment.label} 的板卡（{identities}）；请填写 MAC")
     return candidates[0]
-
-
 def discover_and_provision_boards(
     assignments: Sequence[BoardNetworkAssignment],
     *,
@@ -149,7 +122,7 @@ def discover_and_provision_boards(
 
     # A broadcast response carries the board MAC, but a normal UDP unicast is
     # selected by IP/ARP only.  Detect an old or misconfigured bitstream that
-    # gives multiple boards the same bootstrap address before probing roles;
+    # gives multiple boards the same bootstrap address before provisioning;
     # otherwise connect_discovered() could read or provision the wrong board.
     endpoints: dict[tuple[str, int], list[DiscoveredBoard]] = {}
     for board in boards:
@@ -166,16 +139,14 @@ def discover_and_provision_boards(
             for (ip, port), items in duplicate_endpoints
         )
         raise DriverError(
-            f"发现多块板卡共用临时地址（{details}）。请重新烧写支持全 DNA 临时 IP 的"
-            " master/slave bitstream；旧 bitstream 不能在交换机上安全自动配置"
+            f"发现多块板卡共用临时地址（{details}）。请先修复板卡临时网络身份；"
+            "当前配置不能在交换机上安全自动配置"
         )
-
-    roles = _read_discovered_roles(boards)
 
     selected: list[tuple[BoardNetworkAssignment, DiscoveredBoard]] = []
     used_boards: set[tuple[str, str]] = set()
     for assignment in assignments:
-        board = _select_board(boards, roles, assignment, used_boards)
+        board = _select_board(boards, assignment, used_boards)
         selected.append((assignment, board))
         used_boards.add(board.identity_key)
 
@@ -198,7 +169,6 @@ def discover_and_provision_boards(
         enrolled.append(
             EnrolledBoard(
                 label=assignment.label,
-                sync_role=assignment.sync_role,
                 device_uid=result.device_uid,
                 ip=result.ip,
                 mac=result.mac,

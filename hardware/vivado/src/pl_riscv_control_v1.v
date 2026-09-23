@@ -18,23 +18,8 @@ module pl_riscv_control_v1 #(
     input  wire [31:0]  rvctrl_word_count,
     input  wire [1:0]   rvctrl_protocol,
 
-    output reg  [127:0] m_instr_tdata,
-    output reg          m_instr_tvalid,
-    input  wire         m_instr_tready,
-
-    output reg          trigger_pulse,
-
-    output reg          rfctrl2_arm_pulse,
-    output reg          rfctrl2_trigger_pulse,
-    output reg          rfctrl2_abort_mute_pulse,
     output reg          rfctrl2_sync_epoch_pulse,
     output reg  [63:0]  rfctrl2_epoch,
-    output reg          rfctrl2_set_sync_role_pulse,
-    output reg  [31:0]  rfctrl2_sync_role,
-    output reg  [31:0]  rfctrl2_sync_mode,
-    output reg          rfctrl2_emit_trigger_pulse,
-    output reg          rfctrl2_start_valid,
-    output reg  [63:0]  rfctrl2_start_tick,
 
     output reg          rfdc_apply_start,
     output reg  [31:0]  rfdc_apply_sequence,
@@ -190,8 +175,6 @@ module pl_riscv_control_v1 #(
 );
 
   localparam [31:0] RV0_CMD_PING             = 32'h00000001;
-  localparam [31:0] RV0_CMD_PLAY_INTERLEAVED = 32'h00000002;
-  localparam [31:0] RV0_CMD_TRIGGER          = 32'h00000003;
   localparam [31:0] RV0_CMD_WRITE_MMIO       = 32'h00000004;
 
   localparam [31:0] RV1_OP_PING             = 32'h00000001;
@@ -199,8 +182,6 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RV1_OP_MMIO_WRITE32     = 32'h00000003;
   localparam [31:0] RV1_OP_MMIO_RMW32       = 32'h00000004;
   localparam [31:0] RV1_OP_MMIO_BATCH       = 32'h00000005;
-  localparam [31:0] RV1_OP_PLAY_INTERLEAVED = 32'h00000006;
-  localparam [31:0] RV1_OP_TRIGGER          = 32'h00000007;
   localparam [31:0] RV1_OP_RFDC_CH_ENABLE   = 32'h00000008;
   localparam [31:0] RV1_OP_RFDC_SET_NCO     = 32'h00000009;
   localparam [31:0] RV1_OP_STATUS_READ      = 32'h0000000A;
@@ -210,11 +191,7 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_RFDC_APPLY        = 32'h00000003;
   localparam [31:0] RF2_OP_UPLOAD_BEGIN      = 32'h00000004;
   localparam [31:0] RF2_OP_UPLOAD_COMMIT     = 32'h00000005;
-  localparam [31:0] RF2_OP_ARM               = 32'h00000006;
   localparam [31:0] RF2_OP_SYNC_EPOCH        = 32'h00000007;
-  localparam [31:0] RF2_OP_START_AT          = 32'h00000008;
-  localparam [31:0] RF2_OP_TRIGGER           = 32'h00000009;
-  localparam [31:0] RF2_OP_ABORT_MUTE        = 32'h0000000A;
   localparam [31:0] RF2_OP_RFDC_GET_CONFIG   = 32'h0000000B;
   // Structured RFDC apply, RFDC readback, and runtime network identity
   // configuration are all advertised through HELLO/STATUS.
@@ -225,8 +202,6 @@ module pl_riscv_control_v1 #(
   localparam [31:0] RF2_OP_NETWORK_GET       = 32'h0000000C;
   localparam [31:0] RF2_OP_NETWORK_APPLY     = 32'h0000000D;
   localparam [31:0] RF2_OP_NETWORK_RESTART   = 32'h0000000E;
-  localparam [31:0] RF2_OP_SET_SYNC_ROLE     = 32'h0000000F;
-  localparam [31:0] RF2_OP_EMIT_TRIGGER      = 32'h00000010;
   localparam [31:0] RF2_OP_TDC_REG           = 32'h00000011;
   localparam [31:0] RF2_OP_DIAG_SNAPSHOT     = 32'h00000012;
   localparam [31:0] RF2_OP_DIAG_CONTROL       = 32'h00000013;
@@ -239,16 +214,9 @@ module pl_riscv_control_v1 #(
   localparam [63:0] RVRESP1_MAGIC = 64'h0031505345525652;
   localparam [63:0] RFRESP2_MAGIC = 64'h0032505345524652;
 
-  localparam [3:0] CMD_PLAY = 4'h2;
-  localparam [3:0] CMD_END  = 4'h3;
-  localparam [3:0] CH_AUTO_START = 4'hF;
-  localparam [2:0] PLAY_FLAG_LOOP        = 3'h1;
-  localparam [2:0] PLAY_FLAG_INTERLEAVED = 3'h4;
-
   localparam [3:0] ST_IDLE       = 4'd0;
   localparam [3:0] ST_RECEIVE    = 4'd1;
   localparam [3:0] ST_PROCESS    = 4'd2;
-  localparam [3:0] ST_OUT_PLAY   = 4'd3;
   localparam [3:0] ST_MMIO_WRITE = 4'd4;
   localparam [3:0] ST_MMIO_READ  = 4'd5;
   localparam [3:0] ST_MMIO_RMW_W = 4'd6;
@@ -270,14 +238,8 @@ module pl_riscv_control_v1 #(
   localparam [4:0] DEC_RF2_NETWORK_RESTART = 5'd5;
   localparam [4:0] DEC_RF2_RFDC_APPLY    = 5'd6;
   localparam [4:0] DEC_RF2_RFDC_GET      = 5'd7;
-  localparam [4:0] DEC_RF2_ARM           = 5'd8;
   localparam [4:0] DEC_RF2_SYNC_EPOCH    = 5'd9;
-  localparam [4:0] DEC_RF2_START_AT      = 5'd10;
-  localparam [4:0] DEC_RF2_TRIGGER       = 5'd11;
-  localparam [4:0] DEC_RF2_ABORT_MUTE    = 5'd12;
   localparam [4:0] DEC_RV_PING           = 5'd13;
-  localparam [4:0] DEC_RV_PLAY_INTERLEAVED = 5'd14;
-  localparam [4:0] DEC_RV_TRIGGER        = 5'd15;
   localparam [4:0] DEC_RV_WRITE_MMIO     = 5'd16;
   localparam [4:0] DEC_RV1_MMIO_READ32   = 5'd17;
   localparam [4:0] DEC_RV1_MMIO_RMW32    = 5'd18;
@@ -285,8 +247,6 @@ module pl_riscv_control_v1 #(
   localparam [4:0] DEC_RV1_RFDC_CH_ENABLE = 5'd20;
   localparam [4:0] DEC_RV1_RFDC_SET_NCO  = 5'd21;
   localparam [4:0] DEC_RV1_STATUS_READ   = 5'd22;
-  localparam [4:0] DEC_RF2_SET_SYNC_ROLE = 5'd23;
-  localparam [4:0] DEC_RF2_EMIT_TRIGGER  = 5'd24;
   localparam [4:0] DEC_RF2_TDC_REG       = 5'd25;
   localparam [4:0] DEC_RF2_DIAG_SNAPSHOT = 5'd26;
   localparam [4:0] DEC_RF2_DIAG_CONTROL  = 5'd27;
@@ -302,10 +262,6 @@ module pl_riscv_control_v1 #(
   reg        rx_is_v2;
   reg        process_pending;
   reg        decode_pending;
-
-  reg [31:0] play_bytes_per_channel;
-  reg [31:0] play_flags;
-  reg [3:0]  play_out_index;
 
   reg [31:0] cmd_opcode;
   reg [31:0] cmd_seq;
@@ -372,8 +328,6 @@ module pl_riscv_control_v1 #(
   reg [31:0] diag_snapshot_pending_seq;
   reg        diag_snapshot_ack_seen;
 
-  wire instr_fire = m_instr_tvalid && m_instr_tready;
-  wire out_can_load = !m_instr_tvalid || instr_fire;
   wire [31:0] rx_word_count_clean = rvctrl_word_count;
   wire [RX_COUNT_WIDTH-1:0] rx_word_count_narrow =
       rx_word_count_clean[RX_COUNT_WIDTH-1:0];
@@ -409,33 +363,6 @@ module pl_riscv_control_v1 #(
   integer i;
   integer r;
   integer p;
-  function [127:0] pack_instr;
-    input [31:0] word0;
-    input [31:0] word1;
-    input [31:0] word2;
-    input [31:0] word3;
-    begin
-      pack_instr = {word3, word2, word1, word0};
-    end
-  endfunction
-
-  function [31:0] play_word0;
-    input [3:0] channel;
-    begin
-      play_word0 = {21'd0, PLAY_FLAG_INTERLEAVED, channel, CMD_PLAY};
-    end
-  endfunction
-
-  function [31:0] end_word0;
-    input auto_start;
-    input loop_en;
-    reg [2:0] flags;
-    begin
-      flags = loop_en ? PLAY_FLAG_LOOP : 3'd0;
-      end_word0 = {21'd0, flags, (auto_start ? CH_AUTO_START : 4'd0), CMD_END};
-    end
-  endfunction
-
   function [4:0] decode_kind;
     input is_v1;
     input is_v2;
@@ -451,13 +378,7 @@ module pl_riscv_control_v1 #(
           RF2_OP_NETWORK_RESTART: decode_kind = DEC_RF2_NETWORK_RESTART;
           RF2_OP_RFDC_APPLY: decode_kind = DEC_RF2_RFDC_APPLY;
           RF2_OP_RFDC_GET_CONFIG: decode_kind = DEC_RF2_RFDC_GET;
-          RF2_OP_ARM: decode_kind = DEC_RF2_ARM;
           RF2_OP_SYNC_EPOCH: decode_kind = DEC_RF2_SYNC_EPOCH;
-          RF2_OP_START_AT: decode_kind = DEC_RF2_START_AT;
-          RF2_OP_TRIGGER: decode_kind = DEC_RF2_TRIGGER;
-          RF2_OP_ABORT_MUTE: decode_kind = DEC_RF2_ABORT_MUTE;
-          RF2_OP_SET_SYNC_ROLE: decode_kind = DEC_RF2_SET_SYNC_ROLE;
-          RF2_OP_EMIT_TRIGGER: decode_kind = DEC_RF2_EMIT_TRIGGER;
           RF2_OP_TDC_REG: decode_kind = DEC_RF2_TDC_REG;
           RF2_OP_DIAG_SNAPSHOT: decode_kind = DEC_RF2_DIAG_SNAPSHOT;
           RF2_OP_DIAG_CONTROL: decode_kind = DEC_RF2_DIAG_CONTROL;
@@ -466,8 +387,6 @@ module pl_riscv_control_v1 #(
       end else if (is_v1) begin
         case (opcode)
           RV1_OP_PING: decode_kind = DEC_RV_PING;
-          RV1_OP_PLAY_INTERLEAVED: decode_kind = DEC_RV_PLAY_INTERLEAVED;
-          RV1_OP_TRIGGER: decode_kind = DEC_RV_TRIGGER;
           RV1_OP_MMIO_WRITE32: decode_kind = DEC_RV_WRITE_MMIO;
           RV1_OP_MMIO_READ32: decode_kind = DEC_RV1_MMIO_READ32;
           RV1_OP_MMIO_RMW32: decode_kind = DEC_RV1_MMIO_RMW32;
@@ -480,8 +399,6 @@ module pl_riscv_control_v1 #(
       end else begin
         case (opcode)
           RV0_CMD_PING: decode_kind = DEC_RV_PING;
-          RV0_CMD_PLAY_INTERLEAVED: decode_kind = DEC_RV_PLAY_INTERLEAVED;
-          RV0_CMD_TRIGGER: decode_kind = DEC_RV_TRIGGER;
           RV0_CMD_WRITE_MMIO: decode_kind = DEC_RV_WRITE_MMIO;
           default: decode_kind = DEC_UNSUPPORTED;
         endcase
@@ -888,21 +805,8 @@ module pl_riscv_control_v1 #(
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      m_instr_tdata <= 128'd0;
-      m_instr_tvalid <= 1'b0;
-      trigger_pulse <= 1'b0;
-      rfctrl2_arm_pulse <= 1'b0;
-      rfctrl2_trigger_pulse <= 1'b0;
-      rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
-      rfctrl2_set_sync_role_pulse <= 1'b0;
-      rfctrl2_sync_role <= 32'd0;
-      rfctrl2_sync_mode <= 32'd0;
-      rfctrl2_emit_trigger_pulse <= 1'b0;
-      rfctrl2_start_valid <= 1'b0;
       rfctrl2_epoch <= 64'd0;
-      rfctrl2_start_valid <= 1'b0;
-      rfctrl2_start_tick <= 64'd0;
       diag_clear_events_pulse <= 1'b0;
       diag_clear_counters_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
@@ -963,9 +867,6 @@ module pl_riscv_control_v1 #(
       rx_is_v2 <= 1'b0;
       process_pending <= 1'b0;
       decode_pending <= 1'b0;
-      play_bytes_per_channel <= 32'd0;
-      play_flags <= 32'd0;
-      play_out_index <= 4'd0;
       cmd_opcode <= 32'd0;
       cmd_seq <= 32'd0;
       cmd_flags <= 32'd0;
@@ -1026,13 +927,7 @@ module pl_riscv_control_v1 #(
         resp_words[i] <= 64'd0;
       end
     end else begin
-      trigger_pulse <= 1'b0;
-      rfctrl2_arm_pulse <= 1'b0;
-      rfctrl2_trigger_pulse <= 1'b0;
-      rfctrl2_abort_mute_pulse <= 1'b0;
       rfctrl2_sync_epoch_pulse <= 1'b0;
-      rfctrl2_set_sync_role_pulse <= 1'b0;
-      rfctrl2_emit_trigger_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
       network_apply_start <= 1'b0;
       network_restart_start <= 1'b0;
@@ -1136,9 +1031,6 @@ module pl_riscv_control_v1 #(
         end
       end
 
-      if (instr_fire) begin
-        m_instr_tvalid <= 1'b0;
-      end
       if (m_axil_awvalid && m_axil_awready) begin
         m_axil_awvalid <= 1'b0;
         aw_done <= 1'b1;
@@ -1387,25 +1279,6 @@ module pl_riscv_control_v1 #(
             DEC_RF2_RFDC_GET: begin
               queue_rfdc_response(RF2_OP_RFDC_GET_CONFIG, cmd_seq);
             end
-            DEC_RF2_ARM: begin
-              if (!rfdc_ready || !dac_mts_ready || dac_mts_failed || !nco_sync_ready ||
-                  sync_align_busy || sync_align_failed) begin
-                dbg_status <= 32'hBAD2_2006;
-                queue_resp0(RF2_OP_ARM, 16'h0005, cmd_seq);
-              end else if ((cmd_payload_bytes != 32'd8) ||
-                  ((payload_words[5][7:0] & ~rfdc_config_valid_mask) != 8'd0)) begin
-                dbg_status <= 32'hBAD2_0006;
-                queue_resp0(RF2_OP_ARM, 16'h0006, cmd_seq);
-              end else if (playback_armed || playback_prepared || playback_running) begin
-                dbg_status <= 32'hBAD2_1006;
-                queue_resp0(RF2_OP_ARM, 16'h0006, cmd_seq);
-              end else begin
-                rfctrl2_arm_pulse <= 1'b1;
-                dbg_scratch <= payload_words[5];
-                dbg_status <= 32'h2000_0006;
-                queue_resp1(RF2_OP_ARM, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
-              end
-            end
             DEC_RF2_SYNC_EPOCH: begin
               if ((cmd_payload_bytes != 32'd8) || !sync_role_master || sync_bypass) begin
                 dbg_status <= 32'hBAD2_0007;
@@ -1420,81 +1293,10 @@ module pl_riscv_control_v1 #(
                 queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
               end
             end
-            DEC_RF2_SET_SYNC_ROLE: begin
-              if ((cmd_payload_bytes != 32'd8) ||
-                  (payload_words[4] > 32'd1) || (payload_words[5] > 32'd1) ||
-                  (payload_words[4][0] != sync_role_master) ||
-                  playback_armed || playback_prepared || playback_running ||
-                  sync_align_busy || sync_align_failed) begin
-                dbg_status <= 32'hBAD2_000F;
-                queue_resp0(RF2_OP_SET_SYNC_ROLE, 16'h0003, cmd_seq);
-              end else begin
-                rfctrl2_sync_role <= payload_words[4];
-                rfctrl2_sync_mode <= payload_words[5];
-                rfctrl2_set_sync_role_pulse <= 1'b1;
-                dbg_status <= 32'h2000_000F;
-                queue_resp0(RF2_OP_SET_SYNC_ROLE, 16'h0000, cmd_seq);
-              end
-            end
-            DEC_RF2_EMIT_TRIGGER: begin
-              if (cmd_payload_bytes != 32'd0) begin
-                dbg_status <= 32'hBAD2_0010;
-                queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0003, cmd_seq);
-              end else if (sync_align_busy || sync_align_failed) begin
-                dbg_status <= 32'hBAD2_1010;
-                queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0006, cmd_seq);
-              end else begin
-                rfctrl2_emit_trigger_pulse <= 1'b1;
-                dbg_status <= 32'h2000_0010;
-                queue_resp0(RF2_OP_EMIT_TRIGGER, 16'h0000, cmd_seq);
-              end
-            end
-            DEC_RF2_START_AT: begin
-              rfctrl2_start_tick <= {payload_words[5], payload_words[4]};
-              rfctrl2_start_valid <= 1'b1;
-              dbg_status <= 32'h2000_0008;
-              queue_resp1(RF2_OP_START_AT, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
-            end
-            DEC_RF2_TRIGGER: begin
-              if (!playback_prepared || !sync_link_ready || sync_align_busy || sync_align_failed) begin
-                dbg_status <= 32'hBAD2_0009;
-                queue_resp0(RF2_OP_TRIGGER, 16'h0006, cmd_seq);
-              end else begin
-                rfctrl2_trigger_pulse <= 1'b1;
-                dbg_trigger_count <= dbg_trigger_count + 32'd1;
-                dbg_status <= 32'h2000_0009;
-                queue_resp0(RF2_OP_TRIGGER, 16'h0000, cmd_seq);
-              end
-            end
-            DEC_RF2_ABORT_MUTE: begin
-              rfctrl2_abort_mute_pulse <= 1'b1;
-              dbg_status <= 32'h2000_000A;
-              queue_resp0(RF2_OP_ABORT_MUTE, 16'h0000, cmd_seq);
-            end
             DEC_RV_PING: begin
               dbg_status <= rx_is_v1 ? 32'h1000_0001 : 32'h0000_0001;
               dbg_ping_count <= dbg_ping_count + 32'd1;
               if (rx_is_v1) queue_resp0(RV1_OP_PING, 16'h0000, cmd_seq);
-            end
-            DEC_RV_PLAY_INTERLEAVED: begin
-              if (payload_words[rx_is_v1 ? 4 : 2][4:0] != 5'd0) begin
-                dbg_status <= 32'hBAD0_0002;
-                dbg_error_pending <= 1'b1;
-                if (rx_is_v1) queue_resp0(RV1_OP_PLAY_INTERLEAVED, 16'h0002, cmd_seq);
-              end else begin
-                play_bytes_per_channel <= payload_words[rx_is_v1 ? 4 : 2];
-                play_flags <= payload_words[rx_is_v1 ? 5 : 3];
-                play_out_index <= 4'd0;
-                dbg_play_count <= dbg_play_count + 32'd1;
-                dbg_status <= rx_is_v1 ? 32'h1000_0006 : 32'h0000_0002;
-                dbg_state <= ST_OUT_PLAY;
-              end
-            end
-            DEC_RV_TRIGGER: begin
-              trigger_pulse <= 1'b1;
-              dbg_trigger_count <= dbg_trigger_count + 32'd1;
-              dbg_status <= rx_is_v1 ? 32'h1000_0007 : 32'h0000_0003;
-              if (rx_is_v1) queue_resp0(RV1_OP_TRIGGER, 16'h0000, cmd_seq);
             end
             DEC_RV_WRITE_MMIO: begin
               if (ENABLE_UNSAFE_RFDC_MMIO) begin
@@ -1570,36 +1372,6 @@ module pl_riscv_control_v1 #(
               if (rx_is_v1 || rx_is_v2) queue_resp0(cmd_opcode, 16'h0002, cmd_seq);
             end
           endcase
-        end
-      end else if (dbg_state == ST_OUT_PLAY) begin
-        if (out_can_load) begin
-          if (play_out_index < 4'd8) begin
-            m_instr_tdata <= pack_instr(
-                play_word0(play_out_index + 4'd1),
-                play_bytes_per_channel,
-                32'd0,
-                32'd0
-            );
-            m_instr_tvalid <= 1'b1;
-            play_out_index <= play_out_index + 4'd1;
-          end else begin
-            m_instr_tdata <= pack_instr(
-                end_word0(play_flags[0], play_flags[1]),
-                32'd0,
-                32'd0,
-                32'd0
-            );
-            m_instr_tvalid <= 1'b1;
-            play_out_index <= 4'd0;
-            dbg_state <= ST_IDLE;
-            if (rx_is_v1) queue_resp1(
-                RV1_OP_PLAY_INTERLEAVED,
-                16'h0000,
-                cmd_seq,
-                32'd8,
-                {play_flags, play_bytes_per_channel}
-            );
-          end
         end
       end else if (dbg_state == ST_MMIO_WRITE) begin
         if (write_done) begin

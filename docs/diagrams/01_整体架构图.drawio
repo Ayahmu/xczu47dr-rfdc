@@ -1,0 +1,215 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="title" value="XCZU47DR 单板波形系统 — 整体架构" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="40" y="4" width="900" height="32" as="geometry"/>
+    </mxCell>
+    <mxCell id="gTdc" value="TDC 确定性触发链（200 MHz 采样 / 50 MHz 调度）" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#E1D5E7;strokeColor=#9673A6;" vertex="1" parent="1">
+      <mxGeometry x="40" y="48" width="1580" height="180" as="geometry"/>
+    </mxCell>
+    <mxCell id="tdcclk" value="200 MHz 采样时钟&#10;（相位锁定）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="20" y="66" width="230" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="cap" value="触发时刻精密测量&#10;（TDC 时间数字转换）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="270" y="66" width="230" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="afifo" value="触发事件跨时钟传递&#10;（200M → 50M）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="520" y="66" width="230" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="sched" value="触发调度器&#10;（对齐到目标时刻）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="770" y="66" width="230" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="fir" value="分数延迟滤波 ×8&#10;（细调 39 皮秒）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="1020" y="66" width="230" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="rot" value="相位旋转校正 ×8&#10;（对齐载波相位）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="1270" y="66" width="230" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="gExt" value="外部 / 板级" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1">
+      <mxGeometry x="40" y="280" width="260" height="350" as="geometry"/>
+    </mxCell>
+    <mxCell id="extHost" value="上位机&#10;（10G 万兆以太网）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gExt">
+      <mxGeometry x="30" y="60" width="200" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="extTrig" value="外部触发信号&#10;TRIG_2" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gExt">
+      <mxGeometry x="30" y="160" width="200" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="extXs17" value="参考时钟&#10;250 MHz" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gExt">
+      <mxGeometry x="30" y="260" width="200" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="gCtrl" value="控制面 / 网络 — DDR4 接口时钟 300.12 MHz" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+      <mxGeometry x="360" y="280" width="640" height="380" as="geometry"/>
+    </mxCell>
+    <mxCell id="eth" value="万兆以太网收发&#10;（MAC + UDP/IP）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gCtrl">
+      <mxGeometry x="30" y="50" width="260" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="upload" value="波形接收与写入 DDR&#10;（校验/分类/打包）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gCtrl">
+      <mxGeometry x="330" y="50" width="260" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="risc" value="系统控制中心&#10;（RISC-V 软核）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gCtrl">
+      <mxGeometry x="30" y="170" width="260" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="resp" value="响应打包回传&#10;（状态上报）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gCtrl">
+      <mxGeometry x="330" y="170" width="260" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="net" value="网络地址配置&#10;（MAC / IP 身份）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gCtrl">
+      <mxGeometry x="30" y="290" width="260" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="rfcfg" value="RF-DAC 运行期配置&#10;（输出频率 / 增益）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gCtrl">
+      <mxGeometry x="330" y="290" width="260" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="gSm" value="总线互联 + DDR4" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+      <mxGeometry x="1060" y="280" width="260" height="380" as="geometry"/>
+    </mxCell>
+    <mxCell id="sm" value="总线互联&#10;（AXI 交换）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gSm">
+      <mxGeometry x="30" y="90" width="200" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="mig" value="DDR4 存储控制器&#10;64 位 · 峰值 19.2 GB/s" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gSm">
+      <mxGeometry x="30" y="230" width="200" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="gDac" value="回放数据通路 — 数模转换时钟 50 MHz" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#FFE6CC;strokeColor=#D79B00;" vertex="1" parent="1">
+      <mxGeometry x="1380" y="280" width="580" height="380" as="geometry"/>
+    </mxCell>
+    <mxCell id="path" value="回放控制通路&#10;（读取→缓冲→输出调度）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gDac">
+      <mxGeometry x="30" y="60" width="240" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="fifos" value="8 通道数据缓冲&#10;每通道 256 位 ×1024" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gDac">
+      <mxGeometry x="310" y="60" width="240" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="rfdc" value="RF 数模转换器&#10;（8 通道 · 16 倍插值）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gDac">
+      <mxGeometry x="170" y="230" width="240" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="outNode" value="8 通道模拟输出&#10;采样率 6.4 GS/s" style="whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="2020" y="430" width="230" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="gClk" value="时钟 / 复位 / 同步" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+      <mxGeometry x="360" y="720" width="640" height="130" as="geometry"/>
+    </mxCell>
+    <mxCell id="hmc" value="时钟芯片 HMC7044&#10;（分配参考时钟）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=14;" vertex="1" parent="gClk">
+      <mxGeometry x="30" y="40" width="260" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="ps" value="处理器系统（ARM）&#10;上电配置 / 状态监控" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=14;" vertex="1" parent="gClk">
+      <mxGeometry x="330" y="40" width="260" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="e1" value="10G 网络 · 64 位 @ 161 MHz" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="extHost" target="eth">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e2" value="250 MHz 参考" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="extXs17" target="hmc">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="170" y="665"/>
+          <mxPoint x="520" y="665"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e3" value="100 MHz 工作时钟" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="hmc" target="ps">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e4" value="异步事件" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;labelBackgroundColor=#FFFFFF;strokeColor=#9673A6;exitX=0;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="extTrig" target="cap">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="20" y="472"/>
+          <mxPoint x="20" y="254"/>
+          <mxPoint x="425" y="254"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e5" value="直接触发" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;labelBackgroundColor=#FFFFFF;strokeColor=#D79B00;exitX=1;exitY=0.5;entryX=0.125;entryY=1;" edge="1" parent="1" source="extTrig" target="path">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="320" y="472"/>
+          <mxPoint x="320" y="690"/>
+          <mxPoint x="1440" y="690"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e6" value="64 位 UDP 字" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="eth" target="upload">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e7" value="256 位总线写" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="upload" target="sm">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e8" value="写入" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gSm" source="sm" target="mig">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e9" value="读取" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="gSm" source="mig" target="sm">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e10" value="控制指令" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="eth" target="risc">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e11" value="配置" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0.5;entryY=0;" edge="1" parent="1" source="risc" target="rfcfg">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="670" y="486"/>
+          <mxPoint x="670" y="570"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e12" value="64 位 UDP 字" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;entryX=0.88;entryY=1;" edge="1" parent="1" source="resp" target="eth">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="820" y="420"/>
+          <mxPoint x="620" y="420"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e13" value="身份信息" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;entryX=0;entryY=0.85;" edge="1" parent="1" source="net" target="eth">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="350" y="606"/>
+          <mxPoint x="350" y="391"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e14" value="512 位总线读" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="sm" target="path">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e15" value="2048 位帧 = 8 通道 ×256 位" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;startArrow=classic;startFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="gDac" source="path" target="fifos">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e17" value="8 通道 ×256 位（原始/校正后）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="gDac" source="path" target="rfdc">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e18" value="16 倍插值 → 6.4 GS/s" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="rfdc" target="outNode">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1990" y="546"/>
+          <mxPoint x="1990" y="470"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e19" value="200 MHz" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gTdc" source="tdcclk" target="cap">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e20" value="时刻 + 细相位" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gTdc" source="cap" target="afifo">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e21" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gTdc" source="afifo" target="sched">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e22" value="粗延迟 + 细相位" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gTdc" source="sched" target="fir">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e23" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;" edge="1" parent="gTdc" source="fir" target="rot">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e24" value="启动脉冲（定时对齐）" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="sched" target="path">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="925" y="244"/>
+          <mxPoint x="1530" y="244"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e25" value="校正后 8 通道 ×256 位" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="rot" target="rfdc">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1425" y="266"/>
+          <mxPoint x="1670" y="266"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+  </root>
+</mxGraphModel>

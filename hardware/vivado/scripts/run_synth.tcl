@@ -34,7 +34,7 @@ proc ooc_run_complete {run_name} {
     return 0
 }
 
-set target "custom_xczu47dr_master"
+set target "custom_xczu47dr_waveform"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -50,8 +50,6 @@ puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 set manifest_file "${proj_dir}/build_manifest.json"
 rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
-restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
-
 # Reuse the last successful synthesis checkpoint when available.  The
 # checkpoint is kept outside the run directory because reset_run removes the
 # generated files belonging to synth_1.
@@ -68,42 +66,16 @@ if {[llength ${synth_run}] > 0 && [file exists ${synth_incremental_checkpoint}]}
     puts "INFO: No synthesis checkpoint found; running a full synthesis"
 }
 
-puts "INFO: Skipping XXV Ethernet OOC synthesis; using reference DCP"
-
-# The parent synthesis must consume the XXV OOC checkpoint.  In particular,
-# do not replace the MAC with a synthesizable RTL stand-in: that lets Vivado
-# optimize the instance away and produces an implementation with ordinary
-# OBUFs rather than the required GT channel.  The managed XCI child run is
-# populated from the bitstream-capable reference DCP by
-# prepare_reference_xxv_ooc_run below.
+# The XXV Ethernet XCI is part of the normal project source set. Vivado
+# therefore carries its OOC checkpoint and scoped constraints through the
+# parent synthesis flow without a manual cell-level DCP replacement.
 set xxv_synth_xci [get_files -quiet -all *xxv_ethernet.xci]
-if {[llength ${xxv_synth_xci}] > 0} {
-    set_property USED_IN_SYNTHESIS true ${xxv_synth_xci}
-    puts "INFO: XXV Ethernet XCI enabled for parent synthesis through its OOC checkpoint"
+if {[llength ${xxv_synth_xci}] != 1} {
+    error "Expected exactly one managed XXV Ethernet XCI, found [llength ${xxv_synth_xci}]"
 }
-set xxv_parent_stub [get_files -quiet -all *xxv_ethernet_parent_stub.v]
-if {[llength ${xxv_parent_stub}] > 0} {
-    # The parent RTL compiler still needs the module declaration.  This is a
-    # normal black box, not the old behavioral Ethernet model: synthesis
-    # preserves top_i/udp_10g_i/DUT and implementation replaces that cell
-    # with the bitstream-capable reference OOC checkpoint.
-    set_property IS_ENABLED true ${xxv_parent_stub}
-    set_property USED_IN_SYNTHESIS true ${xxv_parent_stub}
-}
-set xxv_parent_blackbox [get_files -quiet -all *xxv_ethernet_parent_blackbox.v]
-if {[llength ${xxv_parent_blackbox}] > 0} {
-    set_property IS_ENABLED true ${xxv_parent_blackbox}
-    set_property USED_IN_SYNTHESIS true ${xxv_parent_blackbox}
-}
-set parent_synth_defines [get_property verilog_define [current_fileset]]
-set parent_synth_defines [lsearch -all -inline -not -exact ${parent_synth_defines} PARENT_RTL_SYNTH]
-if {[lsearch -exact ${parent_synth_defines} PARENT_XXV_BLACKBOX] < 0} {
-    lappend parent_synth_defines PARENT_XXV_BLACKBOX
-}
-set_property verilog_define ${parent_synth_defines} [current_fileset]
-puts "INFO: Disabled PARENT_RTL_SYNTH; preserving dedicated XXV black box for reference-DCP binding"
-
-#restore_reference_xxv_dcp ${vivado_dir} ${target}
+set_property USED_IN_SYNTHESIS true ${xxv_synth_xci}
+set_property USED_IN_IMPLEMENTATION true ${xxv_synth_xci}
+puts "INFO: XXV Ethernet XCI is enabled for parent synthesis/implementation"
 
 set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]
 if {[llength ${bd_file}] > 0} {
@@ -153,9 +125,8 @@ if {[llength ${bd_file}] > 0} {
     }
 }
 
-# generate_target above can refresh the managed XXV IP. Prepare its OOC run
-# metadata without launching protected RTL, then restore the bitstream-capable
-# reference checkpoint immediately before launching top-level synthesis.
+# Regenerate only the managed OOC metadata if needed, then put the validated
+# bitstream-capable checkpoint back in place immediately before parent synth.
 prepare_reference_xxv_ooc_run ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
 puts "INFO: Starting synthesis..."
@@ -179,14 +150,12 @@ if {${synth_status} != "synth_design Complete!"} {
     exit 1
 }
 
-# The Vivado scheduler may have launched the XXV child run because a freshly
-# created project reports it as "Not started". That child can regenerate a
-# Design_Linking-only checkpoint, so restore the bitstream-capable checkpoint
-# again after all synthesis runs have finished and before opening the parent
-# synthesized design.
+# A parent run may refresh the child OOC output while completing. Restore the
+# exact checkpoint again before opening the synthesized design and before the
+# implementation step consumes the managed IP output.
 restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
 
-# Open synthesized design for reporting
+# Open synthesized design for reporting.
 open_run synth_1
 
 # Synthesis identity/structure guardrails.  These checks intentionally run on

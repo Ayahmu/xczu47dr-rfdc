@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${TARGET:-custom_xczu47dr_master}"
+TARGET="${TARGET:-custom_xczu47dr_waveform}"
 WORK_DIR="${VIVADO_WORK_DIR:-${SCRIPT_DIR}/work}"
 OUTPUT_DIR="${VIVADO_OUTPUT_DIR:-${SCRIPT_DIR}/output}"
 REPORT_DIR="${VIVADO_REPORT_DIR:-${SCRIPT_DIR}/reports}"

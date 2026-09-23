@@ -10,59 +10,39 @@ import numpy as np
 from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, DiagnosticsSnapshot
 from .device import Dr47Device
 from .errors import ParameterRangeError
+from .protocol import pack_wave_begin, pack_wave_data
 from .protocol import (
     RF2_CAP_DAC_MTS,
     RF2_CAP_NCO_SYNC,
-    RF2_CAP_SYNC_IO,
     RF2_CAP_TRIGGER_IO,
     RF2_CAP_PL_RFDC_CONFIG,
     RF2_CAP_RFDC_GET_CONFIG,
-    RF2_OP_ABORT_MUTE,
-    RF2_OP_ARM,
     RF2_OP_HELLO,
     RF2_OP_RFDC_APPLY,
     RF2_OP_RFDC_GET_CONFIG,
     RF2_OP_STATUS,
-    RF2_OP_TRIGGER,
-    RF2_OP_SYNC_EPOCH,
-    RF2_OP_SET_SYNC_ROLE,
-    RF2_OP_EMIT_TRIGGER,
     RF2_OP_DIAG_SNAPSHOT,
     RF2_OP_DIAG_CONTROL,
     RF2_CAP_DIAGNOSTICS,
-    RF2_SYNC_MODE_EXTERNAL,
-    RF2_SYNC_MODE_BYPASS,
-    RF2_SYNC_ROLE_MASTER,
-    RF2_SYNC_ROLE_SLAVE,
-    RF2_SYNC_STATUS_READY,
-    RF2_SYNC_STATUS_ROLE_MASTER,
-    RF2_SYNC_STATUS_SEEN,
-    RF2_SYNC_STATUS_BYPASS,
     RF2_STATUS_DAC_MTS_READY,
     RF2_STATUS_DAC_MTS_REQUIRED,
     RF2_STATUS_NCO_SYNC_READY,
     RF2_STATUS_OK,
-    RF2_STATUS_PREPARED,
     RF2_STATUS_RFDC_READY,
-    RF2_STATUS_ARMED,
-    RF2_STATUS_RUNNING,
     RFCTRL2_VERSION,
     parse_rfctrl2_rfdc_config_response,
+    WAVE_OP_BEGIN, WAVE_OP_DATA, WAVE_OP_COMMIT, WAVE_OP_PLAY, WAVE_OP_PAUSE,
+    WAVE_OP_STOP, WAVE_OP_ABORT, WAVE_OP_STATUS, WAVE_STATUS_OK,
+    WAVE_STATUS_BAD_REQUEST, WAVE_STATUS_INCOMPLETE, WAVE_STATUS_SEQUENCE,
+    WAVE_STATUS_OFFSET, WAVE_STATUS_CRC, WAVEFORM_STATE_ID, WAVEFORM_STATE_UPLOAD,
+    WAVEFORM_STATE_READY, WAVEFORM_STATE_PREFETCH, WAVEFORM_STATE_WAIT_TRIGGER,
+    WAVEFORM_STATE_PLAYING, WAVEFORM_STATE_DONE, WAVEFORM_STATE_ERROR,
+    WAVE_ERROR_NONE, WAVE_ERROR_UNDERFLOW, crc32,
 )
-from .waveforms import (
-    ezq_wave_to_interleaved_int16,
-    make_burst_record,
-    waveform_length_bytes,
-)
-
-
 class SimulatedDr47Device(Dr47Device):
     """A deterministic simulator with the same public API as ``Dr47Device``."""
 
-    def __init__(self, *args, device_uid: str = "sim-xczu47dr", sync_role: str = "master", **kwargs) -> None:
-        if sync_role not in {"master", "slave"}:
-            raise ValueError("sync_role must be 'master' or 'slave'")
-        kwargs["sync_role"] = sync_role
+    def __init__(self, *args, device_uid: str = "sim-xczu47dr", **kwargs) -> None:
         kwargs["transport"] = object()
         super().__init__(*args, **kwargs)
         self.device_uid = str(device_uid)
@@ -77,18 +57,28 @@ class SimulatedDr47Device(Dr47Device):
         self._trigger_input_count = 0
         self._trigger_accepted_count = 0
         self._trigger_output_count = 0
-        self._sim_sync_seen = False
-        self._sim_sync_ready = sync_role == "master"
-        self._sim_sync_align_busy = False
-        self._sim_sync_align_failed = False
-        self._sim_sync_alignment_epoch = 0
-        self._sim_sync_alignment_error = 0
         self._diag_generation = 0
+        self._wave_state = WAVEFORM_STATE_ID
+        self._wave_session = 0
+        self._wave_descriptor = 0
+        self._wave_generation = 0
+        self._wave_fragments = {}
+        self._wave_total_bytes = 0
+        self._wave_total_beats = 0
+        self._wave_channel_mask = 0
+        self._wave_loop_count = 0
+        self._wave_received = bytearray()
+        self._wave_next_packet = 0
+        self._wave_received_bytes = 0
+        self._wave_error = WAVE_ERROR_NONE
+        self._wave_error_offset = 0
+        self._wave_prefetch_complete = False
+        self._wave_play_pending = False
 
     def _make_status_payload(self) -> bytes:
         capabilities = (RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
                         RF2_CAP_DAC_MTS | RF2_CAP_NCO_SYNC |
-                        RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS)
+                        RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS)
         state_flags = RF2_STATUS_RFDC_READY | RF2_STATUS_DAC_MTS_READY | RF2_STATUS_DAC_MTS_REQUIRED | RF2_STATUS_NCO_SYNC_READY
         if self.playback_armed:
             state_flags |= RF2_STATUS_ARMED | RF2_STATUS_PREPARED
@@ -102,24 +92,9 @@ class SimulatedDr47Device(Dr47Device):
             self._sim_valid_mask & 0xFF, 0,
             1, 0,
         )
-        sync_status = 0
-        if self._sim_sync_seen:
-            sync_status |= RF2_SYNC_STATUS_SEEN
-        if self._sim_sync_ready:
-            sync_status |= RF2_SYNC_STATUS_READY
-        if self._sync_mode == "bypass":
-            sync_status |= RF2_SYNC_STATUS_BYPASS
-        if self._sync_role == "master":
-            sync_status |= RF2_SYNC_STATUS_ROLE_MASTER
         return base + struct.pack(
-            "<QIIII", sync_status, self._trigger_input_count,
+            "<QIIII", 0, self._trigger_input_count,
             self._trigger_accepted_count, self._trigger_output_count, 0,
-        ) + struct.pack(
-            "<QQQQ", (self._sim_sync_alignment_epoch & 0x3F) |
-            (int(self._sim_sync_align_busy) << 22) |
-            (int(self._sim_sync_align_failed) << 23),
-            (1 << 16) | (self._sim_sync_alignment_error & 0xFFFF),
-            0, 0,
         )
 
     def _response(self, opcode: int, payload: bytes = b"", seq: int = 1, status: int = RF2_STATUS_OK) -> dict[str, Any]:
@@ -144,20 +119,12 @@ class SimulatedDr47Device(Dr47Device):
             trigger_path_version=3,
             capability_bits=(RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
                               RF2_CAP_DAC_MTS | RF2_CAP_NCO_SYNC |
-                              RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS),
+                              RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS),
             state_flags=RF2_STATUS_RFDC_READY | RF2_STATUS_DAC_MTS_READY | RF2_STATUS_DAC_MTS_REQUIRED | RF2_STATUS_NCO_SYNC_READY,
             rfdc_ready=True,
             dac_mts_required=True,
             dac_mts_ready=True,
             nco_sync_ready=True,
-            sync_role=self._sync_role,
-            sync_mode=self._sync_mode,
-            sync_seen=self._sim_sync_seen,
-            sync_link_ready=self._sim_sync_ready,
-            sync_align_busy=self._sim_sync_align_busy,
-            sync_align_failed=self._sim_sync_align_failed,
-            sync_alignment_epoch=self._sim_sync_alignment_epoch,
-            sync_alignment_error=self._sim_sync_alignment_error,
             trigger_input_count=self._trigger_input_count,
             trigger_accepted_count=self._trigger_accepted_count,
             trigger_output_count=self._trigger_output_count,
@@ -168,7 +135,14 @@ class SimulatedDr47Device(Dr47Device):
         return 0
 
     def status(self, refresh: bool = True) -> DeviceStatus:
-        state = PlaybackState.RUNNING if self.playback_running else PlaybackState.ARMED if self.playback_armed else PlaybackState.IDLE
+        state_map = {
+            WAVEFORM_STATE_ID: PlaybackState.IDLE, WAVEFORM_STATE_UPLOAD: PlaybackState.UPLOAD,
+            WAVEFORM_STATE_READY: PlaybackState.READY, WAVEFORM_STATE_PREFETCH: PlaybackState.PREFETCH,
+            WAVEFORM_STATE_WAIT_TRIGGER: PlaybackState.WAIT_TRIGGER,
+            WAVEFORM_STATE_PLAYING: PlaybackState.PLAYING, WAVEFORM_STATE_DONE: PlaybackState.DONE,
+            WAVEFORM_STATE_ERROR: PlaybackState.ERROR,
+        }
+        state = state_map.get(self._wave_state, PlaybackState.ERROR)
         self._capabilities = DeviceCapabilities(
             **{**self._capabilities.__dict__,
                "config_valid_mask": self._sim_valid_mask,
@@ -176,14 +150,6 @@ class SimulatedDr47Device(Dr47Device):
                "playback_armed": self.playback_armed,
                "playback_prepared": self.playback_prepared,
                "playback_running": self.playback_running,
-               "sync_role": self._sync_role,
-               "sync_mode": self._sync_mode,
-               "sync_seen": self._sim_sync_seen,
-               "sync_link_ready": self._sim_sync_ready,
-               "sync_align_busy": self._sim_sync_align_busy,
-               "sync_align_failed": self._sim_sync_align_failed,
-               "sync_alignment_epoch": self._sim_sync_alignment_epoch,
-               "sync_alignment_error": self._sim_sync_alignment_error,
                "trigger_input_count": self._trigger_input_count,
                "trigger_accepted_count": self._trigger_accepted_count,
                "trigger_output_count": self._trigger_output_count,
@@ -217,52 +183,6 @@ class SimulatedDr47Device(Dr47Device):
         self._diag_generation = 0
         return self._response(RF2_OP_DIAG_CONTROL, self._make_status_payload(), seq=1)
 
-    def rfctrl2_set_sync_role(self, role: int, mode: int = RF2_SYNC_MODE_EXTERNAL,
-                              seq: int | None = None, wait_response: bool = True):
-        requested_role = "master" if int(role) == RF2_SYNC_ROLE_MASTER else "slave"
-        if requested_role != self._sync_role or self.playback_armed or self.playback_prepared or self.playback_running:
-            return self._response(RF2_OP_SET_SYNC_ROLE, seq=seq or 1, status=3)
-        self._sync_mode = "bypass" if int(mode) == RF2_SYNC_MODE_BYPASS else "external"
-        self._sim_sync_seen = False
-        self._sim_sync_ready = self._sync_role == "master" or self._sync_mode == "bypass"
-        self._sim_sync_align_busy = False
-        self._sim_sync_align_failed = False
-        return self._response(RF2_OP_SET_SYNC_ROLE, self._make_status_payload(), seq or 1)
-
-    def rfctrl2_sync_epoch(self, epoch: int, seq: int | None = None, wait_response: bool = True):
-        if self._sync_role != "master":
-            return self._response(RF2_OP_SYNC_EPOCH, seq=seq or 1, status=6)
-        self._sim_sync_seen = True
-        self._sim_sync_align_busy = True
-        self._sim_sync_ready = False
-        self._sim_sync_alignment_epoch = (self._sim_sync_alignment_epoch + 1) & 0x3F
-        self._sim_sync_align_busy = False
-        self._sim_sync_ready = True
-        return self._response(RF2_OP_SYNC_EPOCH, self._make_status_payload(), seq or 1)
-
-    def _simulate_external_sync(self, epoch: int = 1) -> None:
-        """Inject the XS20 event used by :class:`SyncGroup` tests."""
-
-        if self._sync_role != "slave" or self._sync_mode != "external":
-            return
-        self._sim_sync_seen = True
-        self._sim_sync_align_busy = True
-        self._sim_sync_ready = False
-        self._sim_sync_alignment_epoch = (self._sim_sync_alignment_epoch + 1) & 0x3F
-        self._sim_sync_align_busy = False
-        self._sim_sync_ready = True
-
-    def rfctrl2_emit_trigger(self, seq: int | None = None, wait_response: bool = True):
-        self._trigger_output_count = (self._trigger_output_count + 1) & 0xFFFFFFFF
-        # Model the documented XS18 -> XS19 loopback and its synchronization
-        # gate. A master is always locally ready.
-        if self.playback_armed:
-            self._trigger_input_count = (self._trigger_input_count + 1) & 0xFFFFFFFF
-            if self._sim_sync_ready:
-                self._trigger_accepted_count = (self._trigger_accepted_count + 1) & 0xFFFFFFFF
-                self.playback_running = True
-        return self._response(RF2_OP_EMIT_TRIGGER, self._make_status_payload(), seq or 1)
-
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
                            per_channel_output_current_ma, revision: int, channel_mask: int = 0xFF,
                            seq: int | None = None, wait_response: bool = True, retries: int | None = None):
@@ -293,86 +213,160 @@ class SimulatedDr47Device(Dr47Device):
             self._response(RF2_OP_RFDC_GET_CONFIG, self._make_config_payload(), seq or 1)
         )
 
-    def rfctrl2_arm(self, run_id: int, channel_mask: int = 0xFF, seq: int | None = None, wait_response: bool = True):
-        if int(channel_mask) & ~self._sim_valid_mask:
-            return self._response(RF2_OP_ARM, seq=seq or 1, status=5)
-        self.playback_armed = True
-        self.playback_prepared = True
-        self.playback_running = False
-        return self._response(RF2_OP_ARM, self._make_status_payload(), seq or 1)
+    def waveform_status(self, session: int = 0):
+        return self._wave_response(WAVE_OP_STATUS)
 
-    def rfctrl2_trigger(self, seq: int | None = None, wait_response: bool = True):
-        if not self.playback_armed or not self._sim_sync_ready:
-            return self._response(RF2_OP_TRIGGER, seq=seq or 1, status=6)
-        self.playback_running = True
-        return self._response(RF2_OP_TRIGGER, self._make_status_payload(), seq or 1)
+    def _wave_response(self, opcode: int, *, seq: int = 1, status: int = WAVE_STATUS_OK,
+                       error_code: int = 0, error_offset: int = 0, **extra) -> dict[str, Any]:
+        result = {"version": 1, "opcode": opcode, "seq": seq or 1,
+                  "status": status, "session": self._wave_session,
+                  "state": self._wave_state, "descriptor": self._wave_descriptor,
+                  "error_code": error_code, "error_offset": error_offset,
+                  "state_name": {0:"idle",1:"upload",2:"ready",3:"prefetch",4:"wait_trigger",5:"playing",6:"draining",7:"done",8:"error"}.get(self._wave_state, "unknown")}
+        result.update(extra)
+        return result
 
-    def rfctrl2_abort_mute(self, seq: int | None = None, wait_response: bool = True):
-        self.playback_armed = self.playback_prepared = self.playback_running = False
-        return self._response(RF2_OP_ABORT_MUTE, self._make_status_payload(), seq or 1)
+    def begin_waveform(self, *, session: int, total_bytes: int, channel_mask: int,
+                       total_beats: int, loop_count: int = 1, layout: int = 1):
+        try:
+            pack_wave_begin(session=session, total_bytes=total_bytes, channel_mask=channel_mask,
+                            total_beats=total_beats, loop_count=loop_count, layout=layout)
+        except ParameterRangeError:
+            return self._wave_response(WAVE_OP_BEGIN, status=WAVE_STATUS_BAD_REQUEST)
+        self._wave_session = int(session) & 0xFFFFFFFF
+        self._wave_total_bytes = int(total_bytes)
+        self._wave_total_beats = int(total_beats)
+        self._wave_channel_mask = int(channel_mask) & 0xFF
+        self._wave_loop_count = int(loop_count) & 0xFFFFFFFF
+        # Grow on accepted fragments, not on BEGIN: an 8 GiB descriptor must
+        # not allocate 8 GiB just to exercise protocol boundaries.
+        self._wave_received = bytearray()
+        self._wave_fragments.clear()
+        self._wave_descriptor = 0
+        self._wave_play_pending = False
+        self._wave_prefetch_complete = False
+        self._wave_next_packet = 0
+        self._wave_received_bytes = 0
+        self._wave_error = WAVE_ERROR_NONE
+        self._wave_state = WAVEFORM_STATE_UPLOAD
+        return self._wave_response(WAVE_OP_BEGIN)
 
-    def upload_waveforms(self, channel_waves, channel_sequences=None, **kwargs):
-        if not channel_waves:
-            raise ParameterRangeError("channel_waves must not be empty")
-        progress_callback = kwargs.get("progress_callback")
-        if progress_callback is not None and not callable(progress_callback):
-            raise ParameterRangeError("progress_callback must be callable")
+    def data_waveform(self, *, session: int, packet_seq: int, byte_offset: int,
+                      payload: bytes, payload_crc: int | None = None):
+        raw = bytes(payload)
+        if byte_offset < 0 or byte_offset % 32:
+            return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_OFFSET,
+                next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
+                first_error_offset=byte_offset)
+        try:
+            pack_wave_data(session=session, packet_seq=packet_seq, byte_offset=byte_offset, payload=raw)
+        except ParameterRangeError:
+            return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_BAD_REQUEST)
+        if payload_crc is not None and (int(payload_crc) & 0xFFFFFFFF) != crc32(raw):
+            self._wave_error_offset = int(byte_offset)
+            return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_CRC,
+                next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
+                first_error_offset=byte_offset)
+        if session != self._wave_session or self._wave_state != WAVEFORM_STATE_UPLOAD:
+            return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_BAD_REQUEST)
+        if packet_seq < self._wave_next_packet:
+            if self._wave_fragments.get(packet_seq) != (byte_offset, len(raw), crc32(raw)):
+                return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_SEQUENCE)
+            return self._wave_response(WAVE_OP_DATA, ack_packet_seq=packet_seq,
+                next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
+                first_error_offset=self._wave_error_offset)
+        if packet_seq != self._wave_next_packet:
+            return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_SEQUENCE,
+                next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
+                first_error_offset=byte_offset)
+        if byte_offset != self._wave_received_bytes or byte_offset + len(raw) > self._wave_total_bytes:
+            self._wave_error_offset = byte_offset
+            return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_OFFSET,
+                next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
+                first_error_offset=byte_offset)
+        self._wave_received[byte_offset:byte_offset + len(raw)] = raw
+        self._wave_received_bytes += len(raw)
+        self._wave_fragments[packet_seq] = (byte_offset, len(raw), crc32(raw))
+        self._wave_next_packet += 1
+        return self._wave_response(WAVE_OP_DATA, ack_packet_seq=packet_seq,
+            next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
+            first_error_offset=0)
 
-        normalized: dict[int, np.ndarray] = {}
-        for channel, wave in channel_waves.items():
-            physical = int(channel)
-            if not 1 <= physical <= 8:
-                raise ParameterRangeError("physical channel must be in 1..8")
-            fmt = (kwargs.get("wave_formats") or {}).get(physical)
-            if fmt is None:
-                arr = np.asarray(wave)
-                if arr.ndim == 2:
-                    fmt = "iq_matrix"
-                elif isinstance(wave, (list, tuple)) and arr.size and all(-32768 <= int(item) <= 32767 for item in arr.reshape(-1).tolist()):
-                    fmt = "interleaved_iq"
-                else:
-                    fmt = "packed_iq"
-            normalized[physical] = ezq_wave_to_interleaved_int16(wave, fmt)
+    def commit_waveform(self, *, session: int):
+        if session == self._wave_session and self._wave_descriptor:
+            return self._wave_response(WAVE_OP_COMMIT)
+        if session != self._wave_session or self._wave_state != WAVEFORM_STATE_UPLOAD:
+            return self._wave_response(WAVE_OP_COMMIT, status=WAVE_STATUS_BAD_REQUEST)
+        if self._wave_received_bytes != self._wave_total_bytes:
+            return self._wave_response(WAVE_OP_COMMIT, status=WAVE_STATUS_INCOMPLETE)
+        self._wave_generation = (self._wave_generation + 1) & 0xFFFFFFFF or 1
+        self._wave_descriptor = self._wave_generation
+        self._wave_state = WAVEFORM_STATE_PREFETCH
+        self._wave_prefetch_complete = False
+        return self._wave_response(WAVE_OP_COMMIT)
 
-        quantized_schedule = None
-        schedule_meta: dict[str, Any] = {}
-        schedule = kwargs.get("schedule")
-        if schedule is not None:
-            quantized_schedule = schedule.quantized()
-            padded: dict[int, np.ndarray] = {}
-            for channel, wave in normalized.items():
-                padded_wave, meta = make_burst_record(
-                    wave,
-                    first_delay_ns=quantized_schedule.requested_first_delay_ns,
-                    interval_ns=quantized_schedule.requested_interval_ns,
-                )
-                padded[channel] = padded_wave
-                if not schedule_meta:
-                    schedule_meta = meta
-            normalized = padded
+    def complete_prefetch(self):
+        if self._wave_state == WAVEFORM_STATE_PREFETCH:
+            self._wave_prefetch_complete = True
+            self._wave_state = WAVEFORM_STATE_PLAYING if self._wave_play_pending else WAVEFORM_STATE_WAIT_TRIGGER
+            self._wave_play_pending = False
+        return self.status(refresh=False)
 
-        self.waveforms.update(normalized)
-        if channel_sequences:
-            self.sequences.update({int(channel): sequence for channel, sequence in channel_sequences.items()})
-        self._uploaded_channels.update(normalized)
-        bytes_per_channel = max(
-            waveform_length_bytes(wave) for wave in normalized.values()
-        )
-        if progress_callback is not None:
-            progress_callback(0, 0)
-        return {
-            "packet_count": 0,
-            "waveform_packet_count": 0,
-            "channels": tuple(sorted(normalized)),
-            "bytes_per_channel": bytes_per_channel,
-            "wait_for_trigger": bool(channel_sequences),
-            "loop": bool(kwargs.get("loop") or schedule is not None),
-            "commands": [],
-            "instruction_repeats": max(1, int(kwargs.get("instruction_repeats", 1))),
-            "schedule": quantized_schedule,
-            "simulated": True,
-            **schedule_meta,
-        }
+    def play(self, *, session: int = 0):
+        if session and session != self._wave_session:
+            return self._wave_response(WAVE_OP_PLAY, status=WAVE_STATUS_BAD_REQUEST)
+        if self._wave_state in (WAVEFORM_STATE_READY, WAVEFORM_STATE_DONE, WAVEFORM_STATE_PREFETCH):
+            self._wave_state = WAVEFORM_STATE_PREFETCH
+            self._wave_prefetch_complete = False
+            self._wave_play_pending = True
+            return self._wave_response(WAVE_OP_PLAY)
+        if self._wave_state == WAVEFORM_STATE_WAIT_TRIGGER:
+            self._wave_state = WAVEFORM_STATE_PLAYING
+            return self._wave_response(WAVE_OP_PLAY)
+        return self._wave_response(WAVE_OP_PLAY, status=WAVE_STATUS_BAD_REQUEST)
+
+    def pause(self, *, session: int = 0):
+        if session and session != self._wave_session:
+            return self._wave_response(WAVE_OP_PAUSE, status=WAVE_STATUS_BAD_REQUEST)
+        if self._wave_state in (WAVEFORM_STATE_READY, WAVEFORM_STATE_DONE, WAVEFORM_STATE_PLAYING,
+                                WAVEFORM_STATE_WAIT_TRIGGER, WAVEFORM_STATE_PREFETCH):
+            self._wave_state = WAVEFORM_STATE_READY
+            self._wave_prefetch_complete = False
+            self._wave_play_pending = False
+            return self._wave_response(WAVE_OP_PAUSE)
+        return self._wave_response(WAVE_OP_PAUSE, status=WAVE_STATUS_BAD_REQUEST)
+
+    def stop(self, *, session: int = 0):
+        if session and session != self._wave_session:
+            return self._wave_response(WAVE_OP_STOP, status=WAVE_STATUS_BAD_REQUEST)
+        if self._wave_state == WAVEFORM_STATE_UPLOAD:
+            self.abort(session=session)
+            return self._wave_response(WAVE_OP_STOP)
+        result = self.pause(session=session)
+        result["opcode"] = WAVE_OP_STOP
+        return result
+
+    def abort(self, *, session: int = 0):
+        if session and session != self._wave_session:
+            return self._wave_response(WAVE_OP_ABORT, status=WAVE_STATUS_BAD_REQUEST)
+        self._wave_state = WAVEFORM_STATE_ID
+        self._wave_session = 0
+        self._wave_descriptor = 0
+        self._wave_received = bytearray()
+        self._wave_received_bytes = 0
+        self._wave_next_packet = 0
+        self._wave_error = WAVE_ERROR_NONE
+        self._wave_error_offset = 0
+        self._wave_play_pending = False
+        self._wave_prefetch_complete = False
+        self._wave_fragments.clear()
+        return self._wave_response(WAVE_OP_ABORT)
+
+    def trigger_event(self):
+        if self._wave_state == WAVEFORM_STATE_WAIT_TRIGGER:
+            self._wave_state = WAVEFORM_STATE_PLAYING
+            return True
+        return False
 
     def close(self) -> None:
         self._closed = True

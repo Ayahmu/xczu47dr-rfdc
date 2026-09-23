@@ -8,7 +8,7 @@ import time
 from typing import Callable
 
 from .errors import ProtocolError, TransportError, TransportTimeout
-from .protocol import parse_rfresp2_packet
+from .protocol import parse_rfresp2_packet, parse_wave_response, WAVE_RESP_MAGIC
 
 SO_BINDTODEVICE = getattr(socket, "SO_BINDTODEVICE", 25)
 
@@ -170,6 +170,41 @@ class UdpTransport:
         finally:
             self.sock.settimeout(previous_timeout)
         return responses
+
+    def receive_wave_response(self, expected_seq: int | None = None, expected_opcode: int | None = None) -> dict:
+        if self._closed:
+            raise TransportError("UDP transport is closed")
+        while True:
+            try:
+                packet, addr = self.sock.recvfrom(65535)
+            except socket.timeout as exc:
+                raise TransportTimeout(f"timed out waiting for waveform response from {self.ip}:{self.port}") from exc
+            except OSError as exc:
+                raise TransportError(f"receiving waveform response failed: {exc}") from exc
+            if not self._source_matches(addr):
+                continue
+            response = parse_wave_response(packet)
+            if expected_seq is not None and int(response["seq"]) != (int(expected_seq) & 0xFFFFFFFF):
+                continue
+            if expected_opcode is not None and int(response["opcode"]) != (int(expected_opcode) & 0xFFFFFFFF):
+                continue
+            response["addr"] = addr
+            return response
+
+    def request_wave(self, packet: bytes, *, seq: int, opcode: int, retries: int = 0, wait_response: bool = True):
+        attempts = max(0, int(retries)) + 1
+        immutable = bytes(packet)
+        for attempt in range(attempts):
+            self.send(immutable)
+            if not wait_response:
+                return len(immutable)
+            try:
+                return self.receive_wave_response(expected_seq=seq, expected_opcode=opcode)
+            except TransportTimeout:
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(self.retry_backoff_s())
+        raise AssertionError("unreachable waveform retry state")
 
     def request(
         self,

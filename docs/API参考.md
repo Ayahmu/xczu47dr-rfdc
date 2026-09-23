@@ -11,7 +11,7 @@ python -m pip install 47dr_driver-0.1.0-py3-none-any.whl
 ```
 
 ```python
-from dr47 import Dr47Device, BurstSchedule
+from dr47 import Dr47Device
 ```
 
 SDK ZIP 中的 `examples/` 目录包含模拟器、网络发现、软件 Trigger 和外部 Trigger
@@ -29,7 +29,7 @@ python -m dr47.examples.simulator_quickstart
 Dr47Device(
     ip="192.168.1.128", port=1234, timeout_s=5.0,
     udp_interface="", udp_source_ip="", retries=2,
-    batch_mode=False, sync_role="slave", transport=None,
+    batch_mode=False, transport=None,
     expected_build_profile_id=1,
     expected_trigger_path_version=3,
     expected_source_commit_id=None,
@@ -38,17 +38,16 @@ Dr47Device(
 
 | 参数 | 说明 |
 | --- | --- |
-| `ip`, `port` | 板卡地址和 RFCTRL2 UDP 端口。 |
+| `ip`, `port` | 板卡地址和 UDP 端口。 |
 | `timeout_s`, `retries` | 请求超时和重试次数。 |
 | `udp_interface`, `udp_source_ip` | 多网卡主机上指定发送网卡和源地址。 |
 | `batch_mode` | 为 `True` 时，RFDC 设置暂存到 `commit()`。 |
-| `sync_role` | 软件期望的角色；只能配置为 `master` 或 `slave`，不能改变 bitstream 固化的角色。 |
 | `expected_*` | 身份保护条件；设为 `None` 可关闭对应检查。 |
 
 构造对象不会访问网络。常用生命周期方法如下：
 
 ```python
-device.connect()                 # 返回 RFCTRL2 协议版本
+device.connect()                 # 返回板端协议版本
 status = device.status()         # 返回 DeviceStatus
 status_cached = device.status(refresh=False)
 caps = device.capabilities       # DeviceCapabilities
@@ -62,8 +61,8 @@ device.close()
 
 `DeviceStatus` 包含 `connected`、`ip`、`port`、`state`、`capabilities` 和 `message`。
 `DeviceCapabilities` 还提供 RFDC/MTS/NCO 状态、同步状态、Trigger 计数、播放状态和
-每通道 `RfdcChannelReadback`。播放状态为 `idle`、`armed`、`prepared`、`running` 或
-`fault`。
+每通道 `RfdcChannelReadback`。播放状态为 `idle`、`upload`、`ready`、`prefetch`、`wait_trigger`、`playing`、
+`draining`、`done`、`error` 或 `fault`。
 
 ## 网络发现与配置
 
@@ -119,12 +118,12 @@ device.commit()
 "nyquist_zone": 2}` 的结果。4 GHz 的低频 IQ 包络不需要在主机端预先搬移到 RF
 载波。
 
-### 底层 RFCTRL2 方法
+### 底层协议方法
 
 需要精确控制协议时可使用 `rfctrl2_hello()`、`rfctrl2_status()`、
-`rfctrl2_rfdc_apply(...)`、`rfctrl2_rfdc_get_config()`、`rfctrl2_arm(...)`、
-`rfctrl2_trigger()`、`rfctrl2_abort_mute()`。这些方法直接使用协议字段，返回解析后
-字典或状态码；一般应用应优先使用上面的高层方法。
+`rfctrl2_rfdc_apply(...)` 和 `rfctrl2_rfdc_get_config()`。这些方法只覆盖身份、状态、
+RFDC 配置和诊断；波形播放必须使用下面的 WAVECTR0 方法，不再提供旧 ARM、TRIGGER、
+ABORT_MUTE 或 instruction-stream 入口。
 
 ## 波形生成与上传
 
@@ -160,70 +159,53 @@ record, info = make_burst_record(
 - `make_iq_sine_interleaved(frequency_hz, phase_rad, amplitude, sample_rate_hz, *, sample_count, q_sign=-1)`：生成固定样本数的正弦 IQ。
 - `make_iq_gaussian_sine_interleaved(..., duration_s, *, sample_count=None, fwhm_s=None, q_sign=-1, hls_xy_drag=False, drag_alpha=0.5, drag_delta_hz=-200e6)`：生成高斯包络 IQ，可选 DRAG 修正。
 - `place_interleaved_iq_in_record(active_wave, *, delay_s, record_duration_s, sample_rate_hz)`：将有效波形放入带前置零和尾部零的记录。
-- `make_burst_record(active_wave, *, first_delay_ns, interval_ns, sample_rate_hz=400e6)`：生成一份有限 burst 记录和描述字典。
+- `make_burst_record(active_wave, *, first_delay_ns, interval_ns, sample_rate_hz=400e6)`：生成带零填充间隔的波形记录和描述字典；它不创建板端播放指令。
 - `ezq_wave_to_interleaved_int16(wave, wave_format="packed_iq")`：完成输入格式转换。
 
 ### 上传和播放配置
 
+波形协议为单板专用的 `WAVECTR0`，不再提供旧 ARM、PREPARE、RFCTRL2 TRIGGER 或
+ABORT_MUTE 播放命令。8 个通道使用统一的交织 512-bit DDR 图像：每个 DDR beat 为 64 bytes，每个通道占 8 bytes；四个 DDR beat 组成每通道一个 32-byte DAC beat。
+`total_beats` 表示每通道 DAC beat 数，`total_bytes = total_beats * 256`，不因 mask 缩短。所有地址和长度均以 bytes 或 beats 明确表达。
+
+低层接口如下：
+
 ```python
-cfg = device.configure_playback(
-    {1: wave, 2: wave},
-    BurstSchedule(first_delay_ns=0, interval_ns=1000, repetitions=3),
-    wave_formats={1: "interleaved_iq", 2: "interleaved_iq"},
-    bulk_upload=True,
+board.begin_waveform(
+    session=1, total_bytes=len(image), channel_mask=0x03,
+    total_beats=len(image) // 256, loop_count=1,
 )
-device.arm_playback(cfg.channel_mask)
-device.trigger_playback()
-device.abort_playback()
+for packet_seq, offset in enumerate(range(0, len(image), 1024)):
+    board.data_waveform(
+        session=1, packet_seq=packet_seq, byte_offset=offset,
+        payload=image[offset:offset + 1024],
+    )
+board.commit_waveform(session=1)
+board.play(session=1)
+board.pause(session=1)
+board.stop(session=1)
+board.abort(session=1)
+print(board.waveform_status(session=1))
 ```
 
-`configure_playback(channel_waves, schedule, *, wave_formats=None, channel_mask=None,
-bulk_upload=False, **kwargs)` 会上传记录并返回 `PlaybackConfig`，其字段为
-`schedule`、`channel_mask`、`record_duration_ns` 和 `record_bytes_per_channel`。
-`channel_waves` 是 `{physical_channel: numpy_array_or_list}`，通道范围为 1-8。
+`DATA` 由设备按期望 sequence 接收；缺包、乱序、越界和 CRC 错误不会改变累计确认。
+重复包只返回当前 `next_expected_sequence` 和 `received_bytes`。`COMMIT` 只有在全部
+bytes 连续接收后成功，并自动进入 `PREFETCH`。启动水位达到后进入 `WAIT_TRIGGER`；
+`PLAY` 或合法外部 Trigger 的第一个事件进入 `PLAYING`。`PAUSE`/`STOP` 清空 FIFO 并
+保留 descriptor，下一次 `PLAY` 从波形起点重新预取；`ABORT` 清除 descriptor 和错误。
 
-需要更细控制时使用：
+`upload_waveforms()` 是上述流程的便捷封装，会把输入通道补零并打包为统一 interleaved
+图像，然后执行 BEGIN、DATA 和 COMMIT。`loop_count` 表示包含首轮在内的总播放次数；
+它不接受 instruction sequence 或播放延迟参数。
 
-```python
-device.upload_waveforms(
-    {1: wave}, channel_sequences=None,
-    wave_formats={1: "interleaved_iq"}, layout="interleaved_512b",
-    base_addr=0, auto_start=True, loop=False,
-    packet_pause_s=1e-5, packet_burst=8,
-    channel_delays=None, instruction_repeats=1,
-    bulk_upload=False, progress_callback=None, schedule=None,
-)
-```
+## 外部 Trigger
 
-`progress_callback(sent_packets, total_packets)` 在开始上传和每个数据包完成后调用。
-`arm_playback(channel_mask=None, run_id=None)` 进入等待 Trigger 状态；
-`trigger_playback()` 发送软件 Trigger；`abort_playback()` 停止播放并静音。旧名称
-`arm()`、`trigger()`、`abort_mute()` 等价但仅用于兼容旧程序。
+外部窄脉冲由板端异步置位 latch 捕获，再经过约束的同步路径进入 DAC 域。Trigger
+只在 `WAIT_TRIGGER` 状态被消费；在 `IDLE`、`UPLOAD`、`PREFETCH`、`READY`、`PLAYING`
+或 `ERROR` 中到达的事件都会丢弃，不会形成待启动请求。状态查询中的计数区分
+`trigger_seen_count`、`trigger_dropped_count` 和实际启动计数。
 
-`BurstSchedule(first_delay_ns, interval_ns, repetitions, debug_alternate=False)` 的
-时间在 FPGA 端按 20 ns 向上量化。`first_delay_ns=0` 表示不增加可编程等待；异步
-外部输入仍会有一个 DAC 时钟边界量化。
-
-## 同步与外部 Trigger
-
-```python
-device.set_sync_mode("bypass")       # 单板、没有 XS20 时
-device.bypass_sync()
-device.arm_playback(channel_mask=0x03)
-# 此后等待 XS19 外部 Trigger
-```
-
-| 方法 | 说明 |
-| --- | --- |
-| `set_sync_role("master" / "slave")` | 设置协议请求的角色；不能覆盖 bitstream 固化角色。 |
-| `set_sync_mode("external" / "bypass")` | 选择同步门控。单板外部 Trigger 通常使用 `bypass`。 |
-| `bypass_sync()` / `require_external_sync()` | 快捷设置同步模式。 |
-| `sync(epoch=1)` | 主卡发起同步 epoch；slave 调用会失败。 |
-| `emit_trigger()` | 从 XS18 输出一个 Trigger，不会自动启动本地播放。 |
-| `SyncGroup(master, slave, timeout_s=5).sync(epoch=1)` | 执行双板同步并返回 `SyncAlignmentResult`。 |
-
-未准备好的外部 Trigger 不会排队，板卡会立即记录为 skipped/rejected；应用应通过
-`status()` 或诊断快照检查接受计数。
+单板播放不依赖 HMC 多板同步、软件回包或旧 GPIO 门控路径。
 
 ## 诊断与错误处理
 

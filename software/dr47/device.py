@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -25,17 +25,16 @@ from .errors import (
     DeviceStatusError,
     ParameterRangeError,
     ProtocolVersionError,
+    ProtocolError,
     UnsupportedCapabilityError,
     UnsupportedParameterError,
-    SynchronizationError,
     TransportTimeout,
 )
 from .protocol import *  # noqa: F401,F403 - protocol constants are part of the public API
+from .protocol import _wave_uint, WAVE_DAC_FRAME_BYTES
 from .protocol import (
     RF2_CAP_DAC_MTS,
     RF2_CAP_NCO_SYNC,
-    RF2_CAP_SYNC_IO,
-    RF2_CAP_TRIGGER_IO,
     RF2_CAP_PL_RFDC_CONFIG,
     RF2_STATUS_BAD_VERSION,
     RF2_STATUS_BUSY,
@@ -43,44 +42,33 @@ from .protocol import (
     RF2_STATUS_RFDC_NOT_READY,
     RF2_STATUS_UNSUPPORTED,
     RF2_STATUS_RANGE,
-    RF2_SYNC_MODE_EXTERNAL,
-    RF2_SYNC_MODE_BYPASS,
-    RF2_SYNC_ROLE_MASTER,
-    RF2_SYNC_ROLE_SLAVE,
-    pack_rfctrl2_abort_mute,
-    pack_rfctrl2_arm,
     pack_rfctrl2_hello,
     pack_rfctrl2_network_apply,
     pack_rfctrl2_network_get,
     pack_rfctrl2_network_restart,
     pack_rfctrl2_rfdc_apply,
     pack_rfctrl2_rfdc_get_config,
-    pack_rfctrl2_start_at,
-    pack_rfctrl2_set_sync_role,
-    pack_rfctrl2_emit_trigger,
     pack_rfctrl2_status,
-    pack_rfctrl2_sync_epoch,
-    pack_rfctrl2_trigger,
     parse_rfctrl2_network_response,
     parse_rfctrl2_rfdc_config_response,
     parse_rfctrl2_status_payload,
     parse_rfresp2_packet,
+    pack_wave_begin, pack_wave_data, pack_wave_commit, pack_wave_play,
+    pack_wave_pause, pack_wave_stop, pack_wave_abort, pack_wave_status,
+    parse_wave_response, WAVE_OP_BEGIN, WAVE_OP_DATA, WAVE_OP_COMMIT,
+    WAVE_OP_PLAY, WAVE_OP_PAUSE, WAVE_OP_STOP, WAVE_OP_ABORT, WAVE_OP_STATUS,
+    WAVEFORM_STATE_NAMES, WAVEFORM_STATE_ID, WAVEFORM_STATE_UPLOAD,
+    WAVEFORM_STATE_READY, WAVEFORM_STATE_PREFETCH, WAVEFORM_STATE_WAIT_TRIGGER,
+    WAVEFORM_STATE_PLAYING, WAVEFORM_STATE_DRAINING, WAVEFORM_STATE_DONE,
+    WAVEFORM_STATE_ERROR, WAVE_STATUS_OK,
 )
 from .transport import UdpTransport
 from .waveforms import (
     DEFAULT_DDR_LAYOUT,
     DDR_LAYOUT_INTERLEAVED_512B,
-    PLAY_FLAG_INTERLEAVED,
     ezq_wave_to_interleaved_int16,
-    iter_interleaved_udp_bulk_packets,
-    iter_interleaved_udp_waveform_packets,
-    pack_udp_instruction_packet,
-    sequence_to_play_commands,
-    waveform_length_bytes,
-    make_burst_record,
+    pack_interleaved_512b_waveforms,
 )
-from .playback import BurstSchedule, PlaybackConfig
-from .protocol import CMD_REPEAT, REPEAT_FLAG_DEBUG_ALTERNATE
 
 
 GHZ_TO_HZ = 1_000_000_000.0
@@ -138,7 +126,6 @@ class Dr47Device:
         udp_source_ip: str = "",
         retries: int = 2,
         batch_mode: bool = False,
-        sync_role: Literal["master", "slave"] = "slave",
         transport: object | None = None,
         expected_build_profile_id: int | None = RF2_BUILD_PROFILE_NORMAL,
         expected_trigger_path_version: int | None = RF2_TRIGGER_PATH_VERSION,
@@ -154,8 +141,6 @@ class Dr47Device:
         self.expected_build_profile_id = None if expected_build_profile_id is None else int(expected_build_profile_id)
         self.expected_trigger_path_version = None if expected_trigger_path_version is None else int(expected_trigger_path_version)
         self.expected_source_commit_id = None if expected_source_commit_id is None else int(expected_source_commit_id) & 0xFFFFFFFF
-        if sync_role not in {"master", "slave"}:
-            raise ValueError("sync_role must be 'master' or 'slave'")
         self._transport = transport
         self._owns_transport = transport is None
         self._connected = False
@@ -172,8 +157,6 @@ class Dr47Device:
         self._pending_current = {channel: 20.0 for channel in range(1, 9)}
         self._pending_revision = 0
         self._capabilities = DeviceCapabilities()
-        self._sync_role = sync_role
-        self._sync_mode = "external"
         self._status = DeviceStatus(False, self.ip, self.port, PlaybackState.IDLE, self._capabilities, "not connected")
 
     @property
@@ -250,11 +233,11 @@ class Dr47Device:
         decoded = parse_rfctrl2_status_payload(response)
         state_flags = int(decoded.get("state_flags", 0))
         if decoded.get("running"):
-            state = PlaybackState.RUNNING
+            state = PlaybackState.PLAYING
         elif decoded.get("prepared"):
-            state = PlaybackState.PREPARED
+            state = PlaybackState.WAIT_TRIGGER
         elif decoded.get("armed"):
-            state = PlaybackState.ARMED
+            state = PlaybackState.READY
         else:
             state = PlaybackState.IDLE
         self._capabilities = DeviceCapabilities(
@@ -274,14 +257,6 @@ class Dr47Device:
             dac_mts_error=int(decoded.get("dac_mts_error", 0)) & 0xFFFF,
             nco_sync_ready=bool(decoded.get("nco_sync_ready")),
             nco_sync_epoch=int(decoded.get("nco_sync_epoch", 0)) & 0xFFFFFFFF,
-            sync_role=str(decoded.get("sync_role", self._sync_role)),
-            sync_mode=str(decoded.get("sync_mode", self._sync_mode)),
-            sync_seen=bool(decoded.get("sync_seen", False)),
-            sync_link_ready=bool(decoded.get("sync_link_ready", False)),
-            sync_align_busy=bool(decoded.get("sync_align_busy", False)),
-            sync_align_failed=bool(decoded.get("sync_align_failed", False)),
-            sync_alignment_epoch=int(decoded.get("sync_alignment_epoch", 0)) & 0x3F,
-            sync_alignment_error=int(decoded.get("sync_alignment_error", 0)) & 0xFFFF,
             trigger_input_count=int(decoded.get("trigger_input_count", 0)) & 0xFFFFFFFF,
             trigger_accepted_count=int(decoded.get("trigger_accepted_count", 0)) & 0xFFFFFFFF,
             trigger_output_count=int(decoded.get("trigger_output_count", 0)) & 0xFFFFFFFF,
@@ -301,8 +276,6 @@ class Dr47Device:
             raw=dict(decoded),
         )
         self._status = DeviceStatus(self._connected, self.ip, self.port, state, self._capabilities, "RFCTRL2 online", dict(decoded))
-        self._sync_role = self._capabilities.sync_role
-        self._sync_mode = self._capabilities.sync_mode
         return self._capabilities
 
     def _validate_identity(self, response: Mapping, operation: str) -> None:
@@ -453,26 +426,65 @@ class Dr47Device:
         self._cache_rfdc_readback(result)
         return result
 
-    def rfctrl2_arm(self, run_id: int, channel_mask: int = 0xFF, seq: int | None = None, wait_response: bool = True):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        response = self._request(pack_rfctrl2_arm(run_id, channel_mask, sequence), RF2_OP_ARM, sequence, wait_response=wait_response)
-        if wait_response:
-            self._check_response(response, "ARM")
+    def _wave_request(self, packet: bytes, opcode: int, seq: int, *, wait_response: bool = True):
+        # The transport owns the retry deadline and immutable request identity.
+        # Do not fall back to ad-hoc send/receive paths that lose either.
+        return self.transport.request_wave(packet, seq=seq, opcode=opcode,
+                                           retries=self.retries, wait_response=wait_response)
+
+    @staticmethod
+    def _check_wave_response(response: Mapping, operation: str) -> Mapping:
+        if "status" not in response:
+            raise ProtocolError(f"{operation} response has no status")
+        status = int(response["status"])
+        if status != WAVE_STATUS_OK:
+            raise DeviceStatusError(operation, status, str(response.get("error_code", "")))
         return response
 
-    def rfctrl2_trigger(self, seq: int | None = None, wait_response: bool = True):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        response = self._request(pack_rfctrl2_trigger(sequence), RF2_OP_TRIGGER, sequence, wait_response=wait_response)
-        if wait_response:
-            self._check_response(response, "TRIGGER")
-        return response
+    def waveform_status(self, session: int = 0):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_status(session=session, seq=seq), WAVE_OP_STATUS, seq)
 
-    def rfctrl2_abort_mute(self, seq: int | None = None, wait_response: bool = True):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        response = self._request(pack_rfctrl2_abort_mute(sequence), RF2_OP_ABORT_MUTE, sequence, wait_response=wait_response)
-        if wait_response:
-            self._check_response(response, "ABORT_MUTE")
-        return response
+    def begin_waveform(self, *, session: int, total_bytes: int, channel_mask: int,
+                       total_beats: int, loop_count: int = 1, layout: int = WAVE_LAYOUT_INTERLEAVED_512B):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_begin(session=session, total_bytes=total_bytes,
+            channel_mask=channel_mask, total_beats=total_beats, loop_count=loop_count,
+            layout=layout, seq=seq), WAVE_OP_BEGIN, seq)
+
+    def data_waveform(self, *, session: int, packet_seq: int, byte_offset: int,
+                      payload: bytes):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_data(session=session, packet_seq=packet_seq,
+            byte_offset=byte_offset, payload=payload, seq=seq), WAVE_OP_DATA, seq)
+
+    def commit_waveform(self, *, session: int):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_commit(session=session, seq=seq), WAVE_OP_COMMIT, seq)
+
+    def play(self, *, session: int = 0):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_play(session=session, seq=seq), WAVE_OP_PLAY, seq)
+
+    def pause(self, *, session: int = 0):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_pause(session=session, seq=seq), WAVE_OP_PAUSE, seq)
+
+    def stop(self, *, session: int = 0):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_stop(session=session, seq=seq), WAVE_OP_STOP, seq)
+
+    def abort(self, *, session: int = 0):
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_abort(session=session, seq=seq), WAVE_OP_ABORT, seq)
 
     def _tdc_register(self, address: int, *, write: bool = False, data: int = 0) -> int:
         self._require_connected()
@@ -490,124 +502,6 @@ class Dr47Device:
     def write_tdc_register(self, address: int, data: int) -> int:
         """Write a TDC register and return its controller acknowledgement value."""
         return self._tdc_register(address, write=True, data=data)
-
-    def set_sync_role(self, role: str) -> int:
-        """Validate the role fixed into this bitstream; it cannot be changed."""
-
-        value = str(role).strip().lower()
-        if value not in {"master", "slave"}:
-            raise ValueError("sync role must be 'master' or 'slave'")
-        fixed_role = self.status(refresh=False).capabilities.sync_role
-        if fixed_role not in {"master", "slave"}:
-            fixed_role = self.status(refresh=True).capabilities.sync_role
-        if value != fixed_role:
-            raise SynchronizationError(
-                f"bitstream role is fixed as {fixed_role!r}; requested {value!r} requires the other bitstream"
-            )
-        role_code = RF2_SYNC_ROLE_MASTER if fixed_role == "master" else RF2_SYNC_ROLE_SLAVE
-        mode_code = RF2_SYNC_MODE_BYPASS if self._sync_mode == "bypass" else RF2_SYNC_MODE_EXTERNAL
-        self._require_connected()
-        response = self.rfctrl2_set_sync_role(role_code, mode_code, wait_response=True)
-        self._check_response(response, "SET_SYNC_ROLE")
-        self._sync_role = fixed_role
-        self._capabilities = replace(self._capabilities, sync_role=fixed_role)
-        return 0
-
-    def set_sync_mode(self, mode: str) -> int:
-        """Select strict external synchronization or explicit local bypass."""
-
-        value = str(mode).strip().lower()
-        if value not in {"external", "bypass"}:
-            raise ValueError("sync mode must be 'external' or 'bypass'")
-        capability_bits = self.status(refresh=False).capabilities.capability_bits
-        required_capabilities = RF2_CAP_SYNC_IO | RF2_CAP_TRIGGER_IO
-        if (capability_bits & required_capabilities) != required_capabilities:
-            raise UnsupportedCapabilityError(
-                "SET_SYNC_ROLE requires RFCTRL2 SYNC and Trigger capabilities; "
-                f"board capabilities=0x{capability_bits:08X}"
-            )
-        mode_code = RF2_SYNC_MODE_BYPASS if value == "bypass" else RF2_SYNC_MODE_EXTERNAL
-        role_code = RF2_SYNC_ROLE_MASTER if self._sync_role == "master" else RF2_SYNC_ROLE_SLAVE
-        self._require_connected()
-        response = self.rfctrl2_set_sync_role(role_code, mode_code, wait_response=True)
-        self._check_response(response, "SET_SYNC_ROLE")
-        self._sync_mode = value
-        self.status(refresh=True)
-        return 0
-
-    def bypass_sync(self) -> int:
-        """Allow a slave to run locally when no XS20 SYNC source is present."""
-
-        return self.set_sync_mode("bypass")
-
-    def require_external_sync(self) -> int:
-        """Return a slave to XS20-gated playback mode."""
-
-        return self.set_sync_mode("external")
-
-    def sync(self, epoch: int = 1) -> int:
-        """Emit one external SYNC pulse when this board is the master."""
-
-        self._require_connected()
-        if self._sync_mode == "bypass":
-            raise SynchronizationError("sync() is disabled in bypass mode")
-        if self._sync_role != "master":
-            raise SynchronizationError("sync() requires sync_role='master'")
-        response = self.rfctrl2_sync_epoch(int(epoch), wait_response=True)
-        self._check_response(response, "SYNC_EPOCH")
-        return 0
-
-    def emit_trigger(self) -> int:
-        """Emit one pulse on XS18 without starting local playback directly."""
-
-        self._require_connected()
-        response = self.rfctrl2_emit_trigger(wait_response=True)
-        self._check_response(response, "EMIT_TRIGGER")
-        self._capabilities = replace(
-            self._capabilities,
-            trigger_output_count=self._capabilities.trigger_output_count + 1,
-        )
-        return 0
-
-    def rfctrl2_sync_epoch(self, epoch: int, seq: int | None = None, wait_response: bool = True,
-                           retries: int = 0):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        # SYNC_EPOCH is non-idempotent: the PL decoder does not deduplicate the
-        # command by sequence number, so blindly re-sending it after a lost ACK
-        # would emit a second XS20 pulse and start a second MTS/NCO alignment
-        # epoch.  Never auto-retry here; SyncGroup verifies the real slave
-        # event before deciding whether a re-send is actually required.
-        return self._request(pack_rfctrl2_sync_epoch(epoch, sequence), RF2_OP_SYNC_EPOCH,
-                             sequence, wait_response=wait_response, retries=retries)
-
-    def rfctrl2_start_at(self, start_tick: int, seq: int | None = None, wait_response: bool = True):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        return self._request(pack_rfctrl2_start_at(start_tick, sequence), RF2_OP_START_AT, sequence, wait_response=wait_response)
-
-    def rfctrl2_set_sync_role(self, role: int, mode: int = RF2_SYNC_MODE_EXTERNAL,
-                              seq: int | None = None, wait_response: bool = True):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        response = self._request(
-            pack_rfctrl2_set_sync_role(role, mode, sequence),
-            RF2_OP_SET_SYNC_ROLE,
-            sequence,
-            wait_response=wait_response,
-        )
-        if wait_response:
-            self._check_response(response, "SET_SYNC_ROLE")
-        return response
-
-    def rfctrl2_emit_trigger(self, seq: int | None = None, wait_response: bool = True):
-        sequence = self._next_sequence() if seq is None else int(seq)
-        response = self._request(
-            pack_rfctrl2_emit_trigger(sequence),
-            RF2_OP_EMIT_TRIGGER,
-            sequence,
-            wait_response=wait_response,
-        )
-        if wait_response:
-            self._check_response(response, "EMIT_TRIGGER")
-        return response
 
     def rfctrl2_network_get(self, seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         sequence = self._next_sequence() if seq is None else int(seq)
@@ -675,7 +569,7 @@ class Dr47Device:
             # unrelated protocol, range, AXI, or readiness failures.
             if exc.operation != "RFDC_APPLY" or exc.status != RF2_STATUS_UNSAFE_STATE:
                 raise
-            self.abort_playback()
+            self.abort()
             self._wait_for_playback_idle()
             result = self.rfctrl2_rfdc_apply(
                 self._pending_nco, self._pending_zone, self._pending_phase, self._pending_current,
@@ -835,264 +729,159 @@ class Dr47Device:
     def upload_waveforms(
         self,
         channel_waves: Mapping[int, np.ndarray | list],
-        channel_sequences: Mapping[int, np.ndarray | list] | None = None,
-        *,
-        wave_formats: Mapping[int, str] | None = None,
-        layout: str = DEFAULT_DDR_LAYOUT,
-        base_addr: int = DDR_BASE,
-        auto_start: bool = True,
-        loop: bool = False,
-        packet_pause_s: float = 1e-5,
-        packet_burst: int = 8,
-        channel_delays: Mapping[int, int] | None = None,
-        instruction_repeats: int = 1,
-        bulk_upload: bool = False,
-        progress_callback: Callable[[int, int], None] | None = None,
-        schedule: BurstSchedule | None = None,
-    ) -> dict[str, Any]:
-        """Upload channels and queue WAVEINS0 commands.
-
-        ``bulk_upload`` uses the existing PL bulk DDR packet format and keeps
-        only one small datagram in memory, which is useful for long finite
-        records.
-        """
-        if layout != DDR_LAYOUT_INTERLEAVED_512B:
-            raise UnsupportedCapabilityError("upload_waveforms", "interleaved_512b DDR layout")
-        if not channel_waves:
-            raise ParameterRangeError("channel_waves must not be empty")
-        if progress_callback is not None and not callable(progress_callback):
-            raise ParameterRangeError("progress_callback must be callable")
-        normalized: dict[int, np.ndarray] = {}
-        converted_cache: dict[tuple[int, str], np.ndarray] = {}
-        for logical, wave in channel_waves.items():
-            channel = int(logical)
-            if not 1 <= channel <= 8:
-                raise ParameterRangeError("physical channel must be in 1..8")
-            fmt = (wave_formats or {}).get(channel)
-            if fmt is None:
-                arr = np.asarray(wave)
-                if arr.ndim == 2:
-                    fmt = "iq_matrix"
-                else:
-                    fmt = _infer_wave_format(wave, channel)
-            cache_key = (id(wave), str(fmt))
-            if cache_key not in converted_cache:
-                if str(fmt).lower() in {"interleaved_iq", "interleaved", "iq_interleaved"}:
-                    native = np.asarray(wave, dtype="<i2").reshape(-1)
-                    if native.size % 2:
-                        raise ParameterRangeError(
-                            "interleaved_iq wave must contain an even number of int16 lanes"
-                        )
-                    # Keep an already contiguous int16 record zero-copy. This
-                    # matters for long burst records approaching 1 GB/channel.
-                    converted_cache[cache_key] = (
-                        native if native.flags.c_contiguous else np.ascontiguousarray(native)
-                    )
-                else:
-                    converted_cache[cache_key] = ezq_wave_to_interleaved_int16(wave, fmt)
-            normalized[channel] = converted_cache[cache_key]
-        quantized_schedule = None
-        schedule_meta: dict[str, Any] = {}
-        if schedule is not None:
-            quantized_schedule = schedule.quantized()
-            padded: dict[int, np.ndarray] = {}
-            for channel, wave in normalized.items():
-                padded_wave, meta = make_burst_record(
-                    wave,
-                    first_delay_ns=quantized_schedule.requested_first_delay_ns,
-                    interval_ns=quantized_schedule.requested_interval_ns,
-                )
-                padded[channel] = padded_wave
-                if not schedule_meta:
-                    schedule_meta = meta
-                elif padded_wave.size != next(iter(padded.values())).size:
-                    raise ParameterRangeError("all scheduled channel records must have one common period")
-            normalized = padded
-        packet_pause = max(0.0, float(packet_pause_s))
-        burst = max(1, int(packet_burst))
-        packet_count = 0
-        # The interleaved writer emits two 32-byte AXI writes for every four
-        # int16 samples per channel. Bulk packets group four such writes.
-        # Compute this from the padded per-channel length so the callback can
-        # report a real percentage before the first UDP packet is sent.
-        bytes_per_channel = max(
-            waveform_length_bytes(wave) for wave in normalized.values()
-        )
-        waveform_packet_count = (bytes_per_channel + 3) // 4
-        if bulk_upload:
-            waveform_packet_count = (
-                waveform_packet_count + UDP_BULK_SAFE_MAX_BEATS - 1
-            ) // UDP_BULK_SAFE_MAX_BEATS
-        if progress_callback is not None:
-            progress_callback(0, waveform_packet_count)
-        packet_iterator = (
-            iter_interleaved_udp_bulk_packets(normalized, base_addr=base_addr)
-            if bulk_upload
-            else iter_interleaved_udp_waveform_packets(normalized, base_addr=base_addr)
-        )
-        for packet in packet_iterator:
-            self.transport.send(packet)
-            packet_count += 1
-            if progress_callback is not None:
-                progress_callback(packet_count, waveform_packet_count)
-            # The PL UDP RX FIFO is intentionally small.  A host can enqueue
-            # 10G packets faster than the DDR writer can drain AXI responses;
-            # periodic pacing prevents silent packet loss on real hardware.
-            if packet_pause and packet_count % burst == 0:
-                time.sleep(packet_pause)
-        commands: list[list[int]] = []
-        delays = {} if channel_delays is None else {int(channel): int(delay) for channel, delay in channel_delays.items()}
-        if any(channel not in normalized for channel in delays):
-            raise ParameterRangeError("channel_delays contains a channel with no uploaded waveform")
-        if any(delay < 0 for delay in delays.values()):
-            raise ParameterRangeError("channel delay must be non-negative")
-        wait_for_trigger = False
-        loop_from_sequence = False
-        if channel_sequences:
-            for channel in sorted(normalized):
-                sequence = channel_sequences.get(channel)
-                if sequence is None:
-                    continue
-                fmt = (wave_formats or {}).get(channel, "packed_iq")
-                translated, meta = sequence_to_play_commands(sequence, channel=channel, wave_format=fmt, base_addr=base_addr)
-                commands.extend(translated[:-1])
-                wait_for_trigger = wait_for_trigger or bool(meta["wait_for_trigger"])
-                loop_from_sequence = loop_from_sequence or bool(meta["loop"])
-        if not commands:
-            for channel, wave in sorted(normalized.items()):
-                # The web uploader emits a DELAY before every PLAY, including
-                # a zero-delay row. Keep that available for packet parity.
-                if channel_delays is not None:
-                    commands.append([1, channel, delays.get(channel, 0), 0])
-                commands.append([2, channel, waveform_length_bytes(wave), base_addr, PLAY_FLAG_INTERLEAVED])
-        effective_loop = bool(loop or loop_from_sequence or schedule is not None)
-        if quantized_schedule is not None:
-            commands.append([
-                CMD_REPEAT,
-                0,
-                quantized_schedule.repetitions,
-                0,
-                REPEAT_FLAG_DEBUG_ALTERNATE if quantized_schedule.debug_alternate else 0,
-            ])
-        commands.append([3, 0 if wait_for_trigger or not auto_start else 15, 0, 0, PLAY_FLAG_LOOP if effective_loop else 0])
-        instruction_packet = pack_udp_instruction_packet(commands)
-        repeats = max(1, int(instruction_repeats))
-        for repeat_index in range(repeats):
-            self.transport.send(instruction_packet)
-            packet_count += 1
-            if repeat_index + 1 < repeats:
-                time.sleep(0.002)
-        self._uploaded_channels.update(normalized)
-        return {
-            "packet_count": packet_count,
-            "waveform_packet_count": waveform_packet_count,
-            "channels": tuple(sorted(normalized)),
-            "bytes_per_channel": max(waveform_length_bytes(wave) for wave in normalized.values()),
-            "wait_for_trigger": wait_for_trigger,
-            "loop": effective_loop,
-            "commands": commands,
-            "instruction_repeats": repeats,
-            "schedule": quantized_schedule,
-            **schedule_meta,
-        }
-
-    def configure_playback(
-        self,
-        channel_waves: Mapping[int, np.ndarray | list],
-        schedule: BurstSchedule,
+        channel_sequences=None,
         *,
         wave_formats: Mapping[int, str] | None = None,
         channel_mask: int | None = None,
-        bulk_upload: bool = False,
-        **kwargs: Any,
-    ) -> PlaybackConfig:
-        """Upload one zero-padded record and configure finite burst playback."""
-        uploaded = self.upload_waveforms(
-            channel_waves,
-            wave_formats=wave_formats,
-            auto_start=False,
-            loop=True,
-            schedule=schedule,
-            bulk_upload=bulk_upload,
-            **kwargs,
-        )
-        mask = channel_mask
-        if mask is None:
-            mask = sum(1 << (int(channel) - 1) for channel in uploaded["channels"])
-        quantized = uploaded["schedule"]
-        return PlaybackConfig(
-            schedule=quantized,
-            channel_mask=int(mask),
-            record_duration_ns=float(uploaded["bytes_per_channel"]) / 4.0 / 400e6 * 1e9,
-            record_bytes_per_channel=int(uploaded["bytes_per_channel"]),
-        )
+        loop_count: int = 1,
+        progress_callback: Callable[[int, int], object] | None = None,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Upload one uniform eight-lane image and COMMIT it.
 
-    def arm_playback(self, channel_mask: int | None = None, run_id: int | None = None) -> int:
-        return self.arm(channel_mask=channel_mask, run_id=run_id)
-
-    def trigger_playback(self) -> int:
-        return self.trigger()
-
-    def abort_playback(self) -> int:
-        return self.abort_mute()
-
-    def arm(self, channel_mask: int | None = None, run_id: int | None = None) -> int:
-        self._require_connected()
-        mask = (self._channel_mask if self._mask_explicit else 0xFF) if channel_mask is None else int(channel_mask)
-        if self._capabilities.config_valid_mask and mask & ~self._capabilities.config_valid_mask:
-            raise DeviceNotReadyError("ARM", RF2_STATUS_RFDC_NOT_READY, "ARM mask is not configured by PL")
-        if self._capabilities.capability_bits and not self._capabilities.has(RF2_CAP_PL_RFDC_CONFIG):
-            raise UnsupportedCapabilityError("arm", "RF2_CAP_PL_RFDC_CONFIG", self._capabilities.capability_bits)
-        token = self._run_id if run_id is None else int(run_id)
-        arm_response = self.rfctrl2_arm(token, channel_mask=mask, wait_response=True)
-        self._check_response(arm_response, "ARM")
-        self._run_id = (token + 1) & 0xFFFFFFFF or 1
-        self._channel_mask = mask
-        self._capabilities = replace(
-            self._capabilities,
-            playback_state=PlaybackState.ARMED,
-            playback_armed=True,
-            playback_prepared=True,
-            playback_running=False,
-        )
-        self._status = DeviceStatus(True, self.ip, self.port, PlaybackState.ARMED, self._capabilities, "ARM accepted")
-        return 0
-
-    def trigger(self) -> int:
-        """Start local playback via RFCTRL2 TRIGGER.
-
-        On a master, this is the atomic launch event: in the same DDR clock
-        domain it starts local playback and asserts an XS18 pulse for the
-        slave. On a slave, it starts local playback only and is still gated
-        by external XS20 synchronization or the explicit bypass.
+        The new wire contract has no instruction stream: channel data is packed
+        once in interleaved 512-bit beats, then BEGIN/DATA/COMMIT creates the
+        descriptor and starts hardware prefetch automatically.
         """
+        if not channel_waves:
+            raise ParameterRangeError("channel_waves must not be empty")
+        if channel_sequences:
+            raise UnsupportedParameterError("channel_sequences", "instruction playback was removed")
+        normalized: dict[int, np.ndarray] = {}
+        for channel, wave in channel_waves.items():
+            physical = int(channel)
+            if not 1 <= physical <= 8:
+                raise ParameterRangeError("physical channel must be in 1..8")
+            fmt = (wave_formats or {}).get(physical) or _infer_wave_format(wave, physical)
+            normalized[physical] = ezq_wave_to_interleaved_int16(wave, fmt)
+        mask = _wave_uint(channel_mask if channel_mask is not None else
+                          sum(1 << (ch - 1) for ch in normalized), 8, "channel_mask", nonzero=True)
+        normalized = {ch: wave if mask & (1 << (ch - 1)) else np.zeros_like(wave)
+                      for ch, wave in normalized.items()}
+        image, sample_count = pack_interleaved_512b_waveforms(normalized)
+        if not image:
+            raise ParameterRangeError("waveform image must contain at least one beat")
+        mask = int(channel_mask) if channel_mask is not None else sum(1 << (ch - 1) for ch in normalized)
+        session = self._run_id
+        self._run_id = (session + 1) & 0xFFFFFFFF or 1
+        packet_bytes = 1024
+        total_packets = (len(image) + packet_bytes - 1) // packet_bytes
+        if progress_callback:
+            progress_callback(0, total_packets)
+        self._check_wave_response(self.begin_waveform(
+            session=session, total_bytes=len(image), channel_mask=mask,
+            total_beats=len(image) // WAVE_DAC_FRAME_BYTES,
+            loop_count=loop_count), "BEGIN")
+        for packet_seq, offset in enumerate(range(0, len(image), packet_bytes)):
+            self._check_wave_response(self.data_waveform(
+                session=session, packet_seq=packet_seq, byte_offset=offset,
+                payload=image[offset:offset + packet_bytes]), "DATA")
+            if progress_callback:
+                progress_callback(packet_seq + 1, total_packets)
+        committed = self._check_wave_response(self.commit_waveform(session=session), "COMMIT")
+        return {
+            "session": session, "channels": tuple(sorted(normalized)),
+            "channel_mask": mask, "bytes": len(image), "bytes_per_channel": sample_count * 2,
+            "total_beats": len(image) // WAVE_DAC_FRAME_BYTES,
+            "loop_count": int(loop_count), "packet_count": total_packets,
+            "state": committed.get("state"), "descriptor": committed.get("descriptor"),
+        }
 
-        self._require_connected()
-        trigger_response = self.rfctrl2_trigger(wait_response=True)
-        self._check_response(trigger_response, "TRIGGER")
-        self._capabilities = replace(
-            self._capabilities,
-            playback_state=PlaybackState.RUNNING,
-            playback_armed=True,
-            playback_prepared=True,
-            playback_running=True,
-        )
-        self._status = DeviceStatus(True, self.ip, self.port, PlaybackState.RUNNING, self._capabilities, "TRIGGER accepted")
-        return 0
+    def upload_interleaved_chunks(
+        self,
+        chunks: Iterable[tuple[int, bytes]],
+        *,
+        total_bytes: int,
+        total_beats: int,
+        channel_mask: int,
+        loop_count: int = 1,
+        session: int | None = None,
+        packet_bytes: int = 1024,
+        packet_pause_s: float = 0.0,
+        progress_callback: Callable[[int, int], object] | None = None,
+    ) -> dict[str, Any]:
+        """Stream an already-interleaved record through BEGIN/DATA/COMMIT.
 
-    def abort_mute(self) -> int:
+        ``chunks`` contains ``(byte_offset, payload)`` pairs in ascending,
+        contiguous order.  Large producer chunks are fragmented into protocol
+        DATA packets, so callers can generate/cache max-length records without
+        materialising the complete DDR image in host memory.  The descriptor
+        uses the same per-channel DAC-beat unit as :meth:`upload_waveforms`:
+        one descriptor beat is four 64-byte DDR beats, or 256 bytes total.
+        """
         self._require_connected()
-        abort_response = self.rfctrl2_abort_mute(wait_response=True)
-        self._check_response(abort_response, "ABORT_MUTE")
-        self._capabilities = replace(
-            self._capabilities,
-            playback_state=PlaybackState.IDLE,
-            playback_armed=False,
-            playback_prepared=False,
-            playback_running=False,
-        )
-        self._status = DeviceStatus(True, self.ip, self.port, PlaybackState.IDLE, self._capabilities, "ABORT_MUTE accepted")
-        return 0
+        total_bytes = _wave_uint(total_bytes, 64, "total_bytes", nonzero=True)
+        total_beats = _wave_uint(total_beats, 32, "total_beats", nonzero=True)
+        channel_mask = _wave_uint(channel_mask, 8, "channel_mask", nonzero=True)
+        loop_count = _wave_uint(loop_count, 32, "loop_count", nonzero=True)
+        if total_bytes != total_beats * WAVE_DAC_FRAME_BYTES:
+            raise ParameterRangeError("total_bytes must equal total_beats * 8 * 32")
+        packet_bytes = int(packet_bytes)
+        if packet_bytes < 32 or packet_bytes % 32:
+            raise ParameterRangeError("packet_bytes must be a positive 32-byte multiple")
+        max_data = ((UDP_MAX_PAYLOAD_BYTES - WAVE_CTRL_HEADER_BYTES - WAVE_DATA_HEADER_BYTES) // 32) * 32
+        if packet_bytes > max_data:
+            raise ParameterRangeError(f"packet_bytes must not exceed {max_data}")
+        if session is None:
+            session = self._run_id
+            self._run_id = (session + 1) & 0xFFFFFFFF or 1
+        else:
+            session = _wave_uint(session, 32, "session", nonzero=True)
+        total_packets = (total_bytes + packet_bytes - 1) // packet_bytes
+        if progress_callback:
+            progress_callback(0, total_packets)
+        begin = self._check_wave_response(self.begin_waveform(
+            session=session, total_bytes=total_bytes, channel_mask=channel_mask,
+            total_beats=total_beats, loop_count=loop_count), "BEGIN")
+        expected_offset = 0
+        packet_seq = 0
+        sent_packets = 0
+        for offset, payload in chunks:
+            offset = _wave_uint(offset, 64, "chunk byte offset")
+            raw = bytes(payload)
+            if offset != expected_offset:
+                raise ParameterRangeError(
+                    f"interleaved chunks must be contiguous: expected offset {expected_offset}, got {offset}"
+                )
+            if not raw or len(raw) % 32 or offset + len(raw) > total_bytes:
+                raise ParameterRangeError("interleaved chunks must be non-empty, 32-byte aligned, and fit total_bytes")
+            for start in range(0, len(raw), packet_bytes):
+                piece = raw[start:start + packet_bytes]
+                self._check_wave_response(self.data_waveform(
+                    session=session, packet_seq=packet_seq,
+                    byte_offset=offset + start, payload=piece), "DATA")
+                packet_seq += 1
+                sent_packets += 1
+                if progress_callback:
+                    progress_callback(sent_packets, total_packets)
+                if packet_pause_s > 0.0:
+                    time.sleep(float(packet_pause_s))
+            expected_offset += len(raw)
+        if expected_offset != total_bytes:
+            raise ParameterRangeError(
+                f"interleaved chunks contain {expected_offset} bytes, expected {total_bytes}"
+            )
+        committed = self._check_wave_response(self.commit_waveform(session=session), "COMMIT")
+        return {
+            "session": session,
+            "channel_mask": channel_mask,
+            "bytes": total_bytes,
+            "total_beats": total_beats,
+            "loop_count": loop_count,
+            "packet_count": sent_packets,
+            "state": committed.get("state"),
+            "descriptor": committed.get("descriptor"),
+        }
+
+    def upload_and_commit(self, image: bytes, *, session: int, channel_mask: int,
+                          total_beats: int, loop_count: int = 1, packet_bytes: int = 1024):
+        raw = bytes(image)
+        self.begin_waveform(session=session, total_bytes=len(raw), channel_mask=channel_mask,
+                            total_beats=total_beats, loop_count=loop_count)
+        for packet_seq, offset in enumerate(range(0, len(raw), int(packet_bytes))):
+            chunk = raw[offset:offset + int(packet_bytes)]
+            self.data_waveform(session=session, packet_seq=packet_seq, byte_offset=offset, payload=chunk)
+        return self.commit_waveform(session=session)
 
     def commit(self) -> int:
         if self.batch_mode:

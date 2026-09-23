@@ -13,6 +13,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 import host  # noqa: E402
 import waveform_tools  # noqa: E402
+from dr47.device import Dr47Device  # noqa: E402
 
 
 CHANNEL_DEFAULTS = {
@@ -240,32 +241,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_args(rv_ping)
     rv_ping.add_argument("--seq", type=int, default=1)
 
-    rv_play = subparsers.add_parser("rvctrl-play", help="send RVCTRL0 PLAY_INTERLEAVED; waveform data must already be in DDR")
-    add_common_args(rv_play)
-    rv_play.add_argument("--seq", type=int, default=1)
-    rv_play.add_argument("--bytes-per-channel", type=parse_byte_count, default=host.FIXED_DATA_BYTES)
-    rv_play.add_argument("--auto-start", action="store_true", help="Commit END as auto-start instead of waiting for trigger")
-
-    rv_trigger = subparsers.add_parser("rvctrl-trigger", help="send one RVCTRL0 TRIGGER command")
-    add_common_args(rv_trigger)
-    rv_trigger.add_argument("--seq", type=int, default=1)
-
     rv1_ping = subparsers.add_parser("rvctrl1-ping", help="send one RVCTRL1 PING command")
     add_common_args(rv1_ping)
     rv1_ping.add_argument("--seq", type=int, default=1)
     add_rvctrl1_response_args(rv1_ping)
-
-    rv1_play = subparsers.add_parser("rvctrl1-play", help="send RVCTRL1 PLAY_INTERLEAVED; waveform data must already be in DDR")
-    add_common_args(rv1_play)
-    rv1_play.add_argument("--seq", type=int, default=1)
-    rv1_play.add_argument("--bytes-per-channel", type=parse_byte_count, default=host.FIXED_DATA_BYTES)
-    rv1_play.add_argument("--auto-start", action="store_true", help="Commit END as auto-start instead of waiting for trigger")
-    add_rvctrl1_response_args(rv1_play)
-
-    rv1_trigger = subparsers.add_parser("rvctrl1-trigger", help="send one RVCTRL1 TRIGGER command")
-    add_common_args(rv1_trigger)
-    rv1_trigger.add_argument("--seq", type=int, default=1)
-    add_rvctrl1_response_args(rv1_trigger)
 
     rv1_read = subparsers.add_parser("rvctrl1-mmio-read", help="send RVCTRL1 MMIO_READ32 command")
     add_common_args(rv1_read)
@@ -584,53 +563,60 @@ def run_max_length(args: argparse.Namespace) -> int:
         if args.generate_cache_only:
             return 0
 
-    ctrl = host.RFSocController(
+    device = Dr47Device(
         args.ip,
         port=args.port,
         timeout_s=args.timeout_s,
-        transport="udp",
         udp_interface=args.udp_interface,
         udp_source_ip=args.udp_source_ip,
     )
     try:
-        datagrams = ctrl.upload_max_length_udp(
-            int(metadata["bytes_per_channel"]),
-            base_addr=host.DDR_BASE,
-            beats_per_datagram=int(args.beats_per_datagram),
-            marker_bytes_per_channel=int(args.marker_bytes_per_channel),
-            pattern=args.pattern,
-            sine_freq_hz=float(args.sine_freq_hz),
-            sine_amplitude=int(args.sine_amplitude),
-            batch_pause_s=max(0.0, float(args.batch_pause_us)) * 1e-6,
-            use_waveform_cache=not bool(args.no_waveform_cache),
-            waveform_cache_dir=cache_dir,
-            force_waveform_cache=False,
+        device.connect()
+        if args.no_waveform_cache:
+            chunks = (
+                (beat_index * host.DDR_INTERLEAVED_BEAT_BYTES, payload)
+                for beat_index, payload in host.iter_max_length_payload_chunks(
+                    int(metadata["bytes_per_channel"]),
+                    chunk_beats=8192,
+                    marker_bytes_per_channel=int(args.marker_bytes_per_channel),
+                    pattern=args.pattern,
+                    sine_freq_hz=float(args.sine_freq_hz),
+                    sine_amplitude=int(args.sine_amplitude),
+                )
+            )
+        else:
+            chunks = (
+                (beat_index * host.DDR_INTERLEAVED_BEAT_BYTES, payload)
+                for beat_index, payload in host.iter_max_length_payload_chunks_from_cache(
+                    cache_path, int(metadata["bytes_per_channel"]), chunk_beats=8192
+                )
+            )
+        result = device.upload_interleaved_chunks(
+            chunks,
+            total_bytes=int(metadata["physical_ddr_bytes"]),
+            total_beats=int(metadata["expected_rfdc_beats_per_channel"]),
+            channel_mask=0xFF,
+            loop_count=1,
+            packet_pause_s=max(0.0, float(args.batch_pause_us)) * 1e-6,
         )
-        print(f"[max-length] upload complete, datagrams={datagrams}")
+        print(f"[max-length] descriptor committed, packets={result['packet_count']}, session={result['session']}")
         if args.post_upload_sleep_s > 0:
             time.sleep(args.post_upload_sleep_s)
-        lengths = {channel: int(metadata["bytes_per_channel"]) for channel in range(1, 9)}
-        ctrl.send_instructions(
-            waveform_tools.build_play_commands(
-                loop=False,
-                auto_start=not args.wait_for_trigger,
-                channel_lengths=lengths,
-                channel_delays={channel: 0 for channel in range(1, 9)},
-                layout=host.DDR_LAYOUT_INTERLEAVED_512B,
-            )
-        )
-        print("[max-length] PLAY instructions sent")
+        if not args.wait_for_trigger:
+            device.play(session=int(result["session"]))
+            print("[max-length] software PLAY accepted")
+        else:
+            print("[max-length] waiting for external trigger")
         return 0
     finally:
-        ctrl.close()
+        device.close()
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    rvctrl1_modes = {
+    rvctrl_diagnostic_modes = {
+        "rvctrl-ping",
         "rvctrl1-ping",
-        "rvctrl1-play",
-        "rvctrl1-trigger",
         "rvctrl1-mmio-read",
         "rvctrl1-mmio-write",
         "rvctrl1-mmio-rmw",
@@ -639,30 +625,12 @@ def main() -> int:
         "rvctrl1-rfdc-ch-enable",
         "rvctrl1-rfdc-set-nco",
     }
-    if args.mode in ("rvctrl-ping", "rvctrl-play", "rvctrl-trigger") or args.mode in rvctrl1_modes:
+    if args.mode in rvctrl_diagnostic_modes:
         if args.dry_run:
             if args.mode == "rvctrl-ping":
                 packet = host.pack_rvctrl_ping(args.seq)
-            elif args.mode == "rvctrl-play":
-                packet = host.pack_rvctrl_play_interleaved(
-                    args.bytes_per_channel,
-                    seq=args.seq,
-                    auto_start=bool(args.auto_start),
-                    loop=bool(args.loop),
-                )
-            elif args.mode == "rvctrl-trigger":
-                packet = host.pack_rvctrl_trigger(args.seq)
             elif args.mode == "rvctrl1-ping":
                 packet = host.pack_rvctrl1_ping(args.seq)
-            elif args.mode == "rvctrl1-play":
-                packet = host.pack_rvctrl1_play_interleaved(
-                    args.bytes_per_channel,
-                    seq=args.seq,
-                    auto_start=bool(args.auto_start),
-                    loop=bool(args.loop),
-                )
-            elif args.mode == "rvctrl1-trigger":
-                packet = host.pack_rvctrl1_trigger(args.seq)
             elif args.mode == "rvctrl1-mmio-read":
                 packet = host.pack_rvctrl1_mmio_read32(args.addr, seq=args.seq)
             elif args.mode == "rvctrl1-mmio-write":
@@ -693,31 +661,8 @@ def main() -> int:
         try:
             if args.mode == "rvctrl-ping":
                 ctrl.rvctrl_ping(args.seq)
-            elif args.mode == "rvctrl-play":
-                ctrl.rvctrl_play_interleaved(
-                    args.bytes_per_channel,
-                    seq=args.seq,
-                    auto_start=bool(args.auto_start),
-                    loop=bool(args.loop),
-                )
-            elif args.mode == "rvctrl-trigger":
-                ctrl.rvctrl_trigger(args.seq)
             elif args.mode == "rvctrl1-ping":
                 resp = ctrl.rvctrl1_ping(args.seq, wait_response=bool(args.wait_response))
-                if bool(args.wait_response):
-                    print_rvresp1(resp)
-            elif args.mode == "rvctrl1-play":
-                resp = ctrl.rvctrl1_play_interleaved(
-                    args.bytes_per_channel,
-                    seq=args.seq,
-                    auto_start=bool(args.auto_start),
-                    loop=bool(args.loop),
-                    wait_response=bool(args.wait_response),
-                )
-                if bool(args.wait_response):
-                    print_rvresp1(resp)
-            elif args.mode == "rvctrl1-trigger":
-                resp = ctrl.rvctrl1_trigger(args.seq, wait_response=bool(args.wait_response))
                 if bool(args.wait_response):
                     print_rvresp1(resp)
             elif args.mode == "rvctrl1-mmio-read":
@@ -788,54 +733,41 @@ def main() -> int:
             print("[ezq] dry-run: not sending UDP packets")
             return 0
 
-        channel_lengths = {channel: waveform_tools.waveform_length_bytes(samples) for channel, samples in channel_waves.items()}
-        channel_delays = {
-            channel: int(metadata.get(f"ch{channel}_delay_cycles", 0))
-            for channel in channel_waves
-        }
-        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-            channel_delays = {channel: 0 for channel in channel_waves}
-
-        ctrl = host.RFSocController(
+        if layout != host.DDR_LAYOUT_INTERLEAVED_512B:
+            raise ValueError("ezq mode requires ddr-layout=interleaved_512b; tiled/contiguous playback was removed")
+        # Sequence artifacts remain readable for bundle inspection, but the
+        # descriptor path intentionally uploads only uniform channel waveforms;
+        # the removed instruction executor no longer interprets those rows.
+        channel_mask = int(metadata.get("channel_mask", 0)) & 0xFF
+        if not channel_mask:
+            channel_mask = sum(1 << (channel - 1) for channel in channel_waves)
+        device = Dr47Device(
             args.ip,
             port=args.port,
             timeout_s=args.timeout_s,
-            transport="udp",
             udp_interface=args.udp_interface,
             udp_source_ip=args.udp_source_ip,
         )
         try:
-            channel_addrs: dict[int, int] = {}
-            if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-                ctrl.upload_waveform_udp_interleaved(channel_waves, base_addr=host.DDR_BASE, dump_path=str(output_dir / "ezq_interleaved_upload_hex.txt"))
-            else:
-                channel_addrs = {
-                    channel: (host.tiled_channel_base_addr(channel) if layout == host.DDR_LAYOUT_TILED else host.DDR_CH_ADDR[channel - 1])
-                    for channel in sorted(channel_waves)
-                }
-                for channel, samples in sorted(channel_waves.items()):
-                    dump = f"ch{channel}_ezq_upload_hex.txt"
-                    if layout == host.DDR_LAYOUT_TILED:
-                        ctrl.upload_waveform_udp_tiled(samples, channel=channel, base_addr=host.DDR_BASE, dump_path=str(output_dir / dump))
-                    else:
-                        ctrl.upload_waveform_udp(samples, channel_addrs[channel], str(output_dir / dump))
-            if args.post_upload_sleep_s > 0:
-                print(f"[ezq] waiting {args.post_upload_sleep_s:.3f}s for DDR write completion")
-                time.sleep(args.post_upload_sleep_s)
-            ctrl.send_instructions(
-                waveform_tools.build_play_commands(
-                    loop=args.loop or bool(metadata.get("loop", False)),
-                    auto_start=not args.wait_for_trigger,
-                    channel_addrs=None if layout == host.DDR_LAYOUT_INTERLEAVED_512B else channel_addrs,
-                    channel_lengths=channel_lengths,
-                    channel_delays=channel_delays,
-                    layout=layout,
-                )
+            device.connect()
+            result = device.upload_waveforms(
+                channel_waves,
+                channel_mask=channel_mask,
+                loop_count=2 if args.loop or bool(metadata.get("loop", False)) else 1,
+                wave_formats={channel: "interleaved_iq" for channel in channel_waves},
             )
+            if args.post_upload_sleep_s > 0:
+                print(f"[ezq] waiting {args.post_upload_sleep_s:.3f}s for descriptor prefetch")
+                time.sleep(args.post_upload_sleep_s)
+            if not args.wait_for_trigger:
+                device.play(session=int(result["session"]))
+                print(f"[ezq] software PLAY accepted for session={result['session']}")
+            else:
+                print(f"[ezq] waiting for external trigger for session={result['session']}")
             print("Done.")
             return 0
         finally:
-            ctrl.close()
+            device.close()
 
     try:
         generated = generate_waveforms(args)

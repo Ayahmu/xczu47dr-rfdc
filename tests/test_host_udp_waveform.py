@@ -305,125 +305,9 @@ class UdpWaveformPacketTests(unittest.TestCase):
                     udp_interface="enp225s0f0",
                 )
 
-    def test_send_instructions_encodes_reserved_loop_bit(self):
-        class FakeSocket:
-            def __init__(self):
-                self.calls = []
 
-            def settimeout(self, timeout_s):
-                self.calls.append(("settimeout", timeout_s))
 
-            def close(self):
-                self.calls.append(("close",))
 
-            def sendto(self, packet, addr):
-                self.calls.append(("sendto", packet, addr))
-                return len(packet)
-
-        fake_socket = FakeSocket()
-        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
-            ctrl = host.RFSocController("192.168.1.128", transport="udp")
-            ctrl.send_instructions([[3, 15, 0, 0, 1]])
-            ctrl.close()
-
-        sendto_calls = [call for call in fake_socket.calls if call[0] == "sendto"]
-        self.assertEqual(len(sendto_calls), 1)
-        packet = sendto_calls[0][1]
-        magic, word_count = struct.unpack("<QQ", packet[:16])
-        word0, word1, word2, word3 = struct.unpack("<IIII", packet[16:32])
-        self.assertEqual(magic, host.UDP_WAVE_INSTR_MAGIC)
-        self.assertEqual(word_count, 2)
-        self.assertEqual(word0, 0x000001f3)
-        self.assertEqual(word1, 0)
-        self.assertEqual(word2, 0)
-        self.assertEqual(word3, 0)
-
-    def test_send_instructions_encodes_tiled_play_flag_without_loop_conflict(self):
-        class FakeSocket:
-            def __init__(self):
-                self.calls = []
-
-            def settimeout(self, timeout_s):
-                self.calls.append(("settimeout", timeout_s))
-
-            def close(self):
-                self.calls.append(("close",))
-
-            def sendto(self, packet, addr):
-                self.calls.append(("sendto", packet, addr))
-                return len(packet)
-
-        fake_socket = FakeSocket()
-        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
-            ctrl = host.RFSocController("192.168.1.128", transport="udp")
-            ctrl.send_instructions([[2, 1, host.FIXED_DATA_BYTES, host.tiled_channel_base_addr(1), host.PLAY_FLAG_TILED]])
-            ctrl.close()
-
-        packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
-        magic, word_count = struct.unpack("<QQ", packet[:16])
-        word0, word1, word2, word3 = struct.unpack("<IIII", packet[16:32])
-        self.assertEqual(magic, host.UDP_WAVE_INSTR_MAGIC)
-        self.assertEqual(word_count, 2)
-        self.assertEqual(word0, 0x00000212)
-        self.assertEqual(word1, host.FIXED_DATA_BYTES)
-        self.assertEqual(word2, host.tiled_channel_base_addr(1))
-        self.assertEqual(word3, 0)
-
-    def test_send_instructions_encodes_interleaved_play_flag_without_tiled_conflict(self):
-        class FakeSocket:
-            def __init__(self):
-                self.calls = []
-
-            def settimeout(self, timeout_s):
-                self.calls.append(("settimeout", timeout_s))
-
-            def close(self):
-                self.calls.append(("close",))
-
-            def sendto(self, packet, addr):
-                self.calls.append(("sendto", packet, addr))
-                return len(packet)
-
-        fake_socket = FakeSocket()
-        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
-            ctrl = host.RFSocController("192.168.1.128", transport="udp")
-            ctrl.send_instructions([[2, 1, host.FIXED_DATA_BYTES, 0, host.PLAY_FLAG_INTERLEAVED]])
-            ctrl.close()
-
-        packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
-        magic, word_count = struct.unpack("<QQ", packet[:16])
-        word0, word1, word2, word3 = struct.unpack("<IIII", packet[16:32])
-        self.assertEqual(magic, host.UDP_WAVE_INSTR_MAGIC)
-        self.assertEqual(word_count, 2)
-        self.assertEqual(word0, 0x00000412)
-        self.assertFalse(word0 & 0x00000200)
-        self.assertEqual(word1, host.FIXED_DATA_BYTES)
-        self.assertEqual(word2, 0)
-        self.assertEqual(word3, 0)
-
-    def test_udp_trigger_sends_single_reserved_word(self):
-        class FakeSocket:
-            def __init__(self):
-                self.calls = []
-
-            def settimeout(self, timeout_s):
-                self.calls.append(("settimeout", timeout_s))
-
-            def close(self):
-                self.calls.append(("close",))
-
-            def sendto(self, packet, addr):
-                self.calls.append(("sendto", packet, addr))
-                return len(packet)
-
-        fake_socket = FakeSocket()
-        with mock.patch.object(host.socket, "socket", return_value=fake_socket):
-            ctrl = host.RFSocController("192.168.1.128", transport="udp")
-            ctrl.trigger()
-            ctrl.close()
-
-        packet = [call for call in fake_socket.calls if call[0] == "sendto"][0][1]
-        self.assertEqual(packet, struct.pack("<Q", host.UDP_TRIGGER_WORD))
 
     def test_rvctrl_packet_packs_magic_count_and_padding(self):
         packet = host.pack_rvctrl_packet([host.RV_CMD_PING, 0x12345678, 0xA5A5A5A5])
@@ -579,41 +463,7 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(phase_mdeg, -90_500)
         self.assertEqual(current_ua, 40_500)
 
-    def test_send_instructions_rejects_unaligned_play(self):
-        class FakeSocket:
-            def settimeout(self, timeout_s):
-                pass
 
-            def close(self):
-                pass
-
-        with mock.patch.object(host.socket, "socket", return_value=FakeSocket()):
-            ctrl = host.RFSocController("192.168.1.128", transport="udp")
-            with self.assertRaisesRegex(ValueError, "PLAY length must be 32B aligned"):
-                ctrl.send_instructions([[2, 1, 33, host.tiled_channel_base_addr(1), host.PLAY_FLAG_TILED]])
-            with self.assertRaisesRegex(ValueError, "PLAY addr must be 32B aligned"):
-                ctrl.send_instructions([[2, 1, host.FIXED_DATA_BYTES, 8, host.PLAY_FLAG_TILED]])
-            ctrl.close()
-
-    def test_rfctrl2_packets_are_versioned_and_round_trip(self):
-        packet = host.pack_rfctrl2_arm(run_id=0xCAFE, channel_mask=0x3F, seq=0x77)
-        magic, hdr0, hdr1, run_id, channel_mask = struct.unpack("<QQQII", packet)
-        self.assertEqual(magic, host.UDP_RFCTRL2_MAGIC)
-        self.assertEqual(hdr0 & 0xFFFF, host.RFCTRL2_VERSION)
-        self.assertEqual(hdr0 >> 32, host.RF2_OP_ARM)
-        self.assertEqual(hdr1 & 0xFFFFFFFF, 0x77)
-        self.assertEqual(hdr1 >> 32, 8)
-        self.assertEqual(run_id, 0xCAFE)
-        self.assertEqual(channel_mask, 0x3F)
-
-        payload = struct.pack("<QQ", 0x1234, 0x5678)
-        response_hdr0 = (host.RF2_OP_STATUS << 32) | host.RFCTRL2_VERSION
-        response_hdr1 = (len(payload) << 32) | 0x77
-        parsed = host.parse_rfresp2_packet(struct.pack("<QQQ", host.UDP_RFRESP2_MAGIC, response_hdr0, response_hdr1) + payload)
-        self.assertEqual(parsed["version"], host.RFCTRL2_VERSION)
-        self.assertEqual(parsed["opcode"], host.RF2_OP_STATUS)
-        self.assertEqual(parsed["seq"], 0x77)
-        self.assertEqual(parsed["payload"], payload)
 
     def test_rfctrl2_controller_sends_scheduled_start(self):
         class FakeSocket:

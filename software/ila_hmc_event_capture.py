@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture HMC PL_CLK event timestamps while launching one master pulse."""
+"""Capture HMC PL_CLK event timestamps while launching one single-board waveform."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 
 from dr47.device import Dr47Device
-from dr47.sequence import make_single_trigger_sequence
 from dr47.waveforms import (
     iq_duration_to_interleaved_sample_count,
     make_iq_gaussian_sine_interleaved,
@@ -28,13 +27,12 @@ TCL_PATH = REPORT_DIR / "capture.tcl"
 VIVADO_LOG = REPORT_DIR / "vivado.log"
 
 # User configuration: edit this constant before running the script.
-CAPTURE_ROLE = "master"
-BOARD_IP = "169.254.21.60" if CAPTURE_ROLE == "master" else "169.254.214.189"
+BOARD_IP = "169.254.149.60"
 UDP_INTERFACE = "enp1s0f0"
 SOURCE_IP = "169.254.250.11"
-JTAG_SERIAL = "210512180082" if CAPTURE_ROLE == "master" else "210512180081"
+JTAG_SERIAL = "210512180082"
 JTAG_TARGET = f"localhost:3121/xilinx_tcf/Xilinx/{JTAG_SERIAL}"
-LTX_PATH = ROOT / "artifacts" / f"custom_xczu47dr_{CAPTURE_ROLE}.ltx"
+LTX_PATH = ROOT / "artifacts" / "custom_xczu47dr_waveform.ltx"
 VIVADO = "vivado"
 
 
@@ -117,8 +115,6 @@ def drive_once() -> None:
     )
     try:
         device.connect()
-        device.abort_mute()
-        device.require_external_sync()
         deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
             caps = device.status(refresh=True).capabilities
@@ -126,48 +122,30 @@ def drive_once() -> None:
                 break
             time.sleep(0.05)
         else:
-            raise RuntimeError("master RFDC/MTS/NCO was not ready")
+            raise RuntimeError("RFDC/MTS/NCO was not ready")
         device.set_xy_nco_frequency(1, 1.0)
         device.set_gain("xy", 1, 0.2, gain_type="norm")
         device.set_qc_on_off("xy", 1, "on")
         device.commit()
-        device.upload_waveforms(
+        uploaded = device.upload_waveforms(
             {1: record},
-            channel_sequences={1: make_single_trigger_sequence(record.size // 2)},
+            channel_mask=1,
+            loop_count=1,
             wave_formats={1: "interleaved_iq"},
-            auto_start=False,
-            loop=False,
-            instruction_repeats=1,
         )
+        session = int(uploaded["session"])
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
-            raw = device.status(refresh=True).capabilities.raw
-            if (
-                int(raw.get("play_config_channel_mask", 0)) & 1
-            ) and raw.get("play_pending_valid", False) and raw.get("play_prefill_ready", False):
+            if device.status(refresh=True).state.value == "wait_trigger":
                 break
             time.sleep(0.02)
         else:
-            raise RuntimeError("master waveform prefill did not complete")
-        device.arm(channel_mask=1)
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if device.status(refresh=True).state.value == "prepared":
-                break
-            time.sleep(0.02)
-        else:
-            raise RuntimeError("master did not enter PREPARED")
-        if CAPTURE_ROLE == "master":
-            device.trigger()
-        else:
-            raise RuntimeError(
-                "slave ILA capture needs an independent external SYNC/Trigger source; "
-                "the deleted dual-board example is no longer invoked automatically"
-            )
+            raise RuntimeError("waveform prefetch did not complete")
+        device.play(session=session)
         time.sleep(0.5)
     finally:
         try:
-            device.abort_mute()
+            device.abort()
         except Exception:
             pass
         device.close()
@@ -209,7 +187,7 @@ def main() -> int:
             process.kill()
             raise TimeoutError("HMC event ILA did not arm")
         time.sleep(0.2)
-    print("HMC event ILA armed; launching one master waveform")
+    print("HMC event ILA armed; launching one single-board waveform")
     drive_once()
     process.wait(timeout=120.0)
     if process.returncode != 0:

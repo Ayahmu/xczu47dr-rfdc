@@ -12,6 +12,7 @@ from typing import Any, Literal
 import numpy as np
 
 import host
+from dr47.device import Dr47Device
 from dr47.waveforms import (
     iq_duration_to_interleaved_sample_count as _driver_iq_duration_to_sample_count,
     make_iq_gaussian_sine_interleaved as _driver_make_iq_gaussian_sine,
@@ -352,56 +353,6 @@ def delay_seconds_to_axis_cycles_by_freq(delay_s: float, axis_freq_hz: float = h
     return delay_ns_to_axis_cycles(float(delay_s) * 1e9, axis_freq_hz)
 
 
-def build_play_commands(
-    loop: bool,
-    auto_start: bool,
-    x_addr: int = host.DDR_X_ADDR,
-    y_addr: int = host.DDR_Y_ADDR,
-    length_bytes: int = host.FIXED_DATA_BYTES,
-    channel_addrs: dict[int, int] | None = None,
-    channel_lengths: dict[int, int] | None = None,
-    channel_delays: dict[int, int] | None = None,
-    enabled_channels: set[int] | list[int] | tuple[int, ...] | None = None,
-    layout: str = host.DEFAULT_DDR_LAYOUT,
-) -> list[list[int]]:
-    if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
-        raise ValueError(f"unsupported DDR layout: {layout}")
-    end_channel = 15 if auto_start else 0
-    loop_flag = 1 if loop else 0
-    if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-        default_addrs = DEFAULT_INTERLEAVED_CHANNEL_ADDRS
-        play_flag = host.PLAY_FLAG_INTERLEAVED
-    elif layout == host.DDR_LAYOUT_TILED:
-        default_addrs = DEFAULT_TILED_CHANNEL_ADDRS
-        play_flag = host.PLAY_FLAG_TILED
-    else:
-        default_addrs = DEFAULT_CHANNEL_ADDRS
-        play_flag = 0
-    addrs = dict(default_addrs if channel_addrs is None else channel_addrs)
-    if enabled_channels is not None:
-        enabled = {int(channel) for channel in enabled_channels}
-        if not enabled:
-            raise ValueError("enabled_channels must not be empty")
-        addrs = {channel: addr for channel, addr in addrs.items() if int(channel) in enabled}
-        if not addrs:
-            raise ValueError("enabled_channels did not match any channel addresses")
-    lengths = {} if channel_lengths is None else {int(channel): int(length) for channel, length in channel_lengths.items()}
-    delays = {} if channel_delays is None else {int(channel): int(delay) for channel, delay in channel_delays.items()}
-    if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-        for channel in list(addrs.keys()):
-            addrs[channel] = 0
-    elif layout == host.DDR_LAYOUT_CONTIGUOUS and channel_addrs is None:
-        addrs[1] = int(x_addr)
-        addrs[2] = int(y_addr)
-    commands: list[list[int]] = []
-    for channel in sorted(addrs):
-        play_bytes = int(lengths.get(int(channel), length_bytes))
-        if play_bytes % host.BEAT_BYTES != 0:
-            play_bytes += host.BEAT_BYTES - (play_bytes % host.BEAT_BYTES)
-        commands.append([1, int(channel), max(0, delays.get(int(channel), 0)), 0])
-        commands.append([2, int(channel), play_bytes, int(addrs[channel]), play_flag])
-    commands.append([3, end_channel, 0, 0, loop_flag])
-    return commands
 
 
 def ezq_wave_to_interleaved_int16(
@@ -566,44 +517,6 @@ def load_ezq_channel_wave(
     return ezq_wave_to_interleaved_int16(wave, wave_format=wave_format)
 
 
-def build_ezq_upload_plan(
-    channel_waves: dict[int, np.ndarray | list],
-    channel_sequences: dict[int, np.ndarray | list] | None = None,
-    layout: str = host.DEFAULT_DDR_LAYOUT,
-    auto_start: bool = True,
-    loop: bool = False,
-    channel_format: Literal["iq_matrix", "packed_iq", "interleaved_iq"] = "interleaved_iq",
-) -> tuple[dict[int, np.ndarray], list[list[int]], dict[int, int]]:
-    """Convert ez-Q style channel wave/seq data into the current RFSoC upload plan."""
-    if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
-        raise ValueError(f"unsupported DDR layout: {layout}")
-    normalized: dict[int, np.ndarray] = {}
-    delays: dict[int, int] = {}
-    addrs: dict[int, int] = {}
-    lengths: dict[int, int] = {}
-    for channel, wave in sorted(channel_waves.items()):
-        interleaved = ezq_wave_to_interleaved_int16(wave, wave_format=channel_format)
-        normalized[channel] = interleaved
-        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-            addrs[channel] = 0
-        elif layout == host.DDR_LAYOUT_TILED:
-            addrs[channel] = host.tiled_channel_base_addr(channel)
-        else:
-            addrs[channel] = host.DDR_CH_ADDR[channel - 1]
-        lengths[channel] = waveform_length_bytes(interleaved)
-        if channel_sequences is not None and channel in channel_sequences:
-            delays[channel] = _ezq_sequence_delay_cycles(channel_sequences[channel], default=0)
-        else:
-            delays[channel] = 0
-    commands = build_play_commands(
-        loop=loop,
-        auto_start=auto_start,
-        channel_addrs=addrs,
-        channel_lengths=lengths,
-        channel_delays=delays,
-        layout=layout,
-    )
-    return normalized, commands, delays
 
 
 def build_metadata(
@@ -726,98 +639,87 @@ def upload_and_play(
     rfdc_nco_hz: dict[int, float] | dict[str, float] | None = None,
     rfdc_nyquist_zones: dict[int, int] | dict[str, int] | None = None,
     preflight_ack: bool = True,
-    instruction_repeats: int = 3,
     enabled_channels: set[int] | list[int] | tuple[int, ...] | None = None,
-) -> None:
-    if layout not in {host.DDR_LAYOUT_CONTIGUOUS, host.DDR_LAYOUT_TILED, host.DDR_LAYOUT_INTERLEAVED_512B}:
-        raise ValueError(f"unsupported DDR layout: {layout}")
-    ctrl = host.RFSocController(
-        ip,
-        port=port,
-        transport="udp",
-        udp_interface=udp_interface,
-        udp_source_ip=udp_source_ip,
-        timeout_s=timeout_s,
-    )
-    if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-        default_addrs = DEFAULT_INTERLEAVED_CHANNEL_ADDRS
-    elif layout == host.DDR_LAYOUT_TILED:
-        default_addrs = DEFAULT_TILED_CHANNEL_ADDRS
-    else:
-        default_addrs = DEFAULT_CHANNEL_ADDRS
+    loop_count: int | None = None,
+) -> dict:
+    """Upload one complete eight-lane descriptor and optionally start it.
+
+    The public waveform path intentionally uses :class:`Dr47Device` only.
+    ``loop`` is retained at this model boundary for existing GUI configuration;
+    its finite first-version mapping is one play when false and two total plays
+    when true.  The wire contract itself always receives a positive loop count.
+    ``layout``, ``channel_delays`` and ``preflight_ack`` are rejected when they
+    describe the removed instruction/tiled playback paths.
+    """
+    if layout != host.DDR_LAYOUT_INTERLEAVED_512B:
+        raise ValueError("waveform descriptor upload requires interleaved_512b layout")
+    if channel_delays:
+        raise ValueError("per-channel playback delays are not supported by the unified waveform path")
+    if not preflight_ack:
+        raise ValueError("descriptor upload requires the RFCTRL2 handshake")
+    if loop_count is None:
+        loop_count = 2 if bool(loop) else 1
+    loop_count = int(loop_count)
+    if loop_count < 1:
+        raise ValueError("loop_count must be a positive total playback count")
+
     enabled = None if enabled_channels is None else {int(channel) for channel in enabled_channels}
     if enabled is not None and not enabled:
         raise ValueError("enabled_channels must not be empty")
-    available: dict[int, np.ndarray] = {1: x, 2: y}
+    available: dict[int, np.ndarray] = {1: np.asarray(x), 2: np.asarray(y)}
     if ch3 is not None:
-        available[3] = ch3
+        available[3] = np.asarray(ch3)
     if ch4 is not None:
-        available[4] = ch4
+        available[4] = np.asarray(ch4)
     if extra_channels is not None:
-        for channel, samples in sorted(extra_channels.items()):
-            available[int(channel)] = samples
-    missing = sorted(enabled - set(available)) if enabled is not None else []
+        for channel, samples in extra_channels.items():
+            physical = int(channel)
+            if not 1 <= physical <= 8:
+                raise ValueError(f"physical channel must be in 1..8, got {physical}")
+            available[physical] = np.asarray(samples)
+    if enabled is None:
+        enabled = set(available)
+    missing = sorted(enabled - set(available))
     if missing:
-        raise ValueError(f"enabled channel data is missing for CH{', CH'.join(str(channel) for channel in missing)}")
-    uploads: list[tuple[int, np.ndarray, int, str]] = []
-    for channel, samples in sorted(available.items()):
-        if enabled is not None and channel not in enabled:
-            continue
-        uploads.append((channel, samples, default_addrs[channel], f"ch{channel}_upload_hex.txt"))
-    if not uploads:
+        raise ValueError(f"enabled channel data is missing for CH{', CH'.join(str(ch) for ch in missing)}")
+    channel_waves = {ch: available[ch] for ch in sorted(enabled)}
+    channel_mask = sum(1 << (ch - 1) for ch in channel_waves)
+    if channel_mask == 0:
         raise ValueError("no channels selected for upload/playback")
 
+    ctrl = Dr47Device(
+        ip,
+        port=port,
+        timeout_s=timeout_s,
+        udp_interface=udp_interface,
+        udp_source_ip=udp_source_ip,
+    )
     try:
-        if preflight_ack and getattr(ctrl, "transport", "udp") == "udp":
-            warm_control = getattr(ctrl, "warm_udp_control_path", None)
-            if warm_control is None:
-                ctrl.rvctrl1_ping(wait_response=True)
-            else:
-                warm_control()
-        if layout == host.DDR_LAYOUT_INTERLEAVED_512B:
-            channel_waves = {channel: samples for channel, samples, _, _ in uploads}
-            upload_interleaved = getattr(ctrl, "upload_waveform_udp_interleaved", None)
-            if upload_interleaved is not None:
-                upload_interleaved(channel_waves, host.DDR_BASE, str(output_dir / "interleaved_wave_hex.txt"))
-            else:
-                upload_interleaved = getattr(ctrl, "upload_waveform_interleaved", None)
-                if upload_interleaved is not None:
-                    upload_interleaved(channel_waves, host.DDR_BASE, str(output_dir / "interleaved_wave_hex.txt"))
-                else:
-                    payload_bytes, _ = host.pack_interleaved_512b_waveforms(channel_waves)
-                    ctrl.upload_waveform_udp(
-                        np.frombuffer(payload_bytes, dtype="<i2"),
-                        host.DDR_BASE,
-                        str(output_dir / "interleaved_wave_hex.txt"),
-                    )
-        else:
-            for channel, samples, ddr_addr, filename in uploads:
-                if layout == host.DDR_LAYOUT_TILED:
-                    ctrl.upload_waveform_udp_tiled(samples, channel, host.DDR_BASE, str(output_dir / filename))
-                else:
-                    ctrl.upload_waveform_udp(samples, ddr_addr, str(output_dir / filename))
-        if rfdc_nco_hz is not None and rfdc_nyquist_zones is not None:
-            upload_mailbox = getattr(ctrl, "upload_rfdc_nco_mailbox", None)
-            if upload_mailbox is None:
-                raise RuntimeError("RFSocController does not support RFDC NCO mailbox upload")
-            upload_mailbox(rfdc_nco_hz, rfdc_nyquist_zones)
+        ctrl.connect()
+        if rfdc_nco_hz is not None or rfdc_nyquist_zones is not None:
+            if rfdc_nco_hz is None or rfdc_nyquist_zones is None:
+                raise ValueError("RFDC NCO and Nyquist-zone maps must be supplied together")
+            # Waveform metadata stores NCO in Hz; Dr47Device's public RFDC API
+            # deliberately accepts GHz and performs the wire-unit conversion.
+            nco_ghz = {
+                (int(str(ch)[2:]) if isinstance(ch, str) and str(ch).startswith("ch") else int(ch)): float(value) / 1e9
+                for ch, value in rfdc_nco_hz.items()
+            }
+            zones = {
+                (int(str(ch)[2:]) if isinstance(ch, str) and str(ch).startswith("ch") else int(ch)): int(value)
+                for ch, value in rfdc_nyquist_zones.items()
+            }
+            ctrl.apply_rfdc_config(nco_ghz=nco_ghz, nyquist_zone=zones, channel_mask=channel_mask)
         if post_upload_sleep_s > 0:
             time.sleep(post_upload_sleep_s)
-        channel_addrs = {channel: 0 for channel, _, _, _ in uploads} if layout == host.DDR_LAYOUT_INTERLEAVED_512B else {channel: ddr_addr for channel, _, ddr_addr, _ in uploads}
-        channel_lengths = {channel: waveform_length_bytes(samples) for channel, samples, _, _ in uploads}
-        commands = build_play_commands(
-            loop=loop,
-            auto_start=auto_start,
-            channel_addrs=None if layout == host.DDR_LAYOUT_INTERLEAVED_512B else channel_addrs,
-            channel_lengths=channel_lengths,
-            channel_delays=channel_delays,
-            enabled_channels=[channel for channel, _, _, _ in uploads],
-            layout=layout,
+        result = ctrl.upload_waveforms(
+            channel_waves,
+            channel_mask=channel_mask,
+            loop_count=loop_count,
+            wave_formats={ch: "interleaved_iq" for ch in channel_waves},
         )
-        repeats = max(1, int(instruction_repeats))
-        for repeat_index in range(repeats):
-            ctrl.send_instructions(commands)
-            if repeat_index + 1 < repeats:
-                time.sleep(0.002)
+        if auto_start:
+            ctrl.play(session=int(result["session"]))
+        return result
     finally:
         ctrl.close()

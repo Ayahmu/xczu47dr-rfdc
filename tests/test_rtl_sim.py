@@ -16,30 +16,185 @@ def vivado_tool(name: str) -> str | None:
 
 @unittest.skipUnless(all(vivado_tool(tool) for tool in ("xvlog", "xelab", "xsim")), "Vivado simulator is unavailable")
 class RtlSimulationTests(unittest.TestCase):
+    def test_waveform_fifo_mask_adapter(self):
+        self.run_sim(
+            "tb_waveform_fifo_mask_adapter",
+            [ROOT / "hardware/vivado/src/waveform_fifo_mask_adapter.v",
+             ROOT / "tests/tb_waveform_fifo_mask_adapter.sv"],
+            "PASS: disabled FIFO lanes cannot block or consume reader credit",
+        )
+
+    def test_waveform_dac_stream(self):
+        self.run_sim("tb_waveform_dac_stream",
+                     [ROOT / "hardware/vivado/src/waveform_dac_stream.v",
+                      ROOT / "tests/tb_waveform_dac_stream.sv"],
+                     "PASS: eight-channel DAC fires, backpressure, tail and zero silence")
+
+    def test_waveform_ddr_reader(self):
+        self.run_sim("tb_waveform_ddr_reader",
+                     [ROOT / "hardware/vivado/src/waveform_ddr_reader.v",
+                      ROOT / "tests/tb_waveform_ddr_reader.sv"],
+                     "PASS: waveform reader credits, interleave, cancel, AXI errors and timeout")
+
+    def test_waveform_response_serializer(self):
+        self.run_sim("tb_waveform_response_serializer",
+                     [ROOT / "hardware/vivado/src/waveform_response_serializer.v",
+                      ROOT / "tests/tb_waveform_response_serializer.sv"],
+                     "PASS: waveform response golden bytes and AXIS backpressure")
+
+    def test_waveform_simultaneous_event_priority(self):
+        self.run_sim(
+            "tb_waveform_event_priority",
+            [ROOT / "hardware/vivado/src/waveform_playback_controller.v",
+             ROOT / "tests/tb_waveform_event_priority.sv"],
+            "PASS: waveform simultaneous events preserve fault and stop priority",
+        )
+
+    def test_unified_waveform_trigger_cdc(self):
+        self.run_sim(
+            "tb_waveform_trigger_cdc",
+            [
+                ROOT / "hardware/vivado/src/waveform_trigger_cdc.v",
+                ROOT / "tests/tb_waveform_trigger_cdc.sv",
+            ],
+            "PASS: narrow trigger CDC captures one event and never queues it",
+        )
+
+    def test_unified_waveform_status_cdc(self):
+        self.run_sim(
+            "tb_waveform_status_cdc",
+            [ROOT / "hardware/vivado/src/waveform_status_cdc.v",
+             ROOT / "tests/tb_waveform_status_cdc.sv"],
+            "PASS: waveform status snapshot CDC holds a coherent source record",
+        )
+
+    def test_unified_waveform_status_serializer(self):
+        self.run_sim(
+            "tb_waveform_status_serializer",
+            [ROOT / "hardware/vivado/src/waveform_response_serializer.v",
+             ROOT / "tests/tb_waveform_status_serializer.sv"],
+            "PASS: waveform STATUS snapshot serializer returns beat, loop, FIFO, error and trigger fields",
+        )
+
+    def test_unified_waveform_upload_writer(self):
+        self.run_sim(
+            "tb_waveform_upload_writer",
+            [
+                ROOT / "hardware/vivado/src/waveform_upload_writer.v",
+                ROOT / "tests/tb_waveform_upload_writer.sv",
+            ],
+            "PASS: WAVECTR0 writer validates CRC, emits aligned writes, and advances ACK only after AXI B responses",
+        )
+
+    def test_unified_waveform_playback_controller(self):
+        self.run_sim(
+            "tb_waveform_playback_controller",
+            [
+                ROOT / "hardware/vivado/src/waveform_playback_controller.v",
+                ROOT / "tests/tb_waveform_playback_controller.sv",
+            ],
+            "PASS: unified waveform playback state machine gates and counts events",
+        )
+
+    def test_udp_rvctrl_framer(self):
+        self.run_sim(
+            "tb_udp_rvctrl_framer",
+            [
+                ROOT / "hardware/vivado/src/udp_rvctrl_framer.v",
+                ROOT / "tests/tb_udp_rvctrl_framer.sv",
+            ],
+            "PASS: udp_rvctrl_framer framing contract",
+        )
+
+    def test_unified_waveform_playback_path(self):
+        self.run_sim(
+            "tb_waveform_playback_path",
+            [
+                ROOT / "hardware/vivado/src/waveform_command_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_descriptor_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_pulse_sync.v",
+                ROOT / "hardware/vivado/src/waveform_trigger_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_playback_controller.v",
+                ROOT / "hardware/vivado/src/waveform_ddr_reader.v",
+                ROOT / "hardware/vivado/src/waveform_dac_stream.v",
+                ROOT / "hardware/vivado/src/waveform_playback_path.v",
+                ROOT / "tests/tb_waveform_playback_path.sv",
+            ],
+            "PASS: descriptor path prefetches, admits trigger once, and drains playback",
+        )
+
+    def test_unified_waveform_prefetch_fits_full_load(self):
+        self.run_sim(
+            "tb_waveform_prefetch_fits_full_load",
+            [
+                ROOT / "hardware/vivado/src/waveform_command_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_descriptor_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_pulse_sync.v",
+                ROOT / "hardware/vivado/src/waveform_trigger_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_playback_controller.v",
+                ROOT / "hardware/vivado/src/waveform_ddr_reader.v",
+                ROOT / "hardware/vivado/src/waveform_dac_stream.v",
+                ROOT / "hardware/vivado/src/waveform_playback_path.v",
+                ROOT / "tests/tb_waveform_prefetch_fits_full_load.sv",
+            ],
+            "PASS: fits-in-FIFO fully prefetches; oversized keeps the streaming watermark",
+        )
+
+    def test_unified_waveform_stream_throughput(self):
+        self.run_sim(
+            "tb_waveform_stream_throughput",
+            [
+                ROOT / "hardware/vivado/src/waveform_command_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_descriptor_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_pulse_sync.v",
+                ROOT / "hardware/vivado/src/waveform_trigger_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_playback_controller.v",
+                ROOT / "hardware/vivado/src/waveform_ddr_reader.v",
+                ROOT / "hardware/vivado/src/waveform_dac_stream.v",
+                ROOT / "hardware/vivado/src/waveform_playback_path.v",
+                ROOT / "tests/tb_waveform_stream_throughput.sv",
+            ],
+            "PASS: streaming descriptor larger than the FIFO drains with no underflow",
+        )
+
     def run_sim(self, top: str, sources: list[Path], expected: str) -> None:
         with tempfile.TemporaryDirectory(prefix=f"{top}-") as temp_dir:
             workdir = Path(temp_dir)
-            subprocess.run(
-                [vivado_tool("xvlog"), "-sv", *(str(source) for source in sources)],
-                cwd=workdir,
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                [vivado_tool("xelab"), top, "-s", "sim"],
-                cwd=workdir,
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            result = subprocess.run(
-                [vivado_tool("xsim"), "sim", "-runall"],
-                cwd=workdir,
-                check=True,
-                text=True,
-                capture_output=True,
-            )
+
+            def run(command: list[str], timeout: int):
+                try:
+                    result = subprocess.run(command, cwd=workdir, check=True,
+                                            text=True, capture_output=True, timeout=timeout)
+                except subprocess.CalledProcessError as exc:
+                    self.fail(f"{command[0]} failed for {top}:\n{exc.stdout}\n{exc.stderr}")
+                except subprocess.TimeoutExpired as exc:
+                    self.fail(f"{command[0]} timed out for {top}:\n{exc.stdout}\n{exc.stderr}")
+                return result
+
+            # Benches that instantiate the full playback path link the real
+            # xpm_fifo_async simulation model, which references the standard
+            # Vivado global primitive.  TDC benches intentionally provide a
+            # local adversarial stub and must not link XPM.
+            xpm_tops = {"tb_waveform_playback_path", "tb_waveform_prefetch_fits_full_load",
+                        "tb_waveform_stream_throughput"}
+            compile_sources = [str(source) for source in sources]
+            if top in xpm_tops:
+                compile_sources.append("/tools/Xilinx/Vivado/2024.2/data/verilog/src/glbl.v")
+            run([vivado_tool("xvlog"), "-sv", *compile_sources], 120)
+            # The integrated playback path uses Xilinx's asynchronous FIFO
+            # primitive for the ordered command/descriptor CDC.  Keep the
+            # simulator invocation explicit so this test exercises the same
+            # primitive library as Vivado elaboration instead of silently
+            # replacing the CDC with a test-only model.
+            elab_top = [top]
+            if top in xpm_tops:
+                elab_top.append("glbl")
+            elab_command = [vivado_tool("xelab"), *elab_top]
+            if top in xpm_tops:
+                elab_command.extend(["-L", "xpm"])
+            run([*elab_command, "-s", "sim"], 120)
+            result = run([vivado_tool("xsim"), "sim", "-runall"], 180)
+            self.assertNotIn("Fatal:", result.stdout)
             self.assertIn(expected, result.stdout)
 
     def test_udp_writer_legacy_and_bulk_protocol(self):
@@ -90,7 +245,7 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: UDP writer drops oversized bulk packets at the UDP boundary",
         )
 
-    def test_rfctrl2_status_crosses_writer_and_control_response_path(self):
+    def test_waveform_status_crosses_writer_and_control_response_path(self):
         self.run_sim(
             "tb_rfctrl2_control_path",
             [
@@ -98,7 +253,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
                 ROOT / "tests/tb_rfctrl2_control_path.sv",
             ],
-            "PASS: full RFCTRL2 STATUS payload crosses the UDP writer and PL control response path",
+            "PASS: waveform STATUS payload crosses the UDP writer and PL control response path",
         )
 
     def test_rfctrl2_udp_response_targets_requester_and_handles_backpressure(self):
@@ -125,44 +280,14 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: ARP cache learns only local-subnet senders",
         )
 
-    def test_pl_riscv_control_v1_emits_play_and_trigger(self):
+    def test_pl_riscv_control_v1_rejects_removed_rfctrl2_playback(self):
         self.run_sim(
             "tb_pl_riscv_control_v1",
             [
                 ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
                 ROOT / "tests/tb_pl_riscv_control_v1.sv",
             ],
-            "PASS: PL control shim emits legacy commands plus RFCTRL2 ARM, RFDC_APPLY, and SYNC_EPOCH",
-        )
-
-    def test_dac_play_completion_and_underflow_counters(self):
-        self.run_sim(
-            "tb_dac_play_ctrl",
-            [
-                ROOT / "hardware/vivado/src/dac_play_ctrl.v",
-                ROOT / "tests/tb_dac_play_ctrl.sv",
-            ],
-            "PASS: dac_play_ctrl preserves legacy startup, refill loops, and short replay re-arm",
-        )
-
-    def test_dac_play_finite_burst_and_debug_alternate(self):
-        self.run_sim(
-            "tb_dac_play_burst",
-            [
-                ROOT / "hardware/vivado/src/dac_play_ctrl.v",
-                ROOT / "tests/tb_dac_play_burst.sv",
-            ],
-            "PASS: finite burst repeat count and ARM-scoped debug alternate gating",
-        )
-
-    def test_rfctrl2_playback_controller_is_single_board(self):
-        self.run_sim(
-            "tb_rfctrl2_playback_controller",
-            [
-                ROOT / "hardware/vivado/src/rfctrl2_playback_controller.v",
-                ROOT / "tests/tb_rfctrl2_playback_controller.sv",
-            ],
-            "PASS: RFCTRL2 single-board playback CDC arms, triggers, and aborts without board sync",
+            "PASS: PL control shim rejects removed RFCTRL2 playback commands and preserves RFDC_APPLY/SYNC_EPOCH",
         )
 
     def test_pl_rfdc_runtime_controller_closes_the_axi_readback_loop(self):
@@ -185,27 +310,6 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: NCO RTS bridge gates SYSREF and commits enabled channels across four tiles",
         )
 
-    def test_sync_role_switch_generates_master_and_slave_paths(self):
-        self.run_sim(
-            "tb_sync_role_switch",
-            [
-                ROOT / "hardware/vivado/src/sync_role_control.v",
-                ROOT / "tests/tb_sync_role_switch.sv",
-            ],
-            "PASS: runtime roles generate and receive a single-pulse sync sequence",
-        )
-
-    def test_sync_trigger_link_cdc_and_post_sync_trigger(self):
-        self.run_sim(
-            "tb_sync_trigger_link",
-            [
-                ROOT / "hardware/vivado/src/sync_role_control.v",
-                ROOT / "hardware/vivado/src/sync_trigger_link.v",
-                ROOT / "tests/tb_sync_trigger_link.sv",
-            ],
-            "PASS: single-pulse XS20 SYNC and independent XS18->XS19 trigger link",
-        )
-
     def test_dac_direct_external_trigger_capture_and_latency_probe(self):
         self.run_sim(
             "tb_dac_direct_trigger",
@@ -215,18 +319,6 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "tests/tb_dac_direct_trigger.sv",
             ],
             "PASS: DAC direct trigger capture and latency probe behave as specified",
-        )
-
-    def test_hmc_detour_spreads_launch_and_direct_capture_removes_it(self):
-        self.run_sim(
-            "tb_trigger_launch_phase_sweep",
-            [
-                ROOT / "hardware/vivado/src/sync_role_control.v",
-                ROOT / "hardware/vivado/src/sync_trigger_link.v",
-                ROOT / "hardware/vivado/src/dac_ext_trigger_capture.v",
-                ROOT / "tests/tb_trigger_launch_phase_sweep.sv",
-            ],
-            "PASS: hmc_pl_clk detour spreads launch over",
         )
 
     def test_dac_domain_trigger_emitter(self):
@@ -239,27 +331,6 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: dac_trigger_emitter emits one gated DAC-domain pulse per request",
         )
 
-    def test_sync_role_control_master_emits_single_clean_pulse(self):
-        self.run_sim(
-            "tb_sync_deterministic",
-            [
-                ROOT / "hardware/vivado/src/sync_role_control.v",
-                ROOT / "tests/tb_sync_deterministic.sv",
-            ],
-            "PASS: master emits one clean single-pulse SYNC directly to HMC7044",
-        )
-
-    def test_sync_trigger_link_bypass_accepts_missing_sync(self):
-        self.run_sim(
-            "tb_sync_bypass",
-            [
-                ROOT / "hardware/vivado/src/sync_role_control.v",
-                ROOT / "hardware/vivado/src/sync_trigger_link.v",
-                ROOT / "tests/tb_sync_bypass.sv",
-            ],
-            "PASS: bypass accepts XS19 and local RFCTRL2 Trigger without XS20 SYNC",
-        )
-
     def test_axilite_arbiter_locks_complete_transactions(self):
         self.run_sim(
             "tb_axilite_arbiter_2to1",
@@ -268,17 +339,6 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "tests/tb_axilite_arbiter_2to1.sv",
             ],
             "PASS: AXI-Lite arbiter locks each write and read transaction to one master",
-        )
-
-    def test_interleaved_executor_retains_33bit_total_length(self):
-        self.run_sim(
-            "tb_waveform_interleaved_rearm",
-            [
-                ROOT / "tests/axis_data_fifo_1_sim.sv",
-                ROOT / "hardware/vivado/src/waveform_interleaved_system_top.v",
-                ROOT / "tests/tb_waveform_interleaved_rearm.sv",
-            ],
-            "PASS: interleaved executor accepts rearm and clears loop state on abort",
         )
 
 

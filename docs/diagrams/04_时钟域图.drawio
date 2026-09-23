@@ -1,0 +1,86 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="legend" value="XCZU47DR 时钟域架构（6 个时钟域 · 3 个异步跨时钟边界）" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+      <mxGeometry x="40" y="4" width="1000" height="32" as="geometry"/>
+    </mxCell>
+    <mxCell id="gPhy" value="DDR4 物理层" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+      <mxGeometry x="40" y="60" width="300" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_pll" value="存储时钟 ×2&#10;2400.96 MHz" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;fontSize=14;" vertex="1" parent="gPhy">
+      <mxGeometry x="25" y="50" width="250" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="gDdr" value="DDR4 接口域 — 300.12 MHz" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+      <mxGeometry x="400" y="60" width="360" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_mmcm" value="基础设施时钟&#10;300.12 MHz" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gDdr">
+      <mxGeometry x="25" y="50" width="310" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_ui" value="主工作时钟&#10;300.12 MHz（控制面 + 数据面）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="gDdr">
+      <mxGeometry x="25" y="140" width="310" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="gPl" value="100 MHz 板级时基" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1">
+      <mxGeometry x="820" y="60" width="360" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_hmc" value="时钟芯片输出时钟&#10;100 MHz" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gPl">
+      <mxGeometry x="25" y="50" width="310" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_pl0" value="处理器控制时钟&#10;100 MHz" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="gPl">
+      <mxGeometry x="25" y="140" width="310" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="gDac" value="数模转换接口域 — 50 MHz" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#FFE6CC;strokeColor=#D79B00;" vertex="1" parent="1">
+      <mxGeometry x="1240" y="60" width="360" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_dac" value="回放 + 调度时基&#10;50 MHz（周期 20 ns）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="gDac">
+      <mxGeometry x="25" y="45" width="310" height="90" as="geometry"/>
+    </mxCell>
+    <mxCell id="gTdc" value="TDC 采样 — 200 MHz" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#E1D5E7;strokeColor=#9673A6;" vertex="1" parent="1">
+      <mxGeometry x="1660" y="60" width="360" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_200" value="延迟线采样时钟&#10;200 MHz（相位锁定生成）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673A6;fontSize=14;" vertex="1" parent="gTdc">
+      <mxGeometry x="25" y="45" width="310" height="90" as="geometry"/>
+    </mxCell>
+    <mxCell id="gEth" value="10G 以太网时钟" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=15;fontStyle=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="1">
+      <mxGeometry x="40" y="360" width="300" height="240" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_sfp" value="光口参考时钟&#10;156.25 MHz" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B85450;fontSize=14;" vertex="1" parent="gEth">
+      <mxGeometry x="25" y="50" width="250" height="72" as="geometry"/>
+    </mxCell>
+    <mxCell id="n_tx" value="发送用户时钟&#10;≈161.13 MHz（兼作标定相位源）" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B85450;fontSize=14;" vertex="1" parent="gEth">
+      <mxGeometry x="25" y="140" width="250" height="90" as="geometry"/>
+    </mxCell>
+    <mxCell id="note" value="关键关系：&#10;· 200 MHz 与 50 MHz 由同一锁相环生成，4:1 相位对齐 — TDC 细相位能映射回 50 MHz 时基的前提&#10;· 100 MHz 与 50 MHz 同源（同一时钟芯片），周期比 25:48 — 这是直接触发路径 20 ns 抖动的根因&#10;· 异步跨时钟边界（虚线）：DDR(300M) ↔ DAC(50M)、DDR(300M) ↔ PL(100M)、TDC(200M) ↔ DAC(50M)" style="text;html=1;align=left;verticalAlign=top;fontSize=15;whiteSpace=wrap;spacingLeft=4;" vertex="1" parent="1">
+      <mxGeometry x="400" y="360" width="900" height="130" as="geometry"/>
+    </mxCell>
+    <mxCell id="ce1" value="×2 → 2400 MT/s" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="n_pll" target="n_mmcm">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="ce2" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="n_mmcm" target="n_ui">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="ce3" value="工作时钟 / 同步" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="n_hmc" target="n_dac">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="ce4" value="4:1 相位对齐" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="n_dac" target="n_200">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="ce5" value="线速参考" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="gEth" source="n_sfp" target="n_tx">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="cd1" value="跨时钟" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#D79B00;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="n_ui" target="n_dac">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="580" y="330"/>
+          <mxPoint x="1420" y="330"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="cd2" value="跨时钟" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#6C8EBF;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="n_ui" target="n_pl0">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="cd3" value="跨时钟" style="edgeStyle=orthogonalEdgeStyle;html=1;fontSize=13;dashed=1;strokeColor=#9673A6;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="n_200" target="n_dac">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>

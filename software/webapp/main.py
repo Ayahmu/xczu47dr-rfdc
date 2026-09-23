@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .controller import BoardGateway, EventHub, RunCoordinator
+from dr47.protocol import RFCTRL2_VERSION
 from .hardware_services import DiscoveryService, ProgrammerService, SerialService, emit
 from .management import ManagementError, ManagementStore, PermissionError
 from .max_length import MaxLengthService, MaxLengthStore
@@ -302,7 +303,7 @@ def _require_live_board_ready(app_services: AppServices, board_id: str) -> Board
         raise RuntimeError(f"board {board_id} has not been discovered by RFCTRL2 device_uid")
     if not status.online:
         raise RuntimeError(f"board {board_id} RFCTRL2 is offline: {status.message or 'no response'}")
-    if status.protocol_version != 2:
+    if status.protocol_version != RFCTRL2_VERSION:
         raise RuntimeError(f"board {board_id} must speak RFCTRL2 before live waveform output")
     if not status.network_configured or status.network_apply_status != "applied":
         detail = status.network_apply_error or board.network_apply_error or status.message
@@ -723,7 +724,7 @@ def board_preflight(board_id: str, artifact_id: str | None = None, refresh: bool
 
         add("enabled", "板卡档案", "pass" if board.enabled else "fail", "已启用" if board.enabled else "板卡已禁用")
         add("network", "RFCTRL2 网络", "pass" if status.online else "warning", status.message or ("在线" if status.online else "未响应"))
-        protocol_ok = status.online and status.protocol_version == 2
+        protocol_ok = status.online and status.protocol_version == RFCTRL2_VERSION
         add("protocol", "控制协议", "pass" if protocol_ok else "fail", f"RFCTRL{status.protocol_version}" if status.protocol_version else "未检测到 RFCTRL2")
         network_applied = status.network_configured and status.network_apply_status == "applied"
         add(
@@ -946,7 +947,14 @@ def create_run(request: RunCreateRequest, user: UserRecord = Depends(require_mut
                     def prepare(_run_id: str) -> None:
                         status = app_services.boards.status(job.board_id, refresh=True)
                         if status.playback_armed or status.playback_prepared or status.playback_running:
-                            app_services.boards.mute(job.board_id)
+                            if not status.waveform_session:
+                                raise RuntimeError(
+                                    f"{job.board_id}: active waveform has no session identity"
+                                )
+                            app_services.boards.mute(
+                                job.board_id,
+                                session=status.waveform_session,
+                            )
                         app_services.rfdc.apply(job.board_id, RfdcConfigApplyRequest(
                             channels=job.rfdc_config.channels,
                             channel_mask=channel_mask,

@@ -1,15 +1,26 @@
 """唯一板级测试脚本的频率和波形配置测试。"""
 
+import sys
 import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SOFTWARE_DIR = REPO_ROOT / "software"
+
+# Examples are written against the flat ``dr47`` package layout that the board
+# scripts use (``python <example>.py`` with ``software/`` on the path), so the
+# directory has to be importable before the example module is loaded.
+if str(SOFTWARE_DIR) not in sys.path:
+    sys.path.insert(0, str(SOFTWARE_DIR))
 
 from software.dr47 import rfdc_nco_plan_for_target
-from software.dr47.examples import hardware_slave_bypass_external_trigger_test as example
+from software.dr47.examples import waveform_external_trigger_example as example
 
 
 class ExampleFrequencyConfigTests(unittest.TestCase):
     def test_example_uses_explicit_amplitude_and_gain(self):
-        self.assertEqual(example.GAUSSIAN_AMPLITUDE, 0.7)
-        self.assertEqual(example.OUTPUT_GAIN, 1.0)
+        self.assertEqual(example.GAUSSIAN_AMPLITUDE, 0.10)
+        self.assertEqual(example.OUTPUT_GAIN, 0.10)
 
     def test_common_target_frequency_uses_second_nyquist_zone_above_3_2ghz(self):
         plan = rfdc_nco_plan_for_target(4.0, dac_fs_ghz=6.4)

@@ -26,6 +26,7 @@ except ModuleNotFoundError:
 
 import host
 import waveform_tools
+from dr47.device import Dr47Device
 
 
 Uploader = Callable[..., None]
@@ -375,6 +376,7 @@ class ControllerResult:
     generated: GeneratedWaveforms
     output_dir: Path
     dry_run: bool
+    upload_result: dict[str, Any] | None = None
     log_lines: list[str] = field(default_factory=list)
 
 
@@ -2545,7 +2547,7 @@ def run_extreme_playback(
     config: ExtremePlaybackConfig,
     connection: ConnectionConfig,
     waveform_config: WaveformConfig | None = None,
-    controller_cls: Any = host.RFSocController,
+    controller_cls: Any = Dr47Device,
 ) -> ExtremePlaybackResult:
     bytes_per_channel = parse_byte_count(config.bytes_per_channel)
     if bytes_per_channel <= 0 or bytes_per_channel > host.DDR_MAX_BYTES_PER_CHANNEL:
@@ -2599,50 +2601,71 @@ def run_extreme_playback(
         udp_source_ip=connection.udp_source_ip,
     )
     try:
+        ctrl.connect()
         per_channel_nco = metadata.get("per_channel_nco")
         per_channel_zone = metadata.get("per_channel_zone")
         if isinstance(per_channel_nco, dict) and isinstance(per_channel_zone, dict):
-            ctrl.upload_rfdc_nco_mailbox(per_channel_nco, per_channel_zone)
-            log_lines.append("extreme: RFDC NCO mailbox updated from current GUI channel plan")
+            nco_ghz = {int(str(ch).removeprefix("ch")): float(value) / 1e9
+                        for ch, value in per_channel_nco.items()}
+            zones = {int(str(ch).removeprefix("ch")): int(value)
+                     for ch, value in per_channel_zone.items()}
+            ctrl.apply_rfdc_config(nco_ghz=nco_ghz, nyquist_zone=zones, channel_mask=0xFF)
+            log_lines.append("extreme: RFDC configuration applied through the waveform device API")
             if connection.post_upload_sleep_s > 0:
                 time.sleep(connection.post_upload_sleep_s)
-        datagrams = ctrl.upload_max_length_udp(
-            bytes_per_channel,
-            base_addr=host.DDR_BASE,
-            beats_per_datagram=beats_per_datagram,
-            marker_bytes_per_channel=int(config.marker_bytes_per_channel),
-            pattern=config.pattern,
-            sine_freq_hz=float(config.sine_freq_hz),
-            sine_amplitude=int(config.sine_amplitude),
-            use_waveform_cache=bool(config.use_waveform_cache),
-            waveform_cache_dir=config.waveform_cache_dir or (output_dir / "waveform_cache"),
-            force_waveform_cache=bool(config.force_waveform_cache),
+
+        cache_dir = config.waveform_cache_dir or (output_dir / "waveform_cache")
+        if config.use_waveform_cache:
+            cache_path = host.ensure_max_length_waveform_cache(
+                cache_dir,
+                bytes_per_channel,
+                marker_bytes_per_channel=int(config.marker_bytes_per_channel),
+                pattern=config.pattern,
+                sine_freq_hz=float(config.sine_freq_hz),
+                sine_amplitude=int(config.sine_amplitude),
+                force=bool(config.force_waveform_cache),
+            )
+            chunks = host.iter_max_length_payload_chunks_from_cache(
+                cache_path, bytes_per_channel, chunk_beats=beats_per_datagram
+            )
+            log_lines.append(f"extreme: using waveform cache {cache_path}")
+        else:
+            chunks = host.iter_max_length_payload_chunks(
+                bytes_per_channel,
+                chunk_beats=beats_per_datagram,
+                marker_bytes_per_channel=int(config.marker_bytes_per_channel),
+                pattern=config.pattern,
+                sine_freq_hz=float(config.sine_freq_hz),
+                sine_amplitude=int(config.sine_amplitude),
+            )
+
+        total_bytes = int(metadata["physical_ddr_bytes"])
+        total_beats = total_bytes // 256
+        committed = ctrl.upload_interleaved_chunks(
+            chunks,
+            total_bytes=total_bytes,
+            total_beats=total_beats,
+            channel_mask=0xFF,
+            loop_count=1,
+            packet_bytes=1024,
         )
-        log_lines.append(f"extreme: uploaded {datagrams} UDP bulk datagrams")
+        packet_count = int(committed["packet_count"])
+        log_lines.append(f"extreme: descriptor committed, DATA packets={packet_count}")
         if connection.post_upload_sleep_s > 0:
             time.sleep(connection.post_upload_sleep_s)
-        ctrl.send_instructions(
-            waveform_tools.build_play_commands(
-                loop=False,
-                auto_start=not config.wait_for_trigger,
-                channel_lengths={channel: bytes_per_channel for channel in range(1, 9)},
-                channel_delays={channel: 0 for channel in range(1, 9)},
-                layout=host.DDR_LAYOUT_INTERLEAVED_512B,
-            )
-        )
-        log_lines.append("extreme: PLAY instructions sent")
         if config.wait_for_trigger:
             log_lines.append("extreme: waiting for external trigger")
         else:
-            log_lines.append("extreme: playback auto-started")
+            ctrl.play(session=int(committed["session"]))
+            log_lines.append("extreme: software PLAY accepted")
         return ExtremePlaybackResult(
             output_dir=output_dir,
             dry_run=False,
             bytes_per_channel=bytes_per_channel,
-            total_bytes=int(metadata["physical_ddr_bytes"]),
+            total_bytes=total_bytes,
             expected_rfdc_beats_per_channel=int(metadata["expected_rfdc_beats_per_channel"]),
             expected_duration_s=float(metadata["expected_duration_s"]),
-            datagrams=datagrams,
+            datagrams=packet_count,
             log_lines=log_lines,
         )
     finally:
@@ -2707,13 +2730,13 @@ class WaveformController:
         if config.dry_run:
             log_lines.append("dry-run: not sending UDP packets")
             log_lines.append("progress: dry-run complete")
-            return ControllerResult(generated=generated, output_dir=output_dir, dry_run=True, log_lines=log_lines)
+            return ControllerResult(generated=generated, output_dir=output_dir, dry_run=True, upload_result=None, log_lines=log_lines)
 
         log_lines.append("progress: sending UDP packets")
         per_channel_nco = generated.metadata.get("per_channel_nco")
         per_channel_zone = generated.metadata.get("per_channel_zone")
         log_lines.append(f"enabled_channels={','.join(str(channel) for channel in enabled_channels)}")
-        self.uploader(
+        upload_result = self.uploader(
             generated.x,
             generated.y,
             ip=connection.ip,
@@ -2736,4 +2759,4 @@ class WaveformController:
         )
         log_lines.append("progress: send complete")
         log_lines.append(f"sent UDP waveform to {connection.ip}:{connection.port}")
-        return ControllerResult(generated=generated, output_dir=output_dir, dry_run=False, log_lines=log_lines)
+        return ControllerResult(generated=generated, output_dir=output_dir, dry_run=False, upload_result=upload_result, log_lines=log_lines)

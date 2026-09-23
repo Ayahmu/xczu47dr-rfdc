@@ -57,7 +57,8 @@ module rfctrl2_udp_response_tx #(
   wire request_magic =
       (rx_payload_data == 64'h00304C5254435652) ||
       (rx_payload_data == 64'h00314C5254435652) ||
-      (rx_payload_data == 64'h00324C5254434652);
+      (rx_payload_data == 64'h00324C5254434652) ||
+      (rx_payload_data == 64'h5741564543545230);
   wire response_fire = response_valid && response_ready;
   wire final_response_word = response_last ||
       (payload_words != 16'd0 && payload_index == payload_words - 16'd1);

@@ -5,7 +5,7 @@ set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
 source "${script_path}/build_identity.tcl"
 
-set target "custom_xczu47dr_master"
+set target "custom_xczu47dr_waveform"
 if {$argc > 0} {
     set target [lindex $argv 0]
 }
@@ -29,10 +29,10 @@ rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 file mkdir ${output_dir}
 
 # The custom implementation flow writes a routed checkpoint and bitstream
-# directly after binding the protected XXV Ethernet DCP.  Opening impl_1 can
-# cause Vivado to recreate that run, so export from the completed checkpoint
-# instead.  This keeps XSA generation read-only with respect to the isolated
-# project tree.
+# directly after binding the protected XXV Ethernet DCP.  The project-managed
+# impl_1 run is marked complete by the manual flow, so open that completed run
+# instead of reopening the physical DCP.  Reopening the DCP replays the XXV GT
+# port map and creates avoidable Constraints 18-4866 warnings.
 set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
 if {![file exists ${implemented_dcp}]} {
     set implemented_dcp "${impl_dir}/TopCustomXczu47dr_routed.dcp"
@@ -43,6 +43,13 @@ if {![file exists ${implemented_dcp}]} {
     exit 1
 }
 rf2_identity_validate_manifest "${implemented_dcp}.manifest.json" ${target} ${script_path}
+set impl_run [get_runs -quiet impl_1]
+set impl_status [expr {[llength ${impl_run}] == 1 ? [get_property STATUS ${impl_run}] : ""}]
+set impl_progress [expr {[llength ${impl_run}] == 1 ? [get_property PROGRESS ${impl_run}] : ""}]
+if {[llength ${impl_run}] != 1 || ${impl_progress} ne "100%" ||
+    ![string match "*Complete*" ${impl_status}]} {
+    error "Project-managed impl_1 is not a completed routed run (status=${impl_status}, progress=${impl_progress}); refusing XSA export"
+}
 set bit_candidates [glob -nocomplain ${impl_dir}/*.bit]
 set selected_bit ""
 foreach candidate ${bit_candidates} {
@@ -56,8 +63,8 @@ foreach candidate ${bit_candidates} {
 if {${selected_bit} eq ""} {
     error "no identity-checked implementation bitstream found in ${impl_dir}"
 }
-puts "INFO: Opening implemented checkpoint ${implemented_dcp}"
-open_checkpoint ${implemented_dcp}
+puts "INFO: Opening completed project-managed routed run for ${implemented_dcp}"
+open_run impl_1
 
 puts "INFO: Exporting hardware platform (XSA)..."
 set xsa_file "${output_dir}/${output_basename}.xsa"
@@ -66,8 +73,24 @@ set xsa_file "${output_dir}/${output_basename}.xsa"
 set xsa_tmp "${output_dir}/${output_basename}.tmp.xsa"
 file delete -force ${xsa_tmp}
 
-# Export XSA with bitstream
-write_hw_platform -fixed -force -include_bit -file ${xsa_tmp}
+# Export the hardware metadata without asking Vivado to regenerate a bitstream.
+# The manual implementation flow already produced and identity-stamped the
+# selected bitstream.  write_hw_platform's -include_bit path requires the
+# project-managed run to own a write_bitstream result, which is not true for
+# this protected-DCP/manual flow and would regenerate a different header.
+write_hw_platform -fixed -force -file ${xsa_tmp}
+
+# Embed the exact selected bitstream bytes under the XSA member name expected
+# by the identity verifier.  This keeps the XSA payload byte-for-byte aligned
+# with the bitstream that was timing/route/DRC checked and avoids a second
+# write_bitstream invocation during export.
+set xsa_bit_tmp "${output_dir}/${output_basename}.tmp.bit"
+file copy -force ${selected_bit} ${xsa_bit_tmp}
+if {[catch {exec zip -q -j -u ${xsa_tmp} ${xsa_bit_tmp}} zip_error]} {
+    file delete -force ${xsa_bit_tmp}
+    error "failed to embed selected bitstream in XSA: ${zip_error}"
+}
+file delete -force ${xsa_bit_tmp}
 
 if {[file exists ${xsa_tmp}]} {
     file rename -force ${xsa_tmp} ${xsa_file}

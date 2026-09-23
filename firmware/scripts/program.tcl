@@ -5,7 +5,7 @@
 
 if {$argc < 2 || $argc > 3} {
     puts "Usage: xsct program.tcl <xsa_or_bit_file> <elf_file> \[psu_init_tcl\]"
-    puts "Example: xsct program.tcl ../artifacts/custom_xczu47dr_master.xsa ../artifacts/custom_xczu47dr_master.elf ../artifacts/custom_xczu47dr_master_psu_init.tcl"
+    puts "Example: xsct program.tcl ../artifacts/custom_xczu47dr_waveform.xsa ../artifacts/custom_xczu47dr_waveform.elf ../artifacts/custom_xczu47dr_waveform_psu_init.tcl"
     exit 1
 }
 
@@ -13,7 +13,7 @@ set image_file [file normalize [lindex $argv 0]]
 set elf_file [file normalize [lindex $argv 1]]
 set script_dir [file dirname [file normalize [info script]]]
 set firmware_dir [file normalize [file join $script_dir ".."]]
-set target custom_xczu47dr_master
+set target custom_xczu47dr_waveform
 set download_elf_only 0
 set extracted_psu_file ""
 set extracted_manifest_file ""

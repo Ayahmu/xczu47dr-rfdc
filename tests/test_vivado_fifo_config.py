@@ -17,14 +17,18 @@ class VivadoFifoConfigTests(unittest.TestCase):
         self.assertIn("CONFIG.PROG_FULL_THRESH {768}", script)
         self.assertNotIn("CONFIG.FIFO_MEMORY_TYPE {ultra}", script)
 
-    def test_executor_watermarks_fit_reduced_fifo(self):
-        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
+    def test_waveform_path_start_watermark_and_loop_contract_are_explicit(self):
+        path = (REPO_ROOT / "hardware" / "vivado" / "src" / "waveform_playback_path.v").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        controller = (REPO_ROOT / "hardware" / "vivado" / "src" / "waveform_playback_controller.v").read_text(
             encoding="utf-8", errors="ignore"
         )
 
-        self.assertIn(".LOW_WM(256)", top)
-        self.assertIn(".START_WM(512)", top)
-        self.assertIn(".HIGH_WM(768)", top)
+        self.assertIn("parameter integer START_WATERMARK = 768", path)
+        self.assertIn("FIFO_RESET_GUARD_CYCLES = 16", path)
+        self.assertIn("loop_count", controller)
+        self.assertIn("loop_restart", controller)
 
 
 if __name__ == "__main__":
