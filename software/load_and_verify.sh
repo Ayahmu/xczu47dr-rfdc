@@ -32,7 +32,7 @@
 #   FORCE_PSU_INIT=1 run psu_init unconditionally
 set -uo pipefail
 
-ROLE=${1:-slave}
+ROLE=${1:-waveform}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CABLE=${JTAG_CABLE_SERIAL:-210512180082}
 XSA="$REPO/artifacts/custom_xczu47dr_${ROLE}.xsa"
@@ -49,11 +49,6 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 fail() { echo "FAILED: $*" >&2; exit 1; }
-
-case "$ROLE" in
-  slave|master) ;;
-  *) fail "unsupported role '$ROLE' (use slave or master)" ;;
-esac
 
 for f in "$XSA" "$ELF"; do
   [ -s "$f" ] || fail "missing artifact: $f"

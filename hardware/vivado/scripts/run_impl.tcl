@@ -246,8 +246,17 @@ proc impl_run_profile {impl_run profile} {
         set log_fh [open ${impl_log} r]
         set log_body [read ${log_fh}]
         close ${log_fh}
-        if {[regexp -line {CRITICAL WARNING:} ${log_body}]} {
-            error "Implementation log contains Critical Warning; refusing to accept candidate"
+        # A timing-failure critical warning ([Timing 38-282]) is the soft
+        # timing gate's responsibility (impl_profile_timing_clean returns 0 so
+        # the foreach retries the next, more aggressive impl profile).  Letting
+        # it hard-abort here defeated the intended balanced->aggressive retry on
+        # timing-marginal, route-dominated designs.  Any OTHER critical warning
+        # is still a real defect and must abort.
+        foreach log_line [split ${log_body} "\n"] {
+            if {[regexp {CRITICAL WARNING:} ${log_line}] &&
+                ![regexp {\[Timing 38-282\]} ${log_line}]} {
+                error "Implementation log contains a non-timing Critical Warning; refusing to accept candidate: [string trim ${log_line}]"
+            }
         }
     }
     return [impl_profile_timing_clean]

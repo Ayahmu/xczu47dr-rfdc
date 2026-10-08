@@ -6,6 +6,17 @@ ifneq ($(filter $(TARGET),$(ALLOWED_TARGETS)),$(TARGET))
 $(error unsupported TARGET=$(TARGET). Allowed targets: $(ALLOWED_TARGETS))
 endif
 
+# External XS17 reference frequency (MHz). One RTL source tree builds both
+# profiles; REFERENCE_MHZ picks the HMC7044 R1 divider generic at project
+# creation (250 -> R1=25, 10 -> R1=1; PLL1 always closes on a 10 MHz PFD).
+REFERENCE_MHZ ?= 250
+ifeq ($(filter $(REFERENCE_MHZ),10 250),)
+$(error unsupported REFERENCE_MHZ=$(REFERENCE_MHZ). Allowed: 10 or 250)
+endif
+# Passed to Vivado/tclsh children (target_config.tcl reads it for the generic).
+export REFERENCE_MHZ
+REF_TAG := $(REFERENCE_MHZ)mhz
+
 ROOT := $(CURDIR)
 
 VIVADO_DIR := $(ROOT)/hardware/vivado
@@ -17,6 +28,20 @@ VIVADO_REPORT_DIR ?= $(VIVADO_DIR)/reports/$(TARGET)
 CHISEL_DIR := $(ROOT)/hardware/chisel
 FIRMWARE_DIR := $(ROOT)/firmware
 SOFTWARE_DIR := $(ROOT)/software
+
+# --- Xilinx licensing for the XXV Ethernet MAC ------------------------------
+# write_bitstream needs the "Bought" xxv_eth_mac_pcs feature.  The committed
+# reference XXV DCP was produced under an expired evaluation license and is NOT
+# bitstream-capable, so hardware builds re-synthesize the XXV IP fresh
+# (XXV_SYNTHESIZE_FRESH=1) under the Bought license below.  Set
+# XXV_SYNTHESIZE_FRESH=0 to reuse the reference DCP for license-free RTL
+# iteration (synth/impl only; the final write_bitstream will not be permitted).
+XILINX_BOUGHT_LICENSE ?= $(abspath $(ROOT)/../Xilinx_new.lic)
+XXV_SYNTHESIZE_FRESH ?= 1
+export XXV_SYNTHESIZE_FRESH
+ifneq ($(wildcard $(XILINX_BOUGHT_LICENSE)),)
+export XILINXD_LICENSE_FILE := $(XILINX_BOUGHT_LICENSE)$(if $(XILINXD_LICENSE_FILE),:$(XILINXD_LICENSE_FILE),)
+endif
 
 TARGET_PROJECT_BASENAME := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^project_basename:/ {print $$2}')
 TARGET_OUTPUT_BASENAME := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_config.tcl $(TARGET) | awk -F': ' '/^output_basename:/ {print $$2}')
@@ -35,7 +60,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 # and 13 test modules die on import.  Prefer the repo venv when it exists.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-rebuild firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
+.PHONY: help all test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -43,13 +68,19 @@ help:
 	@echo "Build targets:"
 	@echo "  make all              Build hardware and firmware"
 	@echo "  make test             Run software/unit and script syntax checks"
-	@echo "  make hardware         Build Chisel, Vivado project, synth, impl, bitstream, XSA"
+	@echo "  make hardware         Build one version (REFERENCE_MHZ, default 250) into ARTIFACT_DIR"
 	@echo "  make hardware-fast    Reuse the current Vivado project for RTL/constraint iterations"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
 	@echo "  make artifacts        Verify the selected role's checked-in artifacts"
 	@echo "  make artifacts-hash   Refresh artifacts/SHA256SUMS atomically"
 	@echo "  make artifacts-clean  Remove local checked-in artifacts explicitly"
 	@echo "  make driver-release   Build and verify the distributable Python SDK bundle"
+	@echo ""
+	@echo "Dual-version (10 MHz / 250 MHz XS17 reference) bitstreams:"
+	@echo "  make hardware-10mhz   Build the 10 MHz version  -> artifacts/10mhz/"
+	@echo "  make hardware-250mhz  Build the 250 MHz version -> artifacts/250mhz/"
+	@echo "  make hardware-both    Build BOTH versions in parallel (isolated work/artifacts)"
+	@echo "  make hardware REFERENCE_MHZ=10   Single build with an explicit reference"
 	@echo ""
 	@echo "Step targets:"
 	@echo "  make chisel           Generate Chisel Verilog"
@@ -82,8 +113,10 @@ help:
 	@echo "  ELF=$(ELF)"
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
+	@echo "  REFERENCE_MHZ=$(REFERENCE_MHZ) (allowed: 10 or 250)"
+	@echo "  XXV_SYNTHESIZE_FRESH=$(XXV_SYNTHESIZE_FRESH) (1=fresh XXV synth under the Bought license; needed for write_bitstream)"
+	@echo "  XILINXD_LICENSE_FILE=$(XILINXD_LICENSE_FILE)"
 	@echo "  ARTIFACT_DIR=$(ARTIFACT_DIR)"
-	@echo "  TARGET=custom_xczu47dr_waveform is the only production target"
 	@echo "  PROGRAM=cd firmware && TARGET=$(TARGET) ./build.sh program"
 	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
 
@@ -159,14 +192,48 @@ xsa: bitstream
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 hardware:
-	@echo "INFO: TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME) XSA=$(XSA)"
-	cd $(VIVADO_DIR) && TARGET=$(TARGET) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh --clean
+	@echo "INFO: TARGET=$(TARGET) REFERENCE_MHZ=$(REFERENCE_MHZ) PROJECT=$(TARGET_PROJECT_BASENAME) XSA=$(XSA)"
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) REFERENCE_MHZ=$(REFERENCE_MHZ) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh --clean
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 hardware-fast:
-	@echo "INFO: Fast hardware build reusing PROJECT=$(TARGET_PROJECT_BASENAME)"
-	cd $(VIVADO_DIR) && TARGET=$(TARGET) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh
+	@echo "INFO: Fast hardware build reusing PROJECT=$(TARGET_PROJECT_BASENAME) (keeps the project's existing REFERENCE_MHZ)"
+	cd $(VIVADO_DIR) && TARGET=$(TARGET) REFERENCE_MHZ=$(REFERENCE_MHZ) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
+
+# Dual-version builds.  Each reference frequency gets its own Vivado work tree,
+# reports and artifacts directory so the two never collide and can run at once.
+hardware-10mhz:
+	+$(MAKE) --no-print-directory hardware REFERENCE_MHZ=10 \
+	  ARTIFACT_DIR="$(ROOT)/artifacts/10mhz" \
+	  VIVADO_WORK_DIR="$(VIVADO_DIR)/work/$(TARGET)-10mhz" \
+	  VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports/$(TARGET)-10mhz"
+
+hardware-250mhz:
+	+$(MAKE) --no-print-directory hardware REFERENCE_MHZ=250 \
+	  ARTIFACT_DIR="$(ROOT)/artifacts/250mhz" \
+	  VIVADO_WORK_DIR="$(VIVADO_DIR)/work/$(TARGET)-250mhz" \
+	  VIVADO_REPORT_DIR="$(VIVADO_DIR)/reports/$(TARGET)-250mhz"
+
+# Build the 10 MHz and 250 MHz bitstreams concurrently.  Each sub-build streams
+# to its own log; both must succeed for this target to succeed.
+hardware-both:
+	@echo "==> 并行构建 10 MHz 与 250 MHz 双版本 bitstream(各自独立 work/artifacts 目录)"
+	@log10="$$(mktemp)"; log250="$$(mktemp)"; \
+	echo "    10MHz  日志: $$log10"; \
+	echo "    250MHz 日志: $$log250"; \
+	$(MAKE) --no-print-directory hardware-10mhz  > "$$log10"  2>&1 & p10=$$!; \
+	$(MAKE) --no-print-directory hardware-250mhz > "$$log250" 2>&1 & p250=$$!; \
+	rc10=0; rc250=0; \
+	wait $$p10  || rc10=$$?; \
+	wait $$p250 || rc250=$$?; \
+	echo "===== 10 MHz 构建输出(末尾 25 行) ====="; tail -25 "$$log10"; \
+	echo "===== 250 MHz 构建输出(末尾 25 行) ====="; tail -25 "$$log250"; \
+	if [ $$rc10 -ne 0 ] || [ $$rc250 -ne 0 ]; then \
+	  echo "ERROR: 双版本构建失败 (10MHz rc=$$rc10, 250MHz rc=$$rc250; 完整日志见上述路径)"; exit 1; \
+	fi; \
+	rm -f "$$log10" "$$log250"; \
+	echo "OK: 两个版本已生成 -> $(ROOT)/artifacts/10mhz/  和  $(ROOT)/artifacts/250mhz/"
 
 hardware-clean:
 	@echo "Cleaning Vivado generated state; preserving $(ARTIFACT_DIR)"
@@ -194,10 +261,6 @@ firmware-create:
 
 firmware-build:
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
-	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
-
-firmware-rebuild:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 firmware-clean:

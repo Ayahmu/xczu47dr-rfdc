@@ -162,7 +162,9 @@ module Top #(
   // PLL1 PFD; SYNC/Trigger logic is shared across both reference profiles.
   wire        hmc_use_external_250mhz = 1'b1;
 
-  hmc7044 hmc7044_i (
+  hmc7044 #(
+      .REFERENCE_MHZ(REFERENCE_MHZ)
+  ) hmc7044_i (
       .clk(pl_clk),
       .rst(pl_aresetn),
       .H7044_SLEN(H7044_SLEN_0),
@@ -170,7 +172,6 @@ module Top #(
       .H7044_SDATA(H7044_SDATA_0),
       .SET_FINISH(hmc7044_set_finish),
       .USE_EXTERNAL_250MHZ(hmc_use_external_250mhz),
-      .REFERENCE_MHZ(REFERENCE_MHZ),
       .IS_MASTER(IS_MASTER ? 1'b1 : 1'b0)
   );
 
