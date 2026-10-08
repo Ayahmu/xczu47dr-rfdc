@@ -30,14 +30,15 @@ module Top #(
     input  EXT_TRIGGER_P,
     input  EXT_TRIGGER_N,
 
-    // 10G SFP+ UDP link, matching the reference project.
-    input  sfp_refclkp,
-    input  sfp_refclkn,
-    input  sfp_rxp,
-    input  sfp_rxn,
-    output sfp_txp,
-    output sfp_txn,
-    output SFP_TX_DIS,
+    // 100G QSFP28 UDP link (CMAC CAUI-4, RS-FEC) on BANK 128.
+    input  qsfp_refclk_p,
+    input  qsfp_refclk_n,
+    input  [3:0] qsfp_rxp,
+    input  [3:0] qsfp_rxn,
+    output [3:0] qsfp_txp,
+    output [3:0] qsfp_txn,
+    output qsfp_lpmode,
+    output qsfp_resetn,
 
     input  dac2_clk_clk_n,
     input  dac2_clk_clk_p,
@@ -438,7 +439,7 @@ module Top #(
 
   localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
-  // ========== Reference 10G UDP receiver ==========
+  // ========== 100G UDP receiver (CMAC + 512-bit adapter) ==========
   wire        udp64_rcv_vld;
   wire [63:0] udp64_rcv_dat;
   wire        udp64_rcv_last;
@@ -817,8 +818,6 @@ module Top #(
   wire [63:0]  udp_wave_last_addr;
   wire [255:0] udp_wave_last_wdata;
 
-  assign SFP_TX_DIS = 1'b0;
-
   assign network_bootstrap_ip = 32'hC0A8FEFE;
   assign network_capabilities = 32'h00040000;
 `ifdef RF2_BUILD_PROFILE_ID
@@ -908,13 +907,15 @@ module Top #(
   assign wave_resp_ready = wave_resp_valid_ser && udp_resp_tready;
   assign rvresp64_tready = !wave_resp_valid_ser && udp_resp_tready;
 
-  udp_10G udp_10g_i (
-      .gt_rxp_in   (sfp_rxp),
-      .gt_rxn_in   (sfp_rxn),
-      .gt_txp_out  (sfp_txp),
-      .gt_txn_out  (sfp_txn),
-      .gt_refclk_p (sfp_refclkp),
-      .gt_refclk_n (sfp_refclkn),
+  udp_100G udp_100g_i (
+      .gt_rxp_in   (qsfp_rxp),
+      .gt_rxn_in   (qsfp_rxn),
+      .gt_txp_out  (qsfp_txp),
+      .gt_txn_out  (qsfp_txn),
+      .gt_refclk_p (qsfp_refclk_p),
+      .gt_refclk_n (qsfp_refclk_n),
+      .qsfp_lpmode (qsfp_lpmode),
+      .qsfp_resetn (qsfp_resetn),
       .clk_100Mhz  (pl_clk),
       .calibration_clk_out(tdc_async_calibration_clk),
       .clk         (ddr4_ui_clk),
@@ -944,7 +945,7 @@ module Top #(
 
   // Keep the 300 MHz UDP parser local to its input registers. This preserves
   // one-word-per-cycle throughput while removing the long high-fanout path
-  // from the 10G RX core directly into the packet state machine.
+  // from the 100G RX path directly into the packet state machine.
   reg        udp_writer_tvalid;
   reg [63:0] udp_writer_tdata;
   reg        udp_writer_tlast;
@@ -1813,7 +1814,7 @@ module Top #(
   end
 
   wire tdc_mode_sample, tdc_calibration_source, tdc_carrier_enable_sample;
-  // The existing XXV Ethernet TX user clock provides an independent
+  // The CMAC TX user clock provides an independent
   // code-density phase source; the control crossing only selects this pulse.
   wire tdc_calibration_level;
   tdc_calibration_source u_tdc_calibration_source (

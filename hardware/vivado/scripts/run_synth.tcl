@@ -3,7 +3,7 @@
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
-source "${script_path}/reference_xxv_dcp.tcl"
+
 source "${script_path}/build_identity.tcl"
 
 proc ooc_run_complete {run_name} {
@@ -66,16 +66,18 @@ if {[llength ${synth_run}] > 0 && [file exists ${synth_incremental_checkpoint}]}
     puts "INFO: No synthesis checkpoint found; running a full synthesis"
 }
 
-# The XXV Ethernet XCI is part of the normal project source set. Vivado
+# The CMAC XCI is part of the normal project source set. Vivado
 # therefore carries its OOC checkpoint and scoped constraints through the
 # parent synthesis flow without a manual cell-level DCP replacement.
-set xxv_synth_xci [get_files -quiet -all *xxv_ethernet.xci]
-if {[llength ${xxv_synth_xci}] != 1} {
-    error "Expected exactly one managed XXV Ethernet XCI, found [llength ${xxv_synth_xci}]"
+# The IP is generated fresh under the Design_Linking license (no
+# reference-DCP restore dance like the retired XXV flow).
+set cmac_synth_xci [get_files -quiet -all *cmac_usplus_0.xci]
+if {[llength ${cmac_synth_xci}] != 1} {
+    error "Expected exactly one managed CMAC XCI, found [llength ${cmac_synth_xci}]"
 }
-set_property USED_IN_SYNTHESIS true ${xxv_synth_xci}
-set_property USED_IN_IMPLEMENTATION true ${xxv_synth_xci}
-puts "INFO: XXV Ethernet XCI is enabled for parent synthesis/implementation"
+set_property USED_IN_SYNTHESIS true ${cmac_synth_xci}
+set_property USED_IN_IMPLEMENTATION true ${cmac_synth_xci}
+puts "INFO: CMAC XCI is enabled for parent synthesis/implementation"
 
 set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]
 if {[llength ${bd_file}] > 0} {
@@ -125,9 +127,9 @@ if {[llength ${bd_file}] > 0} {
     }
 }
 
-# Regenerate only the managed OOC metadata if needed, then put the validated
-# bitstream-capable checkpoint back in place immediately before parent synth.
-prepare_reference_xxv_ooc_run ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+# Regenerate only the managed OOC metadata if needed.  The CMAC IP is
+# generated fresh by the project (no reference-DCP restore step).
+puts "INFO: CMAC OOC metadata ready for parent synthesis"
 
 puts "INFO: Starting synthesis..."
 reset_run synth_1
@@ -150,10 +152,9 @@ if {${synth_status} != "synth_design Complete!"} {
     exit 1
 }
 
-# A parent run may refresh the child OOC output while completing. Restore the
-# exact checkpoint again before opening the synthesized design and before the
-# implementation step consumes the managed IP output.
-restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+# A parent run may refresh the child OOC output while completing.  No
+# reference checkpoint exists for CMAC; the managed OOC output stands as-is.
+puts "INFO: CMAC managed OOC output ready"
 
 # Open synthesized design for reporting.
 open_run synth_1

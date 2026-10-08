@@ -107,45 +107,45 @@ if {[llength [get_ips -quiet vio_0]] > 0} {
     lappend preflight_stub_files $vio_preflight_stub
 }
 
-# The reference XXV Ethernet IP is intentionally kept as an OOC checkpoint
+# The CMAC IP is intentionally kept as an OOC checkpoint
 # for the real build.  ``synth_design -rtl`` does not consume that checkpoint,
 # so provide its generated black-box declaration for elaboration.  Depending
 # on whether the project was created from a clean tree or an existing cache,
 # Vivado places this file in one of the two generated-IP roots below.
-set xxv_stub_candidates [list \
-    [file normalize "${proj_dir}/ip/xxv_ethernet_1/xxv_ethernet_bmstub.v"] \
-    [file normalize "${proj_dir}/work/ip/xxv_ethernet_1/xxv_ethernet_bmstub.v"] \
-    [file normalize "${vivado_dir}/ip/xxv_ethernet_1/xxv_ethernet_bmstub.v"]]
-set xxv_generated_stub ""
-foreach candidate $xxv_stub_candidates {
+set cmac_stub_candidates [list \
+    [file normalize "${proj_dir}/ip/cmac_usplus_0/cmac_usplus_0_bmstub.v"] \
+    [file normalize "${proj_dir}/work/ip/cmac_usplus_0/cmac_usplus_0_bmstub.v"] \
+    [file normalize "${vivado_dir}/ip/cmac_usplus_0/cmac_usplus_0_bmstub.v"]]
+set cmac_generated_stub ""
+foreach candidate $cmac_stub_candidates {
     if {[file exists $candidate]} {
-        set xxv_generated_stub $candidate
+        set cmac_generated_stub $candidate
         break
     }
 }
-if {$xxv_generated_stub eq ""} {
-    error "Missing generated IP stub: xxv_ethernet_bmstub.v"
+if {$cmac_generated_stub eq ""} {
+    error "Missing generated IP stub: cmac_usplus_0_bmstub.v"
 }
-set xxv_preflight_stub [file normalize "${report_dir}/xxv_ethernet_preflight_stub.v"]
-set old_xxv_preflight_file [get_files -quiet -all $xxv_preflight_stub]
-if {[llength $old_xxv_preflight_file] > 0} {
-    remove_files $old_xxv_preflight_file
+set cmac_preflight_stub [file normalize "${report_dir}/cmac_usplus_0_preflight_stub.v"]
+set old_cmac_preflight_file [get_files -quiet -all $cmac_preflight_stub]
+if {[llength $old_cmac_preflight_file] > 0} {
+    remove_files $old_cmac_preflight_file
 }
 # Remove the managed XCI from this in-memory preflight project.  Otherwise
 # Vivado treats the module as an OOC BlockSet top and silently omits the
 # black-box declaration from the regular RTL compile order.  The project is
 # deliberately not saved by this helper, so the real synthesis project keeps
-# its XCI and reference DCP untouched.
-set xxv_xci_files [get_files -quiet -all *xxv_ethernet.xci]
-if {[llength $xxv_xci_files] > 0} {
-    puts "INFO: Temporarily removing managed XXV Ethernet XCI for RTL preflight"
-    remove_files $xxv_xci_files
+# its XCI and managed OOC checkpoint untouched.
+set cmac_xci_files [get_files -quiet -all *cmac_usplus_0.xci]
+if {[llength $cmac_xci_files] > 0} {
+    puts "INFO: Temporarily removing managed CMAC XCI for RTL preflight"
+    remove_files $cmac_xci_files
 }
-file copy -force $xxv_generated_stub $xxv_preflight_stub
-puts "INFO: Adding current preflight stub for xxv_ethernet"
-add_files -norecurse $xxv_preflight_stub
-set_property USED_IN_SYNTHESIS true [get_files $xxv_preflight_stub]
-lappend preflight_stub_files $xxv_preflight_stub
+file copy -force $cmac_generated_stub $cmac_preflight_stub
+puts "INFO: Adding current preflight stub for cmac_usplus_0"
+add_files -norecurse $cmac_preflight_stub
+set_property USED_IN_SYNTHESIS true [get_files $cmac_preflight_stub]
+lappend preflight_stub_files $cmac_preflight_stub
 
 foreach ip_name {ila_s_axi_01 ila_udp_ddr ila_dac_axis ila_hmc_event} {
     set ip [get_ips -quiet $ip_name]

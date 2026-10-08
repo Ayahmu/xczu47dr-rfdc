@@ -31,14 +31,15 @@ module TopCustomXczu47dr #(
     input  EXT_TRIGGER_P,
     input  EXT_TRIGGER_N,
 
-    // 10G SFP+ UDP link, matching the reference project.
-    input  sfp_refclkp,
-    input  sfp_refclkn,
-    input  sfp_rxp,
-    input  sfp_rxn,
-    output sfp_txp,
-    output sfp_txn,
-    output SFP_TX_DIS,
+    // 100G QSFP28 UDP link (CMAC CAUI-4, RS-FEC).
+    input  qsfp_refclk_p,
+    input  qsfp_refclk_n,
+    input  [3:0] qsfp_rxp,
+    input  [3:0] qsfp_rxn,
+    output [3:0] qsfp_txp,
+    output [3:0] qsfp_txn,
+    output qsfp_lpmode,
+    output qsfp_resetn,
 
     input  dac2_clk_clk_n,
     input  dac2_clk_clk_p,
@@ -111,14 +112,15 @@ module TopCustomXczu47dr #(
       .EXT_TRIGGER_P(EXT_TRIGGER_P),
       .EXT_TRIGGER_N(EXT_TRIGGER_N),
 
-      // 10G SFP+ UDP link
-      .sfp_refclkp(sfp_refclkp),
-      .sfp_refclkn(sfp_refclkn),
-      .sfp_rxp(sfp_rxp),
-      .sfp_rxn(sfp_rxn),
-      .sfp_txp(sfp_txp),
-      .sfp_txn(sfp_txn),
-      .SFP_TX_DIS(SFP_TX_DIS),
+      // 100G QSFP28 UDP link
+      .qsfp_refclk_p(qsfp_refclk_p),
+      .qsfp_refclk_n(qsfp_refclk_n),
+      .qsfp_rxp(qsfp_rxp),
+      .qsfp_rxn(qsfp_rxn),
+      .qsfp_txp(qsfp_txp),
+      .qsfp_txn(qsfp_txn),
+      .qsfp_lpmode(qsfp_lpmode),
+      .qsfp_resetn(qsfp_resetn),
       
       .dac2_clk_clk_n(dac2_clk_clk_n),
       .dac2_clk_clk_p(dac2_clk_clk_p),

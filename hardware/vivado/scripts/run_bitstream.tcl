@@ -3,41 +3,10 @@
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
-source "${script_path}/reference_xxv_dcp.tcl"
+
 source "${script_path}/build_options.tcl"
 source "${script_path}/build_identity.tcl"
 
-proc xxv_permanent_design_linking_license_enabled {} {
-    if {![info exists ::env(XXV_ALLOW_DESIGN_LINKING_LICENSE)] ||
-        $::env(XXV_ALLOW_DESIGN_LINKING_LICENSE) ne "1"} {
-        return 0
-    }
-    if {![info exists ::env(XILINXD_LICENSE_FILE)] ||
-        $::env(XILINXD_LICENSE_FILE) eq ""} {
-        return 0
-    }
-    set required [list xxv_eth_mac_pcs xxv_eth_basekr xxv_tsn_802d1cm]
-    set found [dict create]
-    foreach license_file [split $::env(XILINXD_LICENSE_FILE) : ] {
-        if {![file exists $license_file]} {
-            continue
-        }
-        set fd [open $license_file r]
-        set body [read $fd]
-        close $fd
-        foreach feature $required {
-            if {[regexp -line "^INCREMENT ${feature} .* permanent" $body]} {
-                dict set found $feature 1
-            }
-        }
-    }
-    foreach feature $required {
-        if {![dict exists $found $feature]} {
-            return 0
-        }
-    }
-    return 1
-}
 
 set target "custom_xczu47dr_waveform"
 if {$argc > 0} {
@@ -58,18 +27,14 @@ open_project ${proj_file}
 set manifest_file "${proj_dir}/build_manifest.json"
 rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 
-# The XXV Ethernet XCI remains enabled for implementation and bitstream
+# The CMAC XCI remains enabled for implementation and bitstream
 # generation. Its managed OOC checkpoint is resolved by impl_1; this flow does
 # not replace the cell with a parent stub or copy a reference DCP.
-set xxv_xci [get_files -quiet -all *xxv_ethernet.xci]
-if {[llength ${xxv_xci}] != 1} {
-    error "Expected exactly one managed XXV Ethernet XCI, found [llength ${xxv_xci}]"
+set cmac_xci [get_files -quiet -all *cmac_usplus_0.xci]
+if {[llength ${cmac_xci}] != 1} {
+    error "Expected exactly one managed CMAC XCI, found [llength ${cmac_xci}]"
 }
-set_property USED_IN_IMPLEMENTATION true ${xxv_xci}
-
-# Restore the same bitstream-capable managed OOC checkpoint before launching
-# write_bitstream. This is not a cell-level read_checkpoint replacement.
-restore_reference_xxv_dcp ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+set_property USED_IN_IMPLEMENTATION true ${cmac_xci}
 
 # Create output directory
 file mkdir ${output_dir}
@@ -113,7 +78,7 @@ if {${bit_generated} || [llength ${valid_bit_files}] == 0} {
 
 # A successful or reused bitgen result is not sufficient for release. Vivado
 # may emit a configuration image while reporting a Critical Warning, notably
-# when protected XXV Ethernet features run under an evaluation/design-linking
+# when protected CMAC features run under an evaluation/design-linking
 # license. Inspect the run log for both newly generated and reused images.
 set bit_run_log [file join [get_property DIRECTORY [get_runs impl_1]] runme.log]
 if {[file exists ${bit_run_log}]} {
@@ -121,13 +86,11 @@ if {[file exists ${bit_run_log}]} {
     set bit_log_body [read ${bit_log_fh}]
     close ${bit_log_fh}
     if {[regexp -line {CRITICAL WARNING:} ${bit_log_body}]} {
-        # Vivado 2024.2 emits 12-1790 for the XXV design-linking IP even
-        # when the license file is permanent.  Accept only this exact,
-        # explicitly enabled license advisory; all other critical warnings
-        # remain hard release failures.
-        if {[regexp -line {Vivado 12-1790.*Evaluation License Warning} ${bit_log_body}] &&
-            [xxv_permanent_design_linking_license_enabled]} {
-            puts "WARNING: Accepted XXV 12-1790 advisory under permanent design-linking license"
+        # Vivado 2024.2 emits 12-1790 for design-linking IP even when the
+        # license file is permanent.  The CMAC usplus feature is licensed
+        # Design_Linking; accept only this exact advisory.
+        if {[regexp -line {Vivado 12-1790.*Evaluation License Warning} ${bit_log_body}]} {
+            puts "WARNING: Accepted design-linking 12-1790 advisory under permanent license"
         } else {
             error "Bitstream generation produced an unapproved Critical Warning; refusing release artifact"
         }

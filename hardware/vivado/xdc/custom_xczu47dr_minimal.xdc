@@ -53,29 +53,9 @@ set_property PACKAGE_PIN A9 [get_ports EXT_TRIGGER_N]
 set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_P]
 set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_N]
 
-# 10G SFP+ link copied from the known-good reference implementation report.
-# These ports terminate in GT primitives inside the XXV Ethernet DCP.  The
-# parent synthesis must not insert fabric I/O buffers around the preserved
-# black box, otherwise the GT cannot bind to the package pins at link_design.
-set_property IO_BUFFER_TYPE NONE [get_ports {sfp_rxp sfp_rxn sfp_txp sfp_txn sfp_refclkp sfp_refclkn}]
-set_property CLOCK_BUFFER_TYPE NONE [get_ports {sfp_rxp sfp_rxn sfp_txp sfp_txn sfp_refclkp sfp_refclkn}]
-set_property PACKAGE_PIN N38 [get_ports sfp_rxp]
-set_property PACKAGE_PIN N39 [get_ports sfp_rxn]
-set_property PACKAGE_PIN P35 [get_ports sfp_txp]
-set_property PACKAGE_PIN P36 [get_ports sfp_txn]
-set_property PACKAGE_PIN W33 [get_ports sfp_refclkp]
-set_property PACKAGE_PIN W34 [get_ports sfp_refclkn]
-create_clock -name sfp_refclkp -period 6.400 [get_ports sfp_refclkp]
-set_property PACKAGE_PIN AK19 [get_ports SFP_TX_DIS]
-set_property IOSTANDARD LVCMOS12 [get_ports SFP_TX_DIS]
-
-# The imported 10G UDP MAC uses asynchronous FIFOs between the DDR/user clock
-# and XXV Ethernet TX/RX clocks.  Constrain the pointer and handshake
-# synchronizers as CDC paths so implementation is not forced to time unrelated
-# clocks to near-zero phase alignments.
-set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get_cells -quiet -hierarchical -regexp {.*udp_10g_i/core_inst/eth_mac_10g_fifo_inst/.*/fifo_inst/.*sync.*_reg_reg\[[0-9]+\]}]]
-set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get_cells -quiet -hierarchical -regexp {.*udp_10g_i/core_inst/eth_mac_10g_fifo_inst/.*/fifo_inst/.*sync.*_reg}]]
-set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get_cells -quiet -hierarchical -regexp {.*udp_10g_i/i_xxv_ethernet_0_axi4_lite_user_if/.*cdc_sync.*}]]
+# The 100G QSFP28 link constraints live in custom_xczu47dr_100g.xdc.  The
+# retired 10G SFP+ link is removed; no sfp_* ports remain in the production
+# top module.
 
 # First-stage synchronizer inputs that cross unrelated clocks.  Only stage 0 is
 # asynchronous; downstream stages stay timed.

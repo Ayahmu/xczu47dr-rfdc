@@ -1,11 +1,10 @@
 `timescale 1 ns/1 ps
 
-module ethernet_adapter (
+module ethernet_adapter_100g (
     //-------------------------------------------------------------------------
     // Ethernet adapter
     //  . Clock and Reset
-    input   wire                    tx_clk         ,
-    input   wire                    rx_clk         ,
+    input   wire                    clk         ,
     input   wire                    rst         ,
 
     input	wire 			        user_rx_reset_0 ,
@@ -15,15 +14,15 @@ module ethernet_adapter (
     // MAC AXIS Interface
     //  . RX
 	input	wire 			        rx_axis_tvalid_0,
-	input	wire [63:0] 	        rx_axis_tdata_0 ,
+	input	wire [511:0] 	        rx_axis_tdata_0 ,
 	input	wire [0:0] 		        rx_axis_tuser_0 ,
-	input	wire [7:0] 	            rx_axis_tkeep_0 ,
+	input	wire [63:0] 	        rx_axis_tkeep_0 ,
 	input	wire 			        rx_axis_tlast_0 ,
     //  . TX
 	input 	wire 			        tx_axis_tready_0,
 	output	wire 			        tx_axis_tvalid_0,
-	output	wire [63:0] 	        tx_axis_tdata_0 ,
-	output	wire [7:0] 	            tx_axis_tkeep_0 ,
+	output	wire [511:0] 	        tx_axis_tdata_0 ,
+	output	wire [63:0] 	        tx_axis_tkeep_0 ,
 	output	wire [0:0] 		        tx_axis_tuser_0 ,
 	output	wire  			        tx_axis_tlast_0 ,
 
@@ -48,7 +47,7 @@ module ethernet_adapter (
     axis_fifo_adapter #
     (
         .DEPTH(9216),
-        .S_DATA_WIDTH(64),
+        .S_DATA_WIDTH(512),
         .M_DATA_WIDTH(64),
         .ID_ENABLE(0),
         .DEST_ENABLE(0),
@@ -68,7 +67,7 @@ module ethernet_adapter (
     )
     inst_axis_fifo_adapter_rx
     (
-        .clk(rx_clk),
+        .clk(clk),
         .rst(user_rx_reset_0),
 
         /*
@@ -131,7 +130,7 @@ module ethernet_adapter (
     )
     inst_tx_frame_length_adjust
     (
-        .clk(tx_clk),
+        .clk(clk),
         .rst(user_tx_reset_0),
 
         /*
@@ -179,7 +178,7 @@ module ethernet_adapter (
     (
         .DEPTH(9216),
         .S_DATA_WIDTH(64),
-        .M_DATA_WIDTH(64),
+        .M_DATA_WIDTH(512),
         .ID_ENABLE(0),
         .DEST_ENABLE(0),
         .USER_ENABLE(1),
@@ -198,7 +197,7 @@ module ethernet_adapter (
     )
     inst_axis_fifo_adapter_tx
     (
-        .clk(tx_clk),
+        .clk(clk),
         .rst(user_tx_reset_0),
 
         /*

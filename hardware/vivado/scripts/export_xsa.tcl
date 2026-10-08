@@ -29,9 +29,9 @@ rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 file mkdir ${output_dir}
 
 # The custom implementation flow writes a routed checkpoint and bitstream
-# directly after binding the protected XXV Ethernet DCP.  The project-managed
+# directly after binding the CMAC IP.  The project-managed
 # impl_1 run is marked complete by the manual flow, so open that completed run
-# instead of reopening the physical DCP.  Reopening the DCP replays the XXV GT
+# instead of reopening the physical DCP.  Reopening the DCP replays the CMAC GT
 # port map and creates avoidable Constraints 18-4866 warnings.
 set implemented_dcp "${impl_dir}/TopCustomXczu47dr_postroute_physopt.dcp"
 if {![file exists ${implemented_dcp}]} {

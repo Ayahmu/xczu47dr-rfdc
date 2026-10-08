@@ -3,7 +3,7 @@
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
-source "${script_path}/reference_xxv_dcp.tcl"
+
 source "${script_path}/build_options.tcl"
 source "${script_path}/build_identity.tcl"
 
@@ -52,14 +52,14 @@ open_project ${proj_file}
 set manifest_file "${proj_dir}/build_manifest.json"
 rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 
-# The XXV Ethernet XCI is a first-class project IP. Its OOC checkpoint
+# The CMAC XCI is a first-class project IP. Its OOC checkpoint
 # and scoped constraints are consumed by the generated impl_1 Tcl; do not
 # replace the cell with a parent RTL stub or inject a raw DCP manually.
-set xxv_xci [get_files -quiet -all *xxv_ethernet.xci]
-if {[llength ${xxv_xci}] != 1} {
-    error "Expected exactly one managed XXV Ethernet XCI, found [llength ${xxv_xci}]"
+set cmac_xci [get_files -quiet -all *cmac_usplus_0.xci]
+if {[llength ${cmac_xci}] != 1} {
+    error "Expected exactly one managed CMAC XCI, found [llength ${cmac_xci}]"
 }
-set_property USED_IN_IMPLEMENTATION true ${xxv_xci}
+set_property USED_IN_IMPLEMENTATION true ${cmac_xci}
 
 # Reuse the last successful routed design as the implementation reference.
 # Keep this checkpoint outside impl_1 because reset_run removes the run
@@ -75,12 +75,10 @@ if {[llength ${impl_run}] > 0 && [file exists ${impl_incremental_checkpoint}]} {
     puts "INFO: No implementation checkpoint found; running a full implementation"
 }
 
-puts "INFO: Using project-managed XXV Ethernet XCI/OOC flow"
+puts "INFO: Using project-managed CMAC XCI/OOC flow"
 
-# Keep the managed child run bound to the same bitstream-capable reference
-# checkpoint used during synthesis.  This preserves the XCI/IP provenance and
-# avoids the encrypted generated cellview that write_bitstream rejects.
-prepare_reference_xxv_ooc_run ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+# No reference checkpoint dance: the CMAC IP is generated fresh by the
+# project under the Design_Linking license.
 
 set bd_file [get_files -quiet ${proj_dir}/${proj_name}.srcs/sources_1/bd/design_1/design_1.bd]
 if {[llength ${bd_file}] > 0} {

@@ -27,15 +27,15 @@ foreach cell $read_reset_cells {
         error "FIFO read reset does not release in the 50 MHz DAC domain"
     }
 }
-foreach {primitive expected} {GTYE4_CHANNEL GTYE4_CHANNEL_X0Y8 GTYE4_COMMON GTYE4_COMMON_X0Y2} {
-    set cells [get_cells -hier -filter "REF_NAME == $primitive && NAME =~ top_i/udp_10g_i/DUT/*"]
+foreach {primitive expected} {GTYE4_CHANNEL GTYE4_CHANNEL_X0Y4 GTYE4_CHANNEL GTYE4_CHANNEL_X0Y5 GTYE4_CHANNEL GTYE4_CHANNEL_X0Y6 GTYE4_CHANNEL GTYE4_CHANNEL_X0Y7 GTYE4_COMMON GTYE4_COMMON_X0Y1} {
+    set cells [get_cells -hier -filter "REF_NAME == $primitive && NAME =~ top_i/udp_100g_i/inst_cmac_usplus_wrapper/DUT/*"]
     if {[llength $cells] != 1 || [get_property LOC $cells] ne $expected} {
-        error "Implemented SFP $primitive does not match board site $expected"
+        error "Implemented QSFP $primitive does not match board site $expected"
     }
 }
-foreach {port expected} {sfp_rxp N38 sfp_rxn N39 sfp_txp P35 sfp_txn P36 sfp_refclkp W33 sfp_refclkn W34} {
+foreach {port expected} {qsfp_txp[0] Y35 qsfp_txn[0] Y36 qsfp_rxp[0] AA38 qsfp_rxn[0] AA39 qsfp_txp[1] V35 qsfp_txn[1] V36 qsfp_rxp[1] W38 qsfp_rxn[1] W39 qsfp_txp[2] T35 qsfp_txn[2] T36 qsfp_rxp[2] U38 qsfp_rxn[2] U39 qsfp_txp[3] R33 qsfp_txn[3] R34 qsfp_rxp[3] R38 qsfp_rxn[3] R39 qsfp_refclk_p AA33 qsfp_refclk_n AA34} {
     if {[get_property PACKAGE_PIN [get_ports $port]] ne $expected} {
-        error "Implemented SFP pin $port does not match board pin $expected"
+        error "Implemented QSFP pin $port does not match board pin $expected"
     }
 }
 report_methodology -checks [get_methodology_checks TIMING-17] -file $output/${output_name}_clock_coverage.rpt

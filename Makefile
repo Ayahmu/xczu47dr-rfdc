@@ -29,16 +29,11 @@ CHISEL_DIR := $(ROOT)/hardware/chisel
 FIRMWARE_DIR := $(ROOT)/firmware
 SOFTWARE_DIR := $(ROOT)/software
 
-# --- Xilinx licensing for the XXV Ethernet MAC ------------------------------
-# write_bitstream needs the "Bought" xxv_eth_mac_pcs feature.  The committed
-# reference XXV DCP was produced under an expired evaluation license and is NOT
-# bitstream-capable, so hardware builds re-synthesize the XXV IP fresh
-# (XXV_SYNTHESIZE_FRESH=1) under the Bought license below.  Set
-# XXV_SYNTHESIZE_FRESH=0 to reuse the reference DCP for license-free RTL
-# iteration (synth/impl only; the final write_bitstream will not be permitted).
+# --- Xilinx licensing for the 100G CMAC --------------------------------------
+# The cmac_usplus IP is licensed Design_Linking in Xilinx_new.lic.  Vivado
+# generates the managed OOC checkpoint fresh on every build under that license
+# (no reference-DCP restore, unlike the retired XXV flow).
 XILINX_BOUGHT_LICENSE ?= $(abspath $(ROOT)/../Xilinx_new.lic)
-XXV_SYNTHESIZE_FRESH ?= 1
-export XXV_SYNTHESIZE_FRESH
 ifneq ($(wildcard $(XILINX_BOUGHT_LICENSE)),)
 export XILINXD_LICENSE_FILE := $(XILINX_BOUGHT_LICENSE)$(if $(XILINXD_LICENSE_FILE),:$(XILINXD_LICENSE_FILE),)
 endif
@@ -114,7 +109,6 @@ help:
 	@echo "  FW_WORKSPACE=$(ROOT)/$(TARGET_FIRMWARE_WORKSPACE)"
 	@echo "  TARGET=$(TARGET) (allowed: $(ALLOWED_TARGETS))"
 	@echo "  REFERENCE_MHZ=$(REFERENCE_MHZ) (allowed: 10 or 250)"
-	@echo "  XXV_SYNTHESIZE_FRESH=$(XXV_SYNTHESIZE_FRESH) (1=fresh XXV synth under the Bought license; needed for write_bitstream)"
 	@echo "  XILINXD_LICENSE_FILE=$(XILINXD_LICENSE_FILE)"
 	@echo "  ARTIFACT_DIR=$(ARTIFACT_DIR)"
 	@echo "  PROGRAM=cd firmware && TARGET=$(TARGET) ./build.sh program"

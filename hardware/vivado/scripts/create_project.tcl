@@ -3,7 +3,7 @@
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source "${script_path}/target_config.tcl"
-source "${script_path}/reference_xxv_dcp.tcl"
+
 source "${script_path}/build_options.tcl"
 source "${script_path}/build_identity.tcl"
 
@@ -235,50 +235,75 @@ if {[file exists ${src_dir}]} {
     }
 }
 
-# Add reference 10G UDP/XXV Ethernet RTL for the custom XCZU47DR data path.
+# Add the UDP/IP/ARP RTL for the custom XCZU47DR data path (64-bit stack).
 set udp_src_dir "${src_dir}/udp"
 if {!$is_bandwidth_target && [file exists ${udp_src_dir}]} {
-    puts "INFO: Adding 10G UDP RTL source files from ${udp_src_dir}"
+    puts "INFO: Adding UDP stack RTL source files from ${udp_src_dir}"
     set udp_rtl_files [glob -nocomplain ${udp_src_dir}/*.v ${udp_src_dir}/*.sv ${udp_src_dir}/*.vhd]
     if {[llength $udp_rtl_files] > 0} {
         add_files -norecurse $udp_rtl_files
-        puts "INFO: Added [llength $udp_rtl_files] 10G UDP RTL source files"
+        puts "INFO: Added [llength $udp_rtl_files] UDP stack RTL source files"
     } else {
-        puts "WARN: No 10G UDP RTL files found in ${udp_src_dir}"
+        puts "WARN: No UDP stack RTL files found in ${udp_src_dir}"
     }
 }
 
-# Import the reference XXV Ethernet IP used by udp_10G.
-set xxv_src_dir "${vivado_dir}/ip/xxv_ethernet_1"
-set xxv_local_dir "${generated_ip_dir}/xxv_ethernet_1"
-if {[file exists ${xxv_src_dir}] && ![file exists ${xxv_local_dir}]} {
-    file copy -force ${xxv_src_dir} ${xxv_local_dir}
-}
-set xxv_xci "${xxv_local_dir}/xxv_ethernet.xci"
-if {!$is_bandwidth_target && [file exists ${xxv_xci}]} {
-    puts "INFO: Adding reference XXV Ethernet IP: ${xxv_xci}"
-    # Keep the XCI in the normal project source set. Vivado can then carry
-    # the managed IP identity, constraints, and OOC checkpoint into the
-    # parent synthesis/implementation flow. A hand-injected
-    # read_checkpoint -cell is deliberately not used: it loses the XCI
-    # provenance and creates Vivado 12-5469/Project 1-840 critical warnings.
-    read_ip ${xxv_xci}
-    set xxv_ip [get_ips -quiet xxv_ethernet]
-    if {[llength ${xxv_ip}] != 1} {
-        puts "ERROR: Managed XXV Ethernet IP was not imported"
-        exit 1
+# Add the 100G CMAC wrapper / adapter RTL (udp_100G top module).
+set udp100g_src_dir "${src_dir}/udp100g"
+if {!$is_bandwidth_target && [file exists ${udp100g_src_dir}]} {
+    puts "INFO: Adding 100G UDP RTL source files from ${udp100g_src_dir}"
+    set udp100g_rtl_files [glob -nocomplain ${udp100g_src_dir}/*.v ${udp100g_src_dir}/*.sv ${udp100g_src_dir}/*.vhd]
+    if {[llength $udp100g_rtl_files] > 0} {
+        add_files -norecurse $udp100g_rtl_files
+        puts "INFO: Added [llength $udp100g_rtl_files] 100G UDP RTL source files"
+    } else {
+        puts "WARN: No 100G UDP RTL files found in ${udp100g_src_dir}"
     }
-    generate_target all ${xxv_ip}
-    set xxv_xci_file [get_files -quiet -all ${xxv_xci}]
-    if {[llength ${xxv_xci_file}] == 1} {
-        set_property USED_IN_SYNTHESIS true ${xxv_xci_file}
-        set_property USED_IN_IMPLEMENTATION true ${xxv_xci_file}
-        set_property generate_synth_checkpoint true ${xxv_xci_file}
-    }
-    puts "INFO: XXV Ethernet XCI is managed by the parent project"
-} else {
-    puts "WARN: Reference XXV Ethernet IP not found: ${xxv_xci}"
 }
+
+# Create the 100G CMAC IP used by udp_100G (CAUI-4, RS-FEC, GT quad
+# X0Y4~X0Y7 = QSFP28 BANK 128).  Generated fresh under the permanent
+# Design_Linking license with the same configuration as the reference
+# 100G example (cmac_usplus 3.1).
+set cmac_ip_dir "${generated_ip_dir}"
+file mkdir ${cmac_ip_dir}
+create_ip -force -name cmac_usplus -vendor xilinx.com -library ip -version 3.1 \
+    -module_name cmac_usplus_0 -dir ${cmac_ip_dir}
+set cmac_ip [get_ips cmac_usplus_0]
+set_property -dict [list \
+    CONFIG.CMAC_CAUI4_MODE 1 \
+    CONFIG.NUM_LANES {4x25} \
+    CONFIG.GT_TYPE GTY \
+    CONFIG.GT_REF_CLK_FREQ 156.25 \
+    CONFIG.GT_DRP_CLK 100.00 \
+    CONFIG.OPERATING_MODE Duplex \
+    CONFIG.CLOCKING_MODE Asynchronous \
+    CONFIG.USER_INTERFACE AXIS \
+    CONFIG.TX_FRAME_CRC_CHECKING {Enable FCS Insertion} \
+    CONFIG.RX_FRAME_CRC_CHECKING {Enable FCS Stripping} \
+    CONFIG.RX_MAX_PACKET_LEN 9600 \
+    CONFIG.RX_MIN_PACKET_LEN 64 \
+    CONFIG.TX_FLOW_CONTROL 1 \
+    CONFIG.RX_FLOW_CONTROL 1 \
+    CONFIG.TX_IPG_VALUE 12 \
+    CONFIG.INCLUDE_RS_FEC 1 \
+    CONFIG.INCLUDE_AUTO_NEG_LT_LOGIC 0 \
+    CONFIG.INCLUDE_AN_LT_TX_TRAINER 0 \
+    CONFIG.ENABLE_AXI_INTERFACE 0 \
+    CONFIG.GT_GROUP_SELECT {X0Y4~X0Y7} \
+    CONFIG.ENABLE_PIPELINE_REG 0 \
+    CONFIG.PLL_TYPE QPLL0 \
+    CONFIG.ETHERNET_BOARD_INTERFACE Custom \
+    CONFIG.DIFFCLK_BOARD_INTERFACE Custom \
+] ${cmac_ip}
+set cmac_ip_file [get_files -quiet "${cmac_ip_dir}/cmac_usplus_0/cmac_usplus_0.xci"]
+if {[llength ${cmac_ip_file}] == 0} {
+    puts "ERROR: CMAC IP XCI not found after create_ip"
+    exit 1
+}
+set_property generate_synth_checkpoint true ${cmac_ip_file}
+generate_target all ${cmac_ip_file}
+puts "INFO: CMAC IP created and generated for the parent project"
 
 set fifo64_src_dir "${vivado_dir}/ip/fifo64_2"
 set fifo64_local_dir "${generated_ip_dir}/fifo64_2"
@@ -450,13 +475,9 @@ if {$target_generics ne ""} {
 }
 update_compile_order -fileset sources_1
 
-# The generated XXV OOC view in this Vivado installation is a
-# Design_Linking-only encrypted cellview and cannot be used by write_bitstream.
-# Keep the XCI as the managed project/IP contract, but restore the known
-# bitstream-capable checkpoint into that managed OOC location before any parent
-# synthesis or implementation run can consume it.  This is intentionally not a
-# cell-level read_checkpoint injection.
-prepare_reference_xxv_ooc_run ${vivado_dir} ${proj_dir} ${target} ${proj_name}
+# The CMAC IP generates fresh under the permanent Design_Linking license;
+# no reference-DCP restore is needed (unlike the retired XXV flow).
+puts "INFO: CMAC IP ready (fresh generation under Design_Linking license)"
 
 puts "INFO: Project creation complete"
 puts "INFO: Project file: ${proj_dir}/${proj_name}.xpr"

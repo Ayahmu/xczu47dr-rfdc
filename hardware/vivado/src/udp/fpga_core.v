@@ -65,7 +65,7 @@ module fpga_core #
     
     
     /*
-     * Ethernet: SFP+
+      * Ethernet: QSFP28 (100G CMAC)
      */
     input  wire                       sfp0_tx_clk,
     input  wire                       sfp0_tx_rst,
@@ -226,7 +226,7 @@ wire [31:0] local_ip    = network_local_ip;
 wire [31:0] gateway_ip  = (network_gateway_ip == 32'd0) ? network_local_ip : network_gateway_ip;
 wire [31:0] subnet_mask = network_subnet_mask;
 // Restart only UDP/IP/ARP/control state after changing the network identity.
-// Keep the 10G GT/MAC physical link on the external reset path.
+// Keep the 100G CMAC physical link on the external reset path.
 wire udp_logic_rst = rst | network_restart_pulse;
 
 // IP ports not used
