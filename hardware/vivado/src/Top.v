@@ -1025,6 +1025,19 @@ module Top #(
   assign M_AXI_WAVE_wlast   = wave_wlast_new;
   assign wave_wready_new    = M_AXI_WAVE_wready;
   assign M_AXI_WAVE_bready  = wave_bready_new;
+  // waveform_upload_writer emits single-beat 256-bit writes (one 32-byte
+  // DAC beat per AXI transaction).  The writer drives addr/valid/data but not
+  // the burst qualifiers; leaving them undriven presents Z to the DDR
+  // smartconnect, which answers DECERR and the writer reports AXI_ERROR.
+  // Pin them to the same contract the retired udp_waveform_ddr_writer used:
+  // INCR burst, single transfer, 32-byte (256-bit) beats.
+  assign M_AXI_WAVE_awburst = 2'b01;
+  assign M_AXI_WAVE_awcache = 4'b0011;
+  assign M_AXI_WAVE_awlen   = 8'd0;
+  assign M_AXI_WAVE_awlock  = 1'b0;
+  assign M_AXI_WAVE_awprot  = 3'b000;
+  assign M_AXI_WAVE_awqos   = 4'd0;
+  assign M_AXI_WAVE_awsize  = 3'b101;
 
   waveform_upload_writer #(.DDR_ADDR_BASE(EXT_DDR_ADDR_BASE)) waveform_upload_writer_i (
       .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn),
