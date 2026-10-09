@@ -132,10 +132,21 @@ if {[file exists ${timing_rpt}]} {
 # +0.107 ns.  Nothing downstream checked it, which meant a bitstream that misses
 # timing could be written into artifacts/ and flashed without anyone noticing.
 # Abort instead, unless TIMING_GATE=0 is set in the environment.
+#
+# The published bitstream comes from the post-route phys-opt checkpoint, so the
+# gate must judge THAT report.  The pre-phys-opt routed report can still show
+# "not met" (e.g. WNS=-0.044 ns) even when post-route phys opt has repaired the
+# remaining paths to WNS=+0.002 ns - gating on the intermediate report rejects
+# an artifact that actually meets timing.
 set timing_gate [build_option_get TIMING_GATE 1]
+set physopt_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_postroute_physopted.rpt"
 set routed_rpt "${impl_dir}/TopCustomXczu47dr_timing_summary_routed.rpt"
-if {${timing_gate} && [file exists ${routed_rpt}]} {
-    set fh [open ${routed_rpt} r]
+set gate_rpt ${physopt_rpt}
+if {![file exists ${gate_rpt}]} {
+    set gate_rpt ${routed_rpt}
+}
+if {${timing_gate} && [file exists ${gate_rpt}]} {
+    set fh [open ${gate_rpt} r]
     set body [read ${fh}]
     close ${fh}
     if {[regexp {Timing constraints are not met} ${body}]} {
