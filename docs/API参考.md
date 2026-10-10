@@ -162,7 +162,7 @@ record, info = make_burst_record(
 - `make_iq_gaussian_sine_interleaved(..., duration_s, *, sample_count=None, fwhm_s=None, q_sign=-1, hls_xy_drag=False, drag_alpha=0.5, drag_delta_hz=-200e6)`：生成高斯包络 IQ，可选 DRAG 修正。
 - `place_interleaved_iq_in_record(active_wave, *, delay_s, record_duration_s, sample_rate_hz)`：将有效波形放入带前置零和尾部零的记录。
 - `make_burst_record(active_wave, *, first_delay_ns, interval_ns, sample_rate_hz=400e6)`：生成带零填充间隔的波形记录和描述字典；它不创建板端播放指令。
-- `ezq_wave_to_interleaved_int16(wave, wave_format="packed_iq")`：完成输入格式转换。
+- `ezq_wave_to_interleaved_int16(wave, wave_format="packed_iq", *, copy=True)`：完成输入格式转换；`copy=False` 时已是线上顺序的数据直接返回视图。
 
 ### 上传和播放配置
 
@@ -199,7 +199,7 @@ descriptor 和错误。`play()`、`pause()`、`stop()`、`abort()` 被板端拒�
 `DeviceStatusError`（例如在 `ERROR` 状态下 `PLAY`），不会静默返回。
 
 `upload_waveforms()` 是上述流程的便捷封装，会把输入通道补零并打包为统一 interleaved
-图像，然后执行 BEGIN、DATA 和 COMMIT。`loop_count` 表示包含首轮在内的总播放次数；
+图像，然后执行 BEGIN、DATA 和 COMMIT（大图像自动改走下文的批量通路）。`loop_count` 表示包含首轮在内的总播放次数；
 它不接受 instruction sequence 或播放延迟参数。各轮之间无缝衔接：DDR 读取器把所有轮次
 连续送入 FIFO，DAC 输出在轮次边界不插入空闲拍；TRIG_1 在每一轮的第一拍各输出一次。
 单轮过短时读取器的 DDR 往返延迟无法被流水掩盖，播放会以 underflow 进入 `ERROR`。
@@ -207,6 +207,58 @@ descriptor 和错误。`play()`、`pause()`、`stop()`、`abort()` 被板端拒�
 无 underflow。整条流（单轮拍数 × `loop_count`）不超过 1024 拍时会在开始前整体预取，
 不受此限制。驱动在 BEGIN 前拒绝单轮少于 3 拍且整条流超过 1024 拍的组合
 （`ParameterRangeError`）；需要更短的周期时，把记录重复到至少 3 拍再循环。
+
+### 批量上传（100G 满速）
+
+`DATA` 方式每包 1024 bytes、发一包等一包应答，实测只有约 12.9 MB/s。大波形走批量通路：
+图像以不带逐包应答的 UDP 数据报发往“控制端口 + 1”，板卡在 100G MAC 之后直接以
+512-bit 位宽写入 DDR4。
+
+```python
+result = board.upload_waveforms(channel_waves, wave_formats=formats)   # transport="auto"
+print(result["transport"], result["resent_chunks"])
+```
+
+- `upload_waveforms(..., transport="auto" | "bulk" | "packet", bulk_threshold_bytes=1 << 20)`：
+  `"auto"` 在图像不小于 1 MiB 且 bitstream 带批量通路时走批量通路，否则走 `DATA`；旧
+  bitstream 会拒绝批量 `BEGIN`，驱动自动退回 `DATA`。返回值的 `transport` 说明实际走了哪条。
+- `upload_image_bulk(image, *, session, channel_mask, total_beats, loop_count=1, payload_bytes=None, max_resends_per_chunk=8, progress_callback=None)`：
+  上传一份已经打包好的图像（任意 bytes-like 对象）或一个 `LaneImage`，完成后 `COMMIT`。
+- `dr47.waveforms.LaneImage(channel_waves, *, samples=0)`：描述“8 个通道数组打包后的图像”
+  而不真的生成它；`len()` 是图像字节数，`pack(start, end)` 生成任意一段。批量通路直接从
+  各通道数组边取数边发送，多 GB 的波形不需要第二份内存拷贝。
+- `bulk_status(session=...)`、`bulk_chunk_reset(session=..., chunk=..., epoch=...)`：
+  低层查询与补发控制，一般不需要直接调用。
+
+可靠性：批量数据报没有逐包校验和应答，完整性依靠以太网 FCS 和 RS-FEC（坏帧整帧丢弃）。
+板卡按 1 MiB 分块统计收到的字数；发送结束后驱动查询第一个不完整的分块，给它换一个新的
+epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的旧 epoch 数据报不会被计数，
+因此重发不会把分块误判为完整。同一分块重发 `max_resends_per_chunk` 次仍不完整时抛出
+`DeviceStatusError`，错误信息带链路收包数和丢包数。
+
+板上实测（MTU 1500，每个数据报 1024 bytes 有效载荷，主机 4 个发送线程）：
+
+| 项目 | 结果 |
+|---|---|
+| `upload_waveforms()`，8 通道 `int16` 数据，整片 DDR4（8191 MiB） | 0.75 s，91.6 Gb/s（约 11.5 GB/s），无丢包、无补发 |
+| 线路占用 | 100 Gb/s（有效载荷占每帧 1112 bytes 线路开销中的 1024 bytes） |
+| 发送线程数（8 通道数组边取数边发） | 1 线程约 35 Gb/s，2 线程约 67 Gb/s，3 线程 78–88 Gb/s，4 线程及以上跑满（驱动默认 4 线程） |
+| 发送线程数（已打包好的图像） | 1 线程约 47 Gb/s，2 线程及以上跑满 |
+| 数据正确性 | 64 MiB 全量、8 GiB 抽样 3398 处经 JTAG 从 DDR4 读回逐字节一致；人为丢包后补发的图像同样一致 |
+| 播放 | 8191 MiB 上传后完整播放 33 550 336 拍，无 underflow；示波器上与 `DATA` 方式上传的同一记录输出一致 |
+
+使用条件和限制：
+
+- 主机为 Linux，网卡支持 UDP 分段卸载（GSO）；驱动首次使用时用系统 C 编译器把
+  `_fastsend.c` 编译到 `~/.cache/dr47/`。没有编译器或设置 `DR47_FASTSEND=0` 时退回纯
+  Python 发送（约 9 Gb/s）。
+- 输入为 `interleaved_iq` 或 `packed_iq` 的 `int16`/`int32` 数组时不做额外拷贝；其他格式
+  先由 numpy 转换，转换耗时计入上传时间。
+- 所有发送线程共用一个 socket。每线程一个 socket 时网卡会把各队列的包逐帧交错，板卡每
+  写一帧都要切换 DDR4 行，线速下丢帧约两成（靠补发仍能完成，但总耗时更长）。自行实现
+  发送端时必须保证相邻数据报的地址基本连续。
+- 接口 MTU 为 9000 时驱动自动改用 8192 bytes 的数据报；这一档只做过仿真，未上板验证。
+- 批量会话期间 `DATA` 命令被拒绝；`COMMIT` 在图像不完整时返回 `INCOMPLETE`。
 
 ## 外部 Trigger
 

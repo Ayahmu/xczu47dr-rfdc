@@ -188,6 +188,48 @@ class RtlSimulationTests(unittest.TestCase):
             "tb_ethernet_adapter_100g_rx PASS",
         )
 
+    def test_wave_bulk_rx_classifier_splits_bulk_frames(self):
+        self.run_sim(
+            "tb_wave_bulk_rx_classifier",
+            [ROOT / "hardware/vivado/src/udp100g/wave_bulk_rx_classifier.v",
+             ROOT / "tests/tb_wave_bulk_rx_classifier.sv"],
+            "tb_wave_bulk_rx_classifier PASS",
+        )
+
+    def test_wave_bulk_ddr_writer_accounts_and_recovers(self):
+        self.run_sim(
+            "tb_wave_bulk_ddr_writer",
+            [ROOT / "hardware/vivado/src/wave_bulk_ddr_writer.v",
+             ROOT / "tests/tb_wave_bulk_ddr_writer.sv"],
+            "tb_wave_bulk_ddr_writer PASS",
+        )
+
+    def test_wave_bulk_rx_path_delivers_whole_frames_or_counts_drops(self):
+        self.run_sim(
+            "tb_wave_bulk_rx_path",
+            [ROOT / "hardware/vivado/src/udp/axis_async_fifo.v",
+             ROOT / "hardware/vivado/src/udp100g/wave_bulk_rx_classifier.v",
+             ROOT / "hardware/vivado/src/udp100g/wave_bulk_rx_path.v",
+             ROOT / "tests/tb_wave_bulk_rx_path.sv"],
+            "tb_wave_bulk_rx_path PASS",
+        )
+
+    def test_waveform_upload_writer_bulk_session_control(self):
+        self.run_sim(
+            "tb_waveform_upload_writer_bulk",
+            [ROOT / "hardware/vivado/src/waveform_upload_writer.v",
+             ROOT / "tests/tb_waveform_upload_writer_bulk.sv"],
+            "tb_waveform_upload_writer_bulk PASS",
+        )
+
+    def test_waveform_response_serializer_bulk_queries(self):
+        self.run_sim(
+            "tb_waveform_response_serializer_bulk",
+            [ROOT / "hardware/vivado/src/waveform_response_serializer.v",
+             ROOT / "tests/tb_waveform_response_serializer_bulk.sv"],
+            "tb_waveform_response_serializer_bulk PASS",
+        )
+
     def run_sim(self, top: str, sources: list[Path], expected: str) -> None:
         with tempfile.TemporaryDirectory(prefix=f"{top}-") as temp_dir:
             workdir = Path(temp_dir)

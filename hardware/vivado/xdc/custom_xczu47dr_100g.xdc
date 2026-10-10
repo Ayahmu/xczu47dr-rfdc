@@ -60,3 +60,23 @@ set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get
 
 # The 512<->64 width adapter itself runs entirely in clk_axis (single clock);
 # it has no internal CDC synchronizers and needs no false paths of its own.
+
+# Bulk waveform RX path (wave_bulk_rx_path): CMAC RX clock <-> DDR/UI clock.
+# Only the first flop of each synchronizer is listed, by name, so same-domain
+# paths into the other FIFO registers stay timed.
+#   - network identity (quasi-static) into the CMAC clock
+#   - counter snapshot handshake toggles
+#   - the frame FIFO's gray pointers, commit pointer, update toggles and resets
+set bulk_rx_sync_cells [get_cells -quiet -hierarchical -regexp \
+    {.*udp_100g_i/bulk_rx_path_i/(cfg_sync1_reg|stat_req_sync1_reg|stat_ack_sync1_reg)_reg(\[[0-9]+\])?}]
+set bulk_fifo_sync_cells [get_cells -quiet -hierarchical -regexp \
+    {.*udp_100g_i/bulk_rx_path_i/bulk_fifo_i/(wr_ptr_gray_sync1|rd_ptr_gray_sync1|wr_ptr_update_sync1|wr_ptr_update_ack_sync1|wr_ptr_commit_sync|s_rst_sync2|m_rst_sync2)_reg_reg(\[[0-9]+\])?}]
+set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME == D} -of_objects $bulk_rx_sync_cells]
+set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME == D} -of_objects $bulk_fifo_sync_cells]
+# The FIFO's reset synchronizers take the other domain's reset on PRE.
+set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME == PRE} -of_objects \
+    [get_cells -quiet -hierarchical -regexp {.*udp_100g_i/bulk_rx_path_i/bulk_fifo_i/(s_rst_sync1|m_rst_sync1)_reg_reg}]]
+# The counter snapshot is held stable around the handshake; bound its skew.
+set_max_delay -quiet -datapath_only 3.000 \
+    -from [get_cells -quiet -hierarchical -regexp {.*udp_100g_i/bulk_rx_path_i/stat_hold_reg_reg\[[0-9]+\]}] \
+    -to [get_cells -quiet -hierarchical -regexp {.*udp_100g_i/bulk_rx_path_i/stat_(frames|dropped_full|dropped_bad)_reg\[[0-9]+\]}]

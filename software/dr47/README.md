@@ -64,5 +64,10 @@ board.stop(session=1)
 board.abort(session=1)      # 清除 descriptor/session，回到 IDLE
 ```
 
+不小于 1 MiB 的图像由 `upload_waveforms()` 自动改走批量通路：数据报不逐包应答，发往
+控制端口 + 1，板卡以 512-bit 位宽直接写 DDR4，丢失的 1 MiB 分块由驱动查询后补发。
+板上实测 8 通道整片 DDR4（8 GiB）0.75 s 传完，91.6 Gb/s。条件和限制见 API 接口参考
+的“批量上传”一节。
+
 `waveform_status()` 返回 session、descriptor、状态、错误码和首个错误 offset。
 外部窄 Trigger 只在 `WAIT_TRIGGER` 消费；其他状态的 Trigger 丢弃且不排队。

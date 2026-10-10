@@ -352,7 +352,7 @@ int Report_Custom_DAC_Status(const char *Stage)
 int Report_Custom_DAC_Clock_Status(const char *Stage)
 {
 	XRFdc *RFdcInstPtr = &RFdcInst;
-	XRFdc_IPStatus IpStatus;
+	XRFdc_IPStatus IpStatus = {0}; /* GetIPStatus never clears IsEnabled */
 	unsigned int Tile_Id;
 	unsigned int i;
 
@@ -691,7 +691,7 @@ int Reinitialize_RFDC_For_Sync(void)
 	int Tile_Id;
 	int Status;
 	XRFdc *RFdcInstPtr = &RFdcInst;
-	XRFdc_IPStatus ipStatus;
+	XRFdc_IPStatus ipStatus = {0}; /* GetIPStatus never clears IsEnabled */
 	u32 val;
 
 	xil_printf("SYNC alignment: reinitializing RFDC (master reset + DAC startup).\r\n");
@@ -1073,7 +1073,7 @@ int rfdcStartup(void)
 
 	int Tile_Id;
 	int Status;
-	XRFdc_IPStatus ipStatus;
+	XRFdc_IPStatus ipStatus = {0}; /* GetIPStatus never clears IsEnabled */
 	XRFdc *RFdcInstPtr = &RFdcInst;
 	u32 val;
 	//	u32 test;

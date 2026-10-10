@@ -22,6 +22,12 @@ module tb_waveform_upload_writer;
   wire [63:0] received_bytes,error_offset;wire [31:0] next_packet_seq,error_count;
   reg response_ready=1;
   wire [31:0] response_expected_crc,response_actual_crc;
+  // Bulk session side: idle in this bench (see tb_waveform_upload_writer_bulk).
+  wire bulk_enable,bulk_ctl_start;wire [1:0] bulk_ctl_cmd;wire [20:0] bulk_ctl_arg;
+  reg bulk_ctl_busy=0,bulk_complete=0,bulk_overrun=0,bulk_axi_error=0;
+  reg [13:0] bulk_complete_chunks=0;reg [31:0] bulk_first_incomplete=0;
+  reg [31:0] bulk_frames_ok=0,bulk_frames_rejected=0,bulk_frames_duplicate=0,bulk_frames_stale=0;
+  reg [31:0] bulk_rx_frames=0,bulk_rx_dropped_full=0,bulk_rx_dropped_bad=0;
   waveform_upload_writer #(.AXI_TIMEOUT_CYCLES(40)) dut(.*);
   integer cycles=0,writes=0,commits=0,begins=0,plays=0;
   reg aw_seen=0,w_seen=0,respond_b=1;reg [63:0] addr_q;reg [255:0] data_q;

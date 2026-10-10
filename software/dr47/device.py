@@ -55,6 +55,7 @@ from .protocol import (
     parse_rfresp2_packet,
     pack_wave_begin, pack_wave_data, pack_wave_commit, pack_wave_play,
     pack_wave_pause, pack_wave_stop, pack_wave_abort, pack_wave_status,
+    pack_wave_bulk_status, pack_wave_bulk_chunk_reset,
     parse_wave_response, WAVE_OP_BEGIN, WAVE_OP_DATA, WAVE_OP_COMMIT,
     WAVE_OP_PLAY, WAVE_OP_PAUSE, WAVE_OP_STOP, WAVE_OP_ABORT, WAVE_OP_STATUS,
     WAVEFORM_STATE_NAMES, WAVEFORM_STATE_ID, WAVEFORM_STATE_UPLOAD,
@@ -67,7 +68,7 @@ from .waveforms import (
     DEFAULT_DDR_LAYOUT,
     DDR_LAYOUT_INTERLEAVED_512B,
     ezq_wave_to_interleaved_int16,
-    pack_interleaved_512b_waveforms,
+    LaneImage,
 )
 
 
@@ -151,6 +152,10 @@ class Dr47Device:
         self._channel_mask = 0
         self._mask_explicit = False
         self._uploaded_channels: set[int] = set()
+        # None until a bulk BEGIN has been tried against this board.
+        self._bulk_supported: bool | None = None
+        self._bulk_sender = None
+        self._bulk_settle_interval_s = 0.0002
         self._pending_nco = {channel: 0.0 for channel in range(1, 9)}
         self._pending_zone = {channel: 1 for channel in range(1, 9)}
         self._pending_phase = {channel: 0.0 for channel in range(1, 9)}
@@ -728,6 +733,8 @@ class Dr47Device:
         channel_mask: int | None = None,
         loop_count: int = 1,
         progress_callback: Callable[[int, int], object] | None = None,
+        transport: str = "auto",
+        bulk_threshold_bytes: int = WAVE_BULK_AUTO_THRESHOLD_BYTES,
         **_kwargs: Any,
     ) -> dict[str, Any]:
         """Upload one uniform eight-lane image and COMMIT it.
@@ -735,7 +742,15 @@ class Dr47Device:
         The new wire contract has no instruction stream: channel data is packed
         once in interleaved 512-bit beats, then BEGIN/DATA/COMMIT creates the
         descriptor and starts hardware prefetch automatically.
+
+        ``transport`` selects how the image travels: ``"packet"`` sends
+        acknowledged 1024-byte DATA packets, ``"bulk"`` uses the 512-bit bulk
+        path (see :meth:`upload_image_bulk`), and ``"auto"`` uses the bulk path
+        for images of at least ``bulk_threshold_bytes`` when the bitstream has
+        it.  The result's ``"transport"`` key says which one was used.
         """
+        if transport not in ("auto", "bulk", "packet"):
+            raise ParameterRangeError("transport must be 'auto', 'bulk' or 'packet'")
         if not channel_waves:
             raise ParameterRangeError("channel_waves must not be empty")
         if channel_sequences:
@@ -746,17 +761,41 @@ class Dr47Device:
             if not 1 <= physical <= 8:
                 raise ParameterRangeError("physical channel must be in 1..8")
             fmt = (wave_formats or {}).get(physical) or _infer_wave_format(wave, physical)
-            normalized[physical] = ezq_wave_to_interleaved_int16(wave, fmt)
+            # Read once and never modified here, so no private copy is needed.
+            normalized[physical] = ezq_wave_to_interleaved_int16(wave, fmt, copy=False)
         mask = _wave_uint(channel_mask if channel_mask is not None else
                           sum(1 << (ch - 1) for ch in normalized), 8, "channel_mask", nonzero=True)
-        normalized = {ch: wave if mask & (1 << (ch - 1)) else np.zeros_like(wave)
-                      for ch, wave in normalized.items()}
-        image, sample_count = pack_interleaved_512b_waveforms(normalized)
-        if not image:
+        # A channel that is masked off plays zeros but still decides the length.
+        lanes = LaneImage({ch: wave for ch, wave in normalized.items() if mask & (1 << (ch - 1))},
+                          samples=max(int(wave.size) for wave in normalized.values()))
+        sample_count = lanes.samples
+        if not len(lanes):
             raise ParameterRangeError("waveform image must contain at least one beat")
         mask = int(channel_mask) if channel_mask is not None else sum(1 << (ch - 1) for ch in normalized)
         session = self._run_id
         self._run_id = (session + 1) & 0xFFFFFFFF or 1
+        common = {
+            "session": session, "channels": tuple(sorted(normalized)),
+            "channel_mask": mask, "bytes": len(lanes), "bytes_per_channel": sample_count * 2,
+            "total_beats": len(lanes) // WAVE_DAC_FRAME_BYTES, "loop_count": int(loop_count),
+        }
+        use_bulk = transport == "bulk" or (
+            transport == "auto" and len(lanes) >= int(bulk_threshold_bytes) and self._bulk_supported is not False)
+        if use_bulk:
+            try:
+                bulk = self.upload_image_bulk(lanes, session=session, channel_mask=mask,
+                                              total_beats=common["total_beats"], loop_count=loop_count,
+                                              progress_callback=progress_callback)
+            except DeviceStatusError as exc:
+                # A bitstream without the bulk path refuses the bulk BEGIN and
+                # opens no session, so the packet path can simply take over.
+                if (transport == "bulk" or exc.operation != "BEGIN" or
+                        exc.status != WAVE_STATUS_BAD_REQUEST):
+                    raise
+                self._bulk_supported = False
+            else:
+                return {**common, **bulk}
+        image = lanes.pack()
         packet_bytes = 1024
         total_packets = (len(image) + packet_bytes - 1) // packet_bytes
         if progress_callback:
@@ -768,15 +807,130 @@ class Dr47Device:
         for packet_seq, offset in enumerate(range(0, len(image), packet_bytes)):
             self._check_wave_response(self.data_waveform(
                 session=session, packet_seq=packet_seq, byte_offset=offset,
-                payload=image[offset:offset + packet_bytes]), "DATA")
+                payload=image[offset:offset + packet_bytes].tobytes()), "DATA")
             if progress_callback:
                 progress_callback(packet_seq + 1, total_packets)
         committed = self._check_wave_response(self.commit_waveform(session=session), "COMMIT")
         return {
-            "session": session, "channels": tuple(sorted(normalized)),
-            "channel_mask": mask, "bytes": len(image), "bytes_per_channel": sample_count * 2,
-            "total_beats": len(image) // WAVE_DAC_FRAME_BYTES,
-            "loop_count": int(loop_count), "packet_count": total_packets,
+            **common, "packet_count": total_packets, "transport": "packet",
+            "state": committed.get("state"), "descriptor": committed.get("descriptor"),
+        }
+
+    # ------------------------------------------------------------------ bulk upload
+    def bulk_status(self, *, session: int):
+        """Ask the board how much of a bulk session has arrived (runs a chunk scan)."""
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(pack_wave_bulk_status(session=session, seq=seq), WAVE_OP_BULK_STATUS, seq)
+
+    def bulk_chunk_reset(self, *, session: int, chunk: int, epoch: int):
+        """Zero one 1 MiB chunk's count and move it to ``epoch`` before resending it."""
+        self._require_connected()
+        seq = self._next_sequence()
+        return self._wave_request(
+            pack_wave_bulk_chunk_reset(session=session, chunk=chunk, epoch=epoch, seq=seq),
+            WAVE_OP_BULK_CHUNK_RESET, seq)
+
+    def _bulk_payload_bytes(self) -> int:
+        from .bulk import payload_bytes_for_interface
+        return payload_bytes_for_interface(self.udp_interface)
+
+    def _bulk_send(self, image, start: int, end: int, *, session: int, epoch: int, payload_bytes: int) -> int:
+        """Send image[start:end] as bulk datagrams; returns the datagram count."""
+        from .bulk import BulkSender
+        if self._bulk_sender is None:
+            self._bulk_sender = BulkSender(self.ip, self.port + WAVE_BULK_PORT_OFFSET,
+                                           udp_interface=self.udp_interface, udp_source_ip=self.udp_source_ip)
+        return self._bulk_sender.send(image, start, end, session=session, epoch=epoch,
+                                      payload_bytes=payload_bytes)
+
+    def _bulk_settle(self, session: int) -> Mapping:
+        """Poll until the image is complete or no more datagrams are arriving."""
+        previous = None
+        while True:
+            status = self._check_wave_response(self.bulk_status(session=session), "BULK_STATUS")
+            if status["bulk_complete"] or status["bulk_rx_frames"] == previous:
+                return status
+            previous = status["bulk_rx_frames"]
+            if self._bulk_settle_interval_s:
+                time.sleep(self._bulk_settle_interval_s)
+
+    def upload_image_bulk(
+        self,
+        image,
+        *,
+        session: int,
+        channel_mask: int,
+        total_beats: int,
+        loop_count: int = 1,
+        payload_bytes: int | None = None,
+        max_resends_per_chunk: int = 8,
+        progress_callback: Callable[[int, int], object] | None = None,
+    ) -> dict[str, Any]:
+        """Upload an interleaved DDR image over the 512-bit bulk path and COMMIT it.
+
+        ``image`` is the packed image (bytes-like) or a
+        :class:`~dr47.waveforms.LaneImage` over the channel arrays.
+
+        The image is streamed without per-datagram acknowledgement to the
+        control port + 1.  The board counts the words received in every 1 MiB
+        chunk; afterwards the driver asks for the first short chunk, resets it
+        under a new epoch and sends that chunk again, until the image is whole.
+        Raises ``DeviceStatusError`` when the bitstream has no bulk path
+        (``operation == "BEGIN"``), on a DDR write error, or when a chunk is
+        still short after ``max_resends_per_chunk`` attempts.
+        """
+        self._require_connected()
+        view = image if isinstance(image, LaneImage) else memoryview(image).cast("B")
+        total = len(view)
+        if total == 0 or total != _wave_uint(total_beats, 32, "total_beats", nonzero=True) * WAVE_DAC_FRAME_BYTES:
+            raise ParameterRangeError("image length must equal total_beats * 8 * 32")
+        payload = self._bulk_payload_bytes() if payload_bytes is None else int(payload_bytes)
+        if payload < WAVE_BULK_WORD_BYTES or payload > WAVE_BULK_MAX_WORDS * WAVE_BULK_WORD_BYTES or payload & (payload - 1):
+            raise ParameterRangeError("payload_bytes must be a power of two in 64..8192")
+        total_chunks = (total + WAVE_BULK_CHUNK_BYTES - 1) // WAVE_BULK_CHUNK_BYTES
+        if progress_callback:
+            progress_callback(0, total_chunks)
+        self._check_wave_response(self.begin_waveform(
+            session=session, total_bytes=total, channel_mask=channel_mask, total_beats=total_beats,
+            loop_count=loop_count, layout=WAVE_LAYOUT_INTERLEAVED_512B_BULK), "BEGIN")
+        self._bulk_supported = True
+        # The board answers this only once the session is armed.
+        self._check_wave_response(self.bulk_status(session=session), "BULK_STATUS")
+        frames = self._bulk_send(view, 0, total, session=session, epoch=0, payload_bytes=payload)
+        epochs: dict[int, int] = {}
+        resent: list[int] = []
+        while True:
+            status = self._bulk_settle(session)
+            if status["bulk_axi_error"]:
+                raise DeviceStatusError("BULK_UPLOAD", WAVE_STATUS_AXI_ERROR, "DDR write error during bulk upload")
+            if progress_callback:
+                progress_callback(int(status["bulk_complete_chunks"]), total_chunks)
+            if status["bulk_complete"]:
+                break
+            chunk = status["bulk_first_incomplete_chunk"]
+            if chunk is None or chunk >= total_chunks:
+                raise ProtocolError("board reports an incomplete bulk image but no incomplete chunk")
+            epoch = epochs.get(chunk, 0) + 1
+            if epoch > int(max_resends_per_chunk):
+                raise DeviceStatusError(
+                    "BULK_UPLOAD", WAVE_STATUS_INCOMPLETE,
+                    f"bulk chunk {chunk} is still incomplete after {max_resends_per_chunk} resends "
+                    f"(link saw {status['bulk_rx_frames']} datagrams, dropped "
+                    f"{status['bulk_rx_dropped_full']} full / {status['bulk_rx_dropped_bad']} bad, "
+                    f"writer rejected {status['bulk_frames_rejected']})")
+            epochs[chunk] = epoch
+            self._check_wave_response(self.bulk_chunk_reset(session=session, chunk=chunk, epoch=epoch),
+                                      "BULK_CHUNK_RESET")
+            begin = chunk * WAVE_BULK_CHUNK_BYTES
+            frames += self._bulk_send(view, begin, min(begin + WAVE_BULK_CHUNK_BYTES, total),
+                                      session=session, epoch=epoch, payload_bytes=payload)
+            resent.append(chunk)
+        committed = self._check_wave_response(self.commit_waveform(session=session), "COMMIT")
+        return {
+            "transport": "bulk", "frames": frames, "payload_bytes": payload, "resent_chunks": resent,
+            "packet_count": frames, "rx_dropped_full": int(status["bulk_rx_dropped_full"]),
+            "rx_dropped_bad": int(status["bulk_rx_dropped_bad"]),
             "state": committed.get("state"), "descriptor": committed.get("descriptor"),
         }
 
@@ -887,6 +1041,9 @@ class Dr47Device:
             self._connected = False
             if self._owns_transport and self._transport is not None:
                 self._transport.close()
+            if self._bulk_sender is not None:
+                self._bulk_sender.close()
+                self._bulk_sender = None
             self._status = DeviceStatus(False, self.ip, self.port, PlaybackState.IDLE, self._capabilities, "closed")
 
     def __enter__(self):

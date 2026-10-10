@@ -33,6 +33,9 @@ from .protocol import (
     parse_rfctrl2_rfdc_config_response,
     WAVE_OP_BEGIN, WAVE_OP_DATA, WAVE_OP_COMMIT, WAVE_OP_PLAY, WAVE_OP_PAUSE,
     WAVE_OP_STOP, WAVE_OP_ABORT, WAVE_OP_STATUS, WAVE_STATUS_OK,
+    WAVE_OP_BULK_STATUS, WAVE_OP_BULK_CHUNK_RESET, WAVE_LAYOUT_INTERLEAVED_512B_BULK,
+    WAVE_BULK_CHUNK_BYTES, WAVE_BULK_HEADER_BYTES, WAVE_BULK_MAX_WORDS, WAVE_BULK_TAG,
+    WAVE_BULK_WORD_BYTES, pack_wave_bulk_frame,
     WAVE_STATUS_BAD_REQUEST, WAVE_STATUS_INCOMPLETE, WAVE_STATUS_SEQUENCE,
     WAVE_STATUS_OFFSET, WAVE_STATUS_CRC, WAVEFORM_STATE_ID, WAVEFORM_STATE_UPLOAD,
     WAVEFORM_STATE_READY, WAVEFORM_STATE_PREFETCH, WAVEFORM_STATE_WAIT_TRIGGER,
@@ -74,6 +77,18 @@ class SimulatedDr47Device(Dr47Device):
         self._wave_error_offset = 0
         self._wave_prefetch_complete = False
         self._wave_play_pending = False
+        # Bulk path model, mirroring wave_bulk_ddr_writer: per-chunk
+        # [epoch, words], with an "over" mark when a chunk received too much.
+        self.sim_bulk_supported = True
+        self._bulk_settle_interval_s = 0.0
+        self._bulk_mode = False
+        self._bulk_chunks: dict[int, list[int]] = {}
+        self._bulk_counters = dict.fromkeys(
+            ("frames_ok", "frames_rejected", "frames_duplicate", "frames_stale",
+             "rx_frames", "rx_dropped_full"), 0)
+        self._bulk_overrun = False
+        self._bulk_drop = None
+        self._bulk_resets: list[tuple[int, int]] = []
 
     def _make_status_payload(self) -> bytes:
         capabilities = (RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
@@ -232,6 +247,13 @@ class SimulatedDr47Device(Dr47Device):
                             total_beats=total_beats, loop_count=loop_count, layout=layout)
         except ParameterRangeError:
             return self._wave_response(WAVE_OP_BEGIN, status=WAVE_STATUS_BAD_REQUEST)
+        bulk = int(layout) == WAVE_LAYOUT_INTERLEAVED_512B_BULK
+        if bulk and not self.sim_bulk_supported:
+            return self._wave_response(WAVE_OP_BEGIN, status=WAVE_STATUS_BAD_REQUEST)
+        self._bulk_mode = bulk
+        self._bulk_chunks = {}
+        self._bulk_counters = dict.fromkeys(self._bulk_counters, 0)
+        self._bulk_overrun = False
         self._wave_session = int(session) & 0xFFFFFFFF
         self._wave_total_bytes = int(total_bytes)
         self._wave_total_beats = int(total_beats)
@@ -266,7 +288,7 @@ class SimulatedDr47Device(Dr47Device):
             return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_CRC,
                 next_expected_sequence=self._wave_next_packet, received_bytes=self._wave_received_bytes,
                 first_error_offset=byte_offset)
-        if session != self._wave_session or self._wave_state != WAVEFORM_STATE_UPLOAD:
+        if session != self._wave_session or self._wave_state != WAVEFORM_STATE_UPLOAD or self._bulk_mode:
             return self._wave_response(WAVE_OP_DATA, status=WAVE_STATUS_BAD_REQUEST)
         if packet_seq < self._wave_next_packet:
             if self._wave_fragments.get(packet_seq) != (byte_offset, len(raw), crc32(raw)):
@@ -296,13 +318,117 @@ class SimulatedDr47Device(Dr47Device):
             return self._wave_response(WAVE_OP_COMMIT)
         if session != self._wave_session or self._wave_state != WAVEFORM_STATE_UPLOAD:
             return self._wave_response(WAVE_OP_COMMIT, status=WAVE_STATUS_BAD_REQUEST)
-        if self._wave_received_bytes != self._wave_total_bytes:
+        if (not self._bulk_complete() if self._bulk_mode
+                else self._wave_received_bytes != self._wave_total_bytes):
             return self._wave_response(WAVE_OP_COMMIT, status=WAVE_STATUS_INCOMPLETE)
         self._wave_generation = (self._wave_generation + 1) & 0xFFFFFFFF or 1
         self._wave_descriptor = self._wave_generation
         self._wave_state = WAVEFORM_STATE_PREFETCH
         self._wave_prefetch_complete = False
         return self._wave_response(WAVE_OP_COMMIT)
+
+    # ------------------------------------------------------------------ bulk path
+    def _bulk_expected_words(self, chunk: int) -> int:
+        remaining = self._wave_total_bytes - chunk * WAVE_BULK_CHUNK_BYTES
+        return min(remaining, WAVE_BULK_CHUNK_BYTES) // WAVE_BULK_WORD_BYTES
+
+    def _bulk_total_chunks(self) -> int:
+        return (self._wave_total_bytes + WAVE_BULK_CHUNK_BYTES - 1) // WAVE_BULK_CHUNK_BYTES
+
+    def _bulk_chunk_complete(self, chunk: int) -> bool:
+        return self._bulk_chunks.get(chunk, [0, 0])[1] == self._bulk_expected_words(chunk)
+
+    def _bulk_complete(self) -> bool:
+        return all(self._bulk_chunk_complete(c) for c in range(self._bulk_total_chunks()))
+
+    def _bulk_response(self, opcode: int, status: int = WAVE_STATUS_OK) -> dict[str, Any]:
+        chunks = range(self._bulk_total_chunks()) if self._bulk_mode else range(0)
+        incomplete = [c for c in chunks if not self._bulk_chunk_complete(c)]
+        committed = bool(self._wave_descriptor)
+        return self._wave_response(
+            opcode, status=status,
+            bulk_complete=self._bulk_mode and (committed or not incomplete),
+            bulk_overrun=self._bulk_overrun, bulk_axi_error=False,
+            bulk_complete_chunks=len(chunks) - len(incomplete),
+            bulk_first_incomplete_chunk=incomplete[0] if incomplete else None,
+            bulk_rx_dropped_bad=0, **{f"bulk_{k}": v for k, v in self._bulk_counters.items()})
+
+    def bulk_status(self, *, session: int):
+        if not self._bulk_mode or session != self._wave_session:
+            return self._bulk_response(WAVE_OP_BULK_STATUS, WAVE_STATUS_BAD_REQUEST)
+        return self._bulk_response(WAVE_OP_BULK_STATUS)
+
+    def bulk_chunk_reset(self, *, session: int, chunk: int, epoch: int):
+        if (not self._bulk_mode or session != self._wave_session or
+                self._wave_state != WAVEFORM_STATE_UPLOAD):
+            return self._bulk_response(WAVE_OP_BULK_CHUNK_RESET, WAVE_STATUS_BAD_REQUEST)
+        self._bulk_chunks[int(chunk)] = [int(epoch) & 0xFF, 0]
+        self._bulk_resets.append((int(chunk), int(epoch)))
+        return self._bulk_response(WAVE_OP_BULK_CHUNK_RESET)
+
+    def _bulk_payload_bytes(self) -> int:
+        return 1024
+
+    def _bulk_send(self, image, start: int, end: int, *, session: int, epoch: int, payload_bytes: int) -> int:
+        """The link: every datagram either reaches the writer or is dropped whole."""
+        lanes = hasattr(image, "pack")            # a LaneImage: build only the datagram being sent
+        view = None if lanes else memoryview(image).cast("B")
+        frames = 0
+        for offset in range(int(start), int(end), int(payload_bytes)):
+            last = min(offset + payload_bytes, end)
+            frame = pack_wave_bulk_frame(session=session, byte_offset=offset, epoch=epoch,
+                                         payload=image.pack(offset, last).tobytes() if lanes else view[offset:last])
+            frames += 1
+            self._bulk_counters["rx_frames"] += 1
+            drop = self._bulk_drop
+            lost = drop(offset, epoch) if callable(drop) else (drop is not None and (offset, epoch) in drop)
+            if lost:
+                self._bulk_counters["rx_dropped_full"] += 1
+            else:
+                self.sim_receive_bulk_frame(frame)
+        return frames
+
+    def sim_receive_bulk_frame(self, frame: bytes) -> None:
+        """Deliver one bulk datagram to the modelled DDR writer."""
+        raw = bytes(frame)
+        tag = raw[:4]
+        session, offset, words, epoch = struct.unpack_from("<IQHB", raw, 4)
+        payload = raw[WAVE_BULK_HEADER_BYTES:]
+        end = offset + words * WAVE_BULK_WORD_BYTES
+        chunk = offset // WAVE_BULK_CHUNK_BYTES
+        if (tag != WAVE_BULK_TAG or not self._bulk_mode or self._wave_state != WAVEFORM_STATE_UPLOAD or
+                session != self._wave_session or offset % WAVE_BULK_WORD_BYTES or
+                not 1 <= words <= WAVE_BULK_MAX_WORDS or len(payload) != words * WAVE_BULK_WORD_BYTES or
+                end > self._wave_total_bytes or (end - 1) // WAVE_BULK_CHUNK_BYTES != chunk):
+            self._bulk_counters["frames_rejected"] += 1
+            return
+        # The writer stores the words before it looks at the chunk epoch.
+        if len(self._wave_received) < end:
+            self._wave_received.extend(bytes(end - len(self._wave_received)))
+        self._wave_received[offset:end] = payload
+        entry = self._bulk_chunks.setdefault(chunk, [0, 0])
+        expected = self._bulk_expected_words(chunk)
+        if entry[0] != epoch:
+            self._bulk_counters["frames_stale"] += 1
+        elif entry[1] == expected:
+            self._bulk_counters["frames_duplicate"] += 1
+        else:
+            self._bulk_counters["frames_ok"] += 1
+            if entry[1] < 0 or entry[1] + words > expected:
+                entry[1] = -1                       # over: never equals expected until reset
+                self._bulk_overrun = True
+            else:
+                entry[1] += words
+
+    def sim_drop_bulk_frames(self, drop) -> None:
+        """Lose bulk datagrams: a set of (offset, epoch), or callable(offset, epoch) -> bool."""
+        self._bulk_drop = drop
+
+    def sim_bulk_chunk_resets(self) -> list[tuple[int, int]]:
+        return list(self._bulk_resets)
+
+    def sim_ddr_image(self) -> bytes:
+        return bytes(self._wave_received[:self._wave_total_bytes])
 
     def complete_prefetch(self):
         if self._wave_state == WAVEFORM_STATE_PREFETCH:

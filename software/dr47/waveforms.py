@@ -250,8 +250,14 @@ def _normalize_int16(samples: np.ndarray | list, sample_count: int | None = None
 def ezq_wave_to_interleaved_int16(
     wave: np.ndarray | list,
     wave_format: Literal["iq_matrix", "packed_iq", "interleaved_iq", "z", "real"] = "packed_iq",
+    *,
+    copy: bool = True,
 ) -> np.ndarray:
-    """Convert ez-Q IQ/real forms into little-endian ``I0,Q0,I1,Q1`` lanes."""
+    """Convert ez-Q IQ/real forms into little-endian ``I0,Q0,I1,Q1`` lanes.
+
+    With ``copy=False`` data that is already in wire order (``packed_iq``,
+    ``interleaved_iq``) is returned as a view of the caller's array.
+    """
     arr = np.asarray(wave)
     try:
         if wave_format in {"iq_matrix", "iq", "matrix"}:
@@ -272,12 +278,12 @@ def ezq_wave_to_interleaved_int16(
             return out
         if wave_format in {"packed_iq", "packed"}:
             packed = np.ascontiguousarray(arr, dtype="<i4").reshape(-1)
-            return packed.view("<i2").copy()
+            return packed.view("<i2").copy() if copy else packed.view("<i2")
         if wave_format in {"interleaved_iq", "interleaved", "iq_interleaved"}:
             interleaved = np.ascontiguousarray(arr, dtype="<i2").reshape(-1)
             if interleaved.size % 2:
                 raise WaveformFormatError("interleaved_iq wave must contain an even number of int16 lanes")
-            return interleaved.copy()
+            return interleaved.copy() if copy else interleaved
         if wave_format in {"z", "real", "z_real"}:
             real = np.ascontiguousarray(arr, dtype="<i2").reshape(-1)
             out = np.zeros(real.size * 2, dtype=np.int16)
@@ -334,29 +340,80 @@ def interleaved_channel_lane_addr(channel: int, base_addr: int = DDR_BASE) -> in
     return interleaved_ddr_addr(channel, 0, base_addr)
 
 
-def pack_interleaved_512b_waveforms(channel_waves: Mapping[int, np.ndarray | list]) -> tuple[bytes, int]:
-    """Pack eight channel-local streams into 512-bit ``CH1..CH8`` lanes."""
+_LANE_SAMPLES = DDR_INTERLEAVED_LANE_BYTES // 2      # int16 values of one channel in one DDR word
+
+
+class LaneImage:
+    """The 512-bit DDR image of up to eight channel streams, not yet built.
+
+    One 64-byte DDR word holds an 8-byte lane per channel, CH1 first; a lane
+    is four little-endian int16 values of that channel.  ``len()`` is the
+    image size in bytes and :meth:`pack` builds any part of it.  The bulk
+    sender gathers the lanes from the channel arrays while it sends, so a
+    multi-gigabyte upload never holds a second copy of the data.
+
+    ``samples`` pads the image to at least that many int16 values per channel
+    (a channel that is masked off still decides the length).
+    """
+
+    def __init__(self, channel_waves: Mapping[int, np.ndarray | list], *, samples: int = 0) -> None:
+        self.lanes: list[np.ndarray | None] = [None] * DDR_INTERLEAVED_CHANNELS
+        longest = int(samples)
+        for channel, wave in channel_waves.items():
+            if wave is None:
+                continue
+            if not 1 <= int(channel) <= DDR_INTERLEAVED_CHANNELS:
+                raise ParameterRangeError("channel must be in 1..8")
+            lane = np.ascontiguousarray(wave, dtype="<i2").reshape(-1)
+            self.lanes[int(channel) - 1] = lane
+            longest = max(longest, int(lane.size))
+        self.samples = align_bytes_to_beat(longest * 2) // 2
+        self.nbytes = self.samples // _LANE_SAMPLES * DDR_INTERLEAVED_BEAT_BYTES
+
+    def __len__(self) -> int:
+        return self.nbytes
+
+    def pack(self, start: int = 0, end: int | None = None) -> np.ndarray:
+        """Bytes ``start:end`` of the image as a flat ``uint8`` array."""
+        end = self.nbytes if end is None else int(end)
+        start = int(start)
+        if not 0 <= start <= end <= self.nbytes:
+            raise ParameterRangeError("range must lie inside the image")
+        first = start // DDR_INTERLEAVED_BEAT_BYTES
+        last = -(-end // DDR_INTERLEAVED_BEAT_BYTES)
+        # words x channels x samples-per-lane, in memory exactly the DDR byte order
+        words = np.zeros((last - first, DDR_INTERLEAVED_CHANNELS, _LANE_SAMPLES), dtype="<i2")
+        for index, lane in enumerate(self.lanes):
+            if lane is None:
+                continue
+            begin = first * _LANE_SAMPLES
+            count = min(last * _LANE_SAMPLES, int(lane.size)) - begin
+            if count <= 0:
+                continue
+            whole = count // _LANE_SAMPLES
+            words[:whole, index, :] = lane[begin:begin + whole * _LANE_SAMPLES].reshape(whole, _LANE_SAMPLES)
+            if count % _LANE_SAMPLES:
+                words[whole, index, :count % _LANE_SAMPLES] = lane[begin + whole * _LANE_SAMPLES:begin + count]
+        offset = first * DDR_INTERLEAVED_BEAT_BYTES
+        return words.reshape(-1).view(np.uint8)[start - offset:end - offset]
+
+
+def pack_interleaved_512b_image(channel_waves: Mapping[int, np.ndarray | list]) -> tuple[np.ndarray, int]:
+    """Pack eight channel-local streams into 512-bit ``CH1..CH8`` lanes.
+
+    Returns the image as a flat ``uint8`` array and the padded sample count
+    per channel.
+    """
     if not channel_waves:
-        return b"", 0
-    normalized: dict[int, np.ndarray] = {}
-    max_samples = 0
-    for channel in range(1, DDR_INTERLEAVED_CHANNELS + 1):
-        wave = channel_waves.get(channel)
-        arr = np.asarray(wave, dtype=np.int16).reshape(-1) if wave is not None else np.zeros(0, dtype=np.int16)
-        normalized[channel] = arr
-        max_samples = max(max_samples, int(arr.size))
-    max_samples = align_bytes_to_beat(max_samples * 2) // 2
-    packed = {
-        channel: np.pad(normalized[channel][:max_samples], (0, max(0, max_samples - normalized[channel].size)), mode="constant").astype("<i2", copy=False).tobytes()
-        for channel in range(1, DDR_INTERLEAVED_CHANNELS + 1)
-    }
-    beat_count = max_samples // 4
-    image = bytearray(beat_count * DDR_INTERLEAVED_BEAT_BYTES)
-    for beat_index in range(beat_count):
-        for channel in range(1, DDR_INTERLEAVED_CHANNELS + 1):
-            start = beat_index * DDR_INTERLEAVED_LANE_BYTES
-            image[beat_index * DDR_INTERLEAVED_BEAT_BYTES + (channel - 1) * DDR_INTERLEAVED_LANE_BYTES: beat_index * DDR_INTERLEAVED_BEAT_BYTES + channel * DDR_INTERLEAVED_LANE_BYTES] = packed[channel][start:start + DDR_INTERLEAVED_LANE_BYTES]
-    return bytes(image), max_samples
+        return np.zeros(0, dtype=np.uint8), 0
+    lanes = LaneImage(channel_waves)
+    return lanes.pack(), lanes.samples
+
+
+def pack_interleaved_512b_waveforms(channel_waves: Mapping[int, np.ndarray | list]) -> tuple[bytes, int]:
+    """:func:`pack_interleaved_512b_image` with the image as ``bytes``."""
+    image, samples = pack_interleaved_512b_image(channel_waves)
+    return image.tobytes(), samples
 
 
 def iter_max_length_udp_batches(

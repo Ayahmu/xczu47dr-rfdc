@@ -5,4 +5,4 @@ Change it with ``make driver-bump VERSION=x.y.z`` (or ``PART=patch|minor|major``
 is built and ``dr47.__version__`` re-exports it, so the two cannot drift apart.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

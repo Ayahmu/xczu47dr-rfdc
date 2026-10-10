@@ -28,6 +28,8 @@ module waveform_response_serializer (
     output wire response_last, output wire [15:0] response_word_count,
     input wire response_ready, output wire busy
 );
+  // DATA and the two bulk queries share the 60-byte extended payload.
+  wire event_extended = event_opcode == 2 || event_opcode == 9 || event_opcode == 10;
   reg [63:0] words [0:12];
   reg [4:0] word_count;
   reg [4:0] word_index;
@@ -46,11 +48,11 @@ module waveform_response_serializer (
     end else if (!active && event_valid) begin
       words[0] <= 64'h5741564552535030;
       words[1] <= {event_opcode, event_status, 16'd1};
-      words[2] <= {(event_opcode == 2 ? 32'd60 : event_opcode == 8 ? 32'd80 : 32'd28), event_seq};
+      words[2] <= {(event_extended ? 32'd60 : event_opcode == 8 ? 32'd80 : 32'd28), event_seq};
       words[3] <= {event_state, event_session};
       words[4] <= {event_error_code, 16'd0, event_status};
       words[5] <= {event_error_offset[31:0], event_descriptor};
-      if (event_opcode == 2) begin
+      if (event_extended) begin
         words[6] <= {event_ack_packet_seq, event_error_offset[63:32]};
         words[7] <= {event_received_bytes[31:0], event_next_expected_sequence};
         words[8] <= {event_first_error_offset[31:0], event_received_bytes[63:32]};

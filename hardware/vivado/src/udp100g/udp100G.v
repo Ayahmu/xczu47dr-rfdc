@@ -11,6 +11,13 @@
 //
 //   CMAC (512-bit, RS-FEC) -> ethernet_adapter_100g (512<->64) -> fpga_core
 //
+// Bulk waveform frames (UDP port network_udp_port + 1, "WBLK" tag) are taken
+// off the CMAC RX stream before the width adapter and leave on m_bulk_axis_*
+// at the full 512 bits, already in the clk domain:
+//
+//   CMAC RX -> wave_bulk_rx_path -+-> ethernet_adapter_100g -> fpga_core
+//                                 +-> m_bulk_axis_* (frame FIFO, clk)
+//
 // The UDP/IP/ARP stack in fpga_core is 64 bits wide; the adapter converts
 // between it and the CMAC's 512-bit segments in the CMAC user clock domain.
 module udp_100G
@@ -57,6 +64,15 @@ module udp_100G
     output wire         rcv_vld,
     output wire[63:0]   rcv_dat,
     output wire         rcv_last,
+
+    // Bulk waveform frames, clk domain.  Whole FCS-clean frames only.
+    output wire [511:0] m_bulk_axis_tdata,
+    output wire         m_bulk_axis_tvalid,
+    input  wire         m_bulk_axis_tready,
+    output wire         m_bulk_axis_tlast,
+    output wire [31:0]  bulk_rx_frames,
+    output wire [31:0]  bulk_rx_dropped_full,
+    output wire [31:0]  bulk_rx_dropped_bad,
 
     input   wire    [23:0]       gap_num_vio       ,
     input   wire                 loop_en
@@ -133,6 +149,30 @@ module udp_100G
         .gt_txn_out       ( gt_txn_out       )
     );
 
+    // Bulk frames leave the stream here; the 64-bit stack sees the rest.
+    wire            ctl_rx_axis_tvalid;
+    wire [511:0]    ctl_rx_axis_tdata ;
+    wire [0:0]      ctl_rx_axis_tuser ;
+    wire [63:0]     ctl_rx_axis_tkeep ;
+    wire            ctl_rx_axis_tlast ;
+    reg  [15:0]     bulk_udp_port = 16'd0;
+    always @(posedge clk) bulk_udp_port <= network_udp_port + 16'd1;
+
+    wave_bulk_rx_path bulk_rx_path_i (
+        .rx_clk(clk_axis), .rx_rst(user_rx_reset_0),
+        .s_axis_tdata(rx_axis_tdata_0), .s_axis_tkeep(rx_axis_tkeep_0), .s_axis_tvalid(rx_axis_tvalid_0),
+        .s_axis_tlast(rx_axis_tlast_0), .s_axis_tuser(rx_axis_tuser_0),
+        .m_ctl_axis_tdata(ctl_rx_axis_tdata), .m_ctl_axis_tkeep(ctl_rx_axis_tkeep),
+        .m_ctl_axis_tvalid(ctl_rx_axis_tvalid), .m_ctl_axis_tlast(ctl_rx_axis_tlast),
+        .m_ctl_axis_tuser(ctl_rx_axis_tuser),
+        .clk(clk), .rst(rst), .enable(1'b1),
+        .local_mac(network_local_mac), .local_ip(network_local_ip), .bulk_port(bulk_udp_port),
+        .m_bulk_axis_tdata(m_bulk_axis_tdata), .m_bulk_axis_tvalid(m_bulk_axis_tvalid),
+        .m_bulk_axis_tready(m_bulk_axis_tready), .m_bulk_axis_tlast(m_bulk_axis_tlast),
+        .stat_frames(bulk_rx_frames), .stat_dropped_full(bulk_rx_dropped_full),
+        .stat_dropped_bad(bulk_rx_dropped_bad)
+    );
+
     ethernet_adapter_100g inst_ethernet_adapter (
         //-------------------------------------------------------------------------
         // Ethernet adapter
@@ -145,11 +185,11 @@ module udp_100G
         //-------------------------------------------------------------------------
         // MAC AXIS Interface
         //  . RX
-        .rx_axis_tvalid_0 (rx_axis_tvalid_0),
-        .rx_axis_tdata_0  (rx_axis_tdata_0  ),
-        .rx_axis_tuser_0  (rx_axis_tuser_0  ),
-        .rx_axis_tkeep_0  (rx_axis_tkeep_0),
-        .rx_axis_tlast_0  (rx_axis_tlast_0),
+        .rx_axis_tvalid_0 (ctl_rx_axis_tvalid),
+        .rx_axis_tdata_0  (ctl_rx_axis_tdata ),
+        .rx_axis_tuser_0  (ctl_rx_axis_tuser ),
+        .rx_axis_tkeep_0  (ctl_rx_axis_tkeep ),
+        .rx_axis_tlast_0  (ctl_rx_axis_tlast ),
         //  . TX
         .tx_axis_tready_0 (tx_axis_tready_0),
         .tx_axis_tvalid_0 (tx_axis_tvalid_0),

@@ -147,7 +147,7 @@ def test_begin_golden_dac_beat_units_and_64_bit_bytes():
 
 
 @pytest.mark.parametrize("kwargs", [dict(total_bytes=64, total_beats=1),
-    dict(loop_count=0), dict(layout=2), dict(total_beats=4), dict(total_beats=1.5)])
+    dict(loop_count=0), dict(layout=3), dict(total_beats=4), dict(total_beats=1.5)])
 def test_begin_rejects_invalid_contract_before_sending(kwargs):
     args = dict(session=1,total_bytes=256,total_beats=1,channel_mask=1)
     args.update(kwargs)

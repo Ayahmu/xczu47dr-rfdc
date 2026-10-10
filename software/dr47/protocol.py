@@ -46,6 +46,8 @@ WAVE_OP_PAUSE = 0x05
 WAVE_OP_STOP = 0x06
 WAVE_OP_ABORT = 0x07
 WAVE_OP_STATUS = 0x08
+WAVE_OP_BULK_STATUS = 0x09
+WAVE_OP_BULK_CHUNK_RESET = 0x0A
 
 WAVE_STATUS_OK = 0
 WAVE_STATUS_BAD_VERSION = 1
@@ -61,6 +63,22 @@ WAVE_STATUS_TIMEOUT = 10
 WAVE_STATUS_UNSAFE = 11
 
 WAVE_LAYOUT_INTERLEAVED_512B = 1
+# Same DDR image, but the data arrives on the 512-bit bulk path instead of in
+# acknowledged DATA packets.
+WAVE_LAYOUT_INTERLEAVED_512B_BULK = 2
+# Bulk datagrams go to the control UDP port + 1.  Ethernet (14) + IPv4 (20) +
+# UDP (8) + this 22-byte header fill one 512-bit word, so the payload that
+# follows is a run of whole 64-byte DDR words.
+WAVE_BULK_PORT_OFFSET = 1
+WAVE_BULK_TAG = b"WBLK"
+WAVE_BULK_HEADER_BYTES = 22
+WAVE_BULK_WORD_BYTES = 64
+WAVE_BULK_MAX_WORDS = 128
+# The board counts received words per chunk; a datagram may not cross one.
+WAVE_BULK_CHUNK_BYTES = 1 << 20
+WAVE_BULK_MAX_CHUNKS = 8192
+# upload_waveforms(transport="auto") uses the bulk path from this image size.
+WAVE_BULK_AUTO_THRESHOLD_BYTES = 1 << 20
 # Looped passes are streamed back to back from DDR.  A stream of at most
 # WAVE_FIFO_DEPTH_BEATS beats (pass beats x loop_count) is prefetched whole
 # before the DAC gate opens; a longer stream must be read as fast as the DAC
@@ -271,8 +289,8 @@ def pack_wave_begin(*, session: int, total_bytes: int, channel_mask: int,
     layout = _wave_uint(layout, 8, "layout")
     if total_bytes > DDR_MAX_INTERLEAVED_BYTES or total_bytes != total_beats * WAVE_DAC_FRAME_BYTES:
         raise ParameterRangeError("total_bytes must equal total_beats * 8 * 32 and fit DDR capacity")
-    if layout != WAVE_LAYOUT_INTERLEAVED_512B:
-        raise ParameterRangeError("only eight-lane interleaved layout 1 is supported")
+    if layout not in (WAVE_LAYOUT_INTERLEAVED_512B, WAVE_LAYOUT_INTERLEAVED_512B_BULK):
+        raise ParameterRangeError("only the eight-lane interleaved layouts 1 (packets) and 2 (bulk) are supported")
     if (total_beats < WAVE_MIN_STREAMED_PASS_BEATS and
             total_beats * loop_count > WAVE_FIFO_DEPTH_BEATS):
         raise ParameterRangeError(
@@ -298,6 +316,44 @@ def pack_wave_data(*, session: int, packet_seq: int, byte_offset: int,
         raise ParameterRangeError("DATA offset must be 32-byte aligned without address overflow")
     header = struct.pack("<IIQII", session, packet_seq, byte_offset, len(raw), crc32(raw))
     return _pack_wave_packet(WAVE_OP_DATA, header + raw, seq=seq)
+
+
+def pack_wave_bulk_header(*, session: int, byte_offset: int, words: int, epoch: int = 0) -> bytes:
+    """The 22 bytes that precede the DDR words in every bulk datagram."""
+    session = _wave_uint(session, 32, "session", nonzero=True)
+    byte_offset = _wave_uint(byte_offset, 64, "byte_offset")
+    words = _wave_uint(words, 16, "words", nonzero=True)
+    epoch = _wave_uint(epoch, 8, "epoch")
+    if words > WAVE_BULK_MAX_WORDS:
+        raise ParameterRangeError(f"a bulk datagram carries at most {WAVE_BULK_MAX_WORDS} words")
+    if byte_offset % WAVE_BULK_WORD_BYTES:
+        raise ParameterRangeError("bulk offset must be a multiple of 64 bytes")
+    end = byte_offset + words * WAVE_BULK_WORD_BYTES
+    if byte_offset // WAVE_BULK_CHUNK_BYTES != (end - 1) // WAVE_BULK_CHUNK_BYTES:
+        raise ParameterRangeError("a bulk datagram may not cross a 1 MiB chunk boundary")
+    return WAVE_BULK_TAG + struct.pack("<IQHB3x", session, byte_offset, words, epoch)
+
+
+def pack_wave_bulk_frame(*, session: int, byte_offset: int, payload: bytes, epoch: int = 0) -> bytes:
+    """One bulk UDP datagram: header plus 1..128 whole 64-byte words."""
+    raw = bytes(payload)
+    if not raw or len(raw) % WAVE_BULK_WORD_BYTES:
+        raise ParameterRangeError("bulk payload must be a non-empty multiple of 64 bytes")
+    return pack_wave_bulk_header(session=session, byte_offset=byte_offset,
+                                 words=len(raw) // WAVE_BULK_WORD_BYTES, epoch=epoch) + raw
+
+
+def pack_wave_bulk_status(*, session: int, seq: int = 1) -> bytes:
+    return _pack_wave_packet(WAVE_OP_BULK_STATUS,
+                             struct.pack("<I", _wave_uint(session, 32, "session", nonzero=True)), seq=seq)
+
+
+def pack_wave_bulk_chunk_reset(*, session: int, chunk: int, epoch: int, seq: int = 1) -> bytes:
+    """Zero one chunk's word count and give it a new epoch before resending it."""
+    session = _wave_uint(session, 32, "session", nonzero=True)
+    chunk = _wave_uint(chunk, 13, "chunk")
+    epoch = _wave_uint(epoch, 8, "epoch")
+    return _pack_wave_packet(WAVE_OP_BULK_CHUNK_RESET, struct.pack("<II", session, (epoch << 13) | chunk), seq=seq)
 
 
 def pack_wave_command(opcode: int, *, session: int = 0, seq: int = 1) -> bytes:
@@ -338,6 +394,9 @@ def parse_wave_response(packet: bytes, *, validate_version: bool = True) -> dict
     extension: ACK, next sequence, uint64 received/first-error offsets, and
     expected/actual CRC32. Length mismatches are protocol errors, never raw
     struct.error exceptions or partially populated successful responses.
+
+    BULK_STATUS and BULK_CHUNK_RESET reuse the DATA layout to carry the bulk
+    counters; they are returned under ``bulk_*`` keys.
     """
     raw = bytes(packet)
     if len(raw) < WAVE_RESPONSE_HEADER_BYTES:
@@ -348,10 +407,11 @@ def parse_wave_response(packet: bytes, *, validate_version: bool = True) -> dict
     version, opcode = hdr0 & 0xFFFF, hdr0 >> 32
     if validate_version and version != WAVE_PROTOCOL_VERSION:
         raise ProtocolVersionError(f"waveform protocol version {version} is not supported")
-    if not WAVE_OP_BEGIN <= opcode <= WAVE_OP_STATUS:
+    if not WAVE_OP_BEGIN <= opcode <= WAVE_OP_BULK_CHUNK_RESET:
         raise ProtocolError(f"unknown waveform response opcode {opcode}")
     size = hdr1 >> 32
-    if opcode == WAVE_OP_DATA:
+    is_bulk = opcode in (WAVE_OP_BULK_STATUS, WAVE_OP_BULK_CHUNK_RESET)
+    if opcode == WAVE_OP_DATA or is_bulk:
         expected = WAVE_RESPONSE_DATA_BYTES
     elif opcode == WAVE_OP_STATUS:
         expected = WAVE_RESPONSE_STATUS_BYTES
@@ -375,7 +435,25 @@ def parse_wave_response(packet: bytes, *, validate_version: bool = True) -> dict
               "session": session, "state": state, "state_name": WAVEFORM_STATE_NAMES[state],
               "status": status, "error_code": error_code, "descriptor": descriptor,
               "error_offset": error_offset}
-    if opcode == WAVE_OP_DATA:
+    if is_bulk:
+        flags, first_incomplete, frames, repeats, dropped_bad, _ = struct.unpack_from(
+            "<IIQQII", payload, WAVE_RESPONSE_COMMON_BYTES)
+        result.update({
+            "bulk_complete": bool(flags & 0x8000_0000),
+            "bulk_overrun": bool(flags & 0x4000_0000),
+            "bulk_axi_error": bool(flags & 0x2000_0000),
+            "bulk_complete_chunks": flags & 0x3FFF,
+            "bulk_first_incomplete_chunk": None if first_incomplete == 0xFFFF_FFFF else first_incomplete,
+            "bulk_frames_ok": frames & 0xFFFF_FFFF,
+            "bulk_frames_rejected": frames >> 32,
+            "bulk_frames_duplicate": repeats & 0xFFFF_FFFF,
+            "bulk_frames_stale": repeats >> 32,
+            # error_offset carries the link-level counters for these opcodes.
+            "bulk_rx_frames": error_offset & 0xFFFF_FFFF,
+            "bulk_rx_dropped_full": error_offset >> 32,
+            "bulk_rx_dropped_bad": dropped_bad,
+        })
+    elif opcode == WAVE_OP_DATA:
         values = struct.unpack_from("<IIQQII", payload, WAVE_RESPONSE_COMMON_BYTES)
         result.update(zip(("ack_packet_seq", "next_expected_sequence", "received_bytes",
                            "first_error_offset", "expected_crc", "actual_crc"), values))

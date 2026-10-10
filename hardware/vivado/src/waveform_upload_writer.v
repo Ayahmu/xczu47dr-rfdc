@@ -7,6 +7,11 @@
 // a four-bank synchronous BRAM, checked for sequence/offset/CRC, and only then
 // emitted as aligned 256-bit AXI writes.  This prevents a bad packet from
 // partially changing the committed waveform image.
+//
+// A BEGIN with layout 2 opens a bulk session instead: the image arrives on the
+// 512-bit bulk path (wave_bulk_ddr_writer), DATA packets are refused here, and
+// this parser only arms the bulk writer, relays BULK_STATUS / BULK_CHUNK_RESET
+// and gates COMMIT on the bulk writer reporting the image complete.
 module waveform_upload_writer #(
     parameter [63:0] CTRL_MAGIC = 64'h5741564543545230,
     parameter [63:0] DDR_ADDR_BASE = 64'd0,
@@ -59,18 +64,33 @@ module waveform_upload_writer #(
     output wire m_axi_bready,
 
     output reg [63:0] received_bytes, output reg [31:0] next_packet_seq,
-    output reg [63:0] error_offset, output reg [31:0] error_count
+    output reg [63:0] error_offset, output reg [31:0] error_count,
+
+    // Bulk session control (wave_bulk_ddr_writer and the bulk RX counters).
+    output wire bulk_enable,
+    output reg bulk_ctl_start, output reg [1:0] bulk_ctl_cmd, output reg [20:0] bulk_ctl_arg,
+    input wire bulk_ctl_busy,
+    input wire bulk_complete, input wire [13:0] bulk_complete_chunks,
+    input wire [31:0] bulk_first_incomplete,
+    input wire [31:0] bulk_frames_ok, input wire [31:0] bulk_frames_rejected,
+    input wire [31:0] bulk_frames_duplicate, input wire [31:0] bulk_frames_stale,
+    input wire bulk_overrun, input wire bulk_axi_error,
+    input wire [31:0] bulk_rx_frames, input wire [31:0] bulk_rx_dropped_full,
+    input wire [31:0] bulk_rx_dropped_bad
 );
   localparam [3:0] ST_IDLE=4'd0, ST_HDR0=4'd1, ST_HDR1=4'd2,
                    ST_PAYLOAD=4'd3, ST_WRITE=4'd4, ST_CRC=4'd5, ST_CRC_DONE=4'd6,
                    ST_FINAL=4'd7, ST_EMIT=4'd8, ST_DROP=4'd9,
-                   ST_READ_WAIT=4'd10, ST_READ_LOAD=4'd11;
+                   ST_READ_WAIT=4'd10, ST_READ_LOAD=4'd11, ST_DECODE=4'd12;
   localparam [15:0] OK=16'd0, BAD_REQUEST=16'd2, INCOMPLETE=16'd4,
                     SEQUENCE=16'd5, OFFSET=16'd6, CRC=16'd7, RANGE=16'd8,
                     AXI_ERROR=16'd9, TIMEOUT=16'd10, UNSAFE=16'd11;
   localparam [31:0] OP_BEGIN=32'd1, OP_DATA=32'd2, OP_COMMIT=32'd3,
                     OP_PLAY=32'd4, OP_PAUSE=32'd5, OP_STOP=32'd6,
-                    OP_ABORT=32'd7, OP_STATUS=32'd8;
+                    OP_ABORT=32'd7, OP_STATUS=32'd8,
+                    OP_BULK_STATUS=32'd9, OP_BULK_CHUNK_RESET=32'd10;
+  localparam [7:0] LAYOUT_INTERLEAVED=8'd1, LAYOUT_INTERLEAVED_BULK=8'd2;
+  localparam [1:0] BULK_CMD_CLEAR=2'd1, BULK_CMD_CHUNK_RESET=2'd2, BULK_CMD_SCAN=2'd3;
   localparam integer MAX_DATA_WORDS = (MAX_PAYLOAD_BYTES + 7) / 8;
 
   // RX never backpressures. Track every packet boundary, including packets
@@ -106,6 +126,13 @@ module waveform_upload_writer #(
   reg [63:0] begin_total_bytes;
   reg [7:0] begin_channel_mask, begin_layout;
   reg [31:0] begin_bytes_per_beat;
+  reg bulk_mode;
+  reg [1:0] bulk_phase;
+  wire command_is_bulk_query = command_opcode == OP_BULK_STATUS || command_opcode == OP_BULK_CHUNK_RESET;
+  wire begin_is_bulk = begin_layout == LAYOUT_INTERLEAVED_BULK;
+  // A bulk BEGIN arms the bulk writer, so it also waits for that writer.
+  wire begin_waits_for_bulk = command_opcode == OP_BEGIN && begin_is_bulk && bulk_ctl_busy;
+  assign bulk_enable = upload_active && bulk_mode;
 
   // Pre-register the wide DATA validation predicates so the 64-bit subtract
   // and length checks do not land on the response-status clock-enable path at
@@ -147,6 +174,40 @@ module waveform_upload_writer #(
       packet_read_data[bank*64 +: 64] <= data_mem[packet_read_addr];
     end
   end endgenerate
+
+  // ST_FINAL acts on a complete, registered request.  The wide compares it
+  // needs are registered here first, one cycle earlier (ST_DECODE), so that
+  // only single-bit flags reach the clock enables of the session, response
+  // and error registers at 300 MHz.  The flags are refreshed every cycle, so
+  // they stay current while ST_FINAL waits for the playback path.
+  reg payload_at_last;          // the word being received is the last one the header promised
+  reg dec_begin_bad, dec_begin_repeat, dec_begin_mismatch;
+  reg dec_session_bad, dec_commit_incomplete, dec_bulk_query_bad;
+  reg dec_data_bad, dec_data_duplicate, dec_data_seq_bad;
+  always @(posedge clk) begin
+    dec_begin_bad <= begin_session == 0 || begin_channel_mask == 0 ||
+                     (begin_layout != LAYOUT_INTERLEAVED && !begin_is_bulk) ||
+                     begin_reserved != 0 || begin_bytes_per_beat != 64 || begin_loop_count == 0 ||
+                     begin_total_bytes == 0 || begin_total_bytes > DDR_CAPACITY_BYTES ||
+                     begin_total_bytes != {24'd0, begin_total_beats, 8'd0};
+    dec_begin_repeat <= session == begin_session && last_begin_request == command_seq &&
+                        (upload_active || committed);
+    dec_begin_mismatch <= total_bytes != begin_total_bytes || total_beats != begin_total_beats ||
+                          channel_mask != begin_channel_mask || loop_count != begin_loop_count ||
+                          bulk_mode != begin_is_bulk;
+    dec_session_bad <= command_session_word[63:32] != 0 ||
+                       (command_session_word[31:0] != 0 && command_session_word[31:0] != session);
+    dec_commit_incomplete <= bulk_mode ? !bulk_complete : received_bytes != total_bytes;
+    dec_bulk_query_bad <= !bulk_mode || command_session_word[31:0] != session ||
+                          (command_opcode == OP_BULK_STATUS && command_session_word[63:32] != 0) ||
+                          (command_opcode == OP_BULK_CHUNK_RESET &&
+                           (!upload_active || command_session_word[63:53] != 0));
+    dec_data_bad <= data_session != session || !upload_active || bulk_mode || playback_state == 8;
+    dec_data_duplicate <= last_data_valid && data_packet_seq == last_data_packet &&
+                          command_seq == last_data_request && data_offset == last_data_offset &&
+                          data_length == last_data_length && data_crc_expected == last_data_crc;
+    dec_data_seq_bad <= data_packet_seq != next_packet_seq;
+  end
 
   reg [31:0] write_index, write_words_total;
   reg [31:0] write_length;
@@ -223,6 +284,8 @@ module waveform_upload_writer #(
       hdr0 <= 0; payload_bytes <= 0; payload_words <= 0; payload_index <= 0;
       command_seq <= 0; command_opcode <= 0; command_flags <= 0; packet_error <= 0;
       duplicate_packet <= 0; begin_session <= 0; begin_total_bytes <= 0;
+      bulk_mode <= 0; bulk_phase <= 0; bulk_ctl_start <= 0; bulk_ctl_cmd <= 0; bulk_ctl_arg <= 0;
+      payload_at_last <= 0;
       begin_total_beats <= 0; begin_channel_mask <= 0; begin_layout <= 0;
       begin_loop_count <= 0; begin_bytes_per_beat <= 0;
       data_session <= 0; data_packet_seq <= 0; data_length <= 0;
@@ -238,6 +301,7 @@ module waveform_upload_writer #(
     end else begin
       if (response_valid && response_ready) response_valid <= 1'b0;
       status_request <= 1'b0;
+      bulk_ctl_start <= 1'b0;
       if (udp_tvalid) rx_active <= !udp_tlast;
       begin_valid <= 1'b0; commit_valid <= 1'b0; play_valid <= 1'b0;
       pause_valid <= 1'b0; stop_valid <= 1'b0; abort_valid <= 1'b0;
@@ -349,7 +413,21 @@ module waveform_upload_writer #(
         response_ack_packet_seq <= next_packet_seq - 1'b1;
         response_next_expected_sequence <= next_packet_seq;
         response_received_bytes <= received_bytes;
+        if (command_is_bulk_query) begin
+          // Same wire layout as a DATA response, carrying the bulk counters.
+          response_ack_packet_seq <= {committed || bulk_complete, bulk_overrun, bulk_axi_error,
+                                      15'd0, bulk_complete_chunks};
+          response_next_expected_sequence <= bulk_first_incomplete;
+          response_received_bytes <= {bulk_frames_rejected, bulk_frames_ok};
+          response_first_error_offset <= {bulk_frames_stale, bulk_frames_duplicate};
+          response_error_offset <= {bulk_rx_dropped_full, bulk_rx_frames};
+          response_expected_crc <= bulk_rx_dropped_bad;
+          response_actual_crc <= 32'd0;
+        end
         state <= ST_IDLE;
+      end else if (state == ST_DECODE) begin
+        // One cycle for the registered predicates to see the last word.
+        state <= ST_FINAL;
       end else if (state == ST_FINAL) begin
         // All fields, including the last word, are now registered. Never
         // validate and act on a final word in the same nonblocking-assignment
@@ -376,24 +454,34 @@ module waveform_upload_writer #(
           end else begin
             state <= ST_FINAL;
           end
-        end else if (command_opcode_requires_admission && !command_ready) begin
+        end else if (command_is_bulk_query && !packet_error) begin
+          // The bulk writer runs the command; answer when it has finished.
+          case (bulk_phase)
+            2'd0: begin
+              if (dec_bulk_query_bad) begin
+                set_error(BAD_REQUEST, 0); state <= ST_EMIT;
+              end else if (!bulk_ctl_busy) begin
+                bulk_ctl_start <= 1'b1;
+                bulk_ctl_cmd <= command_opcode == OP_BULK_STATUS ? BULK_CMD_SCAN : BULK_CMD_CHUNK_RESET;
+                bulk_ctl_arg <= command_session_word[52:32];
+                bulk_phase <= 2'd1;
+              end
+            end
+            2'd1: bulk_phase <= 2'd2;
+            default: if (!bulk_ctl_busy) state <= ST_EMIT;
+          endcase
+        end else if ((command_opcode_requires_admission && !command_ready) || begin_waits_for_bulk) begin
           state <= ST_FINAL;
         end else begin
           state <= ST_EMIT;
         end
-        if (!packet_error && command_opcode != OP_STATUS &&
-            (!command_opcode_requires_admission || command_ready)) begin
+        if (!packet_error && command_opcode != OP_STATUS && !command_is_bulk_query &&
+            (!command_opcode_requires_admission || command_ready) && !begin_waits_for_bulk) begin
           if (command_opcode == OP_BEGIN) begin
-            if (begin_session == 0 || begin_channel_mask == 0 || begin_layout != 1 ||
-                begin_reserved != 0 || begin_bytes_per_beat != 64 || begin_loop_count == 0 ||
-                begin_total_bytes == 0 || begin_total_bytes > DDR_CAPACITY_BYTES ||
-                begin_total_bytes != {24'd0, begin_total_beats, 8'd0}) begin
+            if (dec_begin_bad) begin
               set_error(BAD_REQUEST, 0);
-            end else if (session == begin_session && last_begin_request == command_seq &&
-                         (upload_active || committed)) begin
-              if (total_bytes != begin_total_bytes || total_beats != begin_total_beats ||
-                  channel_mask != begin_channel_mask || loop_count != begin_loop_count)
-                set_error(BAD_REQUEST, 0);
+            end else if (dec_begin_repeat) begin
+              if (dec_begin_mismatch) set_error(BAD_REQUEST, 0);
             end else begin
               session <= begin_session; total_bytes <= begin_total_bytes;
               total_beats <= begin_total_beats; channel_mask <= begin_channel_mask;
@@ -402,31 +490,34 @@ module waveform_upload_writer #(
               upload_active <= 1; committed <= 0; last_data_valid <= 0; last_play_valid <= 0;
               last_begin_request <= command_seq; error_offset <= 0;
               begin_valid <= 1;
+              bulk_mode <= begin_is_bulk;
+              if (begin_is_bulk) begin
+                bulk_ctl_start <= 1'b1; bulk_ctl_cmd <= BULK_CMD_CLEAR; bulk_ctl_arg <= 21'd0;
+              end
             end
           end else if (command_opcode == OP_DATA) begin
             response_expected_crc <= data_crc_expected;
-            if (data_session != session || !upload_active || playback_state == 8) set_error(BAD_REQUEST, data_offset);
+            if (dec_data_bad) set_error(BAD_REQUEST, data_offset);
             else if (!data_range_ok) set_error(RANGE, data_offset);
-            else if (last_data_valid && data_packet_seq == last_data_packet && command_seq == last_data_request &&
-                     data_offset == last_data_offset && data_length == last_data_length && data_crc_expected == last_data_crc) begin
+            else if (dec_data_duplicate) begin
               duplicate_packet <= 1;
               data_crc_running <= 32'hffffffff; crc_check_bit_index <= 0;
               crc_check_total_bits <= data_length[13:0] << 3;
               packet_read_addr <= 0; reading_crc <= 1; state <= ST_READ_WAIT;
-            end else if (data_packet_seq != next_packet_seq) set_error(SEQUENCE, data_offset);
+            end else if (dec_data_seq_bad) set_error(SEQUENCE, data_offset);
             else if (!data_offset_ok) set_error(OFFSET, data_offset);
             else begin
               data_crc_running <= 32'hffffffff; crc_check_bit_index <= 0;
               crc_check_total_bits <= data_length[13:0] << 3;
               packet_read_addr <= 0; reading_crc <= 1; state <= ST_READ_WAIT;
             end
-          end else if (command_session_word[63:32] != 0 ||
-                       (command_session_word[31:0] != 0 && command_session_word[31:0] != session)) begin
+          end else if (dec_session_bad) begin
             set_error(BAD_REQUEST, received_bytes);
           end else if (command_opcode == OP_COMMIT) begin
             if (committed && last_commit_request == command_seq) begin end
             else if (!upload_active || session == 0 || playback_state == 8) set_error(BAD_REQUEST, received_bytes);
-            else if (received_bytes != total_bytes) set_error(INCOMPLETE, received_bytes);
+            else if (dec_commit_incomplete) set_error(INCOMPLETE, received_bytes);
+            else if (bulk_mode && bulk_axi_error) set_error(AXI_ERROR, 0);
             else begin
               generation <= next_generation; descriptor <= next_generation;
               committed <= 1; upload_active <= 0; last_commit_request <= command_seq;
@@ -460,8 +551,9 @@ module waveform_upload_writer #(
           ST_HDR0: begin
             hdr0 <= udp_tdata; command_opcode <= udp_tdata[63:32];
             command_flags <= udp_tdata[31:16];
-            if (udp_tdata[31:0] != 32'd1 || udp_tdata[63:32] < 1 || udp_tdata[63:32] > 8)
+            if (udp_tdata[31:0] != 32'd1 || udp_tdata[63:32] < 1 || udp_tdata[63:32] > OP_BULK_CHUNK_RESET)
               set_error(BAD_REQUEST, 0);
+          bulk_phase <= 2'd0;
           status_requested <= 1'b0;
           status_response_latched <= 1'b0;
             state <= udp_tlast ? ST_IDLE : ST_HDR1;
@@ -470,10 +562,13 @@ module waveform_upload_writer #(
             command_seq <= udp_tdata[31:0]; payload_bytes <= udp_tdata[63:32];
             payload_words <= (udp_tdata[63:32] >> 3) + (|udp_tdata[34:32]);
             payload_index <= 0; data_word_index <= 0; duplicate_packet <= 0;
+            payload_at_last <= udp_tdata[63:32] != 0 && udp_tdata[63:32] <= 32'd8;
             if (udp_tlast) begin set_error(BAD_REQUEST, 0); state <= ST_EMIT; end
             else if ((command_opcode == OP_BEGIN && udp_tdata[63:32] != 28) ||
                      (command_opcode == OP_DATA && (udp_tdata[63:32] < 56 || udp_tdata[63:32] > MAX_PAYLOAD_BYTES+24)) ||
-                     (command_opcode >= OP_COMMIT && udp_tdata[63:32] != 4)) begin
+                     (command_opcode == OP_BULK_CHUNK_RESET && udp_tdata[63:32] != 8) ||
+                     (command_opcode >= OP_COMMIT && command_opcode != OP_BULK_CHUNK_RESET &&
+                      udp_tdata[63:32] != 4)) begin
               set_error(BAD_REQUEST, 0); state <= ST_DROP;
             end else state <= ST_PAYLOAD;
           end
@@ -513,11 +608,14 @@ module waveform_upload_writer #(
               endcase
             end else command_session_word <= udp_tdata;
             if (udp_tlast) begin
-              if (payload_index + 1 != payload_words) set_error(BAD_REQUEST, 0);
-              state <= ST_FINAL;
-            end else if (payload_index + 1 >= payload_words) begin
+              if (!payload_at_last) set_error(BAD_REQUEST, 0);
+              state <= ST_DECODE;
+            end else if (payload_at_last) begin
               set_error(BAD_REQUEST, 0); state <= ST_DROP;
-            end else payload_index <= payload_index + 1'b1;
+            end else begin
+              payload_index <= payload_index + 1'b1;
+              payload_at_last <= payload_index + 32'd2 == payload_words;
+            end
           end
         endcase
       end

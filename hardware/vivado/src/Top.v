@@ -478,6 +478,29 @@ module Top #(
   wire [1:0]   M_AXI_WAVE_bresp;
   wire         M_AXI_WAVE_bvalid;
 
+  // 512-bit bulk waveform write port (wave_bulk_ddr_writer).
+  wire [63:0]  M_AXI_BULK_awaddr;
+  wire [7:0]   M_AXI_BULK_awlen;
+  wire         M_AXI_BULK_awready;
+  wire         M_AXI_BULK_awvalid;
+  wire [511:0] M_AXI_BULK_wdata;
+  wire         M_AXI_BULK_wlast;
+  wire         M_AXI_BULK_wready;
+  wire [63:0]  M_AXI_BULK_wstrb;
+  wire         M_AXI_BULK_wvalid;
+  wire         M_AXI_BULK_bready;
+  wire [1:0]   M_AXI_BULK_bresp;
+  wire         M_AXI_BULK_bvalid;
+  wire [511:0] bulk_axis_tdata;
+  wire         bulk_axis_tvalid, bulk_axis_tready, bulk_axis_tlast;
+  wire [31:0]  bulk_rx_frames, bulk_rx_dropped_full, bulk_rx_dropped_bad;
+  wire         bulk_enable, bulk_ctl_start, bulk_ctl_busy, bulk_complete, bulk_overrun, bulk_axi_error;
+  wire [1:0]   bulk_ctl_cmd;
+  wire [20:0]  bulk_ctl_arg;
+  wire [13:0]  bulk_complete_chunks;
+  wire [31:0]  bulk_first_incomplete;
+  wire [31:0]  bulk_frames_ok, bulk_frames_rejected, bulk_frames_duplicate, bulk_frames_stale;
+
   // The WAVECTR0 writer is the sole owner of the waveform DDR write port.
   // There is deliberately no legacy instruction/data writer or arbitration
   // mux: descriptor commit is the only way to publish waveform storage.
@@ -939,6 +962,13 @@ module Top #(
       .rcv_vld     (udp64_rcv_vld),
       .rcv_dat     (udp64_rcv_dat),
       .rcv_last    (udp64_rcv_last),
+      .m_bulk_axis_tdata (bulk_axis_tdata),
+      .m_bulk_axis_tvalid(bulk_axis_tvalid),
+      .m_bulk_axis_tready(bulk_axis_tready),
+      .m_bulk_axis_tlast (bulk_axis_tlast),
+      .bulk_rx_frames(bulk_rx_frames),
+      .bulk_rx_dropped_full(bulk_rx_dropped_full),
+      .bulk_rx_dropped_bad(bulk_rx_dropped_bad),
       .gap_num_vio (24'd0),
       .loop_en     (1'b0)
   );
@@ -1065,7 +1095,35 @@ module Top #(
       .m_axi_wdata(wave_wdata_new), .m_axi_wstrb(wave_wstrb_new), .m_axi_wvalid(wave_wvalid_new),
       .m_axi_wlast(wave_wlast_new), .m_axi_wready(wave_wready_new),
       .m_axi_bresp(M_AXI_WAVE_bresp), .m_axi_bvalid(M_AXI_WAVE_bvalid), .m_axi_bready(wave_bready_new),
-      .received_bytes(), .next_packet_seq(), .error_offset(wave_writer_error_offset), .error_count(wave_writer_error_count));
+      .received_bytes(), .next_packet_seq(), .error_offset(wave_writer_error_offset), .error_count(wave_writer_error_count),
+      .bulk_enable(bulk_enable), .bulk_ctl_start(bulk_ctl_start), .bulk_ctl_cmd(bulk_ctl_cmd),
+      .bulk_ctl_arg(bulk_ctl_arg), .bulk_ctl_busy(bulk_ctl_busy), .bulk_complete(bulk_complete),
+      .bulk_complete_chunks(bulk_complete_chunks), .bulk_first_incomplete(bulk_first_incomplete),
+      .bulk_frames_ok(bulk_frames_ok), .bulk_frames_rejected(bulk_frames_rejected),
+      .bulk_frames_duplicate(bulk_frames_duplicate), .bulk_frames_stale(bulk_frames_stale),
+      .bulk_overrun(bulk_overrun), .bulk_axi_error(bulk_axi_error),
+      .bulk_rx_frames(bulk_rx_frames), .bulk_rx_dropped_full(bulk_rx_dropped_full),
+      .bulk_rx_dropped_bad(bulk_rx_dropped_bad));
+
+  // Bulk waveform image: 512-bit frames from the CMAC straight into DDR.  The
+  // WAVECTR0 parser above owns the session; this writer owns the data and the
+  // per-chunk accounting the host uses to resend what was lost.
+  wave_bulk_ddr_writer #(.DDR_ADDR_BASE(EXT_DDR_ADDR_BASE)) wave_bulk_ddr_writer_i (
+      .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn),
+      .enable(bulk_enable), .session(wave_resp_session), .total_bytes(wave_descriptor_total_bytes),
+      .ctl_start(bulk_ctl_start), .ctl_cmd(bulk_ctl_cmd), .ctl_arg(bulk_ctl_arg), .ctl_busy(bulk_ctl_busy),
+      .complete(bulk_complete), .complete_chunks(bulk_complete_chunks),
+      .first_incomplete(bulk_first_incomplete),
+      .frames_ok(bulk_frames_ok), .frames_rejected(bulk_frames_rejected),
+      .frames_duplicate(bulk_frames_duplicate), .frames_stale(bulk_frames_stale),
+      .overrun(bulk_overrun), .axi_error(bulk_axi_error),
+      .s_axis_tdata(bulk_axis_tdata), .s_axis_tvalid(bulk_axis_tvalid),
+      .s_axis_tready(bulk_axis_tready), .s_axis_tlast(bulk_axis_tlast),
+      .m_axi_awaddr(M_AXI_BULK_awaddr), .m_axi_awlen(M_AXI_BULK_awlen),
+      .m_axi_awvalid(M_AXI_BULK_awvalid), .m_axi_awready(M_AXI_BULK_awready),
+      .m_axi_wdata(M_AXI_BULK_wdata), .m_axi_wstrb(M_AXI_BULK_wstrb), .m_axi_wlast(M_AXI_BULK_wlast),
+      .m_axi_wvalid(M_AXI_BULK_wvalid), .m_axi_wready(M_AXI_BULK_wready),
+      .m_axi_bresp(M_AXI_BULK_bresp), .m_axi_bvalid(M_AXI_BULK_bvalid), .m_axi_bready(M_AXI_BULK_bready));
 
   waveform_response_serializer waveform_response_serializer_i (
       .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn), .event_valid(wave_resp_valid),
@@ -3365,6 +3423,25 @@ module Top #(
       .S_AXI_WAVE_bready(M_AXI_WAVE_bready),
       .S_AXI_WAVE_bresp(M_AXI_WAVE_bresp),
       .S_AXI_WAVE_bvalid(M_AXI_WAVE_bvalid),
+
+      .S_AXI_BULK_awaddr(M_AXI_BULK_awaddr),
+      .S_AXI_BULK_awburst(2'b01),
+      .S_AXI_BULK_awcache(4'b0011),
+      .S_AXI_BULK_awlen(M_AXI_BULK_awlen),
+      .S_AXI_BULK_awlock(1'b0),
+      .S_AXI_BULK_awprot(3'b000),
+      .S_AXI_BULK_awqos(4'd0),
+      .S_AXI_BULK_awready(M_AXI_BULK_awready),
+      .S_AXI_BULK_awsize(3'b110),
+      .S_AXI_BULK_awvalid(M_AXI_BULK_awvalid),
+      .S_AXI_BULK_wdata(M_AXI_BULK_wdata),
+      .S_AXI_BULK_wlast(M_AXI_BULK_wlast),
+      .S_AXI_BULK_wready(M_AXI_BULK_wready),
+      .S_AXI_BULK_wstrb(M_AXI_BULK_wstrb),
+      .S_AXI_BULK_wvalid(M_AXI_BULK_wvalid),
+      .S_AXI_BULK_bready(M_AXI_BULK_bready),
+      .S_AXI_BULK_bresp(M_AXI_BULK_bresp),
+      .S_AXI_BULK_bvalid(M_AXI_BULK_bvalid),
 
       .M_AXI_DDR_araddr(M_AXI_DDR4_araddr),
       .M_AXI_DDR_arburst(M_AXI_DDR4_arburst),

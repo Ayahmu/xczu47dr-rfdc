@@ -33,6 +33,11 @@ Documentation = "https://github.com/Ayahmu/xczu47dr-rfdc/tree/xs17-250mhz-sync/d
 [tool.setuptools]
 packages = ["dr47", "dr47.examples"]
 
+# The C source of the bulk sender core ships in the pure-Python wheel and is
+# compiled on first use (dr47.bulk).
+[tool.setuptools.package-data]
+dr47 = ["_fastsend.c"]
+
 [tool.setuptools.dynamic]
 version = {attr = "dr47._version.__version__"}
 
