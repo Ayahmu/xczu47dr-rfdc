@@ -2,7 +2,7 @@
 set script_path [file dirname [file normalize [info script]]]
 set vivado_dir [file dirname $script_path]
 source ${script_path}/target_config.tcl
-# CMAC OOC output is managed fresh by the project; no XXV reference DCP restore.
+# The CMAC OOC output is managed by the project and regenerated as needed.
 set target [lindex $argv 0]
 if {![target_config_exists $target]} {target_config_error $target}
 set proj_name [target_config_get $target project_basename]

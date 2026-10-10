@@ -242,7 +242,6 @@ export interface BoardWaveformJob {
 
 export interface RfdcChannelConfig {
   channel: number
-  dac_output_current_ma: number
   target_rf_hz: number
   nco_hz: number
   nyquist_zone: 1 | 2
@@ -254,10 +253,8 @@ export interface RfdcChannelConfig {
   actual_nco_hz?: number | null
   actual_nyquist_zone?: 1 | 2 | null
   actual_nco_phase_deg?: number | null
-  actual_dac_output_current_ma?: number | null
   nco_word?: number | null
   phase_word?: number | null
-  vop_code?: number | null
   hardware_status: number
 }
 

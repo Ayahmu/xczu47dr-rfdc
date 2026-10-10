@@ -157,6 +157,37 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: streaming descriptor larger than the FIFO drains with no underflow",
         )
 
+    def test_unified_waveform_loop_and_stop(self):
+        self.run_sim(
+            "tb_waveform_loop_and_stop",
+            [
+                ROOT / "hardware/vivado/src/waveform_command_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_descriptor_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_pulse_sync.v",
+                ROOT / "hardware/vivado/src/waveform_trigger_cdc.v",
+                ROOT / "hardware/vivado/src/waveform_playback_controller.v",
+                ROOT / "hardware/vivado/src/waveform_ddr_reader.v",
+                ROOT / "hardware/vivado/src/waveform_dac_stream.v",
+                ROOT / "hardware/vivado/src/waveform_playback_path.v",
+                ROOT / "tests/tb_waveform_loop_and_stop.sv",
+            ],
+            "tb_waveform_loop_and_stop PASS",
+        )
+
+    def test_ethernet_adapter_100g_rx_drops_whole_frames(self):
+        self.run_sim(
+            "tb_ethernet_adapter_100g_rx",
+            [
+                ROOT / "hardware/vivado/src/udp/axis_adapter.v",
+                ROOT / "hardware/vivado/src/udp/axis_fifo.v",
+                ROOT / "hardware/vivado/src/udp/axis_fifo_adapter.v",
+                ROOT / "hardware/vivado/src/udp/axis_frame_length_adjust.v",
+                ROOT / "hardware/vivado/src/udp100g/ethernet_adapter_100g.v",
+                ROOT / "tests/tb_ethernet_adapter_100g_rx.sv",
+            ],
+            "tb_ethernet_adapter_100g_rx PASS",
+        )
+
     def run_sim(self, top: str, sources: list[Path], expected: str) -> None:
         with tempfile.TemporaryDirectory(prefix=f"{top}-") as temp_dir:
             workdir = Path(temp_dir)
@@ -176,7 +207,7 @@ class RtlSimulationTests(unittest.TestCase):
             # Vivado global primitive.  TDC benches intentionally provide a
             # local adversarial stub and must not link XPM.
             xpm_tops = {"tb_waveform_playback_path", "tb_waveform_prefetch_fits_full_load",
-                        "tb_waveform_stream_throughput"}
+                        "tb_waveform_stream_throughput", "tb_waveform_loop_and_stop"}
             compile_sources = [str(source) for source in sources]
             if top in xpm_tops:
                 compile_sources.append("/tools/Xilinx/Vivado/2024.2/data/verilog/src/glbl.v")

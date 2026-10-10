@@ -36,18 +36,17 @@ from dr47 import Dr47Device, DriverError, PlaybackState, make_iq_gaussian_sine_i
 # 连接参数(按本板/本主机实测填写)
 BOARD_IP = "169.254.5.248"
 BOARD_PORT = 1234
-UDP_INTERFACE = "enp1s0f1"
+UDP_INTERFACE = "enp33s0f0np0"
 UDP_SOURCE_IP = "169.254.250.11"
 
 # 波形/DAC 参数
 OUTPUT_CHANNELS = (1, 2)
-RF_FREQUENCY_GHZ = 0.500          # 输出 RF 中心频率(GHz),设到示波器带宽内!
+RF_FREQUENCY_GHZ = 1          # 输出 RF 中心频率(GHz),设到示波器带宽内!
 BASEBAND_HZ = 0.0                 # 基带载波(Hz):0 = 纯高斯包络;非 0 = 包络内塞正弦
-OUTPUT_GAIN = 0.10                # 输出强度 0~1,越大越强
 SAMPLE_RATE_HZ = 400_000_000.0    # IQ 采样率 400 MS/s,固定
 GAUSSIAN_DURATION_NS = 100.0      # 这一包脉冲总时长(ns)
 GAUSSIAN_FWHM_NS = 40.0           # 高斯包络半高全宽(ns),越小越"瘦"
-GAUSSIAN_AMPLITUDE = 3_276        # 满幅 ~32768,留余量防削顶
+GAUSSIAN_AMPLITUDE = 1.0         # 峰值幅度,归一化到 [-1, 1],1 = 满幅(默认最大);输出强度只由它决定
 
 UDP_TIMEOUT_S = 2.0
 UDP_RETRIES = 3
@@ -80,12 +79,31 @@ def wait_rfdc_ready(device: Dr47Device) -> None:
     raise TimeoutError("RFDC/DAC MTS/NCO did not become ready")
 
 
-def wait_state(device: Dr47Device, expected: PlaybackState, label: str) -> None:
+def wait_state(device: Dr47Device, expected: PlaybackState, label: str, session: int = 0) -> None:
+    """Poll until the board reaches ``expected``.
+
+    Uses the WAVE STATUS register (``waveform_status``) rather than the coarse
+    RFCTRL2 ``status().state``.  The RFCTRL2 status only reports IDLE/READY/
+    WAIT_TRIGGER/PLAYING and keeps ``prepared`` set after a record finishes, so
+    a short one-shot record never appears to leave WAIT_TRIGGER.  The WAVE
+    status machine carries the full state (including ``done``).
+
+    The default record is a single ~100 ns Gaussian pulse, so PLAY may admit
+    (playing) and finish (done) inside one poll interval; both are success.
+    READY is not: it means the record never left the idle-prepared state.
+    ERROR stops the wait immediately with the board's status code.
+    """
     deadline = time.monotonic() + PLAYBACK_TIMEOUT_S
     while time.monotonic() < deadline:
-        actual = device.status(refresh=True).state
+        st = device.waveform_status(session=session)
+        actual = PlaybackState(st.get("state_name", st.get("state")))
         if actual is expected:
             return
+        if expected is PlaybackState.PLAYING and actual is PlaybackState.DONE:
+            return
+        if actual is PlaybackState.ERROR:
+            raise RuntimeError(f"{label}: board entered error (status={st.get('status')}, "
+                               f"error_code={st.get('error_code')})")
         time.sleep(POLL_INTERVAL_S)
     raise TimeoutError(f"{label}: expected {expected.value}")
 
@@ -124,7 +142,6 @@ def run() -> int:
         print(f"[2/4] configure channels {OUTPUT_CHANNELS} @ {RF_FREQUENCY_GHZ} GHz")
         for channel in OUTPUT_CHANNELS:
             device.set_xy_target_frequency(channel, RF_FREQUENCY_GHZ)
-            device.set_gain("xy", channel, OUTPUT_GAIN)
             device.set_qc_on_off("xy", channel, "on")
         device.commit()
 
@@ -141,7 +158,7 @@ def run() -> int:
 
         print("[4/4] send one software PLAY (observe the scope now)")
         device.play(session=session)
-        wait_state(device, PlaybackState.PLAYING, "software PLAY")
+        wait_state(device, PlaybackState.PLAYING, "software PLAY", session)
         print(f"PASS: WAVECTR0 software PLAY admitted for session={session}")
         return 0
     except (DriverError, RuntimeError, TimeoutError, ValueError) as error:

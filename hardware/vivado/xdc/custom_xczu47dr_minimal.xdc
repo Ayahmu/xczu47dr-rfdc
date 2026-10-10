@@ -53,9 +53,7 @@ set_property PACKAGE_PIN A9 [get_ports EXT_TRIGGER_N]
 set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_P]
 set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_N]
 
-# The 100G QSFP28 link constraints live in custom_xczu47dr_100g.xdc.  The
-# retired 10G SFP+ link is removed; no sfp_* ports remain in the production
-# top module.
+# The 100G QSFP28 link constraints live in custom_xczu47dr_100g.xdc.
 
 # First-stage synchronizer inputs that cross unrelated clocks.  Only stage 0 is
 # asynchronous; downstream stages stay timed.

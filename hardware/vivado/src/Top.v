@@ -2152,8 +2152,6 @@ module Top #(
 
   localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
 
-  wire         ex_fifo_clear;
-
   // The descriptor reader/FIFO/DAC path below is the only waveform playback
   // executor in the production design. The historical instruction executor is
   // intentionally not instantiated; its status fields remain zero-valued for
@@ -2187,7 +2185,6 @@ module Top #(
   assign cfg_repeat_count = wave_descriptor_loop_count;
   assign cfg_debug_alternate = 1'b0;
   assign cfg_commit = 1'b0;
-  assign ex_fifo_clear = wave_begin_valid | wave_pause_valid | wave_stop_valid | wave_abort_valid;
   assign ex_dbg_st = 3'd0;
   assign ex_dbg_dm_st = 2'd0;
   assign ex_dbg_dm_sel_ch1 = 1'b0;
@@ -2494,9 +2491,11 @@ module Top #(
       wave_fifo_credit_mask_ddr_reg <= wave_descriptor_channel_mask;
       // reader_credit is the real write-side free depth, already produced by
       // the mask adapter's four-stage pipeline.  This extra register is a
-      // final timing buffer before the 300 MHz AR-reservation logic; a
-      // few-cycle-stale credit stays conservative because the reader's own
-      // in-flight `reserved` counter debits reservations against it.
+      // final timing buffer before the 300 MHz AR-reservation logic.  A write
+      // reaches this credit 6 cycles later (XPM count register, four adapter
+      // stages, this register); the reader holds each written frame's credit
+      // for READER_CREDIT_LATENCY (8) cycles to cover that.  Adding a stage
+      // here or in the adapter must stay within that hold.
       wave_fifo_reader_credit_ddr_reg <= new_fifo_reader_credit;
     end
   end
@@ -2654,7 +2653,11 @@ module Top #(
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn) begin
       wave_fifo_reset_cnt <= 5'd0;
-    end else if(ex_fifo_clear || new_fifo_clear_ddr) begin
+    end else if(new_fifo_clear_ddr) begin
+      // The playback path is the only FIFO-clear authority: it waits for the
+      // DDR reader to retire and, for BEGIN/PAUSE/STOP, for the DAC FSM to
+      // acknowledge the command, so the DAC side never sees its FIFOs vanish
+      // while it is still PLAYING or WAIT_TRIGGER.
       wave_fifo_reset_cnt <= 5'd16;
     end else if(wave_fifo_reset_cnt != 5'd0) begin
       wave_fifo_reset_cnt <= wave_fifo_reset_cnt - 5'd1;

@@ -5,14 +5,14 @@ export type NcoMode = 'auto' | 'manual'
 export type PlayMode = 'single' | 'continuous_sine'
 export interface OutputChannelDraft {
   channel: number; enabled: boolean; waveform: ManualChannel['waveform']; format: 'iq' | 'real'; targetRfGhz: number; dataAmplitude: number;
-  dataPhaseDeg: number; dataOffsetMhz: number; channelDurationNs: number; delayNs: number; dacCurrentMa: number; ncoMode: NcoMode;
+  dataPhaseDeg: number; dataOffsetMhz: number; channelDurationNs: number; delayNs: number; ncoMode: NcoMode;
   ncoMhz: number; ncoPhaseDeg: number; nyquistZone: 1 | 2; calibrationPhaseDeg: number; calibrationNcoMhz: number;
 }
 export interface OutputDraft {
   name: string; playMode: PlayMode; loop: boolean; recordDurationNs: number; outputDurationMs: number; channels: OutputChannelDraft[];
   selectedChannels: number[]; activeChannel: number; dirty: boolean;
 }
-export type SweepAxis = 'data_amplitude' | 'data_offset_hz' | 'data_phase_deg' | 'target_rf_hz' | 'nco_hz' | 'nco_phase_deg' | 'dac_output_current_ma'
+export type SweepAxis = 'data_amplitude' | 'data_offset_hz' | 'data_phase_deg' | 'target_rf_hz' | 'nco_hz' | 'nco_phase_deg'
 export interface SweepDraft {
   name: string; axis: SweepAxis; start: number; stop: number; step: number; mode: 'manual' | 'automatic';
   settleMs: number; autoMute: boolean; dirty: boolean;
@@ -26,8 +26,8 @@ function defaultChannel(channel: number): OutputChannelDraft {
   const targetRfGhz = targetDefaults[channel - 1]
   const plan = ncoPlan(targetRfGhz)
   const waveform: ManualChannel['waveform'] = channel <= 4 ? 'xy' : channel <= 6 ? 'z' : 'readout'
-  return { channel, enabled: channel <= 2, waveform, format: channel <= 6 && channel >= 5 ? 'real' : 'iq', targetRfGhz, dataAmplitude: 0.5, dataPhaseDeg: 0,
-    dataOffsetMhz: 20, channelDurationNs: 500, delayNs: 0, dacCurrentMa: 20, ncoMode: 'auto', ncoMhz: plan.ncoMhz,
+  return { channel, enabled: channel <= 2, waveform, format: channel <= 6 && channel >= 5 ? 'real' : 'iq', targetRfGhz, dataAmplitude: 1, dataPhaseDeg: 0,
+    dataOffsetMhz: 20, channelDurationNs: 500, delayNs: 0, ncoMode: 'auto', ncoMhz: plan.ncoMhz,
     ncoPhaseDeg: 0, nyquistZone: plan.nyquistZone, calibrationPhaseDeg: 0, calibrationNcoMhz: 0 }
 }
 function defaultDraft(): OutputDraft {
@@ -57,17 +57,15 @@ function hydrate(draft: OutputDraft, rfdc?: BoardRfdcConfig | null, records: Pha
       if (typeof channel.dataAmplitude !== 'number') channel.dataAmplitude = source.data_amplitude
       if (typeof channel.dataPhaseDeg !== 'number') channel.dataPhaseDeg = source.data_phase_deg
       if (typeof channel.dataOffsetMhz !== 'number') channel.dataOffsetMhz = source.data_offset_hz / 1e6
-      if (typeof channel.dacCurrentMa !== 'number') channel.dacCurrentMa = source.dac_output_current_ma
       if (typeof channel.ncoMhz !== 'number') channel.ncoMhz = source.nco_hz / 1e6
       if (typeof channel.ncoPhaseDeg !== 'number') channel.ncoPhaseDeg = source.nco_phase_deg
       if (channel.nyquistZone !== 1 && channel.nyquistZone !== 2) channel.nyquistZone = source.nyquist_zone
     }
-    if (typeof channel.dataAmplitude !== 'number') channel.dataAmplitude = 0.5
+    if (typeof channel.dataAmplitude !== 'number') channel.dataAmplitude = 1
     if (typeof channel.dataPhaseDeg !== 'number') channel.dataPhaseDeg = 0
     if (typeof channel.dataOffsetMhz !== 'number') channel.dataOffsetMhz = 0
     if (typeof channel.channelDurationNs !== 'number') channel.channelDurationNs = 500
     if (typeof channel.targetRfGhz !== 'number') channel.targetRfGhz = targetDefaults[channel.channel - 1] ?? 4.5
-    if (typeof channel.dacCurrentMa !== 'number') channel.dacCurrentMa = 20
     if (typeof channel.ncoMhz !== 'number') channel.ncoMhz = ncoPlan(channel.targetRfGhz).ncoMhz
     if (typeof channel.ncoPhaseDeg !== 'number') channel.ncoPhaseDeg = 0
     if (channel.nyquistZone !== 1 && channel.nyquistZone !== 2) channel.nyquistZone = ncoPlan(channel.targetRfGhz).nyquistZone
@@ -153,7 +151,7 @@ export function outputWaveform(draft: OutputDraft): WaveformRequest {
   const continuousSine = draft.playMode === 'continuous_sine'
   return { name: draft.name, mode: 'manual', loop: continuousSine, record_duration_ns: draft.recordDurationNs,
     manual_channels: draft.channels.map((item) => {
-      const dataAmplitude = typeof item.dataAmplitude === 'number' ? item.dataAmplitude : 0.5
+      const dataAmplitude = typeof item.dataAmplitude === 'number' ? item.dataAmplitude : 1
       const dataOffsetMhz = typeof item.dataOffsetMhz === 'number' ? item.dataOffsetMhz : 0
       return { channel: item.channel, enabled: item.enabled, waveform: item.waveform, format: item.format,
       frequency_mhz: dataOffsetMhz, data_offset_mhz: dataOffsetMhz, phase_deg: typeof item.dataPhaseDeg === 'number' ? item.dataPhaseDeg : 0,
@@ -175,14 +173,13 @@ export function outputRfdc(boardId: string, draft: OutputDraft, base: BoardRfdcC
     const targetRfGhz = typeof item.targetRfGhz === 'number' ? item.targetRfGhz : 0
     const ncoMhz = typeof item.ncoMhz === 'number' ? item.ncoMhz : 0
     const nyquistZone = item.nyquistZone === 2 ? 2 : 1
-    const dataAmplitude = typeof item.dataAmplitude === 'number' ? item.dataAmplitude : 0.5
+    const dataAmplitude = typeof item.dataAmplitude === 'number' ? item.dataAmplitude : 1
     const plan: { ncoMhz: number; nyquistZone: 1 | 2 } = item.ncoMode === 'auto' ? ncoPlan(targetRfGhz) : { ncoMhz, nyquistZone }
     return { ...source, target_rf_hz: real ? 0 : targetRfGhz * 1e9, nco_hz: real ? 0 : (plan.ncoMhz + (typeof item.calibrationNcoMhz === 'number' ? item.calibrationNcoMhz : 0)) * 1e6,
       nyquist_zone: real ? 1 : plan.nyquistZone, data_offset_hz: (typeof item.dataOffsetMhz === 'number' ? item.dataOffsetMhz : 0) * 1e6,
       data_amplitude: dataAmplitude, data_phase_deg: typeof item.dataPhaseDeg === 'number' ? item.dataPhaseDeg : 0,
       nco_phase_deg: typeof item.ncoPhaseDeg === 'number' ? item.ncoPhaseDeg : 0,
-      calibration_phase_deg: typeof item.calibrationPhaseDeg === 'number' ? item.calibrationPhaseDeg : 0,
-      dac_output_current_ma: typeof item.dacCurrentMa === 'number' ? item.dacCurrentMa : 20 }
+      calibration_phase_deg: typeof item.calibrationPhaseDeg === 'number' ? item.calibrationPhaseDeg : 0 }
   })
   return { ...base, board_id: boardId, channels }
 }

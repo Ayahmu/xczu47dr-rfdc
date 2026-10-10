@@ -54,8 +54,7 @@ set_property IOSTANDARD LVCMOS25 [get_ports qsfp_resetn]
 # The 100G UDP stack uses asynchronous FIFOs between the DDR/user clock
 # domain and the CMAC TX/RX user clocks.  Constrain the pointer and handshake
 # synchronizers as CDC paths so implementation is not forced to time unrelated
-# clocks to near-zero phase alignments.  (Mirrors the retired 10G SFP+ CDC
-# set; the instance hierarchy moved from udp_10g_i to udp_100g_i.)
+# clocks to near-zero phase alignments.
 set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get_cells -quiet -hierarchical -regexp {.*udp_100g_i/core_inst/eth_mac_10g_fifo_inst/.*/fifo_inst/.*sync.*_reg_reg\[[0-9]+\]}]]
 set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME =~ D} -of_objects [get_cells -quiet -hierarchical -regexp {.*udp_100g_i/core_inst/eth_mac_10g_fifo_inst/.*/fifo_inst/.*sync.*_reg}]]
 

@@ -9,8 +9,16 @@
 // CLEAR/PLAYING are controlled by the session FSM. Before closing PLAYING or
 // clearing a FIFO it must finish any presented/stalled beat (or reset the AXI
 // sink as part of fault recovery); changing PLAYING mid-stall is not legal.
+//
+// WRAP is asserted by the session FSM while another pass of a looped
+// descriptor follows the current one.  The last beat of the pass then returns
+// the position to 0 in the same cycle, so the next pass streams from the FIFO
+// without a single idle beat (the DDR reader already queued it behind the
+// current pass).  FIRST_TRANSFER (TRIG_1) is re-armed at the wrap so every
+// pass still emits its start marker.
 module waveform_dac_stream (
     input wire clk, input wire rst_n, input wire playing, input wire clear,
+    input wire wrap,
     input wire [7:0] channel_mask, input wire [31:0] total_beats,
     input wire [2047:0] fifo_data, input wire [7:0] fifo_valid,
     output wire [7:0] fifo_ready,
@@ -60,8 +68,12 @@ module waveform_dac_stream (
     else if(clear) begin sent<=0;first_sent<=0;beat_position<=0;underflow_count<=0;end
     else begin
       if (underflow && underflow_count != 32'hffffffff) underflow_count <= underflow_count + 1'b1;
-      if(first_transfer) first_sent<=1;
-      if(beat_fire) begin sent<=0;beat_position<=beat_position+1'b1;end
+      if(beat_fire&&beat_last&&wrap) first_sent<=0;
+      else if(first_transfer) first_sent<=1;
+      if(beat_fire) begin
+        sent<=0;
+        beat_position<=(beat_last&&wrap) ? 32'd0 : beat_position+1'b1;
+      end
       else sent<=sent|fire;
     end
   end

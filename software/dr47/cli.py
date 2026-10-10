@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 
+from ._version import __version__
 from .device import Dr47Device
 from .errors import DriverError
 from .network import discover_boards, parse_ip_pool, prepare_interface, provision_board
@@ -44,6 +45,7 @@ def _print_boards(boards, as_json: bool) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dr47-network", description="XCZU47DR switched multi-board network enrollment")
+    parser.add_argument("--version", action="version", version=f"dr47-network (47dr-driver {__version__})")
     sub = parser.add_subparsers(dest="command", required=True)
     discover = sub.add_parser("discover", help="broadcast NETWORK_GET")
     _common_discovery(discover)

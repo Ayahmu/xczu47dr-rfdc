@@ -15,6 +15,18 @@ proc rf2_identity_source_commit {script_path} {
     return [string tolower [string range [string trim ${git_head}] 0 7]]
 }
 
+# 1 when tracked files differ from HEAD.  The 32-bit RF2_SOURCE_COMMIT_ID
+# cannot express this, so it is recorded in the manifest (and the XSA) and
+# printed, letting a bitstream built from uncommitted edits be told apart from
+# one built from the commit it names.
+proc rf2_identity_source_dirty {script_path} {
+    set repo_root [rf2_identity_repo_root $script_path]
+    if {[catch {exec git -C ${repo_root} status --porcelain --untracked-files=no} changes] != 0} {
+        return 1
+    }
+    return [expr {[string trim ${changes}] ne ""}]
+}
+
 proc rf2_identity_profile_id {target} {
     if {$target eq "custom_xczu47dr_bw"} {
         return 3
@@ -22,13 +34,16 @@ proc rf2_identity_profile_id {target} {
     return 1
 }
 
-proc rf2_identity_write_manifest {manifest_file target source_commit build_profile_id trigger_path_version ila_enabled} {
+proc rf2_identity_write_manifest {manifest_file target source_commit build_profile_id trigger_path_version ila_enabled {source_dirty 0}} {
     set parent [file dirname ${manifest_file}]
     file mkdir ${parent}
     set fd [open ${manifest_file} w]
-    puts ${fd} [format {{"target":"%s","protocol_version":3,"build_profile_id":%d,"trigger_path_version":%d,"source_commit":"%s","ila_enabled":%d}} \
-        ${target} ${build_profile_id} ${trigger_path_version} ${source_commit} ${ila_enabled}]
+    puts ${fd} [format {{"target":"%s","protocol_version":3,"build_profile_id":%d,"trigger_path_version":%d,"source_commit":"%s","source_dirty":%d,"ila_enabled":%d}} \
+        ${target} ${build_profile_id} ${trigger_path_version} ${source_commit} ${source_dirty} ${ila_enabled}]
     close ${fd}
+    if {${source_dirty}} {
+        puts "WARNING: building from a working tree with uncommitted changes; RF2_SOURCE_COMMIT_ID=${source_commit} names HEAD, not the exact sources"
+    }
 }
 
 proc rf2_identity_manifest_value {manifest key} {
@@ -81,6 +96,37 @@ proc rf2_identity_validate_project {manifest_file target script_path} {
         }
     }
     return ${manifest}
+}
+
+# The project-level checks above compare the CURRENT project defines with
+# HEAD.  They cannot see what synthesis actually compiled: if HEAD moves while
+# synth_1 runs, or the defines/manifest are re-stamped afterwards, the netlist
+# keeps the old RF2_SOURCE_COMMIT_ID while the manifest and XSA claim the new
+# one.  synth_1's generated run script records the defines it was launched
+# with, so compare that value with the manifest at every stage that consumes
+# the synthesized netlist.
+proc rf2_identity_validate_synth_run {manifest_file run_name top_module} {
+    set manifest [rf2_identity_read_manifest ${manifest_file}]
+    set expected [string tolower [rf2_identity_manifest_value ${manifest} source_commit]]
+    set run [get_runs -quiet ${run_name}]
+    if {[llength ${run}] == 0} {
+        error "cannot validate build identity: run ${run_name} does not exist"
+    }
+    set run_script [file join [get_property DIRECTORY ${run}] "${top_module}.tcl"]
+    if {![file exists ${run_script}]} {
+        error "cannot validate build identity: ${run_script} is missing"
+    }
+    set fd [open ${run_script} r]
+    set text [read ${fd}]
+    close ${fd}
+    if {![regexp {RF2_SOURCE_COMMIT_ID=32'h([0-9a-fA-F]+)} ${text} -> compiled]} {
+        error "${run_script} does not define RF2_SOURCE_COMMIT_ID"
+    }
+    set compiled [string tolower ${compiled}]
+    if {${compiled} ne ${expected}} {
+        error "synthesized netlist identity ${compiled} differs from build manifest ${expected}; re-run synthesis from the current sources"
+    }
+    puts "INFO: synthesized netlist identity ${compiled} matches the build manifest"
 }
 
 proc rf2_identity_stamp {artifact manifest_file} {

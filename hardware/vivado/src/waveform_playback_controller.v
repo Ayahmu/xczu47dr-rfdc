@@ -26,6 +26,9 @@ module waveform_playback_controller (
     input  wire [31:0] loop_count,
     output reg [3:0] state,
     output wire dac_gate,
+    // High while PLAYING a pass that is followed by another pass; the DAC
+    // stream wraps its beat position on that pass's last beat.
+    output wire loop_wrap,
     output reg loop_restart,
     output reg [31:0] loop_position,
     output reg [31:0] trigger_seen_count,
@@ -56,6 +59,9 @@ module waveform_playback_controller (
                            !stop_cmd && !pause_cmd;
 
   assign dac_gate = (state == ST_PLAYING);
+  // loop_position counts completed passes of the current session.
+  assign loop_wrap = (state == ST_PLAYING) && (loop_count > 32'd1) &&
+                     (loop_position + 32'd1 < loop_count);
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -133,14 +139,11 @@ module waveform_playback_controller (
             play_pending <= 1'b0;
           end
           ST_PLAYING: if (stream_fire && beat_last) begin
-            if (loop_count > 32'd1 && loop_position + 32'd1 < loop_count) begin
-              // The current descriptor remains valid.  Ask the DDR domain to
-              // clear/refill the FIFOs and automatically continue; a loop
-              // boundary never re-enters WAIT_TRIGGER.
-              state <= ST_PREFETCH;
-              play_pending <= 1'b1;
+            if (loop_wrap) begin
+              // The DDR reader streams every pass back to back into the
+              // FIFOs, so the next pass is already queued behind this one:
+              // stay in PLAYING with the gate open (seamless loop).
               loop_position <= loop_position + 32'd1;
-              loop_restart <= 1'b1;
             end else begin
               state <= ST_DRAINING;
               loop_position <= 32'd0;

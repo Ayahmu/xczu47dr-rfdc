@@ -7,7 +7,7 @@ module tb_waveform_event_priority;
   reg trigger_event=0, prefetch_done=0, fifo_safe=0, fifo_empty=0, axi_error=0;
   reg beat_valid=0, beat_ready=0, beat_last=0;
   reg [31:0] loop_count=1;
-  wire [3:0] state; wire dac_gate; wire loop_restart; wire [31:0] loop_position;
+  wire [3:0] state; wire dac_gate; wire loop_wrap; wire loop_restart; wire [31:0] loop_position;
   wire [31:0] trigger_seen_count,trigger_dropped_count,trigger_fire_count;
   waveform_playback_controller dut(.*);
   integer failures=0;

@@ -8,7 +8,7 @@
     <mxCell id="g1" value="控制面 / 网络 — 300.12 MHz" style="whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;fontSize=15;fontStyle=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
       <mxGeometry x="40" y="130" width="545" height="680" as="geometry"/>
     </mxCell>
-    <mxCell id="g1a" value="万兆以太网收发&#10;MAC + UDP/IP 协议栈" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">
+    <mxCell id="g1a" value="100G 以太网收发&#10;CMAC + UDP/IP 协议栈" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">
       <mxGeometry x="20" y="40" width="505" height="72" as="geometry"/>
     </mxCell>
     <mxCell id="g1b" value="波形接收与写入 DDR&#10;校验 / 分类 / 打包" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">
@@ -23,7 +23,7 @@
     <mxCell id="g1e" value="网络地址配置&#10;芯片序列号派生 MAC / IP" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">
       <mxGeometry x="20" y="376" width="505" height="72" as="geometry"/>
     </mxCell>
-    <mxCell id="g1f" value="RF-DAC 运行期配置&#10;输出频率 / 增益实时调整" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">
+    <mxCell id="g1f" value="RF-DAC 运行期配置&#10;输出频率实时调整" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">
       <mxGeometry x="20" y="460" width="505" height="72" as="geometry"/>
     </mxCell>
     <mxCell id="g1g" value="TDC 标定寄存器&#10;标定表读写 / 监测" style="whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82B366;fontSize=14;" vertex="1" parent="g1">

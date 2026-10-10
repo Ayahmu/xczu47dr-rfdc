@@ -230,7 +230,6 @@ watch(boardId, load)
         <div><dt>目标 RF</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.targetRfGhz.toFixed(3) + ' GHz').join('；') }}</dd></div>
         <div><dt>数据幅值</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.dataAmplitude).join('；') }}</dd></div>
         <div><dt>模式与时长</dt><dd>{{ modeLabel }} · {{ runDurationLabel }}{{ isContinuous && draft.outputDurationMs <= 0 ? '' : ' 后自动静音' }}</dd></div>
-        <div><dt>DAC 电流</dt><dd>{{ enabledChannels.map(item => 'CH' + item.channel + ' ' + item.dacCurrentMa + ' mA').join('；') }}</dd></div>
       </dl>
       <template #footer><el-button @click="confirmOpen = false">返回检查</el-button><el-button type="primary" :loading="sendBusy" @click="send">确认并发送</el-button></template>
     </el-dialog>

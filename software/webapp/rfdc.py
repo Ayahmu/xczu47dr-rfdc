@@ -190,10 +190,8 @@ class RfdcConfigService:
                 "actual_nco_hz": float(actual["nco_hz"]),
                 "actual_nyquist_zone": int(actual["nyquist_zone"]),
                 "actual_nco_phase_deg": float(actual["nco_phase_deg"]),
-                "actual_dac_output_current_ma": float(actual["dac_output_current_ma"]),
                 "nco_word": int(actual["nco_word"]),
                 "phase_word": int(actual["phase_word"]),
-                "vop_code": int(actual["vop_code"]),
                 "hardware_status": int(actual["status"]),
             }))
         return base.model_copy(update={

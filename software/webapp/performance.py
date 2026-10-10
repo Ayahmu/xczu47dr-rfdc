@@ -377,7 +377,7 @@ class PerformanceService:
             # A point may contain a complete per-channel snapshot. The legacy
             # top-level fields below remain supported for old saved tests.
             for field in (
-                "dac_output_current_ma", "data_offset_hz", "data_amplitude",
+                "data_offset_hz", "data_amplitude",
                 "data_phase_deg", "nco_phase_deg",
             ):
                 if field in channel_params:

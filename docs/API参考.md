@@ -7,7 +7,7 @@
 ## 安装与导入
 
 ```bash
-python -m pip install 47dr_driver-0.1.0-py3-none-any.whl
+python -m pip install 47dr_driver-<版本>-py3-none-any.whl
 ```
 
 ```python
@@ -99,7 +99,6 @@ device = connect_discovered(board)
 
 ```python
 device.set_xy_target_frequency(channel=1, target_rf_ghz=4.0, dac_fs_ghz=6.4)
-device.set_gain("xy", 1, gain=0.7, gain_type="norm")
 device.set_qc_on_off("xy", 1, "on")
 device.commit()
 ```
@@ -108,10 +107,9 @@ device.commit()
 | --- | --- | --- |
 | `set_xy_target_frequency(channel, target_rf_ghz, dac_fs_ghz=6.4)` | 通道 1-8、目标模拟频率和 DAC 采样率。 | 返回 NCO/Nyquist 规划字典；目标频率必须在 `[0, dac_fs_ghz]`。 |
 | `set_xy_nco_frequency(channel, frequency_ghz)` | 通道 1-8，RFDC NCO，范围约 `-3.2..3.2 GHz`。 | 返回状态码。 |
-| `set_gain(channel_type, channel, gain=1.0, gain_type="norm")` | `channel_type` 为 `xy` 或 `z`；`gain_type` 为 `norm`、`dbm`、`code` 或 `volt`。 | 返回状态码；`norm` 取值 `0..1`。 |
 | `set_qc_on_off(channel_type, channel, on_off="on")` | 输出类型、通道和 `on`/`off`。 | 返回状态码。 |
 | `set_qr_on_off(gen_type, channel, on_off="on")` | 读取/DAQ 路径控制；当前硬件不支持 ADC 输入。 | 返回状态码或抛出 `UnsupportedParameterError`。 |
-| `apply_rfdc_config(nco_ghz=None, nyquist_zone=None, phase_deg=None, output_current_ma=None, revision=None, channel_mask=0xff)` | Mapping（键为通道号）或 8 项 Sequence；可一次提交多通道。 | 返回状态码。 |
+| `apply_rfdc_config(nco_ghz=None, nyquist_zone=None, phase_deg=None, revision=None, channel_mask=0xff)` | Mapping（键为通道号）或 8 项 Sequence；可一次提交多通道。 | 返回状态码。 |
 | `commit()` | 无参数。批量提交暂存的 RFDC 配置。 | 返回状态码。播放器必须处于 `idle`；忙时会抛出/处理 `DeviceBusyError`。 |
 
 `set_xy_target_frequency(1, 4.0)` 会返回类似 `{"nco_ghz": -2.4,
@@ -146,13 +144,17 @@ from dr47 import (
 )
 
 wave = make_iq_gaussian_sine_interleaved(
-    frequency_hz=50e6, phase_rad=0.0, amplitude=12000,
+    frequency_hz=50e6, phase_rad=0.0, amplitude=0.4,
     sample_rate_hz=400e6, duration_s=2e-6, fwhm_s=0.6e-6,
 )
 record, info = make_burst_record(
     wave, first_delay_ns=0, interval_ns=1000, sample_rate_hz=400e6,
 )
 ```
+
+输出强度只由波形样点幅度决定。`amplitude` 归一化到 `[-1, 1]`，`1` 是满幅（int16 的
+32767，也是默认的最大输出）；负值表示反相。超出 `[-1, 1]` 或非有限值会抛出
+`ParameterRangeError`，不会静默截断，所以旧代码里传入的整型 DAC 码会立即报错。
 
 主要函数参数：
 
@@ -191,12 +193,20 @@ print(board.waveform_status(session=1))
 `DATA` 由设备按期望 sequence 接收；缺包、乱序、越界和 CRC 错误不会改变累计确认。
 重复包只返回当前 `next_expected_sequence` 和 `received_bytes`。`COMMIT` 只有在全部
 bytes 连续接收后成功，并自动进入 `PREFETCH`。启动水位达到后进入 `WAIT_TRIGGER`；
-`PLAY` 或合法外部 Trigger 的第一个事件进入 `PLAYING`。`PAUSE`/`STOP` 清空 FIFO 并
-保留 descriptor，下一次 `PLAY` 从波形起点重新预取；`ABORT` 清除 descriptor 和错误。
+`PLAY` 或合法外部 Trigger 的第一个事件进入 `PLAYING`。`PAUSE`/`STOP` 回到 `READY`、
+清空 FIFO 并保留 descriptor，下一次 `PLAY` 从波形起点重新预取；`ABORT` 清除
+descriptor 和错误。`play()`、`pause()`、`stop()`、`abort()` 被板端拒绝时抛出
+`DeviceStatusError`（例如在 `ERROR` 状态下 `PLAY`），不会静默返回。
 
 `upload_waveforms()` 是上述流程的便捷封装，会把输入通道补零并打包为统一 interleaved
 图像，然后执行 BEGIN、DATA 和 COMMIT。`loop_count` 表示包含首轮在内的总播放次数；
-它不接受 instruction sequence 或播放延迟参数。
+它不接受 instruction sequence 或播放延迟参数。各轮之间无缝衔接：DDR 读取器把所有轮次
+连续送入 FIFO，DAC 输出在轮次边界不插入空闲拍；TRIG_1 在每一轮的第一拍各输出一次。
+单轮过短时读取器的 DDR 往返延迟无法被流水掩盖，播放会以 underflow 进入 `ERROR`。
+板上实测：单轮 2 拍（40 ns）在约 5000 轮后 underflow，3 拍（60 ns）及以上 2 秒连续循环
+无 underflow。整条流（单轮拍数 × `loop_count`）不超过 1024 拍时会在开始前整体预取，
+不受此限制。驱动在 BEGIN 前拒绝单轮少于 3 拍且整条流超过 1024 拍的组合
+（`ParameterRangeError`）；需要更短的周期时，把记录重复到至少 3 拍再循环。
 
 ## 外部 Trigger
 

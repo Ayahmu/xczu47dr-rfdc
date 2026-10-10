@@ -6,14 +6,13 @@
 //
 // This module mirrors the reference 100G example's udp_100G top but targets
 // the 47DR QSFP28 cage (BANK 128, GT quad X0Y4~X0Y7) instead of the VU13P
-// card.  It carries the same extended control-plane interface as the
-// production 10G module (network identity, response stream, packet
-// classifier outputs), so the Top.v integration point is a drop-in swap:
+// card and carries the board's control-plane interface (network identity,
+// response stream, packet classifier outputs):
 //
 //   CMAC (512-bit, RS-FEC) -> ethernet_adapter_100g (512<->64) -> fpga_core
 //
-// The 64-bit UDP/IP/ARP stack in fpga_core is unchanged from the retired 10G design;
-// only the MAC/GT layer and the width adapter are new.
+// The UDP/IP/ARP stack in fpga_core is 64 bits wide; the adapter converts
+// between it and the CMAC's 512-bit segments in the CMAC user clock domain.
 module udp_100G
 (
     input   wire    [3:0]       gt_rxp_in       ,
@@ -29,7 +28,7 @@ module udp_100G
     input   wire                clk_100Mhz      ,
 
     // CMAC TX user clock, exported for the TDC code-density calibration
-    // source (same role as the XXV tx_clk_out in the retired 10G module).
+    // source.
     output  wire                calibration_clk_out,
 
     // 64-bit UDP stack / control plane domain (DDR UI clock on this board)

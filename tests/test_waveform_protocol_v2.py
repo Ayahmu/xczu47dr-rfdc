@@ -11,6 +11,7 @@ from dr47.protocol import (  # noqa: E402
     crc32,
     pack_wave_begin, pack_wave_data, pack_wave_command, parse_wave_response,
 )
+from dr47.errors import DeviceStatusError  # noqa: E402
 from dr47.simulator import SimulatedDr47Device  # noqa: E402
 from dr47.capabilities import PlaybackState  # noqa: E402
 
@@ -153,6 +154,29 @@ def test_begin_rejects_invalid_contract_before_sending(kwargs):
     with pytest.raises(ParameterRangeError): pack_wave_begin(**args)
 
 
+@pytest.mark.parametrize("beats,loops", [(1, 1025), (2, 513), (2, 10**6)])
+def test_begin_rejects_streamed_loop_with_too_short_pass(beats, loops):
+    # Looped passes shorter than three beats cannot be streamed fast enough
+    # (hardware underflows into ERROR) once the whole stream exceeds the FIFO.
+    with pytest.raises(ParameterRangeError, match="pass"):
+        pack_wave_begin(session=1, total_bytes=beats*256, total_beats=beats,
+                        channel_mask=1, loop_count=loops)
+
+
+@pytest.mark.parametrize("beats,loops", [(1, 1024), (2, 512), (3, 10**6), (1, 1), (2**20, 2)])
+def test_begin_accepts_prefetched_or_long_pass_loops(beats, loops):
+    pack_wave_begin(session=1, total_bytes=beats*256, total_beats=beats,
+                    channel_mask=1, loop_count=loops)
+
+
+def test_simulator_rejects_too_short_streamed_pass_like_begin():
+    import numpy as np
+    board = SimulatedDr47Device(); board.connect()
+    with pytest.raises(DeviceStatusError):
+        board.upload_waveforms({1: np.zeros(16, dtype=np.int16)},
+                               wave_formats={1: "interleaved_iq"}, loop_count=2000)
+
+
 @pytest.mark.parametrize("kwargs", [dict(byte_offset=2**64),dict(session=2**32),
     dict(packet_seq=-1),dict(payload=bytes(31)),dict(payload=bytes(1440)),dict(seq=1.5)])
 def test_data_fields_do_not_wrap_or_truncate(kwargs):
@@ -164,7 +188,8 @@ def test_data_fields_do_not_wrap_or_truncate(kwargs):
 def test_stop_cancels_upload_and_pause_does_not_invent_descriptor():
     board = SimulatedDr47Device(); board.connect()
     board.begin_waveform(session=1,total_bytes=256,total_beats=1,channel_mask=1)
-    assert board.pause()["status"] != 0
+    with pytest.raises(DeviceStatusError):
+        board.pause()
     result=board.stop()
     assert result["opcode"] == WAVE_OP_STOP
     assert result["state"] == 0 and result["session"] == 0 and result["descriptor"] == 0
@@ -191,8 +216,10 @@ def test_missing_status_is_not_a_successful_ack():
 def test_simulator_rejects_wrong_session_without_state_change(operation):
     board=SimulatedDr47Device(); board.connect()
     board.begin_waveform(session=3,total_bytes=256,total_beats=1,channel_mask=1)
-    response=getattr(board,operation)(session=7)
-    assert response["status"] != 0 and response["session"] == 3 and response["state"] == 1
+    with pytest.raises(DeviceStatusError):
+        getattr(board,operation)(session=7)
+    status=board.waveform_status(session=3)
+    assert status["session"] == 3 and status["state"] == 1
 
 
 def test_udp_wave_timeout_retransmits_identical_request():

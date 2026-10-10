@@ -91,7 +91,7 @@ lappend define_list RF2_SOURCE_COMMIT_ID=32'h${source_commit}
 set_property verilog_define ${define_list} [current_fileset]
 
 set build_manifest_file "${proj_dir}/build_manifest.json"
-rf2_identity_write_manifest ${build_manifest_file} ${target} ${source_commit} ${build_profile_id} ${trigger_path_version} ${enable_ila}
+rf2_identity_write_manifest ${build_manifest_file} ${target} ${source_commit} ${build_profile_id} ${trigger_path_version} ${enable_ila} [rf2_identity_source_dirty ${script_path}]
 
 set rfdc_generated_config "${vivado_dir}/../chisel/generated/rfdc_custom_xczu47dr_config.tcl"
 set ddr_generated_config "${vivado_dir}/../chisel/generated/ddr_custom_xczu47dr_config.tcl"
@@ -355,7 +355,7 @@ if {!$is_bandwidth_target && [file exists ${async_fifo_script}]} {
     puts "WARN: AXIS Async FIFO script not found: ${async_fifo_script}"
 }
 
-# Create ILA IPs used for custom 10G UDP to RFDC debug and acceptance.
+# Create ILA IPs used for UDP-to-RFDC debug and acceptance.
 set ila_udp_ddr_script "${script_path}/ila_udp_ddr.tcl"
 if {$enable_ila && !$is_bandwidth_target && [file exists ${ila_udp_ddr_script}]} {
     source ${ila_udp_ddr_script}
@@ -475,8 +475,7 @@ if {$target_generics ne ""} {
 }
 update_compile_order -fileset sources_1
 
-# The CMAC IP generates fresh under the permanent Design_Linking license;
-# no reference-DCP restore is needed (unlike the retired XXV flow).
+# The CMAC IP is generated fresh under the Design_Linking license.
 puts "INFO: CMAC IP ready (fresh generation under Design_Linking license)"
 
 puts "INFO: Project creation complete"

@@ -17,7 +17,14 @@ module waveform_playback_path #(
     // a single-outstanding one-frame reader (1,1) is latency-bound and
     // underflows streaming descriptors.
     parameter integer READER_BURST_FRAMES = 8,
-    parameter integer READER_MAX_OUTSTANDING = 4
+    parameter integer READER_MAX_OUTSTANDING = 4,
+    // DDR cycles from a FIFO write until FIFO_FREE_BEATS includes it.  Top.v
+    // derives the credit from the XPM write count (1 register), the mask
+    // adapter's four-stage max/subtract pipeline and one timing register: 6
+    // cycles.  The reader holds each written frame's credit this long, so a
+    // larger value only costs a couple of frames of headroom while a smaller
+    // one lets it reserve frames the FIFO cannot hold.
+    parameter integer READER_CREDIT_LATENCY = 8
 ) (
     input wire ddr_clk, input wire ddr_rst_n,
     input wire begin_cmd, input wire commit_cmd, input wire play_cmd,
@@ -73,14 +80,29 @@ module waveform_playback_path #(
   wire loop_restart_ddr;
   reg loop_restart_pending_ddr;
   reg loop_restart_start_ddr;
+  reg commit_pending_ddr;
+  reg commit_start_ddr;
+  reg ctrl_wait_ddr;
+  wire ctrl_ack_ddr;
   // Software PLAY re-arms the reader only when it needs a fresh prefetch
   // (READY/DONE -> PREFETCH), and that case is driven by loop_restart from the
   // controller, NOT by raw play_cmd: play_cmd also asserts on the
   // WAIT_TRIGGER -> PLAYING gate-open transition, where re-arming would
   // re-read the already-prefetched descriptor into a full FIFO (double fill)
   // and reset the prefetch accounting mid-read.
-  wire reader_start = commit_cmd | loop_restart_start_ddr;
-  wire reader_cancel = begin_cmd | pause_cmd | stop_cmd | abort_cmd;
+  wire reader_start = commit_start_ddr | loop_restart_start_ddr;
+  // BEGIN/PAUSE/STOP change what the DAC FSM may expect from the FIFOs, but
+  // they reach that FSM only after the command CDC.  Cancelling the reader or
+  // clearing the FIFOs as soon as the DDR side sees the command lets the DAC
+  // side, still PLAYING or WAIT_TRIGGER, observe an empty FIFO or a dropped
+  // PREFETCH_SAFE first; that is a genuine fault there (higher priority than
+  // STOP) and the session would end in the sticky ERROR state.  These three
+  // commands are therefore applied in the DDR domain only after the DAC FSM
+  // acknowledges it has taken them (ctrl_ack_ddr).  ABORT outranks every
+  // fault in the FSM, so it keeps immediate DDR-side effect and also works
+  // when the DAC clock is absent.
+  wire ctrl_apply_ddr = (ctrl_wait_ddr && ctrl_ack_ddr) || abort_cmd;
+  wire reader_cancel = ctrl_apply_ddr;
 
   // Pipeline large, page-sized bursts with several transactions in flight so
   // the reader's sustained throughput exceeds the DAC consumption rate.  DDR4
@@ -92,9 +114,11 @@ module waveform_playback_path #(
   // by the real min-free FIFO credit (waveform_fifo_mask_adapter.reader_credit)
   // and the reader's own in-flight `reserved` accounting, so it stays
   // overflow-safe.
-  waveform_ddr_reader #(.MAX_OUTSTANDING(READER_MAX_OUTSTANDING), .BURST_FRAMES(READER_BURST_FRAMES)) u_reader (
+  waveform_ddr_reader #(.MAX_OUTSTANDING(READER_MAX_OUTSTANDING), .BURST_FRAMES(READER_BURST_FRAMES),
+                        .CREDIT_LATENCY(READER_CREDIT_LATENCY)) u_reader (
     .clk(ddr_clk), .rst_n(ddr_rst_n), .start(reader_start), .cancel(reader_cancel),
     .base_addr(descriptor_base), .total_beats(descriptor_total_beats),
+    .loop_count(descriptor_loop_count),
     .fifo_free_beats(fifo_free_beats),
     .m_axi_araddr(m_axi_araddr), .m_axi_arlen(m_axi_arlen),
     .m_axi_arvalid(m_axi_arvalid), .m_axi_arready(m_axi_arready),
@@ -122,15 +146,26 @@ module waveform_playback_path #(
       loop_restart_pending_ddr <= 1'b0;
       loop_restart_start_ddr <= 1'b0;
       loop_restart_guard_ddr <= 8'd0;
+      commit_pending_ddr <= 1'b0;
+      commit_start_ddr <= 1'b0;
+      ctrl_wait_ddr <= 1'b0;
     end else begin
       fifo_clear_ddr_reg <= 1'b0;
       loop_restart_start_ddr <= 1'b0;
+      commit_start_ddr <= 1'b0;
       if (loop_restart_guard_ddr != 0)
         loop_restart_guard_ddr <= loop_restart_guard_ddr - 1'b1;
-      if (begin_cmd || pause_cmd || stop_cmd || abort_cmd) begin
+      if (begin_cmd || pause_cmd || stop_cmd)
+        ctrl_wait_ddr <= 1'b1;
+      if (ctrl_apply_ddr) begin
+        ctrl_wait_ddr <= 1'b0;
         clear_pending_ddr <= 1'b1;
         loop_restart_pending_ddr <= 1'b0;
       end
+      if (abort_cmd)
+        commit_pending_ddr <= 1'b0;
+      else if (commit_cmd)
+        commit_pending_ddr <= 1'b1;
       if (reader_error)
         clear_pending_ddr <= 1'b1;
       if (loop_restart_ddr) begin
@@ -150,6 +185,13 @@ module waveform_playback_path #(
         loop_restart_start_ddr <= 1'b1;
         loop_restart_pending_ddr <= 1'b0;
       end
+      // COMMIT starts the reader under the same rule, so a descriptor is never
+      // read into FIFOs whose BEGIN-time clear is still pending.
+      if (commit_pending_ddr && !commit_cmd && !ctrl_wait_ddr && !clear_pending_ddr &&
+          !reader_busy_ddr && !fifo_clear_ddr_reg && loop_restart_guard_ddr == 0) begin
+        commit_start_ddr <= 1'b1;
+        commit_pending_ddr <= 1'b0;
+      end
     end
   end
   // During PREFETCH the DAC side is gated, so the number of accepted
@@ -160,33 +202,44 @@ module waveform_playback_path #(
   // used for admission timing.
   reg [31:0] prefetched_beats_ddr;
   wire reader_frame_fire_ddr = reader_frame_valid && reader_frame_ready;
-  // Any descriptor that fits entirely in the async FIFOs is FULLY prefetched
-  // before the DAC gate opens; only a descriptor too large to fit falls back to
-  // the streaming watermark.
+  // The reader streams all LOOP_COUNT passes back to back, so the prefetch
+  // target is sized by the whole stream (passes x beats), not by one pass.
+  // A stream that fits in the async FIFOs is FULLY prefetched before the DAC
+  // gate opens, so playback drains a static FIFO and cannot underflow.  A
+  // longer stream (one long pass, or many passes of a short one) opens the
+  // gate at START_WATERMARK and must genuinely stream; the pipelined reader
+  // (READER_BURST_FRAMES x READER_MAX_OUTSTANDING) sustains more than the DAC
+  // rate for passes of at least a few frames.
   //
-  // The DDR reader keeps a single one-frame AXI burst in flight (BURST_FRAMES=1,
-  // outstanding<=1), so its sustained refill rate is well below the DAC
-  // consumption rate.  Opening the gate at START_WATERMARK while the reader is
-  // still filling therefore drains the head-start buffer and underflows a
-  // finite descriptor once it outruns the reader (measured ceiling ~875 beats
-  // at 768 watermark).  When the whole descriptor fits, waiting for the reader
-  // to finish makes playback drain a static, fully-loaded FIFO that the reader
-  // never has to keep feeding, so it cannot underflow.  START_WATERMARK is kept
-  // only for descriptors larger than the FIFO, which must genuinely stream.
-  wire [31:0] prefetch_target_ddr =
-      (descriptor_total_beats <= FIFO_DEPTH_BEATS) ?
-      descriptor_total_beats : START_WATERMARK;
+  // The descriptor is static from BEGIN to COMMIT (milliseconds), so the
+  // 11x11 product is registered off the critical path.
+  localparam integer FIFO_DEPTH_W = $clog2(FIFO_DEPTH_BEATS + 1);
+  reg stream_fits_ddr;
+  reg [31:0] prefetch_target_ddr;
+  wire total_small = descriptor_total_beats <= FIFO_DEPTH_BEATS;
+  wire loops_small = descriptor_loop_count <= FIFO_DEPTH_BEATS;
+  wire [2*FIFO_DEPTH_W-1:0] stream_small_product =
+      descriptor_total_beats[FIFO_DEPTH_W-1:0] * descriptor_loop_count[FIFO_DEPTH_W-1:0];
+  always @(posedge ddr_clk or negedge ddr_rst_n) begin
+    if (!ddr_rst_n) begin
+      stream_fits_ddr <= 1'b0;
+      prefetch_target_ddr <= START_WATERMARK;
+    end else begin
+      stream_fits_ddr <= total_small && loops_small && (descriptor_loop_count != 0) &&
+                         (stream_small_product <= FIFO_DEPTH_BEATS);
+      prefetch_target_ddr <= stream_fits_ddr ? stream_small_product : START_WATERMARK;
+    end
+  end
   wire level_safe = (descriptor_total_beats != 0) &&
       (prefetched_beats_ddr >= prefetch_target_ddr);
   always @(posedge ddr_clk or negedge ddr_rst_n) begin
     if (!ddr_rst_n) begin
       prefetched_beats_ddr <= 32'd0;
-    end else if (begin_cmd || pause_cmd || stop_cmd || abort_cmd ||
-                 commit_cmd || loop_restart_ddr ||
-                 loop_restart_start_ddr || fifo_clear_ddr_reg) begin
+    end else if (ctrl_apply_ddr || commit_cmd || commit_start_ddr ||
+                 loop_restart_ddr || loop_restart_start_ddr || fifo_clear_ddr_reg) begin
       prefetched_beats_ddr <= 32'd0;
     end else if (reader_frame_fire_ddr &&
-                 prefetched_beats_ddr < descriptor_total_beats) begin
+                 prefetched_beats_ddr < prefetch_target_ddr) begin
       prefetched_beats_ddr <= prefetched_beats_ddr + 1'b1;
     end
   end
@@ -203,7 +256,7 @@ module waveform_playback_path #(
       prefetch_complete_ddr <= 1'b0;
       prefetch_safe_ddr_reg <= 1'b0;
     end else begin
-      if (begin_cmd || pause_cmd || stop_cmd || abort_cmd || commit_cmd ||
+      if (ctrl_apply_ddr || commit_cmd || commit_start_ddr ||
           loop_restart_ddr || loop_restart_start_ddr)
         prefetch_complete_ddr <= 1'b0;
       if (reader_done_ddr && !reader_error_ddr)
@@ -416,6 +469,7 @@ module waveform_playback_path #(
   wire [31:0] controller_loop_position;
   wire [7:0] trigger_event_seen, unused_trigger;
   wire loop_restart_dac;
+  wire loop_wrap_dac;
   // The DAC stream's beat position, per-channel fire counts, first-transfer
   // flag and underflow counter belong to exactly one playback session, and a
   // session always starts from beat 0 at the beginning of a prefetch (COMMIT,
@@ -435,6 +489,14 @@ module waveform_playback_path #(
     .trigger_seen(unused_trigger[0]), .trigger_dropped(unused_trigger[1]),
     .trigger_seen_count(), .trigger_dropped_count()
   );
+  // Acknowledge BEGIN/PAUSE/STOP once the DAC FSM has applied them (the FSM
+  // updates its state on the same edge the command pops).  The source clock
+  // is the slower DAC clock, so back-to-back acknowledgements cannot merge in
+  // the toggle synchronizer.
+  waveform_pulse_sync u_ctrl_ack_sync (
+    .src_clk(dac_clk), .src_rst_n(dac_rst_n), .src_pulse(begin_dac | pause_dac | stop_dac),
+    .dst_clk(ddr_clk), .dst_rst_n(ddr_rst_n), .dst_pulse(ctrl_ack_ddr)
+  );
   waveform_pulse_sync u_loop_restart_sync (
     .src_clk(dac_clk), .src_rst_n(dac_rst_n), .src_pulse(loop_restart_dac),
     .dst_clk(ddr_clk), .dst_rst_n(ddr_rst_n), .dst_pulse(loop_restart_ddr)
@@ -453,14 +515,15 @@ module waveform_playback_path #(
     .fifo_empty(stream_underflow || any_fifo_empty),
     .axi_error(error_sync[1]), .beat_valid(stream_beat_fire), .beat_ready(1'b1),
     .beat_last(stream_beat_last), .loop_count(descriptor_loop_count_dac),
-    .state(state_dac), .dac_gate(dac_gate), .loop_restart(loop_restart_dac),
+    .state(state_dac), .dac_gate(dac_gate), .loop_wrap(loop_wrap_dac),
+    .loop_restart(loop_restart_dac),
     .loop_position(controller_loop_position),
     .trigger_seen_count(trigger_seen_count), .trigger_dropped_count(trigger_dropped_count),
     .trigger_fire_count(trigger_fire_count)
   );
   waveform_dac_stream u_dac_stream (
     .clk(dac_clk), .rst_n(dac_rst_n), .playing(dac_gate),
-    .clear(stream_clear_dac),
+    .clear(stream_clear_dac), .wrap(loop_wrap_dac),
     .channel_mask(mask_dac), .total_beats(total_beats_dac), .fifo_data(fifo_data),
     .fifo_valid(fifo_valid), .fifo_ready(fifo_read_ready), .dac_data(dac_data),
     .dac_valid(dac_valid), .dac_ready(dac_ready), .dac_last(dac_last), .dac_keep(dac_keep),

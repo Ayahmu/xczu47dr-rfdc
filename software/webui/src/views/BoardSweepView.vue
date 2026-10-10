@@ -39,11 +39,9 @@ const axes: Array<{ value: SweepAxis; label: string; unit: string; min: number; 
   { value: 'target_rf_hz', label: '最终 RF', unit: 'GHz', min: 0, max: 6.4 },
   { value: 'nco_hz', label: 'NCO 频率', unit: 'MHz', min: -3200, max: 3200 },
   { value: 'nco_phase_deg', label: 'NCO 相位', unit: 'deg', min: -3600, max: 3600 },
-  { value: 'dac_output_current_ma', label: 'DAC 输出电流', unit: 'mA', min: 2.25, max: 40.5 },
 ]
 const axisMeta = computed(() => {
   const meta = axes.find((item) => item.value === sweep.value.axis) || axes[0]
-  if (meta.value === 'dac_output_current_ma' && output.value.channels.some((item) => item.enabled && [5, 6].includes(item.channel))) return { ...meta, min: 6.4, max: 32 }
   return meta
 })
 const values = computed(() => {
@@ -60,12 +58,12 @@ const enabledChannels = computed(() => output.value.channels.filter((item) => it
 const currentIndex = computed(() => selectedTest.value?.current_point || 0)
 const nextPoint = computed(() => points.value.find((item) => item.index === currentIndex.value))
 function hardwareValue(value: number) { return sweep.value.axis === 'target_rf_hz' ? value * 1e9 : ['data_offset_hz', 'nco_hz'].includes(sweep.value.axis) ? value * 1e6 : value }
-function kind() { return ['data_amplitude', 'dac_output_current_ma'].includes(sweep.value.axis) ? 'amplitude' : ['data_phase_deg', 'nco_phase_deg'].includes(sweep.value.axis) ? 'phase' : 'frequency' }
+function kind() { return sweep.value.axis === 'data_amplitude' ? 'amplitude' : ['data_phase_deg', 'nco_phase_deg'].includes(sweep.value.axis) ? 'phase' : 'frequency' }
 function makePoints() {
   return values.value.map((value) => {
     const channel_configs: Record<string, Record<string, number>> = {}
     for (const channel of enabledChannels.value) {
-      const config: Record<string, number> = { dac_output_current_ma: channel.dacCurrentMa, data_amplitude: channel.dataAmplitude,
+      const config: Record<string, number> = { data_amplitude: channel.dataAmplitude,
         data_offset_hz: channel.dataOffsetMhz * 1e6, data_phase_deg: channel.dataPhaseDeg, target_rf_hz: channel.targetRfGhz * 1e9,
         nco_hz: channel.ncoMhz * 1e6, nco_phase_deg: channel.ncoPhaseDeg, duration_ns: channel.channelDurationNs }
       config[sweep.value.axis] = hardwareValue(value)

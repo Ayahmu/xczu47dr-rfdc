@@ -43,7 +43,7 @@ def make_record() -> np.ndarray:
     active = make_iq_gaussian_sine_interleaved(
         frequency_hz=0.0,
         phase_rad=0.0,
-        amplitude=6553,
+        amplitude=0.2,
         sample_rate_hz=sample_rate,
         duration_s=duration,
         sample_count=active_count,
@@ -124,7 +124,6 @@ def drive_once() -> None:
         else:
             raise RuntimeError("RFDC/MTS/NCO was not ready")
         device.set_xy_nco_frequency(1, 1.0)
-        device.set_gain("xy", 1, 0.2, gain_type="norm")
         device.set_qc_on_off("xy", 1, "on")
         device.commit()
         uploaded = device.upload_waveforms(

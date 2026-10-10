@@ -88,7 +88,6 @@ PULSE_DURATION_NS = 256.0
 PULSE_DELAY_NS = 200.0
 RECORD_DURATION_NS = 1024.0
 WAVEFORM_AMPLITUDE = 0.2
-GAIN = 0.2
 CHANNEL_MASK = 0x01
 
 # 抓取时关注的 ILA 探针名（与当前单板 ltx 里的真实名称一致）。
@@ -112,7 +111,7 @@ def _make_gaussian_record() -> np.ndarray:
     active = make_iq_gaussian_sine_interleaved(
         frequency_hz=BASEBAND_GHZ * 1e9,
         phase_rad=0.0,
-        amplitude=round(WAVEFORM_AMPLITUDE * 32767.0),
+        amplitude=WAVEFORM_AMPLITUDE,
         sample_rate_hz=SAMPLE_RATE_HZ,
         duration_s=duration_s,
         sample_count=active_count,
@@ -314,7 +313,6 @@ def _play_gaussian() -> None:
             raise AssertionError("主卡 RFDC 未就绪")
 
         device.set_xy_nco_frequency(1, RF_NCO_GHZ)
-        device.set_gain("xy", 1, GAIN, gain_type="norm")
         device.set_qc_on_off("xy", 1, "on")
         device.commit()
         print("上传高斯包络并等待 DDR 预取。", flush=True)

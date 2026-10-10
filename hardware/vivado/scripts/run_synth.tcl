@@ -69,8 +69,7 @@ if {[llength ${synth_run}] > 0 && [file exists ${synth_incremental_checkpoint}]}
 # The CMAC XCI is part of the normal project source set. Vivado
 # therefore carries its OOC checkpoint and scoped constraints through the
 # parent synthesis flow without a manual cell-level DCP replacement.
-# The IP is generated fresh under the Design_Linking license (no
-# reference-DCP restore dance like the retired XXV flow).
+# The IP is generated fresh under the Design_Linking license.
 set cmac_synth_xci [get_files -quiet -all *cmac_usplus_0.xci]
 if {[llength ${cmac_synth_xci}] != 1} {
     error "Expected exactly one managed CMAC XCI, found [llength ${cmac_synth_xci}]"
@@ -174,6 +173,7 @@ if {!${ila_requested} && [llength ${synth_ila_cells}] > 0} {
     error "production synthesis unexpectedly contains ILA cells"
 }
 rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
+rf2_identity_validate_synth_run ${manifest_file} synth_1 [target_config_get ${target} top_module]
 set synth_dcp [file join ${proj_dir} ${proj_name}.runs synth_1 [target_config_get ${target} top_module].dcp]
 if {[file exists ${synth_dcp}]} {
     file copy -force ${manifest_file} "${synth_dcp}.manifest.json"

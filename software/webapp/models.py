@@ -165,12 +165,11 @@ class BoardStatus(BaseModel):
 
 class RfdcChannelConfig(BaseModel):
     channel: int = Field(ge=1, le=8)
-    dac_output_current_ma: float = Field(20.0, ge=2.25, le=40.5)
     target_rf_hz: float = Field(0.0, ge=0.0, le=6.4e9)
     nco_hz: float = Field(0.0, ge=-3.2e9, le=3.2e9)
     nyquist_zone: Literal[1, 2] = 1
     data_offset_hz: float = Field(0.0, ge=-160e6, le=160e6)
-    data_amplitude: float = Field(0.5, ge=-1.0, le=1.0)
+    data_amplitude: float = Field(1.0, ge=-1.0, le=1.0)
     data_phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
     nco_phase_deg: float = Field(0.0, ge=-3600.0, le=3600.0)
     # The user-requested NCO phase remains separate from the server-side
@@ -179,10 +178,8 @@ class RfdcChannelConfig(BaseModel):
     actual_nco_hz: float | None = None
     actual_nyquist_zone: int | None = Field(default=None, ge=1, le=2)
     actual_nco_phase_deg: float | None = None
-    actual_dac_output_current_ma: float | None = None
     nco_word: int | None = None
     phase_word: int | None = None
-    vop_code: int | None = None
     hardware_status: int = 0
 
 class BoardRfdcConfig(BaseModel):
@@ -231,11 +228,6 @@ class RfdcConfigApplyRequest(BaseModel):
     def validate_channels(self) -> "RfdcConfigApplyRequest":
         if sorted(channel.channel for channel in self.channels) != list(range(1, 9)):
             raise ValueError("RFDC config requires exactly one configuration for CH1..CH8")
-        for channel in self.channels:
-            if channel.channel in (5, 6) and not 6.4 <= channel.dac_output_current_ma <= 32.0:
-                raise ValueError(
-                    f"CH{channel.channel} is DC-coupled; DAC current must be 6.4-32.0 mA"
-                )
         return self
 
 

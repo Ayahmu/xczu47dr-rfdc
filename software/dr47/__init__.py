@@ -32,8 +32,7 @@ from .network import (
     provision_board,
 )
 from .waveforms import *  # noqa: F401,F403
-
-__version__ = "0.1.0"
+from ._version import __version__
 
 __all__ = [
     "Dr47Device", "connect", "SimulatedDr47Device", "MagicMock",

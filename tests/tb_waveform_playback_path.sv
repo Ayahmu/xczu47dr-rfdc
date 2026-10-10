@@ -39,6 +39,7 @@ module tb_waveform_playback_path;
   integer wr_total = 0, fifo_rd = 0;
   wire [15:0] fifo_count = wr_total[15:0] - fifo_rd[15:0];
   integer issued=0, burst_beats=0, return_beat=0, cycles=0, firsts=0, fired=0;
+  integer q_head=0, q_tail=0; reg [8:0] q_len [0:15];
   reg responding=1;
   always @* begin
     fifo_level_beats = fifo_count;
@@ -71,9 +72,11 @@ module tb_waveform_playback_path;
     if (m_axi_arvalid && m_axi_arready) begin
       if (m_axi_araddr[7:0] != 0 || m_axi_araddr[11:0] + (m_axi_arlen+1)*64 > 4096)
         $fatal(1, "reader issued invalid burst addr=%h len=%0d", m_axi_araddr, m_axi_arlen+1);
+      // Looped descriptors keep several bursts in flight across pass
+      // boundaries, so accepted ARs are queued and answered in order.
+      q_len[q_tail % 16] <= m_axi_arlen + 1;
+      q_tail <= q_tail + 1;
       issued <= issued + 1;
-      burst_beats <= m_axi_arlen + 1;
-      return_beat <= 0;
     end
     if (fifo_write_valid && (&fifo_write_ready)) begin
       fifo_mem[wr_total[3:0]] <= fifo_write_data;
@@ -102,21 +105,20 @@ module tb_waveform_playback_path;
   always @(negedge ddr_clk) begin
     // Drive the AXI response for the following rising edge with blocking
     // assignments; the bus model must not move RLAST one cycle after RDATA.
-    if (responding && issued != 0 && burst_beats != 0) begin
+    if (m_axi_rvalid && m_axi_rready) begin
+      if (m_axi_rlast) begin
+        q_head = q_head + 1;
+        return_beat = 0;
+      end else return_beat = return_beat + 1;
+    end
+    if (responding && q_head != q_tail) begin
       m_axi_rvalid = 1'b1;
-      m_axi_rlast = return_beat == burst_beats-1;
+      m_axi_rlast = return_beat == q_len[q_head % 16] - 1;
       for (integer ch=0; ch<8; ch=ch+1)
-        m_axi_rdata[ch*64 +: 64] = ((issued-1)*16 + return_beat*8 + ch);
+        m_axi_rdata[ch*64 +: 64] = (q_head*16 + return_beat*8 + ch);
     end else begin
       m_axi_rvalid = 1'b0;
       m_axi_rlast = 1'b0;
-    end
-    if (m_axi_rvalid && m_axi_rready) begin
-      if (m_axi_rlast) begin
-        issued = issued - 1;
-        burst_beats = 0;
-        return_beat = 0;
-      end else return_beat = return_beat + 1;
     end
   end
 

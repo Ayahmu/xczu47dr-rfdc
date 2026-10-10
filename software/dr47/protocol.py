@@ -61,6 +61,13 @@ WAVE_STATUS_TIMEOUT = 10
 WAVE_STATUS_UNSAFE = 11
 
 WAVE_LAYOUT_INTERLEAVED_512B = 1
+# Looped passes are streamed back to back from DDR.  A stream of at most
+# WAVE_FIFO_DEPTH_BEATS beats (pass beats x loop_count) is prefetched whole
+# before the DAC gate opens; a longer stream must be read as fast as the DAC
+# plays it, and passes shorter than WAVE_MIN_STREAMED_PASS_BEATS are too short
+# for that (measured on hardware: 2-beat passes underflow, 3 beats sustain).
+WAVE_FIFO_DEPTH_BEATS = 1024
+WAVE_MIN_STREAMED_PASS_BEATS = 3
 WAVEFORM_STATE_ID = 0
 WAVEFORM_STATE_UPLOAD = 1
 WAVEFORM_STATE_READY = 2
@@ -266,6 +273,12 @@ def pack_wave_begin(*, session: int, total_bytes: int, channel_mask: int,
         raise ParameterRangeError("total_bytes must equal total_beats * 8 * 32 and fit DDR capacity")
     if layout != WAVE_LAYOUT_INTERLEAVED_512B:
         raise ParameterRangeError("only eight-lane interleaved layout 1 is supported")
+    if (total_beats < WAVE_MIN_STREAMED_PASS_BEATS and
+            total_beats * loop_count > WAVE_FIFO_DEPTH_BEATS):
+        raise ParameterRangeError(
+            f"a looped pass of {total_beats} beat(s) cannot be streamed: use at least "
+            f"{WAVE_MIN_STREAMED_PASS_BEATS} beats per pass (repeat the record) or keep "
+            f"beats x loop_count <= {WAVE_FIFO_DEPTH_BEATS}")
     payload = struct.pack("<IQBBHIII", session, total_bytes, channel_mask,
                           layout, 0, total_beats, loop_count, DDR_INTERLEAVED_BEAT_BYTES)
     return _pack_wave_packet(WAVE_OP_BEGIN, payload, seq=seq)
@@ -436,11 +449,19 @@ def normalize_rfdc_phase_mdeg(phase_deg: float) -> int:
     return int(round(phase * 1000.0))
 
 
+# The driver fixes the output gain at 1.0: every RFDC_APPLY carries the maximum
+# DAC output current of each channel (DC-coupled CH5/CH6: 32 mA, AC-coupled
+# others: 40.5 mA).  Output level is set only by the waveform sample amplitude.
+# Underscore-prefixed so ``from .protocol import *`` keeps it out of the package API.
+_FIXED_DAC_OUTPUT_CURRENT_MA = {
+    channel: (32.0 if channel in (5, 6) else 40.5) for channel in range(1, 9)
+}
+
+
 def pack_rfctrl2_rfdc_apply(
     per_channel_nco_hz,
     per_channel_nyquist_zone,
     per_channel_phase_deg,
-    per_channel_output_current_ma,
     revision: int,
     channel_mask: int = 0xFF,
     seq: int = 1,
@@ -459,13 +480,7 @@ def pack_rfctrl2_rfdc_apply(
         if zone not in (1, 2):
             raise ParameterRangeError(f"RFDC CH{channel} nyquist_zone must be 1 or 2")
         phase = normalize_rfdc_phase_mdeg(float(_channel_value(per_channel_phase_deg, channel, 0.0)))
-        current_ua = int(round(float(_channel_value(per_channel_output_current_ma, channel, 20.0)) * 1000.0))
-        current_min, current_max = ((6400, 32000) if channel in (5, 6) else (2250, 40500))
-        if not current_min <= current_ua <= current_max:
-            coupling = "DC" if channel in (5, 6) else "AC"
-            raise ParameterRangeError(
-                f"RFDC CH{channel} {coupling}-coupled DAC current must be in [{current_min / 1000:g}, {current_max / 1000:g}] mA"
-            )
+        current_ua = int(round(_FIXED_DAC_OUTPUT_CURRENT_MA[channel] * 1000.0))
         payload += struct.pack("<qIiII", nco, zone, phase, current_ua, 0)
     if len(payload) != RFDC_APPLY_REQUEST_HEADER_BYTES + RFDC_APPLY_CHANNELS * RFDC_APPLY_REQUEST_ENTRY_BYTES:
         raise AssertionError("RFDC apply request packing produced an unexpected size")

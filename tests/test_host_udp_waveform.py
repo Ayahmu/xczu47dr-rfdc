@@ -235,6 +235,11 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(decoded_addr, host.DDR_X_ADDR)
         self.assertEqual(decoded_payload, samples.astype("<i2").tobytes())
 
+    def test_dc_iq_tone_defaults_to_full_scale_and_accepts_negative_amplitude(self):
+        self.assertEqual(host.TONE_AMP, 1.0)
+        self.assertEqual(int(host.build_dc_iq_tone(64)[0]), 32767)
+        self.assertEqual(int(host.build_dc_iq_tone(64, amp=-1.0)[0]), -32767)
+
     def test_dc_iq_tone_uses_interleaved_i_with_zero_q(self):
         tone = host.build_dc_iq_tone(64, amp=0.5)
 
@@ -443,12 +448,11 @@ class UdpWaveformPacketTests(unittest.TestCase):
         self.assertEqual(last_addr, host.RFDC_CTRL_MAILBOX_OFFSET)
         self.assertEqual(last_payload, image[:host.RFDC_CTRL_MAILBOX_HEADER_BYTES])
 
-    def test_rfdc_runtime_mailbox_preserves_negative_phase_and_fractional_current(self):
+    def test_rfdc_runtime_mailbox_preserves_negative_phase_and_uses_fixed_current(self):
         image = host.pack_rfdc_runtime_mailbox(
             {1: -1.9e9},
             {1: 2},
             {1: -90.5},
-            {1: 40.5},
             seq=9,
             apply_mask=0x01,
         )

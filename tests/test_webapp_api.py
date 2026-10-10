@@ -261,6 +261,25 @@ class WebAppApiTests(unittest.TestCase):
         self.assertEqual(applied["config_valid_mask"], 0x31)
         self.assertIsNotNone(applied["channels"][0]["actual_nco_hz"])
 
+    def test_rfdc_config_has_no_dac_current_and_ignores_stale_clients(self):
+        leased = self.client.post("/api/boards/board-a/lease", headers=self.headers)
+        self.assertEqual(leased.status_code, 200, leased.text)
+        config = self.client.get("/api/boards/board-a/rfdc-config").json()
+        hidden = {"dac_output_current_ma", "actual_dac_output_current_ma", "vop_code"}
+        for channel in config["channels"]:
+            self.assertFalse(hidden & channel.keys(), hidden & channel.keys())
+        # An older UI draft may still send the retired field; it is ignored, never applied or echoed.
+        stale = [{**channel, "dac_output_current_ma": 2.25} for channel in config["channels"]]
+        response = self.client.post(
+            "/api/boards/board-a/rfdc-config/apply",
+            json={"channels": stale, "channel_mask": 0x01}, headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        for channel in response.json()["channels"]:
+            self.assertFalse(hidden & channel.keys(), hidden & channel.keys())
+        # The default amplitude is the maximum.
+        self.assertTrue(all(channel["data_amplitude"] == 1.0 for channel in config["channels"]))
+
     def test_phase_calibration_is_persisted_and_returned_by_exact_key(self):
         response = self.client.put(
             "/api/boards/board-a/phase-calibration",
@@ -624,7 +643,7 @@ class WebAppApiTests(unittest.TestCase):
                 "board_id": "board-a",
                 "kind": "amplitude",
                 "channels": [1],
-                "points": [{"dac_output_current_ma": 2.25, "data_amplitude": 0.5}],
+                "points": [{"data_amplitude": 0.5}],
                 "dry_run": True,
             },
             headers=self.headers,
@@ -649,7 +668,7 @@ class WebAppApiTests(unittest.TestCase):
                 "kind": "amplitude",
                 "mode": "manual",
                 "channels": [1],
-                "points": [{"dac_output_current_ma": 20.0, "data_amplitude": 0.5}],
+                "points": [{"data_amplitude": 0.5}],
                 "dry_run": True,
             },
             headers=self.headers,
@@ -686,13 +705,13 @@ class WebAppApiTests(unittest.TestCase):
                             "data_amplitude": 0.5, "data_offset_hz": 20e6,
                             "data_phase_deg": 10, "target_rf_hz": 4.5e9,
                             "nco_hz": -2e9, "nco_phase_deg": 20,
-                            "dac_output_current_ma": 20, "duration_ns": 250,
+                            "duration_ns": 250,
                         },
                         "3": {
                             "data_amplitude": 0.25, "data_offset_hz": -10e6,
                             "data_phase_deg": 90, "target_rf_hz": 4.6e9,
                             "nco_hz": -1.8e9, "nco_phase_deg": 45,
-                            "dac_output_current_ma": 22, "duration_ns": 500,
+                            "duration_ns": 500,
                         },
                     },
                 }],

@@ -26,6 +26,7 @@ puts "INFO: Opening project ${proj_file}"
 open_project ${proj_file}
 set manifest_file "${proj_dir}/build_manifest.json"
 rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
+rf2_identity_validate_synth_run ${manifest_file} synth_1 [target_config_get ${target} top_module]
 
 # The CMAC XCI remains enabled for implementation and bitstream
 # generation. Its managed OOC checkpoint is resolved by impl_1; this flow does

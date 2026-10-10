@@ -16,10 +16,12 @@
 // underflowed any streaming descriptor past ~875 beats).  The 8-lane saturate +
 // max-reduction + subtract is 29 logic levels, far too deep for the 300 MHz DDR
 // clock in one cycle, so reader_credit is produced by a THREE-STAGE pipeline
-// (per-lane masked level -> max -> FIFO_DEPTH-max).  A credit that lags a few
-// cycles is safe: it is conservative, free space changes slowly relative to the
-// pipeline depth, and the reader's own in-flight `reserved` counter debits
-// reservations against it.  fifo_ready_path/fifo_valid_lane/min_level/min_free
+// (per-lane masked level -> max -> FIFO_DEPTH-max).  The lagging credit is NOT
+// conservative by itself: a frame written inside the lag window is in neither
+// the count nor the reader's `reserved`.  The DDR reader therefore holds each
+// written frame's credit for its CREDIT_LATENCY, which must cover this pipeline
+// plus the XPM count register and Top.v's timing register.
+// fifo_ready_path/fifo_valid_lane/min_level/min_free
 // stay combinational for the per-cycle frame handshake and status.
 module waveform_fifo_mask_adapter #(
     parameter integer FIFO_DEPTH = 1024

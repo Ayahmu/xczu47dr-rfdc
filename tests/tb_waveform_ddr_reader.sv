@@ -4,6 +4,7 @@ module tb_waveform_ddr_reader;
   reg rst_n=0,start=0,cancel=0;
   reg [63:0] base_addr=64'h100000f00;
   reg [31:0] total_beats=40;
+  reg [31:0] loop_count=1;
   reg [15:0] fifo_free_beats=1024;
   wire [63:0] m_axi_araddr;wire [7:0] m_axi_arlen;
   wire m_axi_arvalid;reg m_axi_arready=1;

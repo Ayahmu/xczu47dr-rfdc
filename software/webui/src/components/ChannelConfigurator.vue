@@ -11,10 +11,9 @@ const advanced = ref(false)
 const bulkOpen = ref(false)
 const bulk = reactive({ targets: [] as number[], fields: ['dataAmplitude', 'dataPhaseDeg', 'dataOffsetMhz'] as string[] })
 const active = computed(() => props.draft.channels[props.draft.activeChannel - 1])
-const currentRange = computed(() => active.value.channel === 5 || active.value.channel === 6 ? { min: 6.4, max: 32 } : { min: 2.25, max: 40.5 })
 const fieldOptions = [
   ['waveform', '波形类型'], ['format', 'IQ / Real'], ['targetRfGhz', '最终 RF'], ['dataAmplitude', '幅值'], ['dataPhaseDeg', '数据相位'],
-  ['dataOffsetMhz', '基带偏移'], ['channelDurationNs', '通道波形长度'], ['delayNs', '延迟'], ['dacCurrentMa', 'DAC 输出电流'],
+  ['dataOffsetMhz', '基带偏移'], ['channelDurationNs', '通道波形长度'], ['delayNs', '延迟'],
   ['ncoMode', 'NCO 模式'], ['ncoMhz', 'NCO 频率'], ['ncoPhaseDeg', 'NCO 相位'], ['nyquistZone', 'Nyquist zone'],
 ]
 function touch() { emit('dirty') }
@@ -77,7 +76,6 @@ watch(() => [active.value.channel, active.value.targetRfGhz], () => {
         <label><span>数据相位 <small>deg</small></span><el-input-number v-model="active.dataPhaseDeg" :min="-3600" :max="3600" :step="1" controls-position="right" @change="touch" /></label>
         <label><span>通道波形长度 <small>ns</small></span><el-input-number v-model="active.channelDurationNs" :min="1" :max="draft.recordDurationNs" :step="10" controls-position="right" @change="touch" /></label>
         <label><span>延迟 <small>ns</small></span><el-input-number v-model="active.delayNs" :min="0" :max="draft.recordDurationNs" :step="10" controls-position="right" @change="touch" /></label>
-        <label><span>DAC 输出电流 <small>mA，不是 dBm</small></span><el-input-number v-model="active.dacCurrentMa" :min="currentRange.min" :max="currentRange.max" :step="0.05" :precision="2" controls-position="right" @change="touch" /></label>
       </div>
       <button class="advanced-toggle" @click="advanced = !advanced"><Settings2 :size="17" /><span>{{ advanced ? '收起高级参数' : '展开高级参数' }}</span></button>
       <div v-if="advanced" class="advanced-panel">

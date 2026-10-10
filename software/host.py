@@ -58,7 +58,7 @@ RFDC_INTERPOLATION = DAC_INTERP
 
 # 单频 CW 的复基带置于 DC：I 为常数，Q 为 0。每个 256-bit RFDC
 # AXIS 字按 I0,Q0,I1,Q1,...,I7,Q7 的 int16 lane 顺序写入 DDR。
-TONE_AMP = 0.5  # 每路 lane 占满量程的比例（C = round(amp*32767)）
+TONE_AMP = 1.0  # 每路 lane 的归一化幅度 [-1, 1]，1 = 满量程（默认最大；C = round(amp*32767)）
 TONE_BYTES_DEFAULT = 256 * 1024  # 每通道 DDR 缓冲字节数（32B 对齐）
 DDR_CH_STRIDE = TONE_BYTES_DEFAULT
 BEAT_BYTES = 32
@@ -354,11 +354,18 @@ def iter_rfdc_nco_mailbox_packets(
     yield from iter_udp_waveform_packets(header, mailbox_offset)
 
 
+# The output gain is fixed at 1.0: every RFDC request carries the maximum DAC output
+# current of its channel (DC-coupled CH5/CH6: 32 mA, AC-coupled others: 40.5 mA).  It is not
+# a request parameter.  Kept equal to dr47.protocol._FIXED_DAC_OUTPUT_CURRENT_MA (tested).
+_FIXED_DAC_OUTPUT_CURRENT_MA = {
+    channel: (32.0 if channel in (5, 6) else 40.5) for channel in range(1, 9)
+}
+
+
 def pack_rfdc_runtime_mailbox(
     per_channel_nco_hz: dict[int, float] | dict[str, float],
     per_channel_nyquist_zone: dict[int, int] | dict[str, int],
     per_channel_phase_deg: dict[int, float] | dict[str, float],
-    per_channel_output_current_ma: dict[int, float] | dict[str, float],
     seq: int,
     apply_mask: int = 0xFF,
     flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
@@ -366,7 +373,7 @@ def pack_rfdc_runtime_mailbox(
     """Pack the runtime RFDC configuration mailbox used by the web console.
 
     Each entry is 32 bytes: signed NCO Hz, Nyquist zone, phase in milli-degrees,
-    DAC output current in microamps, and reserved words. The header is written
+    the fixed DAC output current in microamps, and reserved words. The header is written
     last by the packet iterator so firmware never observes a partial update.
     """
     def get(mapping, channel: int, default):
@@ -377,11 +384,9 @@ def pack_rfdc_runtime_mailbox(
         nco_hz = int(round(float(get(per_channel_nco_hz, channel, 0.0))))
         zone = int(get(per_channel_nyquist_zone, channel, 1))
         phase_mdeg = int(round(float(get(per_channel_phase_deg, channel, 0.0)) * 1000.0))
-        current_ua = int(round(float(get(per_channel_output_current_ma, channel, 20.0)) * 1000.0))
+        current_ua = int(round(_FIXED_DAC_OUTPUT_CURRENT_MA[channel] * 1000.0))
         if zone not in (1, 2):
             raise ValueError(f"RFDC runtime CH{channel} nyquist_zone must be 1 or 2")
-        if not 2250 <= current_ua <= 40500:
-            raise ValueError(f"RFDC runtime CH{channel} output current must be 2.25..40.5 mA")
         entries += struct.pack("<qIiIIII", nco_hz, zone, phase_mdeg, current_ua, 0, 0, 0)
     header = struct.pack(
         "<QIII12s", RFDC_RUNTIME_MAILBOX_MAGIC, int(seq) & 0xFFFFFFFF,
@@ -395,13 +400,13 @@ def pack_rfdc_runtime_mailbox(
 
 def iter_rfdc_runtime_mailbox_packets(
     per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
-    per_channel_output_current_ma, seq: int, apply_mask: int = 0xFF,
+    seq: int, apply_mask: int = 0xFF,
     flags: int = RFDC_CTRL_MAILBOX_FLAG_APPLY_IMMEDIATE,
     mailbox_offset: int = RFDC_CTRL_MAILBOX_OFFSET,
 ):
     image = pack_rfdc_runtime_mailbox(
         per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
-        per_channel_output_current_ma, seq=seq, apply_mask=apply_mask, flags=flags,
+        seq=seq, apply_mask=apply_mask, flags=flags,
     )
     yield from iter_udp_waveform_packets(image[RFDC_RUNTIME_MAILBOX_HEADER_BYTES:], mailbox_offset + RFDC_RUNTIME_MAILBOX_HEADER_BYTES)
     yield from iter_udp_waveform_packets(image[:RFDC_RUNTIME_MAILBOX_HEADER_BYTES], mailbox_offset)
@@ -644,7 +649,6 @@ def pack_rfctrl2_rfdc_apply(
     per_channel_nco_hz,
     per_channel_nyquist_zone,
     per_channel_phase_deg,
-    per_channel_output_current_ma,
     revision: int,
     channel_mask: int = 0xFF,
     seq: int = 1,
@@ -654,7 +658,7 @@ def pack_rfctrl2_rfdc_apply(
     Payload layout (little-endian):
       u32 revision, u32 channel_mask
       8 x {s64 nco_hz, u32 nyquist_zone, s32 phase_mdeg,
-           u32 dac_output_current_ua, u32 reserved}
+           u32 dac_output_current_ua (fixed maximum), u32 reserved}
     """
     mask = int(channel_mask)
     if mask < 1 or mask > 0xFF:
@@ -672,16 +676,7 @@ def pack_rfctrl2_rfdc_apply(
         phase_mdeg = normalize_rfdc_phase_mdeg(
             float(_rfdc_channel_value(per_channel_phase_deg, channel, 0.0))
         )
-        current_ua = int(round(
-            float(_rfdc_channel_value(per_channel_output_current_ma, channel, 20.0)) * 1000.0
-        ))
-        current_min, current_max = ((6400, 32000) if channel in (5, 6) else (2250, 40500))
-        if not current_min <= current_ua <= current_max:
-            coupling = "DC" if channel in (5, 6) else "AC"
-            raise ValueError(
-                f"RFDC CH{channel} {coupling}-coupled DAC current must be in "
-                f"[{current_min / 1000:g}, {current_max / 1000:g}] mA"
-            )
+        current_ua = int(round(_FIXED_DAC_OUTPUT_CURRENT_MA[channel] * 1000.0))
         payload += struct.pack("<qIiII", nco_hz, zone, phase_mdeg, current_ua, 0)
     if len(payload) != RFDC_APPLY_REQUEST_HEADER_BYTES + RFDC_APPLY_CHANNELS * RFDC_APPLY_REQUEST_ENTRY_BYTES:
         raise AssertionError("RFDC apply request packing produced an unexpected size")
@@ -1831,7 +1826,6 @@ class RFSocController:
         per_channel_nco_hz,
         per_channel_nyquist_zone,
         per_channel_phase_deg,
-        per_channel_output_current_ma,
         revision: int,
         channel_mask: int = 0xFF,
         seq: int = 1,
@@ -1842,7 +1836,6 @@ class RFSocController:
             per_channel_nco_hz,
             per_channel_nyquist_zone,
             per_channel_phase_deg,
-            per_channel_output_current_ma,
             revision=revision,
             channel_mask=channel_mask,
             seq=seq,
@@ -2036,14 +2029,13 @@ class RFSocController:
         per_channel_nco_hz,
         per_channel_nyquist_zone,
         per_channel_phase_deg,
-        per_channel_output_current_ma,
         seq: int,
         apply_mask: int = 0xFF,
     ):
         packet_count = 0
         for packet in iter_rfdc_runtime_mailbox_packets(
             per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
-            per_channel_output_current_ma, seq=seq, apply_mask=apply_mask,
+            seq=seq, apply_mask=apply_mask,
         ):
             self.sock.sendto(packet, (self.ip, self.port))
             packet_count += 1
@@ -2092,7 +2084,7 @@ def parse_args():
     parser.add_argument("--tone-bytes", type=int, default=TONE_BYTES_DEFAULT,
                         help="Per-channel DDR buffer size in bytes (32B aligned)")
     parser.add_argument("--tone-amp", type=float, default=TONE_AMP,
-                        help="Per-lane amplitude as a fraction of full scale (0..1)")
+                        help="Per-lane amplitude normalized to [-1, 1] (1 = full scale)")
     parser.add_argument("--channels", default="1,2,3,4,5,6,7,8",
                         help="Comma-separated executor channels to play (1..8 -> physical DAC slices)")
     parser.add_argument("--dry-run", action="store_true",

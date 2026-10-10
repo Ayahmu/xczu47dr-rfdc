@@ -31,8 +31,7 @@ SOFTWARE_DIR := $(ROOT)/software
 
 # --- Xilinx licensing for the 100G CMAC --------------------------------------
 # The cmac_usplus IP is licensed Design_Linking in Xilinx_new.lic.  Vivado
-# generates the managed OOC checkpoint fresh on every build under that license
-# (no reference-DCP restore, unlike the retired XXV flow).
+# generates the managed OOC checkpoint fresh on every build under that license.
 XILINX_BOUGHT_LICENSE ?= $(abspath $(ROOT)/../Xilinx_new.lic)
 ifneq ($(wildcard $(XILINX_BOUGHT_LICENSE)),)
 export XILINXD_LICENSE_FILE := $(XILINX_BOUGHT_LICENSE)$(if $(XILINXD_LICENSE_FILE),:$(XILINXD_LICENSE_FILE),)
@@ -55,7 +54,7 @@ HOST_OUTPUT_DIR ?= $(ROOT)/software/output
 # and 13 test modules die on import.  Prefer the repo venv when it exists.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-wheel driver-smoke driver-release hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
+.PHONY: help all test driver-wheel driver-smoke driver-release driver-version driver-bump hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -70,6 +69,8 @@ help:
 	@echo "  make artifacts-hash   Refresh artifacts/SHA256SUMS atomically"
 	@echo "  make artifacts-clean  Remove local checked-in artifacts explicitly"
 	@echo "  make driver-release   Build and verify the distributable Python SDK bundle"
+	@echo "  make driver-version   Show the driver version (source and installed)"
+	@echo "  make driver-bump PART=patch|minor|major   or   VERSION=x.y.z   Change the driver version"
 	@echo ""
 	@echo "Dual-version (10 MHz / 250 MHz XS17 reference) bitstreams:"
 	@echo "  make hardware-10mhz   Build the 10 MHz version  -> artifacts/10mhz/"
@@ -134,6 +135,15 @@ driver-smoke: driver-wheel
 
 driver-release: driver-smoke
 	$(PYTHON) software/build_driver_release.py
+
+driver-version:
+	$(PYTHON) "$(SOFTWARE_DIR)/bump_driver_version.py" --show
+
+# Single version source: software/dr47/_version.py.  Reinstalls the editable install so pip's
+# recorded version follows (an editable install otherwise keeps the number it was installed with).
+driver-bump:
+	@test -n "$(VERSION)$(PART)" || { echo "ERROR: give VERSION=x.y.z or PART=patch|minor|major"; exit 1; }
+	$(PYTHON) "$(SOFTWARE_DIR)/bump_driver_version.py" $(if $(VERSION),$(VERSION),--part $(PART)) --reinstall
 
 check-tools:
 	@command -v vivado >/dev/null || { echo "ERROR: vivado not found. Source Vivado settings first."; exit 1; }

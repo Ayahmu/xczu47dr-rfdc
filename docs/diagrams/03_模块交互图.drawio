@@ -5,7 +5,7 @@
     <mxCell id="title" value="XCZU47DR 单板波形系统 — 模块交互时序图（三大数据流）" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
       <mxGeometry x="40" y="4" width="1100" height="32" as="geometry"/>
     </mxCell>
-    <mxCell id="host" value="上位机（10G 网络）" style="whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+    <mxCell id="host" value="上位机（100G 网络）" style="whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;fontStyle=1;" vertex="1" parent="1">
       <mxGeometry x="40" y="100" width="150" height="60" as="geometry"/>
     </mxCell>
     <mxCell id="eth" value="以太网收发（MAC+UDP）" style="whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;" vertex="1" parent="1">

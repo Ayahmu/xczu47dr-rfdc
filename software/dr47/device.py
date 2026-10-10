@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 
@@ -154,7 +154,6 @@ class Dr47Device:
         self._pending_nco = {channel: 0.0 for channel in range(1, 9)}
         self._pending_zone = {channel: 1 for channel in range(1, 9)}
         self._pending_phase = {channel: 0.0 for channel in range(1, 9)}
-        self._pending_current = {channel: 20.0 for channel in range(1, 9)}
         self._pending_revision = 0
         self._capabilities = DeviceCapabilities()
         self._status = DeviceStatus(False, self.ip, self.port, PlaybackState.IDLE, self._capabilities, "not connected")
@@ -400,12 +399,12 @@ class Dr47Device:
         return response
 
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
-                           per_channel_output_current_ma, revision: int, channel_mask: int = 0xFF,
+                           revision: int, channel_mask: int = 0xFF,
                            seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         sequence = self._next_sequence() if seq is None else int(seq)
         response = self._request(
             pack_rfctrl2_rfdc_apply(per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
-                                    per_channel_output_current_ma, revision, channel_mask=channel_mask, seq=sequence),
+                                    revision, channel_mask=channel_mask, seq=sequence),
             RF2_OP_RFDC_APPLY, sequence, wait_response=wait_response, retries=retries,
         )
         if not wait_response:
@@ -467,24 +466,34 @@ class Dr47Device:
         return self._wave_request(pack_wave_commit(session=session, seq=seq), WAVE_OP_COMMIT, seq)
 
     def play(self, *, session: int = 0):
+        """Start the committed descriptor.
+
+        PLAY, PAUSE, STOP and ABORT raise ``DeviceStatusError`` when the board
+        rejects the command (for example PLAY while the playback FSM is in
+        ERROR), so a refused control command is never mistaken for success.
+        """
         self._require_connected()
         seq = self._next_sequence()
-        return self._wave_request(pack_wave_play(session=session, seq=seq), WAVE_OP_PLAY, seq)
+        return self._check_wave_response(
+            self._wave_request(pack_wave_play(session=session, seq=seq), WAVE_OP_PLAY, seq), "PLAY")
 
     def pause(self, *, session: int = 0):
         self._require_connected()
         seq = self._next_sequence()
-        return self._wave_request(pack_wave_pause(session=session, seq=seq), WAVE_OP_PAUSE, seq)
+        return self._check_wave_response(
+            self._wave_request(pack_wave_pause(session=session, seq=seq), WAVE_OP_PAUSE, seq), "PAUSE")
 
     def stop(self, *, session: int = 0):
         self._require_connected()
         seq = self._next_sequence()
-        return self._wave_request(pack_wave_stop(session=session, seq=seq), WAVE_OP_STOP, seq)
+        return self._check_wave_response(
+            self._wave_request(pack_wave_stop(session=session, seq=seq), WAVE_OP_STOP, seq), "STOP")
 
     def abort(self, *, session: int = 0):
         self._require_connected()
         seq = self._next_sequence()
-        return self._wave_request(pack_wave_abort(session=session, seq=seq), WAVE_OP_ABORT, seq)
+        return self._check_wave_response(
+            self._wave_request(pack_wave_abort(session=session, seq=seq), WAVE_OP_ABORT, seq), "ABORT")
 
     def _tdc_register(self, address: int, *, write: bool = False, data: int = 0) -> int:
         self._require_connected()
@@ -557,7 +566,7 @@ class Dr47Device:
             raise ConnectionStateError("Dr47Device.connect() must be called before applying RFDC configuration")
         try:
             result = self.rfctrl2_rfdc_apply(
-                self._pending_nco, self._pending_zone, self._pending_phase, self._pending_current,
+                self._pending_nco, self._pending_zone, self._pending_phase,
                 revision=self._pending_revision, channel_mask=channel_mask, retries=self.retries,
             )
         except DeviceStatusError as exc:
@@ -572,7 +581,7 @@ class Dr47Device:
             self.abort()
             self._wait_for_playback_idle()
             result = self.rfctrl2_rfdc_apply(
-                self._pending_nco, self._pending_zone, self._pending_phase, self._pending_current,
+                self._pending_nco, self._pending_zone, self._pending_phase,
                 revision=self._pending_revision, channel_mask=channel_mask, retries=self.retries,
             )
         self._cache_rfdc_readback(result)
@@ -625,15 +634,14 @@ class Dr47Device:
         nco_ghz: Mapping | Sequence | None = None,
         nyquist_zone: Mapping | Sequence | None = None,
         phase_deg: Mapping | Sequence | None = None,
-        output_current_ma: Mapping | Sequence | None = None,
         revision: int | None = None,
         channel_mask: int = 0xFF,
     ):
         """Apply and read back the eight-channel RFDC configuration.
 
-        ``nco_ghz`` is the public unit.  Phase is in degrees and DAC output
-        current remains in mA because those are the physical units exposed by
-        the board.  The resulting RFCTRL2 fields are converted to integer Hz.
+        ``nco_ghz`` is the public unit.  Phase is in degrees, the physical unit
+        exposed by the board.  The resulting RFCTRL2 fields are converted to
+        integer Hz.
         """
         if nco_ghz is not None:
             for channel in range(1, 9):
@@ -642,7 +650,6 @@ class Dr47Device:
         for target, source, default in (
             (self._pending_zone, nyquist_zone, 1),
             (self._pending_phase, phase_deg, 0.0),
-            (self._pending_current, output_current_ma, 20.0),
         ):
             if source is None:
                 continue
@@ -690,20 +697,6 @@ class Dr47Device:
         if not self.batch_mode:
             self._apply_pending(1 << (physical - 1))
         return plan
-
-    def set_gain(self, channel_type: Literal["xy", "z"], channel: int, gain: float = 1.0,
-                 gain_type: Literal["norm", "dbm", "code", "volt"] = "norm") -> int:
-        physical = self._map_channel(channel_type, channel)
-        if gain_type != "norm":
-            raise UnsupportedParameterError("set_gain", f"gain_type={gain_type!r}")
-        value = float(gain)
-        if not 0.0 <= value <= 1.0:
-            raise ParameterRangeError("norm gain must be in [0, 1]")
-        low, high = ((6.4, 32.0) if physical in (5, 6) else (2.25, 40.5))
-        self._pending_current[physical] = low + value * (high - low)
-        if not self.batch_mode:
-            self._apply_pending(1 << (physical - 1))
-        return 0
 
     def _set_channel_mask(self, channel_type: str, channel: int, on_off: str) -> int:
         physical = self._map_channel(channel_type, channel)

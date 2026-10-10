@@ -15,8 +15,10 @@ import host
 from dr47.device import Dr47Device
 from dr47.waveforms import (
     iq_duration_to_interleaved_sample_count as _driver_iq_duration_to_sample_count,
-    make_iq_gaussian_sine_interleaved as _driver_make_iq_gaussian_sine,
-    make_iq_sine_interleaved as _driver_make_iq_sine,
+    # This legacy tool layer keeps its amplitude in int16 DAC codes, so it uses the
+    # code-based cores; the public driver functions take a normalized [-1, 1] amplitude.
+    _iq_gaussian_sine_codes as _driver_make_iq_gaussian_sine,
+    _iq_sine_codes as _driver_make_iq_sine,
 )
 
 

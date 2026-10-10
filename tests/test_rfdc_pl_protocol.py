@@ -10,8 +10,7 @@ def channel_maps():
     nco = {channel: (-1_900_000_000 if channel <= 4 else 0) for channel in range(1, 9)}
     zones = {channel: (2 if channel <= 4 else 1) for channel in range(1, 9)}
     phases = {channel: 450.0 + channel for channel in range(1, 9)}
-    currents = {channel: (20.0 if channel not in (5, 6) else 6.4) for channel in range(1, 9)}
-    return nco, zones, phases, currents
+    return nco, zones, phases
 
 
 class RfdcPlProtocolTests(unittest.TestCase):
@@ -91,9 +90,9 @@ class RfdcPlProtocolTests(unittest.TestCase):
         self.assertEqual(decoded["nco_sync_epoch"], 9)
 
     def test_apply_packet_has_fixed_eight_channel_layout(self):
-        nco, zones, phases, currents = channel_maps()
+        nco, zones, phases = channel_maps()
         packet = host.pack_rfctrl2_rfdc_apply(
-            nco, zones, phases, currents, revision=7, channel_mask=0x31, seq=19
+            nco, zones, phases, revision=7, channel_mask=0x31, seq=19
         )
         magic, hdr0, hdr1 = struct.unpack_from("<QQQ", packet)
         self.assertEqual(magic, host.UDP_RFCTRL2_MAGIC)
@@ -105,16 +104,23 @@ class RfdcPlProtocolTests(unittest.TestCase):
         ch1 = struct.unpack_from("<qIiII", packet, 32)
         self.assertEqual(ch1[:2], (-1_900_000_000, 2))
         self.assertEqual(ch1[2], 91_000)
-        self.assertEqual(ch1[3], 20_000)
+        # The output current is not a request parameter: every entry carries the fixed maximum.
+        self.assertEqual(ch1[3], 40_500)
+        self.assertEqual(struct.unpack_from("<qIiII", packet, 32 + 24 * 4)[3], 32_000)
+        self.assertEqual(struct.unpack_from("<qIiII", packet, 32 + 24 * 5)[3], 32_000)
 
-    def test_phase_is_normalized_and_dc_current_range_is_enforced(self):
-        nco, zones, phases, currents = channel_maps()
-        packet = host.pack_rfctrl2_rfdc_apply(nco, zones, phases, currents, revision=1)
+    def test_phase_is_normalized(self):
+        nco, zones, phases = channel_maps()
+        packet = host.pack_rfctrl2_rfdc_apply(nco, zones, phases, revision=1)
         ch1 = struct.unpack_from("<qIiII", packet, 32)
         self.assertEqual(ch1[2], 91_000)
-        currents[5] = 2.25
-        with self.assertRaisesRegex(ValueError, "CH5 DC-coupled"):
-            host.pack_rfctrl2_rfdc_apply(nco, zones, phases, currents, revision=2)
+
+    def test_host_exposes_no_dac_current_parameter(self):
+        import inspect
+        for function in (host.pack_rfctrl2_rfdc_apply, host.RFSocController.rfctrl2_rfdc_apply,
+                         host.pack_rfdc_runtime_mailbox, host.iter_rfdc_runtime_mailbox_packets,
+                         host.RFSocController.upload_rfdc_runtime_mailbox):
+            self.assertNotIn("per_channel_output_current_ma", inspect.signature(function).parameters)
 
     def test_hardware_response_decodes_masks_and_raw_register_values(self):
         header = struct.pack("<IIIIIIII", 9, 0x0F, 0x10, 0xEF, 8, 0x1CC, 2, 1)
@@ -145,7 +151,7 @@ class RfdcPlProtocolTests(unittest.TestCase):
         self.assertEqual(decoded["channels"][0]["nco_word"], 1)
 
     def test_timeout_retry_reuses_identical_packet_and_sequence(self):
-        nco, zones, phases, currents = channel_maps()
+        nco, zones, phases = channel_maps()
 
         class FakeSocket:
             def __init__(self, *_args, **_kwargs):
@@ -181,7 +187,7 @@ class RfdcPlProtocolTests(unittest.TestCase):
         with patch.object(host.socket, "socket", return_value=fake):
             controller = host.RFSocController("192.168.1.128", timeout_s=0.01)
             result = controller.rfctrl2_rfdc_apply(
-                nco, zones, phases, currents, revision=3, seq=77, retries=1
+                nco, zones, phases, revision=3, seq=77, retries=1
             )
         self.assertEqual(result["status"], host.RF2_STATUS_OK)
         self.assertEqual(len(fake.sent), 2)

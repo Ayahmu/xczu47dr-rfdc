@@ -10,7 +10,7 @@ import numpy as np
 from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, DiagnosticsSnapshot
 from .device import Dr47Device
 from .errors import ParameterRangeError
-from .protocol import pack_wave_begin, pack_wave_data
+from .protocol import _FIXED_DAC_OUTPUT_CURRENT_MA, pack_wave_begin, pack_wave_data
 from .protocol import (
     RF2_CAP_DAC_MTS,
     RF2_CAP_NCO_SYNC,
@@ -184,7 +184,7 @@ class SimulatedDr47Device(Dr47Device):
         return self._response(RF2_OP_DIAG_CONTROL, self._make_status_payload(), seq=1)
 
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
-                           per_channel_output_current_ma, revision: int, channel_mask: int = 0xFF,
+                           revision: int, channel_mask: int = 0xFF,
                            seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         self._sim_revision = int(revision) & 0xFFFFFFFF
         self._sim_valid_mask |= int(channel_mask) & 0xFF
@@ -192,7 +192,6 @@ class SimulatedDr47Device(Dr47Device):
             self._pending_nco[channel] = _value(per_channel_nco_hz, channel, 0.0)
             self._pending_zone[channel] = _value(per_channel_nyquist_zone, channel, 1)
             self._pending_phase[channel] = _value(per_channel_phase_deg, channel, 0.0)
-            self._pending_current[channel] = _value(per_channel_output_current_ma, channel, 20.0)
         return parse_rfctrl2_rfdc_config_response(
             self._response(RF2_OP_RFDC_APPLY, self._make_config_payload(), seq or 1)
         )
@@ -203,7 +202,7 @@ class SimulatedDr47Device(Dr47Device):
         for channel in range(1, 9):
             entries += struct.pack(
                 "<qIiIIQII", int(round(self._pending_nco[channel])), int(self._pending_zone[channel]),
-                int(round(self._pending_phase[channel] * 1000)), int(round(self._pending_current[channel] * 1000)),
+                int(round(self._pending_phase[channel] * 1000)), int(round(_FIXED_DAC_OUTPUT_CURRENT_MA[channel] * 1000)),
                 0, 0, 0, 0,
             )
         return header + bytes(entries)
@@ -313,6 +312,9 @@ class SimulatedDr47Device(Dr47Device):
         return self.status(refresh=False)
 
     def play(self, *, session: int = 0):
+        return self._check_wave_response(self._play(session=session), "PLAY")
+
+    def _play(self, *, session: int = 0):
         if session and session != self._wave_session:
             return self._wave_response(WAVE_OP_PLAY, status=WAVE_STATUS_BAD_REQUEST)
         if self._wave_state in (WAVEFORM_STATE_READY, WAVEFORM_STATE_DONE, WAVEFORM_STATE_PREFETCH):
@@ -326,6 +328,9 @@ class SimulatedDr47Device(Dr47Device):
         return self._wave_response(WAVE_OP_PLAY, status=WAVE_STATUS_BAD_REQUEST)
 
     def pause(self, *, session: int = 0):
+        return self._check_wave_response(self._pause(session=session), "PAUSE")
+
+    def _pause(self, *, session: int = 0):
         if session and session != self._wave_session:
             return self._wave_response(WAVE_OP_PAUSE, status=WAVE_STATUS_BAD_REQUEST)
         if self._wave_state in (WAVEFORM_STATE_READY, WAVEFORM_STATE_DONE, WAVEFORM_STATE_PLAYING,
@@ -337,16 +342,22 @@ class SimulatedDr47Device(Dr47Device):
         return self._wave_response(WAVE_OP_PAUSE, status=WAVE_STATUS_BAD_REQUEST)
 
     def stop(self, *, session: int = 0):
+        return self._check_wave_response(self._stop(session=session), "STOP")
+
+    def _stop(self, *, session: int = 0):
         if session and session != self._wave_session:
             return self._wave_response(WAVE_OP_STOP, status=WAVE_STATUS_BAD_REQUEST)
         if self._wave_state == WAVEFORM_STATE_UPLOAD:
-            self.abort(session=session)
+            self._abort(session=session)
             return self._wave_response(WAVE_OP_STOP)
-        result = self.pause(session=session)
+        result = self._pause(session=session)
         result["opcode"] = WAVE_OP_STOP
         return result
 
     def abort(self, *, session: int = 0):
+        return self._check_wave_response(self._abort(session=session), "ABORT")
+
+    def _abort(self, *, session: int = 0):
         if session and session != self._wave_session:
             return self._wave_response(WAVE_OP_ABORT, status=WAVE_STATUS_BAD_REQUEST)
         self._wave_state = WAVEFORM_STATE_ID

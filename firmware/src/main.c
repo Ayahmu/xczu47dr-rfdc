@@ -49,6 +49,13 @@ int Report_Custom_DAC_Clock_Status(const char *Stage);
  * NCO = target - 6.4 GHz.
  */
 #define CUSTOM_DAC_FS_GHZ (6.4)
+
+/* The output gain is fixed at 1: every DAC block runs at the maximum output current
+ * of its coupling, and the host driver requests exactly these values on every RFDC
+ * apply.  CH5/CH6 (Z) are DC-coupled and limited to 32 mA; the other blocks are
+ * AC-coupled (2.25 - 40.5 mA). */
+#define DAC_OUTPUT_CURRENT_AC_UA 40500U
+#define DAC_OUTPUT_CURRENT_DC_UA 32000U
 /************************** Variable Definitions *****************************/
 
 // VT100 esc sequences
@@ -247,20 +254,17 @@ int Init_GPIO(void)
 	return XST_SUCCESS;
 }
 
-int Adjust_DAC_Power(u32 Tile_Id, u32 Block_Id, u32 CurrentMA)
+int Adjust_DAC_Power(u32 Tile_Id, u32 Block_Id, u32 CurrentUA)
 {
 	int Status;
-	u32 uAmps;
 
-	if (CurrentMA < 3 || CurrentMA > 40)
+	if (CurrentUA < 2250U || CurrentUA > 40500U)
 	{
-		xil_printf("Error: Current %d mA out of range (2.25 - 40.5 mA)\r\n", CurrentMA);
+		xil_printf("Error: Current %d uA out of range (2250 - 40500 uA)\r\n", CurrentUA);
 		return XST_FAILURE;
 	}
 
-	uAmps = CurrentMA * 1000;
-
-	Status = XRFdc_SetDACVOP(&RFdcInst, Tile_Id, Block_Id, uAmps);
+	Status = XRFdc_SetDACVOP(&RFdcInst, Tile_Id, Block_Id, CurrentUA);
 	if (Status != XST_SUCCESS)
 	{
 		xil_printf("XRFdc_SetDACVOP failed for DAC Tile%d Block%d status=%d\r\n",
@@ -268,9 +272,14 @@ int Adjust_DAC_Power(u32 Tile_Id, u32 Block_Id, u32 CurrentMA)
 		return XST_FAILURE;
 	}
 
-	xil_printf("Success: DAC Tile%d Block%d current set to %d mA (%d uA)\r\n",
-		   Tile_Id, Block_Id, CurrentMA, uAmps);
+	xil_printf("Success: DAC Tile%d Block%d current set to %d uA\r\n",
+		   Tile_Id, Block_Id, CurrentUA);
 	return XST_SUCCESS;
+}
+
+static u32 Custom_DAC_Output_Current_uA(const CustomDacChannel *Channel)
+{
+	return (strcmp(Channel->Role, "Z") == 0) ? DAC_OUTPUT_CURRENT_DC_UA : DAC_OUTPUT_CURRENT_AC_UA;
 }
 
 int Configure_DAC_Output_Current(void)
@@ -279,7 +288,8 @@ int Configure_DAC_Output_Current(void)
 
 	for (i = 0; i < sizeof(CustomDacChannels) / sizeof(CustomDacChannels[0]); i++)
 	{
-		if (Adjust_DAC_Power(CustomDacChannels[i].Tile_Id, CustomDacChannels[i].Block_Id, 20) != XST_SUCCESS)
+		if (Adjust_DAC_Power(CustomDacChannels[i].Tile_Id, CustomDacChannels[i].Block_Id,
+				     Custom_DAC_Output_Current_uA(&CustomDacChannels[i])) != XST_SUCCESS)
 		{
 			return XST_FAILURE;
 		}

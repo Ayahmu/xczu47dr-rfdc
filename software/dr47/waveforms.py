@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 from typing import Any, Literal, Mapping
 
@@ -40,6 +41,8 @@ BEAT_SAMPLES = BEAT_BYTES // 2
 NUM_SAMPLES = 4096 // 2
 INT16_PER_DACWORD = 16
 INT16_PER_BEAT = INT16_PER_DACWORD
+# Largest I/Q sample magnitude the waveform helpers emit (symmetric int16).
+_INT16_FULL_SCALE = 32767.0
 
 
 def iq_duration_to_interleaved_sample_count(duration_s: float, sample_rate_hz: float) -> int:
@@ -70,16 +73,45 @@ def _pack_iq_interleaved(i_wave: np.ndarray, q_wave: np.ndarray, sample_count: i
     return packed
 
 
+def _amplitude_to_codes(amplitude: float) -> float:
+    """Convert a normalized amplitude in [-1, 1] to int16 DAC codes (1 = full scale)."""
+
+    value = float(amplitude)
+    if not math.isfinite(value) or abs(value) > 1.0:
+        raise ParameterRangeError(
+            f"amplitude must be a normalized value in [-1, 1] (1 = full scale), got {amplitude!r}"
+        )
+    return value * _INT16_FULL_SCALE
+
+
 def make_iq_sine_interleaved(
     frequency_hz: float,
     phase_rad: float,
-    amplitude: int,
+    amplitude: float,
     sample_rate_hz: float,
     *,
     sample_count: int,
     q_sign: int = -1,
 ) -> np.ndarray:
-    """Build the web manual-path IQ sine format: ``I0,Q0,...`` int16."""
+    """Build the web manual-path IQ sine format: ``I0,Q0,...`` int16.
+
+    ``amplitude`` is normalized to [-1, 1]; 1 is the int16 full scale (32767).
+    """
+
+    return _iq_sine_codes(frequency_hz, phase_rad, _amplitude_to_codes(amplitude), sample_rate_hz,
+                          sample_count=sample_count, q_sign=q_sign)
+
+
+def _iq_sine_codes(
+    frequency_hz: float,
+    phase_rad: float,
+    amplitude_codes: float,
+    sample_rate_hz: float,
+    *,
+    sample_count: int,
+    q_sign: int = -1,
+) -> np.ndarray:
+    """``make_iq_sine_interleaved`` with the amplitude given in int16 DAC codes."""
 
     if int(q_sign) not in (-1, 1):
         raise ParameterRangeError("q_sign must be +1 or -1")
@@ -88,7 +120,7 @@ def make_iq_sine_interleaved(
     count = int(sample_count) // 2
     sample_index = np.arange(count, dtype=np.float64)
     angle = (2.0 * np.pi * float(frequency_hz) * sample_index / float(sample_rate_hz)) + float(phase_rad)
-    scale = float(amplitude)
+    scale = float(amplitude_codes)
     return _pack_iq_interleaved(
         np.round(np.clip(np.cos(angle) * scale, -32767.0, 32767.0)).astype(np.int16),
         np.round(np.clip(int(q_sign) * np.sin(angle) * scale, -32767.0, 32767.0)).astype(np.int16),
@@ -99,7 +131,7 @@ def make_iq_sine_interleaved(
 def make_iq_gaussian_sine_interleaved(
     frequency_hz: float,
     phase_rad: float,
-    amplitude: int,
+    amplitude: float,
     sample_rate_hz: float,
     duration_s: float,
     *,
@@ -111,6 +143,32 @@ def make_iq_gaussian_sine_interleaved(
     drag_delta_hz: float = -200e6,
 ) -> np.ndarray:
     """Build the web manual-path XY Gaussian IQ waveform exactly.
+
+    ``amplitude`` is normalized to [-1, 1]; 1 is the int16 full scale (32767).
+    """
+
+    return _iq_gaussian_sine_codes(
+        frequency_hz, phase_rad, _amplitude_to_codes(amplitude), sample_rate_hz, duration_s,
+        sample_count=sample_count, fwhm_s=fwhm_s, q_sign=q_sign, hls_xy_drag=hls_xy_drag,
+        drag_alpha=drag_alpha, drag_delta_hz=drag_delta_hz,
+    )
+
+
+def _iq_gaussian_sine_codes(
+    frequency_hz: float,
+    phase_rad: float,
+    amplitude_codes: float,
+    sample_rate_hz: float,
+    duration_s: float,
+    *,
+    sample_count: int | None = None,
+    fwhm_s: float | None = None,
+    q_sign: int = -1,
+    hls_xy_drag: bool = False,
+    drag_alpha: float = 0.5,
+    drag_delta_hz: float = -200e6,
+) -> np.ndarray:
+    """``make_iq_gaussian_sine_interleaved`` with the amplitude given in int16 DAC codes.
 
     The web's manual ``xy`` control uses ``FWHM=duration/2`` and has its
     HLS-DRAG option disabled.  The optional DRAG arguments expose the explicit
@@ -140,7 +198,7 @@ def make_iq_gaussian_sine_interleaved(
     else:
         quadrature = np.zeros_like(envelope)
     angle = (2.0 * np.pi * float(frequency_hz) * time_s) + float(phase_rad)
-    wave = (envelope + 1j * quadrature) * np.exp(1j * int(q_sign) * angle) * float(amplitude)
+    wave = (envelope + 1j * quadrature) * np.exp(1j * int(q_sign) * angle) * float(amplitude_codes)
     return _pack_iq_interleaved(
         np.round(np.clip(np.real(wave), -32767.0, 32767.0)).astype(np.int16),
         np.round(np.clip(np.imag(wave), -32767.0, 32767.0)).astype(np.int16),

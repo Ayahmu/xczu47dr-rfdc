@@ -6,17 +6,34 @@
 // (including an AR stalled before acceptance), not at R arrival. The FIFO
 // free count must be conservative in the write clock domain.
 //
+// FIFO_FREE_BEATS may trail the FIFO writes by up to CREDIT_LATENCY cycles
+// (a registered write count and credit pipeline).  A frame that has been
+// written is then in neither RESERVED nor the free count until the count
+// catches up, so RESERVED keeps each frame for CREDIT_LATENCY cycles after its
+// write.  Without that hold the engine over-reserves by the frames written in
+// the lag window and can present a frame that a full FIFO never accepts once
+// the consumer stops, which also blocks CANCEL from ever retiring.
+//
 // CANCEL/error never withdraws VALID or resets a live AXI transaction. Issued
 // bursts drain without producing frames. A missing RLAST/timeout quarantines
 // the engine until the real bus transaction retires; !busy is the only safe
 // permission to clear FIFOs or replace descriptor storage.
+//
+// LOOP_COUNT passes are read back to back as one continuous stream: when the
+// burst that completes a pass is accepted, the address rewinds to BASE_ADDR
+// for the next pass.  Bursts are already clamped to the beats remaining in
+// the current pass, so no burst crosses the wrap point, and the outstanding
+// pipeline keeps running across pass boundaries (no drain, no FIFO clear).
 module waveform_ddr_reader #(
     parameter integer MAX_OUTSTANDING = 4,
     parameter integer BURST_FRAMES = 16,
-    parameter integer TIMEOUT_CYCLES = 300000
+    parameter integer TIMEOUT_CYCLES = 300000,
+    // Cycles from a frame write until FIFO_FREE_BEATS reflects it (0: same cycle).
+    parameter integer CREDIT_LATENCY = 0
 ) (
     input wire clk, input wire rst_n, input wire start, input wire cancel,
     input wire [63:0] base_addr, input wire [31:0] total_beats,
+    input wire [31:0] loop_count,
     input wire [15:0] fifo_free_beats,
     output reg [63:0] m_axi_araddr, output reg [7:0] m_axi_arlen,
     output reg m_axi_arvalid, input wire m_axi_arready,
@@ -34,10 +51,18 @@ module waveform_ddr_reader #(
   reg [QW:0] outstanding;
   reg [63:0] issue_addr, return_offset;
   reg [31:0] remaining;
+  // Passes still to be issued after the current one (loop_count - 1 at start).
+  reg [31:0] passes_left;
   reg [CREDIT_W-1:0] reserved;
+  // frame_fire delayed by CREDIT_LATENCY: the cycle a written frame's credit
+  // may be returned because the free count now includes the write.
+  localparam integer FIRE_DLY_W = (CREDIT_LATENCY < 1) ? 1 : CREDIT_LATENCY;
+  reg [FIRE_DLY_W:0] fire_dly;
+  wire credit_return;
   wire [CREDIT_W-1:0] fifo_free_credit =
       (|fifo_free_beats[15:CREDIT_W]) ? FIFO_CREDIT_MAX : fifo_free_beats[CREDIT_W-1:0];
   reg [6:0] proposed_frames, pending_frames;
+  wire pass_ends = remaining == {25'd0, pending_frames};
   reg [4:0] page_frames;
   reg [31:0] watchdog;
   reg [8:0] returned_in_burst;
@@ -47,6 +72,7 @@ module waveform_ddr_reader #(
   wire ar_fire=m_axi_arvalid&&m_axi_arready;
   wire r_fire=m_axi_rvalid&&m_axi_rready;
   wire frame_fire=frame_valid&&frame_ready;
+  assign credit_return=(CREDIT_LATENCY==0) ? frame_fire : fire_dly[FIRE_DLY_W-1];
   wire retiring=r_fire&&m_axi_rlast;
   wire r_fault=r_fire && (m_axi_rresp!=0 || m_axi_rlast!=(returned_in_burst+1==burst_lengths[head]));
   wire draining=cancelled||cancel||error||r_fault;
@@ -105,14 +131,16 @@ module waveform_ddr_reader #(
       for(queue_slot=0;queue_slot<MAX_OUTSTANDING;queue_slot=queue_slot+1) burst_lengths[queue_slot]<=0;
       m_axi_araddr<=0;m_axi_arlen<=0;m_axi_arvalid<=0;
       frame_valid<=0;assembling<=0;head<=0;tail<=0;outstanding<=0;
-      issue_addr<=0;return_offset<=0;remaining<=0;reserved<=0;pending_frames<=0;
+      issue_addr<=0;return_offset<=0;remaining<=0;passes_left<=0;reserved<=0;pending_frames<=0;
+      fire_dly<=0;
       watchdog<=0;returned_in_burst<=0;slice<=0;cancelled<=0;
     end else begin
       done<=0;
       if(start&&!busy) begin
         error<=0;error_code<=0;error_offset<=0;cancelled<=0;
         issue_addr<=base_addr;return_offset<=0;remaining<=total_beats;
-        head<=0;tail<=0;outstanding<=0;reserved<=0;watchdog<=0;
+        passes_left<=(loop_count==0) ? 32'd0 : loop_count-1'b1;
+        head<=0;tail<=0;outstanding<=0;reserved<=0;fire_dly<=0;watchdog<=0;
         returned_in_burst<=0;slice<=0;frame_valid<=0;
         if(base_addr[7:0]!=0 || total_beats==0 ||
            base_addr+{24'd0,total_beats,8'd0}<base_addr) begin
@@ -121,11 +149,12 @@ module waveform_ddr_reader #(
       end else if(busy) begin
         if(cancel) cancelled<=1;
         if(frame_fire) frame_valid<=0;
+        fire_dly<={fire_dly[FIRE_DLY_W-1:0],frame_fire};
         if(reserve_new) begin
           m_axi_araddr<=issue_addr;m_axi_arlen<=(proposed_frames<<2)-1'b1;
           pending_frames<=proposed_frames;m_axi_arvalid<=1;
         end
-        case({reserve_new,frame_fire})
+        case({reserve_new,credit_return})
           2'b10: reserved<=reserved+proposed_frames;
           2'b01: reserved<=reserved-1'b1;
           2'b11: reserved<=reserved+proposed_frames-1'b1;
@@ -135,8 +164,14 @@ module waveform_ddr_reader #(
           m_axi_arvalid<=0;
           burst_lengths[tail]<={2'b00,pending_frames}<<2;
           tail<=tail+1'b1;
-          issue_addr<=issue_addr+({57'd0,pending_frames}<<8);
-          remaining<=remaining-pending_frames;
+          if(pass_ends && passes_left!=0) begin
+            issue_addr<=base_addr;
+            remaining<=total_beats;
+            passes_left<=passes_left-1'b1;
+          end else begin
+            issue_addr<=issue_addr+({57'd0,pending_frames}<<8);
+            remaining<=remaining-pending_frames;
+          end
         end
         case({ar_fire,retiring})
           2'b10: outstanding<=outstanding+1'b1;

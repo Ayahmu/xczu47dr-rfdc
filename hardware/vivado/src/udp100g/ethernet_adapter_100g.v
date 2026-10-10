@@ -44,9 +44,19 @@ module ethernet_adapter_100g (
     
     );
 
+    // RX: CMAC (512 bit) -> UDP stack (64 bit), both on clk_axis.
+    //
+    // The CMAC RX interface has no backpressure (s_axis_tready is not
+    // connected to the MAC) and can present one 512-bit word per cycle, while
+    // the 64-bit side drains eight times slower.  A burst of back-to-back
+    // frames from the host therefore overflows any finite buffer.  Run the
+    // buffer as a frame FIFO that drops whole frames when full (and frames the
+    // MAC marked bad), so overflow costs complete packets instead of splicing
+    // the head of one frame onto the tail of another.  DEPTH is in bytes and
+    // holds several jumbo frames.
     axis_fifo_adapter #
     (
-        .DEPTH(9216),
+        .DEPTH(32768),
         .S_DATA_WIDTH(512),
         .M_DATA_WIDTH(64),
         .ID_ENABLE(0),
@@ -55,12 +65,12 @@ module ethernet_adapter_100g (
         .USER_WIDTH(1),
         .RAM_PIPELINE (1),
         .OUTPUT_FIFO_ENABLE (0),
-        .FRAME_FIFO (0),
+        .FRAME_FIFO (1),
         .USER_BAD_FRAME_VALUE (1),
         .USER_BAD_FRAME_MASK (1),
-        .DROP_OVERSIZE_FRAME (0),
-        .DROP_BAD_FRAME (0),
-        .DROP_WHEN_FULL (0),
+        .DROP_OVERSIZE_FRAME (1),
+        .DROP_BAD_FRAME (1),
+        .DROP_WHEN_FULL (1),
         .MARK_WHEN_FULL (0),
         .PAUSE_ENABLE (0),
         .FRAME_PAUSE (0)

@@ -30,11 +30,10 @@ UDP_SOURCE_IP = "169.254.250.11"
 
 OUTPUT_CHANNEL = 1
 RF_FREQUENCY_GHZ = 1.79
-OUTPUT_GAIN = 0.10
 SAMPLE_RATE_HZ = 400_000_000.0
 GAUSSIAN_DURATION_NS = 30.0
 GAUSSIAN_FWHM_NS = 15.0
-GAUSSIAN_AMPLITUDE = 0.10
+GAUSSIAN_AMPLITUDE = 1.0  # 满幅的比例,1.0 = 峰值 32767
 WAVE_SESSION = 1
 UDP_TIMEOUT_S = 2.0
 UDP_RETRIES = 3
@@ -88,7 +87,6 @@ def run_test() -> None:
 
         print(f"[2/4] configuring CH{OUTPUT_CHANNEL} at {RF_FREQUENCY_GHZ:g} GHz")
         device.set_xy_target_frequency(OUTPUT_CHANNEL, RF_FREQUENCY_GHZ)
-        device.set_gain("xy", OUTPUT_CHANNEL, OUTPUT_GAIN, gain_type="norm")
         device.set_qc_on_off("xy", OUTPUT_CHANNEL, "on")
         device.commit()
 

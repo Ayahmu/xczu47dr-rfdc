@@ -16,6 +16,7 @@ if str(SOFTWARE_DIR) not in sys.path:
     sys.path.insert(0, str(SOFTWARE_DIR))
 
 import dr47 as driver  # noqa: E402
+from dr47.protocol import _FIXED_DAC_OUTPUT_CURRENT_MA  # noqa: E402
 import waveform_model as gui_model  # noqa: E402
 
 from .models import (
@@ -699,7 +700,7 @@ class BoardGateway:
                 nco_word = (int(round(item.nco_hz)) * (1 << 48) // 6_400_000_000) & ((1 << 48) - 1)
                 phase_mdeg = driver.normalize_rfdc_phase_mdeg(item.nco_phase_deg)
                 phase_word = (phase_mdeg * (1 << 17) // 180_000) & ((1 << 18) - 1)
-                vop_code = max(0, int((item.dac_output_current_ma * 1000.0 - 1400.0) / 43.75))
+                vop_code = max(0, int((_FIXED_DAC_OUTPUT_CURRENT_MA[item.channel] * 1000.0 - 1400.0) / 43.75))
                 actual_current_ua = int(round(1400.0 + vop_code * 43.75))
                 response_channels.append({
                     "channel": item.channel,
@@ -746,7 +747,6 @@ class BoardGateway:
                     {item.channel: item.nco_hz for item in ordered},
                     {item.channel: item.nyquist_zone for item in ordered},
                     {item.channel: item.nco_phase_deg for item in ordered},
-                    {item.channel: item.dac_output_current_ma for item in ordered},
                     revision=revision,
                     channel_mask=channel_mask,
                     seq=self._next_sequence(),

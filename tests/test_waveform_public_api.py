@@ -9,6 +9,7 @@ waveform driver surface.
 from __future__ import annotations
 
 import inspect
+import struct
 from dataclasses import fields
 import sys
 from pathlib import Path
@@ -25,6 +26,10 @@ import waveform_tools  # noqa: E402
 from dr47.capabilities import DeviceCapabilities  # noqa: E402
 from dr47.device import Dr47Device  # noqa: E402
 from dr47.hardware_test_network import BoardNetworkAssignment, EnrolledBoard  # noqa: E402
+from dr47.protocol import (  # noqa: E402
+    RF2_STATUS_OK, RFCTRL2_VERSION, RFDC_APPLY_CHANNELS, RFDC_APPLY_RESPONSE_ENTRY_BYTES,
+    RFDC_APPLY_RESPONSE_HEADER_BYTES,
+)
 from dr47.simulator import SimulatedDr47Device  # noqa: E402
 
 
@@ -46,6 +51,49 @@ LEGACY_DRIVER_METHODS = (
 def test_single_board_driver_does_not_expose_retired_playback_methods(method_name: str):
     assert not hasattr(Dr47Device, method_name)
     assert not hasattr(SimulatedDr47Device, method_name)
+
+
+def test_driver_exposes_no_gain_or_dac_current_setting():
+    for cls in (Dr47Device, SimulatedDr47Device):
+        assert not hasattr(cls, "set_gain")
+        assert "output_current_ma" not in inspect.signature(cls.apply_rfdc_config).parameters
+        assert "per_channel_output_current_ma" not in inspect.signature(cls.rfctrl2_rfdc_apply).parameters
+
+
+def test_host_and_driver_use_the_same_fixed_dac_current():
+    assert host._FIXED_DAC_OUTPUT_CURRENT_MA == protocol._FIXED_DAC_OUTPUT_CURRENT_MA
+    assert protocol._FIXED_DAC_OUTPUT_CURRENT_MA == {
+        channel: (32.0 if channel in (5, 6) else 40.5) for channel in range(1, 9)}
+
+
+class _RecordingTransport:
+    """Injected transport that records RFCTRL2 requests and acknowledges them."""
+
+    def __init__(self):
+        self.sent = []
+
+    def request(self, packet, *, seq, opcode, retries, wait_response):
+        self.sent.append(packet)
+        payload = bytes(RFDC_APPLY_RESPONSE_HEADER_BYTES + RFDC_APPLY_CHANNELS * RFDC_APPLY_RESPONSE_ENTRY_BYTES)
+        return {"version": RFCTRL2_VERSION, "status": RF2_STATUS_OK, "opcode": opcode,
+                "seq": seq, "payload_bytes": len(payload), "payload": payload}
+
+
+def _requested_currents_ua(packet: bytes) -> list[int]:
+    # 24 B RFCTRL2 header, revision + channel mask, then eight (q I i I I) entries.
+    return [struct.unpack_from("<qIiII", packet, 32 + 24 * channel)[3] for channel in range(8)]
+
+
+def test_every_rfdc_apply_requests_the_fixed_maximum_dac_current():
+    transport = _RecordingTransport()
+    device = Dr47Device(ip="192.0.2.10", transport=transport, batch_mode=True)
+    device._connected = True
+    device.set_xy_target_frequency(1, 0.5)
+    device.commit()
+    device.apply_rfdc_config(nco_ghz={1: 0.2})
+    assert len(transport.sent) == 2
+    for packet in transport.sent:
+        assert _requested_currents_ua(packet) == [40500] * 4 + [32000] * 2 + [40500] * 2
 
 
 def test_single_board_constructor_and_capabilities_have_no_sync_role_contract():

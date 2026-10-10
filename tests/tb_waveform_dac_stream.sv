@@ -4,6 +4,7 @@ module tb_waveform_dac_stream;
   reg rst_n=0,playing=0,clear=0;
   reg [7:0] channel_mask=8'hff;
   reg [31:0] total_beats=3;
+  reg wrap=0;
   reg [2047:0] fifo_data;
   reg [7:0] fifo_valid=8'hff;
   wire [7:0] fifo_ready;
