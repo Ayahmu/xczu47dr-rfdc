@@ -43,25 +43,18 @@ TARGET_FIRMWARE_WORKSPACE := $(shell cd $(VIVADO_DIR)/scripts && tclsh target_co
 XSA ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa
 ELF ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf
 
-IP ?= 10.87.5.241
-PORT ?= 7
-TIMEOUT ?= 5
-HOST_OUTPUT_DIR ?= $(ROOT)/software/output
-
-# The docs tell you to install the test dependencies into ./.venv, but every
-# Python target used a bare python3, so a correctly set up repo still ran the
-# tests against the system interpreter - where matplotlib/fastapi are missing
-# and 13 test modules die on import.  Prefer the repo venv when it exists.
+# The docs install the test dependencies into ./.venv; prefer it when it
+# exists so the tests do not run against a system interpreter without them.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-wheel driver-smoke driver-release driver-version driver-bump hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean host host-dry-run run program check-tools clean
+.PHONY: help all test driver-wheel driver-smoke driver-release driver-version driver-bump hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean run program check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make all              Build hardware and firmware"
-	@echo "  make test             Run software/unit and script syntax checks"
+	@echo "  make test             Run the software, build-script and RTL simulation tests"
 	@echo "  make hardware         Build one version (REFERENCE_MHZ, default 250) into ARTIFACT_DIR"
 	@echo "  make hardware-fast    Reuse the current Vivado project for RTL/constraint iterations"
 	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
@@ -90,12 +83,9 @@ help:
 	@echo "  make firmware-create  Create Vitis platform/application"
 	@echo "  make firmware-build   Build firmware ELF"
 	@echo ""
-	@echo "Board/host targets:"
+	@echo "Board targets:"
 	@echo "  make program          Program XSA and download the matching ELF over JTAG"
 	@echo "  make run              Alias for make program"
-	@echo "  make host             Run host.py against board IP/PORT"
-	@echo "  make host IP=10.87.5.241 PORT=7"
-	@echo "  make host-dry-run     Generate host artifacts without board access"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make hardware-clean   Clean Vivado work, reports, and ignored output"
@@ -113,17 +103,15 @@ help:
 	@echo "  XILINXD_LICENSE_FILE=$(XILINXD_LICENSE_FILE)"
 	@echo "  ARTIFACT_DIR=$(ARTIFACT_DIR)"
 	@echo "  PROGRAM=cd firmware && TARGET=$(TARGET) ./build.sh program"
-	@echo "  IP=$(IP) PORT=$(PORT) TIMEOUT=$(TIMEOUT)"
 
 all: hardware firmware artifacts
 
 test:
-	@$(PYTHON) -c "import numpy, matplotlib, fastapi" 2>/dev/null || { \
-	  echo "ERROR: 测试依赖缺失（numpy / matplotlib / fastapi）。"; \
+	@$(PYTHON) -c "import numpy, pytest" 2>/dev/null || { \
+	  echo "ERROR: 测试依赖缺失（numpy / pytest）。"; \
 	  echo "       先执行: $(PYTHON) -m pip install -r software/requirements.txt"; \
 	  echo "       当前解释器: $(PYTHON)"; exit 1; }
-	$(PYTHON) -m unittest discover -s tests
-	bash -n software/capture_uart.sh
+	$(PYTHON) -m pytest tests -q
 	bash -n firmware/build.sh
 
 driver-wheel:
@@ -296,11 +284,5 @@ artifacts-clean:
 
 run program:
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh program
-
-host:
-	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --ip "$(IP)" --port "$(PORT)" --timeout "$(TIMEOUT)" --output-dir "$(HOST_OUTPUT_DIR)"
-
-host-dry-run:
-	cd $(SOFTWARE_DIR) && $(PYTHON) host.py --dry-run --output-dir "$(HOST_OUTPUT_DIR)"
 
 clean: firmware-clean hardware-clean chisel-clean

@@ -10,7 +10,7 @@ TARGET_CONFIG = REPO_ROOT / "hardware" / "vivado" / "scripts" / "target_config.t
 FIRMWARE_MAIN = REPO_ROOT / "firmware" / "src" / "main.c"
 FIRMWARE_MAIN_H = REPO_ROOT / "firmware" / "src" / "main.h"
 RFCTRL2_RTL = REPO_ROOT / "hardware" / "vivado" / "src" / "pl_riscv_control_v1.v"
-HOST_SOFTWARE = REPO_ROOT / "software" / "host.py"
+DRIVER_PROTOCOL = REPO_ROOT / "software" / "dr47" / "protocol.py"
 VCXO_HZ = 100_000_000.0
 
 
@@ -68,7 +68,9 @@ class Hmc7044ConfigTests(unittest.TestCase):
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         self.assertRegex(top, r"parameter integer REFERENCE_MHZ = 250")
         target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
-        self.assertIn("generics {REFERENCE_MHZ=250}", target_config)
+        # 250 MHz unless the build sets REFERENCE_MHZ=10.
+        self.assertIn('"REFERENCE_MHZ=[target_config_reference_mhz]"', target_config)
+        self.assertRegex(target_config, r"proc target_config_reference_mhz \{\} \{\s*set ref 250\b")
 
     def test_external_250mhz_selects_high_vco_core_for_3072_ghz(self):
         regs = _hmc7044_registers()
@@ -120,7 +122,7 @@ class Hmc7044ConfigTests(unittest.TestCase):
         firmware = FIRMWARE_MAIN.read_text(encoding="utf-8", errors="ignore")
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
         rfctrl2 = RFCTRL2_RTL.read_text(encoding="utf-8", errors="ignore")
-        host = HOST_SOFTWARE.read_text(encoding="utf-8", errors="ignore")
+        driver = DRIVER_PROTOCOL.read_text(encoding="utf-8", errors="ignore")
 
         # RFDC MTS/NCO alignment is still a board-local diagnostic/configuration
         # responsibility.  It must not be confused with the retired two-board
@@ -135,9 +137,8 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertIn("Reinitialize_RFDC_For_Sync", firmware)
         self.assertIn("Read_Sync_Event_Epoch", firmware)
         self.assertIn("dac_mts", rfctrl2.lower())
-        self.assertIn("dac_mts", host.lower())
-        self.assertIn("RF2_NET_STATUS_HMC_DONE", host)
-        self.assertIn("rfctrl2_sync_epoch", host)
+        self.assertIn("dac_mts", driver.lower())
+        self.assertIn("RF2_NET_STATUS_HMC_DONE", driver)
         self.assertIn("waveform_playback_path", top)
         self.assertNotIn("sync_trigger_link_i", top)
         self.assertNotIn("dac_trigger_emitter_i", top)

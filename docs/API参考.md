@@ -14,8 +14,8 @@ python -m pip install 47dr_driver-<版本>-py3-none-any.whl
 from dr47 import Dr47Device
 ```
 
-SDK ZIP 中的 `examples/` 目录包含模拟器、网络发现、软件 Trigger 和外部 Trigger
-示例。先运行模拟器示例可以在没有板卡时检查安装：
+SDK ZIP 中的 `examples/` 目录包含模拟器、网络发现、软件 Trigger 发波、外部 Trigger
+发波和 100G 上传测速脚本。先运行模拟器示例可以在没有板卡时检查安装：
 
 ```bash
 python -m dr47.examples.simulator_quickstart
@@ -291,5 +291,5 @@ chunk/outstanding beat 以及 refill 起止时间。诊断寄存器在硬件侧�
 ## 版本与兼容性
 
 当前公开包不包含 TDC 校准、补偿或 TDC 公共 API。驱动、XSA 和 ELF 应来自同一发布
-版本；`software/load_and_verify.sh` 会从 XSA 提取内嵌 bitstream 与 `psu_init.tcl`，
+版本；`make program` 会从 XSA 提取内嵌 bitstream 与 `psu_init.tcl`，
 不需要额外的 `.bit` 或 `_psu_init.tcl` 文件。

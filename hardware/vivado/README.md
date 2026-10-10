@@ -1,55 +1,32 @@
- # Vivado 硬件构建
+# Vivado 硬件构建
 
- 这里是 XCZU47DR 的 Vivado 输入：src/ 放 RTL，bd/ 放 Block Design，ip/ 放
- 固定 IP，xdc/ 放引脚和时序约束，scripts/ 放自动化流程。工程和报告只在本地
- 生成，交付文件写入根目录 artifacts/。
+`src/` 放 RTL（其中 `udp/` 是 64 位 UDP/IP 协议栈，`udp100g/` 是 100G CMAC 封装和批量
+上传接收通路），`bd/` 放 Block Design，`ip/` 放固定 IP，`xdc/` 和 `constraints/` 放引脚、
+时序和 TDC 布局约束，`scripts/` 放自动化流程。`src/` 下的每个文件都会进入工程，不再
+使用的模块应直接删除。工程和报告只在本地生成。
 
- ## 目标和关键接口
+## 关键接口
 
- - custom_xczu47dr_master：XS20 为输出。
- - custom_xczu47dr_slave：XS20 为输入。
- - XS18 (TRIG_1) 为 Trigger 输出，XS19 (TRIG_2) 为 Trigger 输入。
- - RFDC 为 6.4 GS/s、16 倍插值、400 MS/s IQ、50 MHz AXIS。
- - XS17 提供两板共同 250 MHz 参考；HMC7044 通过 R1=25 产生 10 MHz PLL1 PFD，
-   并输出约 96 MHz `PL_CLK` 作为 SYNC/Trigger
-   事件时间基准，PS `pl_clk` 不参与物理事件捕获。
+- RFDC：6.4 GS/s、16 倍插值、400 MS/s IQ、50 MHz AXIS。
+- DDR4：8 GiB，300 MHz 用户时钟，512-bit AXI。
+- 网络：100G CMAC（CAUI-4、RS-FEC）。控制命令走 64 位协议栈；批量波形数据在 CMAC
+  输出处分流，以 512-bit 位宽直接写 DDR4。
+- XS17 外部参考（250 或 10 MHz）经 HMC7044 产生 10 MHz PLL1 PFD 和 128 MHz DAC 参考。
+- XS18（TRIG_1）为 Trigger 输出，XS19（TRIG_2）为 Trigger 输入。
 
- 主从方向是综合时固定的宏定义，软件不能切换。主从接线和仪器检查见
- [硬件指标](../../docs/硬件指标.md)。
+## 分步命令
 
- ## 构建命令
+~~~bash
+source /tools/Xilinx/Vivado/2024.2/settings64.sh
 
- ~~~bash
- source /tools/Xilinx/Vivado/2024.2/settings64.sh
+make vivado-project     # 生成工程和 IP
+make preflight          # 只做 RTL 展开和结构检查
+make synth
+make xdc-check          # 核对 XDC 中带 -quiet 的对象查询仍能匹配综合网表
+make impl
+make bitstream
+make xsa
+~~~
 
- make vivado-project TARGET=custom_xczu47dr_slave
- make preflight TARGET=custom_xczu47dr_slave
- make synth TARGET=custom_xczu47dr_slave
- make impl TARGET=custom_xczu47dr_slave
- make bitstream TARGET=custom_xczu47dr_slave
- make xsa TARGET=custom_xczu47dr_slave  # 每次只构建这个 TARGET
- ~~~
-
- 需要构建另一个角色时，单独执行：
-
- ~~~bash
- make xsa-master
- make xsa-slave
- ~~~
-
- `make xsa` 默认只构建 master；通过 `TARGET=custom_xczu47dr_slave` 或上面的
- 快捷目标构建 slave。两个角色的 Vivado 工程和报告分别位于
- `hardware/vivado/work/<TARGET>` 与 `hardware/vivado/reports/<TARGET>`，不会共用
- 同一个工程状态。每个目标的输出都使用角色前缀，随后由 `make firmware` 生成匹配
- ELF。不要把主卡 bitstream 与从卡 XSA/ELF 混搭。
-
- ## 调试重点
-
- 实现后先看时序报告中的 WNS/TNS、WHS/THS，再用 ILA 检查 UDP 接收、DDR 512 位
- 交错数据、8 路打包器和 RFDC AXIS。Vivado DRC 警告需要按规则逐项判断，不能把所有
- 警告都当成时序失败。
-
- `ila_hmc_event` 观察 HMC `PL_CLK` 域的 `sync_xs20_in/out`、`sync_hmc`、XS18/XS19
- Trigger、`hmc_event_tick`、`sync_event_tick`、`trigger_capture_tick` 和
- `trigger_launch_tick`。它与 `ila_dac_axis` 配合使用，才能区分物理事件时刻和 DAC
- AXIS 数据有效时刻。
+构建选项通过环境变量传入：`TIMING_GATE=0` 关闭时序门限（仅限诊断构建），`IMPL_MODE`
+选择实现策略（默认先平衡、不过再激进）。

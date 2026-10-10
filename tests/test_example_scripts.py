@@ -21,12 +21,32 @@ def called_methods(tree: ast.AST) -> set[str]:
 
 
 class ExampleScriptTests(unittest.TestCase):
-    def test_only_one_hardware_test_remains(self):
+    def test_board_test_scripts_are_exactly_the_documented_set(self):
         scripts = {
             path.name
             for path in EXAMPLES.glob("waveform_*_example.py")
         }
-        self.assertEqual(scripts, {"waveform_external_trigger_example.py", "waveform_software_play_example.py"})
+        self.assertEqual(scripts, {
+            "waveform_external_trigger_example.py",
+            "waveform_software_play_example.py",
+            "waveform_bulk_upload_speed_example.py",
+        })
+        # Every script in the directory is listed in the driver README.
+        readme = (ROOT / "software/dr47/README.md").read_text(encoding="utf-8")
+        for path in EXAMPLES.glob("*.py"):
+            if path.name != "__init__.py":
+                self.assertIn(path.name, readme)
+
+    def test_speed_test_measures_the_bulk_path_through_the_public_call(self):
+        text = (EXAMPLES / "waveform_bulk_upload_speed_example.py").read_text(encoding="utf-8")
+        methods = called_methods(ast.parse(text))
+        self.assertIn("upload_waveforms", methods)
+        self.assertIn("play", methods)
+        self.assertIn("waveform_status", methods)
+        for reported in ('result["transport"]', "resent_chunks", "underflow_count", "Gb/s"):
+            self.assertIn(reported, text)
+        for forbidden in ("argparse", "sys.argv", "os.environ", "os.getenv"):
+            self.assertNotIn(forbidden, text)
 
     def test_configuration_is_defined_in_source(self):
         text = (EXAMPLES / SCRIPT_NAME).read_text(encoding="utf-8")

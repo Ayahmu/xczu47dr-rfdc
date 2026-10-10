@@ -72,12 +72,8 @@ set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_dac_sync_ff_reg[0]/D
 set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
 set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_ddr_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/trigger_input_count_ddr_meta_reg[*]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/trigger_accepted_count_ddr_meta_reg[*]/D]
-# Present on both roles: a slave now also drives XS18 on an explicit
-# EMIT_TRIGGER, so this counter is no longer constant-folded away when
-# IS_MASTER=0.
-set_false_path -quiet -to [get_pins -quiet top_i/trigger_output_count_ddr_meta_reg[*]/D]
+# The trigger_*_count_ddr_meta registers have no constraint here: Top.v ties
+# those three counters to zero, so synthesis removes the registers.
 
 # PL_SYSREF goes straight from its IBUFDS to the RFDC user_sysref_dac port and
 # is never sampled by PL logic, so it needs no synchronizer constraint here.

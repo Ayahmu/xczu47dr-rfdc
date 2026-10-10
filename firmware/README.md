@@ -15,13 +15,12 @@
  从仓库根目录执行：
 
  ~~~bash
- make firmware TARGET=custom_xczu47dr_waveform
- make firmware TARGET=custom_xczu47dr_waveform
- JTAG_CABLE_SERIAL=<序列号> TARGET=custom_xczu47dr_waveform make program
+ make firmware
+ JTAG_CABLE_SERIAL=<序列号> make program
  ~~~
 
  也可在本目录使用 ./build.sh create|build|rebuild|program|clean。program 使用
- artifacts/ 中与目标同名的 bitstream、XSA、ELF 和 psu_init.tcl，主从文件不能混用。
+ artifacts/ 中的 XSA（内嵌 bitstream 和 psu_init.tcl）与 ELF，两者必须来自同一次构建。
 
  ## 源码职责
 

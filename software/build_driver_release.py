@@ -169,7 +169,6 @@ def main() -> int:
                 "waveform generation and DDR upload",
                 "finite burst scheduling",
                 "software and external Trigger playback",
-                "master/slave SYNC control",
                 "in-memory simulation",
             ],
             "excluded_features": [

@@ -38,15 +38,20 @@ set project_basename [target_config_get $target project_basename]
 set top_module [target_config_get $target top_module]
 set dcp "${work_dir}/${project_basename}.runs/synth_1/${top_module}.dcp"
 
-# Prefer open_run over open_checkpoint when called from within a project: it
-# applies the full constraint set (including IP-owned XDC), whereas
-# open_checkpoint only brings the netlist.  If no project/run is open, fall
-# back to the DCP.
-set loaded_from_run 0
+# Open the synthesized run through its project: that links the IP netlists and
+# applies the whole constraint set, so the clocks the XDC names exist.  A bare
+# checkpoint is only a fallback; it carries the netlist but not those clocks.
+set project_file "${work_dir}/${project_basename}.xpr"
 if {[llength [get_designs -quiet]] == 0} {
-  if {[catch {current_project -quiet} proj] == 0 && ${proj} ne ""} {
+  set loaded_from_run 0
+  if {[file exists ${project_file}]} {
+    if {[catch {current_project -quiet} proj] || ${proj} eq ""} {
+      open_project -quiet ${project_file}
+    }
     if {[catch {open_run synth_1} e] == 0} {
       set loaded_from_run 1
+    } else {
+      puts "WARNING: open_run synth_1 failed (${e}); falling back to the checkpoint"
     }
   }
   if {!${loaded_from_run}} {
@@ -57,6 +62,8 @@ if {[llength [get_designs -quiet]] == 0} {
     open_checkpoint ${dcp}
   }
 }
+# Clock names can only be checked against a design that has clocks.
+set have_clocks [expr {[llength [get_clocks -quiet]] > 0}]
 
 set vivado_dir [file dirname ${script_folder}]
 set xdc_files [list]
@@ -112,6 +119,7 @@ foreach xdc ${xdc_files} {
         {get_clocks\s+(?:-quiet\s+|-include_generated_clocks\s+)+([^\s\{\-]\S*)\]} ${trimmed}] {
       lappend clock_names ${inner}
     }
+    if {!${have_clocks}} { set clock_names [list] }
     foreach name ${clock_names} {
       if {[catch {llength [get_clocks -quiet ${name}]} count]} {
         puts "CRITICAL WARNING: unparsable XDC clock name in ${tail}: ${name}"
@@ -129,14 +137,8 @@ foreach xdc ${xdc_files} {
 puts "XDC pin check: ${live} live, ${dead} dead"
 puts "XDC clock check: ${live_clocks} live, ${dead_clocks} dead"
 
-# If the clock check found zero live names, the constraint set likely was not
-# loaded (open_checkpoint without the project brings only the netlist).  That is
-# a tool usage bug, not a genuine dead-constraint problem, so downgrade to a
-# warning rather than failing the build.
-if {${live_clocks} == 0 && ${dead_clocks} > 0} {
-  puts "WARNING: all queried clock names returned empty; constraint set may not be loaded"
-  puts "         (this check may have been invoked on a bare checkpoint instead of via open_run)"
-  exit 0
+if {!${have_clocks}} {
+  puts "WARNING: the open design defines no clocks (bare netlist); clock names were not checked"
 }
 
 set total_dead [expr {${dead} + ${dead_clocks}}]

@@ -166,11 +166,8 @@ set synth_cells [get_cells -hier -quiet *dac_trigger_scheduler*]
 if {[llength ${synth_cells}] > 0} {
     error "legacy dac_trigger_scheduler is present in synthesized netlist"
 }
-set synth_ila_cells [get_cells -hier -quiet *ila*]
-set synth_defines [get_property verilog_define [current_fileset]]
-set ila_requested [expr {[lsearch -exact ${synth_defines} ENABLE_ILA] >= 0}]
-if {!${ila_requested} && [llength ${synth_ila_cells}] > 0} {
-    error "production synthesis unexpectedly contains ILA cells"
+if {[llength [get_cells -hier -quiet *ila*]] > 0} {
+    error "synthesized netlist unexpectedly contains ILA cells"
 }
 rf2_identity_validate_project ${manifest_file} ${target} ${script_path}
 rf2_identity_validate_synth_run ${manifest_file} synth_1 [target_config_get ${target} top_module]

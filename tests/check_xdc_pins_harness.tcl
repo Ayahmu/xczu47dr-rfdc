@@ -8,8 +8,11 @@
 # under plain tclsh in milliseconds.  tests/test_check_xdc_pins.py drives it.
 #
 # usage: tclsh tests/check_xdc_pins_harness.tcl <repo_root> <case>
-#   live : every clock name the XDC references exists  -> checker must exit 0
-#   dead : one referenced clock name is missing        -> checker must exit 1
+#   live             : every clock name the XDC references exists  -> exit 0
+#   dead             : one referenced clock name is missing        -> exit 1
+#   dead_pin         : one pin pattern matches nothing             -> exit 1
+#   netlist          : no clock is defined at all (bare netlist)   -> exit 0, clocks skipped
+#   netlist_dead_pin : the same, and one pin pattern is dead       -> exit 1
 
 set repo [lindex $argv 0]
 set mode [lindex $argv 1]
@@ -23,13 +26,17 @@ set LIVE_CLOCKS {
 if {$mode eq "dead"} {
   set LIVE_CLOCKS [lsearch -all -inline -not -exact $LIVE_CLOCKS RFDAC2_CLK]
 }
+if {[string match "netlist*" $mode]} {
+  set LIVE_CLOCKS [list]
+}
+set DEAD_PIN [expr {[string match "*dead_pin" $mode] ? "*hmc_done_ddr_sync_reg*" : ""}]
 
 proc target_config_get {target key} {
   switch -- $key {
     project_basename { return "custom_xczu47dr_waveform_rfdc" }
     top_module       { return "TopCustomXczu47dr" }
     xdc_files        { return [list xdc/custom_xczu47dr_minimal.xdc \
-                                   xdc/custom_xczu47dr_waveform.xdc] }
+                                   xdc/custom_xczu47dr_100g.xdc] }
   }
   error "harness: unexpected target_config key $key"
 }
@@ -37,13 +44,17 @@ proc target_config_get {target key} {
 proc get_designs args { return [list stub_design] }
 proc open_checkpoint args { error "harness: the checker must not need a checkpoint" }
 
-# Pin patterns are all reported present: this harness covers the parse and the
-# clock path.  The pin list is already exercised for real by every build.
-proc get_pins args { return [list stub_pin] }
+# Pin patterns are reported present, except the one a *dead_pin case removes.
+proc get_pins args {
+  global DEAD_PIN
+  if {$DEAD_PIN ne "" && [string match $DEAD_PIN [lindex $args end]]} { return [list] }
+  return [list stub_pin]
+}
 
 proc get_clocks args {
   global LIVE_CLOCKS
   set name [lindex $args end]
+  if {$name eq "-quiet"} { return $LIVE_CLOCKS }      ;# "which clocks exist at all"
   if {[lsearch -exact $LIVE_CLOCKS $name] >= 0} { return [list $name] }
   return [list]
 }

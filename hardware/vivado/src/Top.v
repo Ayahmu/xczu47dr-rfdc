@@ -3,10 +3,9 @@ module Top #(
     // 1 = XS20/TRIG_3 mirrors the XS18 Trigger output instead of carrying SYNC.
     // Bench-measurement builds only; see the assign near sync_xs20_out.
     parameter integer XS20_TRIG_OUT = 0,
-    // 1 = generate the XS18/XS20 pulse in dac_axis_clk instead of hmc_pl_clk.
-    // Puts the scope reference and the RF launch in one clock domain so a
-    // single-board XS18->XS19 loopback measures ~0 jitter; see
-    // dac_trigger_emitter.v.
+    // 1 = take the XS18/XS20 pulse from the dac_axis_clk emitter instead of
+    // hmc_pl_clk.  That emitter is retired (trigger_emit_dac_pulse is tied
+    // low), so the waveform target always builds with 0.
     parameter integer TRIG_EMIT_DAC = 0,
     // External XS17 reference frequency in MHz (250 or 10).  Selects the HMC7044
     // R1 divider so PLL1 always closes on a 10 MHz PFD.
@@ -290,11 +289,11 @@ module Top #(
   wire sync_align_failed;
   wire [5:0] sync_alignment_epoch;
   // The HMC event domain accepts one external Trigger per DAC PREPARED
-  // interval; declare this before the sync_trigger_link instance.
+  // interval; declare this before its first use below.
   wire waveform_prepared_dac;
   wire rfctrl2_sync_epoch_pulse;
   wire sync_role_master_ddr = IS_MASTER ? 1'b1 : 1'b0;
-  // Declare this before the sync_trigger_link instance below.  Vivado's
+  // Declare this before the first port connection that uses it.  Vivado's
   // Verilog compiler otherwise creates an implicit net at the port
   // connection and rejects the later explicit declaration.
   reg sync_bypass_ddr;
@@ -1059,8 +1058,8 @@ module Top #(
   // DAC beat per AXI transaction).  The writer drives addr/valid/data but not
   // the burst qualifiers; leaving them undriven presents Z to the DDR
   // smartconnect, which answers DECERR and the writer reports AXI_ERROR.
-  // Pin them to the same contract the retired udp_waveform_ddr_writer used:
-  // INCR burst, single transfer, 32-byte (256-bit) beats.
+  // Pin them to the writer's contract: INCR burst, single transfer, 32-byte
+  // (256-bit) beats.
   assign M_AXI_WAVE_awburst = 2'b01;
   assign M_AXI_WAVE_awcache = 4'b0011;
   assign M_AXI_WAVE_awlen   = 8'd0;
@@ -1627,9 +1626,8 @@ module Top #(
     end
   end
   // ========== trigger CDC ==========
-  // XS18/XS19 carry the independent playback Trigger. The sync_trigger_link
-  // module gates both the dedicated input and the legacy fallback behind the
-  // external XS20 SYNC state (or the explicit runtime bypass).
+  // XS18/XS19 carry the independent playback Trigger.  Admission is gated
+  // on the external XS20 SYNC state (or the explicit runtime bypass).
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_event_ddr_sync_ff;
   reg role_trigger_event_ddr_seen;
   // Slave-bypass software Triggers use a dedicated DDR-to-DAC toggle. The
@@ -3714,252 +3712,4 @@ module Top #(
   assign M_AXI_GPIO_rdata =
       {hmc7044_set_finish, sync_event_epoch, axigpio_rdata[24:0]};
 
-`ifdef ENABLE_ILA
-  ila_s_axi_01 u_ila_s_axi_01 (
-    .clk(ddr4_ui_clk),
-    .probe0(M_AXI_DM_araddr),
-    .probe1(M_AXI_DM_arlen),
-    .probe2(M_AXI_DM_arsize),
-    .probe3({M_AXI_DM_arvalid, M_AXI_DM_arready, M_AXI_DM_rvalid, M_AXI_DM_rready}),
-    .probe4(M_AXI_DM_rdata),
-    .probe5(M_AXI_DM_rresp),
-    .probe6(M_AXI_WAVE_awaddr),
-    .probe7(M_AXI_WAVE_awlen),
-    .probe8(M_AXI_WAVE_awsize),
-    .probe9({M_AXI_WAVE_awvalid, M_AXI_WAVE_awready, M_AXI_WAVE_wvalid, M_AXI_WAVE_wready}),
-    .probe10(M_AXI_WAVE_wdata),
-    .probe11({M_AXI_WAVE_bvalid, M_AXI_WAVE_bready, M_AXI_WAVE_bresp})
-  );
-
-  ila_udp_ddr u_ila_udp_ddr (
-    .clk(ddr4_ui_clk),
-    .probe0({
-      ddr4_ui_aresetn,                 // 127
-      ps_trigger_ddr_sync,             // 126
-      udp64_rcv_vld,                   // 125
-      udp_wave_pkt,                    // 124
-      udp_instr_word,                  // 123
-      udp_instr_tvalid,                // 122
-      udp_instr_tready,                // 121
-      rvctrl64_tvalid,                 // 120
-      rvctrl64_tfirst,                 // 119
-      rvctrl64_tlast,                  // 118
-      rv_instr_tvalid,                 // 117
-      rv_instr_tready,                 // 116
-      instr_tvalid,                    // 115
-      instr_tready,                    // 114
-      cfg_commit,                      // 113
-      ch1_wave_tvalid,                 // 112
-      ch1_wave_tready_internal,        // 111
-      ch2_wave_tvalid,                 // 110
-      ch2_wave_tready_internal,        // 109
-      M_AXI_DM_arvalid,                // 108
-      M_AXI_DM_arready,                // 107
-      M_AXI_DM_rvalid,                 // 106
-      M_AXI_DM_rready,                 // 105
-      M_AXI_DM_rlast,                  // 104
-      dm_mm2s_err,                     // 103
-      control_trigger_pulse,           // 102
-      M_AXI_WAVE_awvalid,              // 101
-      M_AXI_WAVE_awready,              // 100
-      M_AXI_WAVE_wvalid,               // 99
-      M_AXI_WAVE_wready,               // 98
-      M_AXI_WAVE_bvalid,               // 97
-      M_AXI_WAVE_bready,               // 96
-      ex_dbg_active_valid,             // 95
-      ex_dbg_pending_valid,            // 94
-      ex_dbg_ch1_need_hard,            // 93
-      ex_dbg_ch2_need_hard,            // 92
-      ex_dbg_ch1_need_soft,            // 91
-      ex_dbg_ch2_need_soft,            // 90
-      ex_dbg_dm_sel_ch1,               // 89
-      ex_dbg_dm_st,                    // 88:87
-      ex_dbg_st,                       // 86:84
-      udp_wave_state[2:0],             // 83:81
-      M_AXI_DM_rresp,                  // 80:79
-      M_AXI_WAVE_bresp,                // 78:77
-      udp_wave_last_bresp,             // 76:75
-      rv_dbg_state,                    // 74:71
-      dm_mm2s_sts_tdata[3:0],          // 70:67
-      udp_wave_fifo_count[7:0],        // 66:59
-      ch1_fifo_level_beats,            // 58:43
-      ch2_fifo_level_beats,            // 42:27
-      udp_wave_write_count[8:0],       // 26:18
-      udp_wave_drop_count[8:0],        // 17:9
-      {wave_new_dac_gate,              // 8
-       1'b0,                           // 7
-       waveform_prepared_ddr,           // 6
-       waveform_armed_ddr,              // 5
-       wave_control_abort_dac,         // 4
-       udp_wave_align_error_count[3:0]} // 3:0
-    }),
-    .probe1(udp64_rcv_dat),
-    .probe2(M_AXI_WAVE_wdata[63:0]),
-    .probe3({
-      rv_dbg_state,                    // 127:124
-      rv_dbg_status,                   // 123:92
-      rv_dbg_last_seq,                 // 91:60
-      rv_dbg_last_cmd,                 // 59:28
-      rvctrl64_protocol,                // 27:26
-      rvctrl64_word_count[6:0],         // 25:19
-      rv_dbg_scratch[10:0],             // 18:8
-      udp_control_tx_debug             // 7:0
-    }),
-    .probe4(instr_tdata),
-    .probe5(dm_cmd_tdata),
-    .probe6(dm_data_tdata[63:0]),
-    .probe7({
-      rvresp64_word_count[10:0],       // 127:117
-      rvresp64_tlast,                  // 116
-      rvresp64_tready,                 // 115
-      rvresp64_tvalid,                 // 114
-      RV_AXI_RFDC_awvalid,             // 113
-      RV_AXI_RFDC_awready,             // 112
-      RV_AXI_RFDC_wvalid,              // 111
-      RV_AXI_RFDC_wready,              // 110
-      RV_AXI_RFDC_bvalid,              // 109
-      RV_AXI_RFDC_bready,              // 108
-      RV_AXI_RFDC_arvalid,             // 107
-      RV_AXI_RFDC_arready,             // 106
-      RV_AXI_RFDC_rvalid,              // 105
-      RV_AXI_RFDC_rready,              // 104
-      RV_AXI_RFDC_bresp,               // 103:102
-      RV_AXI_RFDC_rresp,               // 101:100
-      RV_AXI_RFDC_awaddr,              // 99:82
-      RV_AXI_RFDC_wdata,               // 81:50
-      RV_AXI_RFDC_araddr,              // 49:32
-      RV_AXI_RFDC_rdata                // 31:0
-    }),
-    .probe8({rvresp64_tdata, ex_dbg_ch1_bytes_left}),
-    .probe9(ch1_wave_tdata[63:0]),
-    .probe10(ch2_wave_tdata[63:0]),
-    .probe11(udp_wave_last_wdata[63:0])
-  );
-
-  ila_dac_axis u_ila_dac_axis (
-    .clk(dac_axis_clk),
-    .probe0({
-      // bit0: DAC-domain reset; bit1: final RFDC output permission.
-      // Top 6 bits: the DAC-domain external Trigger path under test.
-      dac_ext_trigger_gate,
-      role_trigger_dac_pulse,
-      1'b0,
-      dac_trigger_launch,
-      dac_direct_trigger_sync,
-      dac_direct_trigger_pulse,
-      waveform_play_prepare,
-      waveform_play_trigger,
-      waveform_play_abort,
-      waveform_prepared_dac,
-      waveform_armed_dac,
-      pc_done_pulse,
-      wave_diag_underflow_seen,
-      trig_1_dac_valid_pulse,
-      trig_1_dac_valid,
-      ps_trigger_dac_sync,
-      pc_trig_pulse,
-      pc_trig_start,
-      pc_started,
-      pc_new_cfg,
-      cfg_auto_start_dac,
-      cfg_rd_ready,
-      cfg_rd_valid,
-      pc_last_seq_id,
-      seq_id_dac,
-      ch8_prog_full, ch7_prog_full, ch6_prog_full, ch5_prog_full,
-      ch4_prog_full, ch3_prog_full, ch2_prog_full, ch1_prog_full,
-      ch8_prog_empty, ch7_prog_empty, ch6_prog_empty, ch5_prog_empty,
-      ch4_prog_empty, ch3_prog_empty, ch2_prog_empty, ch1_prog_empty,
-      ch8_arm_dac, ch7_arm_dac, ch6_arm_dac, ch5_arm_dac,
-      ch4_arm_dac, ch3_arm_dac, ch2_arm_dac, ch1_arm_dac,
-      ch8_allow, ch7_allow, ch6_allow, ch5_allow,
-      ch4_allow, ch3_allow, ch2_allow, ch1_allow,
-      dac_ch8_ready_gated,
-      dac_ch7_ready_gated,
-      dac_ch6_ready_gated,
-      dac_ch5_ready_gated,
-      dac_ch4_ready_gated,
-      dac_ch3_ready_gated,
-      dac_ch2_ready_gated,
-      dac_ch1_ready_gated,
-      dac_ch8_ready,
-      dac_ch7_ready,
-      dac_ch6_ready,
-      dac_ch5_ready,
-      dac_ch4_ready,
-      dac_ch3_ready,
-      dac_ch2_ready,
-      dac_ch1_ready,
-      dac_ch8_valid_gated,
-      dac_ch7_valid_gated,
-      dac_ch6_valid_gated,
-      dac_ch5_valid_gated,
-      dac_ch4_valid_gated,
-      dac_ch3_valid_gated,
-      dac_ch2_valid_gated,
-      dac_ch1_valid_gated,
-      // Final AXIS valids presented to the RFDC, after output gating.
-      rfdc_ch8_tvalid,
-      rfdc_ch7_tvalid,
-      rfdc_ch6_tvalid,
-      rfdc_ch5_tvalid,
-      rfdc_ch4_tvalid,
-      rfdc_ch3_tvalid,
-      rfdc_ch2_tvalid,
-      rfdc_ch1_tvalid,
-      rfdc_output_permitted_dac,
-      dac_rst_n
-    }),
-    // These are the exact data buses connected to RFDC sXX_axis_tdata.
-    .probe1(rfdc_ch1_tdata[31:0]),
-    .probe2(rfdc_ch2_tdata[31:0]),
-    .probe3(rfdc_ch3_tdata[31:0]),
-    .probe4(rfdc_ch4_tdata[31:0]),
-    .probe5(rfdc_ch5_tdata[31:0]),
-    .probe6(rfdc_ch6_tdata[31:0]),
-    .probe7(rfdc_ch7_tdata[31:0]),
-    .probe8(rfdc_ch8_tdata[31:0]),
-    .probe9({ch1_wr_count, ch2_wr_count, ch3_wr_count, ch4_wr_count,
-             ch5_wr_count, ch6_wr_count, ch7_wr_count, ch8_wr_count}),
-    .probe10({ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac,
-              ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac}),
-    .probe11({pc_ch1_fire_count, pc_ch2_fire_count, pc_ch3_fire_count, pc_ch4_fire_count,
-              pc_ch5_fire_count, pc_ch6_fire_count, pc_ch7_fire_count, pc_ch8_fire_count}),
-    // Trigger-latency instrumentation, all in dac_axis_clk.
-    .probe12(trig_lat_tick),
-    .probe13({trig_lat_delta_last, trig_lat_delta_min,
-              trig_lat_delta_max, trig_lat_start_delta}),
-    .probe14({trig_lat_pair_count, trig_lat_orphan_count}),
-    .probe15({dac_direct_input_count, dac_direct_accept_count}),
-    .probe16({trig_lat_pending, dac_direct_trigger_edge,
-              dac_direct_trigger_latched, waveform_prepared_dac})
-  );
-
-  ila_hmc_event u_ila_hmc_event (
-    .clk(hmc_pl_clk),
-    .probe0({
-      112'd0,
-      hmc_pl_rst_n,
-      sync_xs20_in,
-      sync_xs20_out,
-      sync_xs20_oe,
-      sync_hmc,
-      trigger_xs18_out,
-      TRIG_2,
-      trigger_event_toggle_hmc,
-      trigger_in_seen,
-      trigger_accepted,
-      trigger_output_active,
-      sync_done_pl,
-      sync_seen,
-      sync_link_ready,
-      sync_align_busy,
-      sync_align_failed
-    }),
-    .probe1(hmc_event_tick),
-    .probe2(sync_event_tick),
-    .probe3(trigger_capture_tick),
-    .probe4(trigger_launch_tick)
-  );
-`endif
 endmodule

@@ -1,7 +1,7 @@
 # 主机软件
 
-本目录提供 Python 驱动、波形生成工具和网页控制台。完整操作流程请看
-[软件版本说明](../docs/软件版本说明.md)包含版本、安装和 API 概览；完整签名和示例见
+本目录提供 Python 驱动 `dr47` 及其测试脚本。版本、安装和 API 概览见
+[软件版本说明](../docs/软件版本说明.md)，完整签名和示例见
 [API 接口参考](../docs/API参考.md)。
 
 ## 安装
@@ -13,29 +13,10 @@ python -m pip install -r software/requirements.txt
 python -m pip install -e software/dr47
 ~~~
 
-## 板级测试入口
+## 内容
 
-`dr47/examples/` 提供两个单板 WAVECTR0 示例：外部 XS19 Trigger 和软件 PLAY。
-板卡 IP、主机网卡、源 IP、频率、脉冲和 Trigger 参数都直接写在脚本顶部，
-不接受命令行参数或环境变量。
-
-~~~bash
-.venv/bin/python software/dr47/examples/waveform_external_trigger_example.py
-.venv/bin/python software/dr47/examples/waveform_software_play_example.py
-~~~
-
-## 常用工具
-
-- `send_waveform_udp.py`：生成并上传 CH1-CH8 波形。
-- `dr47-network`：发现、配置和查询板卡。
-- `webapp/`：FastAPI 后端；`webui/`：Vue 前端。
-
-网页控制台当前一次只控制一块板。
-
-## SDK 交付
-
-软件版本说明、模拟器样例和上板样例会随 SDK 一起交付。在仓库根目录生成可发布包：
-
-~~~bash
-make driver-release
-~~~
+- `dr47/`：可安装的驱动包。发波、板上测速、网络发现和模拟器脚本都在 `dr47/examples/`，
+  清单见 [dr47/README.md](dr47/README.md)。安装后还提供 `dr47-network` 命令，用于发现、
+  配置和查询板卡。
+- `bump_driver_version.py`、`build_driver_release.py`：修改驱动版本号、生成 SDK 发布包
+  （对应 `make driver-bump` 和 `make driver-release`）。

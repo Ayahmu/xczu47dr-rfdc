@@ -1,41 +1,32 @@
- # FPGA 硬件设计
+# FPGA 硬件设计
 
- 本目录包含 Chisel 生成器、Vivado RTL/IP、约束和构建脚本。最终 bitstream、XSA
- 和固件交付文件统一放在仓库根目录 artifacts/。
+本目录包含 Chisel 生成器、Vivado RTL/IP、约束和构建脚本。XSA（内嵌 bitstream）和
+固件 ELF 统一写入仓库根目录 `artifacts/`。
 
- ## 构建目标
+## 构建目标
 
- | 目标 | 用途 | XS20 |
- | --- | --- | --- |
- | custom_xczu47dr_master | 正常 RFDC 播放主卡 | 输出 SYNC |
- | custom_xczu47dr_slave | 正常 RFDC 播放从卡 | 输入 SYNC |
- | custom_xczu47dr_bw | DDR 带宽压力测试 | 不用于同步播放 |
+只有一个产品目标 `custom_xczu47dr_waveform`：单板波形播放，100G QSFP28 网口，
+XS18 为 Trigger 输出，XS19 为 Trigger 输入。XS17 外部参考可选 250 MHz（默认）或
+10 MHz，由构建参数 `REFERENCE_MHZ` 决定 HMC7044 的 R1 分频，其余时钟完全相同。
 
- 本分支时钟为 XS17 外部 250 MHz，HMC7044 通过 R1=25 产生 10 MHz PLL1 PFD，
- 并继续输出 128 MHz DAC 参考。XS18 是 Trigger 输出，XS19 是 Trigger 输入。
- 主从同步 RTL、驱动和协议与 10 MHz 主线保持一致；主从同步接线和验收项目见
- [硬件指标](../docs/硬件指标.md)。
+## 构建
 
- ## 构建
+~~~bash
+source /tools/Xilinx/Vivado/2024.2/settings64.sh
+source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
- ~~~bash
- source /tools/Xilinx/Vivado/2024.2/settings64.sh
- source /tools/Xilinx/Vitis/2024.2/settings64.sh
+make hardware                 # 250 MHz 参考，约 70 分钟，写入 artifacts/
+make hardware REFERENCE_MHZ=10
+make hardware-both            # 两种参考并行构建，分别写入 artifacts/10mhz 和 artifacts/250mhz
+make firmware                 # 用当前 XSA 重建固件 ELF
+~~~
 
- make hardware TARGET=custom_xczu47dr_master
- make hardware TARGET=custom_xczu47dr_slave
- make bitstream-dual
- ~~~
+构建结束时会检查时序报告，约束不满足则失败。
 
- bitstream-dual 为主卡和从卡使用独立的 work-dual/、reports-dual/ 目录，避免
- Vivado 并行构建互相覆盖。生成的角色文件名为 custom_xczu47dr_master.* 和
- custom_xczu47dr_slave.*。
+## 子目录
 
- ## 子目录
+- `vivado/`：顶层 RTL、UDP/RFCTRL2、波形上传与回放、约束和 Vivado Tcl。
+- `chisel/`：RFDC、DDR4 等 IP 配置和小模块的 Chisel 生成器。
 
- - vivado/：顶层 RTL、UDP/RFCTRL2、RFDC 播放器、约束和 Vivado Tcl。
- - chisel/：可复用 Chisel 模块及 RFDC 配置生成器。
- - riscv-mini/：独立的 RISC-V 控制路径试验代码，当前由 PL shim 接入。
-
- Vivado 工程、综合实现报告、Chisel out/ 和 Vitis 工作区都是生成物，不应提交到
- 版本库；清理使用 make clean，不要手工删除 artifacts/。
+Vivado 工程、综合实现报告、Chisel `out/` 和 Vitis 工作区都是生成物，不进版本库；
+清理使用 `make clean`。

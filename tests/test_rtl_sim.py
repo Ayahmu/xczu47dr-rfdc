@@ -270,65 +270,6 @@ class RtlSimulationTests(unittest.TestCase):
             self.assertNotIn("Fatal:", result.stdout)
             self.assertIn(expected, result.stdout)
 
-    def test_udp_writer_legacy_and_bulk_protocol(self):
-        self.run_sim(
-            "tb_udp_waveform_ddr_writer_alignment",
-            [
-                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
-                ROOT / "tests/tb_udp_waveform_ddr_writer_alignment.sv",
-            ],
-            "PASS: UDP DDR writer preserves legacy writes and bulk sequential writes",
-        )
-
-    def test_udp_writer_routes_rvctrl_packets(self):
-        self.run_sim(
-            "tb_udp_rvctrl_protocol",
-            [
-                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
-                ROOT / "tests/tb_udp_rvctrl_protocol.sv",
-            ],
-            "PASS: RVCTRL0/RVCTRL1/RFCTRL2 packets route to the PL control path and framed UDP instructions",
-        )
-
-    def test_udp_writer_full_fifo_read_write_collision(self):
-        self.run_sim(
-            "tb_udp_writer_fifo_collision",
-            [ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
-             ROOT / "tests/tb_udp_writer_fifo_collision.sv"],
-            "PASS: writer FIFO preserves old data on full push/pop and resets admission",
-        )
-
-    def test_udp_writer_resets_at_packet_boundary(self):
-        self.run_sim(
-            "tb_udp_waveform_packet_boundary",
-            [
-                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
-                ROOT / "tests/tb_udp_waveform_packet_boundary.sv",
-            ],
-            "PASS: UDP packet boundary terminates incomplete bulk parsing",
-        )
-
-    def test_udp_writer_drops_oversized_bulk_packet(self):
-        self.run_sim(
-            "tb_udp_waveform_bulk_limit",
-            [
-                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
-                ROOT / "tests/tb_udp_waveform_bulk_limit.sv",
-            ],
-            "PASS: UDP writer drops oversized bulk packets at the UDP boundary",
-        )
-
-    def test_waveform_status_crosses_writer_and_control_response_path(self):
-        self.run_sim(
-            "tb_rfctrl2_control_path",
-            [
-                ROOT / "hardware/vivado/src/udp_waveform_ddr_writer.v",
-                ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
-                ROOT / "tests/tb_rfctrl2_control_path.sv",
-            ],
-            "PASS: waveform STATUS payload crosses the UDP writer and PL control response path",
-        )
-
     def test_rfctrl2_udp_response_targets_requester_and_handles_backpressure(self):
         self.run_sim(
             "tb_rfctrl2_udp_response_tx",
@@ -381,27 +322,6 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "tests/tb_rfdc_nco_rts_bridge.sv",
             ],
             "PASS: NCO RTS bridge gates SYSREF and commits enabled channels across four tiles",
-        )
-
-    def test_dac_direct_external_trigger_capture_and_latency_probe(self):
-        self.run_sim(
-            "tb_dac_direct_trigger",
-            [
-                ROOT / "hardware/vivado/src/dac_ext_trigger_capture.v",
-                ROOT / "hardware/vivado/src/dac_trigger_latency_probe.v",
-                ROOT / "tests/tb_dac_direct_trigger.sv",
-            ],
-            "PASS: DAC direct trigger capture and latency probe behave as specified",
-        )
-
-    def test_dac_domain_trigger_emitter(self):
-        self.run_sim(
-            "tb_dac_trigger_emitter",
-            [
-                ROOT / "hardware/vivado/src/dac_trigger_emitter.v",
-                ROOT / "tests/tb_dac_trigger_emitter.sv",
-            ],
-            "PASS: dac_trigger_emitter emits one gated DAC-domain pulse per request",
         )
 
     def test_axilite_arbiter_locks_complete_transactions(self):

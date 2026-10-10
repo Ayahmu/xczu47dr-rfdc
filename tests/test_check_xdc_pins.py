@@ -48,6 +48,25 @@ class CheckXdcPinsTests(unittest.TestCase):
         self.assertIn("dead XDC clock name", result.stdout)
         self.assertIn("RFDAC2_CLK", result.stdout)
 
+    def test_dead_pin_pattern_fails_the_check(self):
+        result = _run("dead_pin")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("dead XDC pin pattern", result.stdout)
+        self.assertIn("hmc_done_ddr_sync_reg", result.stdout)
+
+    def test_bare_netlist_skips_clocks_but_still_fails_on_a_dead_pin(self):
+        """只有网表、没有任何时钟定义时，时钟名无从核对，但 pin 仍然要核对。
+
+        以前这种情况整个检查直接退出 0，三条失效的 pin 约束因此一直没被发现。
+        """
+        clean = _run("netlist")
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        self.assertIn("clock names were not checked", clean.stdout)
+        self.assertNotIn("dead XDC clock name", clean.stdout)
+        dead = _run("netlist_dead_pin")
+        self.assertEqual(dead.returncode, 1, dead.stdout + dead.stderr)
+        self.assertIn("dead XDC pin pattern", dead.stdout)
+
     def test_no_unbalanced_brace_in_any_comment(self):
         """braced body 里的注释花括号必须配平，否则 Tcl 解析整块都会失败。"""
         offenders = []

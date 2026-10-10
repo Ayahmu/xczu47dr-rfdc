@@ -154,8 +154,8 @@ if {${timing_gate} && [file exists ${gate_rpt}]} {
         set wns "?"
         if {[regexp -line {^\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+\d+\s+\d+} ${body} -> wns tns]} {}
         puts "ERROR: implementation does not meet timing (WNS=${wns} ns)."
-        puts "       Refusing to publish ${output_basename}.bit - re-run implementation,"
-        puts "       reduce ILA probe width/count, or override with TIMING_GATE=0."
+        puts "       Refusing to publish ${output_basename}.bit - re-run implementation"
+        puts "       or override with TIMING_GATE=0."
         close_project
         exit 1
     }

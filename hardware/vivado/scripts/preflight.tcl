@@ -147,29 +147,6 @@ add_files -norecurse $cmac_preflight_stub
 set_property USED_IN_SYNTHESIS true [get_files $cmac_preflight_stub]
 lappend preflight_stub_files $cmac_preflight_stub
 
-foreach ip_name {ila_s_axi_01 ila_udp_ddr ila_dac_axis ila_hmc_event} {
-    set ip [get_ips -quiet $ip_name]
-    if {[llength $ip] == 0} {
-        puts "INFO: Optional ILA IP not present, skipping ${ip_name}"
-        continue
-    }
-    generate_target all $ip
-    set generated_stub [file normalize \
-        "${proj_dir}/${proj_name}.gen/sources_1/ip/${ip_name}/${ip_name}_bmstub.v"]
-    if {![file exists $generated_stub]} {
-        error "Missing generated ILA stub: ${generated_stub}"
-    }
-    set preflight_stub [file normalize "${report_dir}/${ip_name}_preflight_stub.v"]
-    set old_preflight_file [get_files -quiet -all $preflight_stub]
-    if {[llength $old_preflight_file] > 0} {
-        remove_files $old_preflight_file
-    }
-    file copy -force $generated_stub $preflight_stub
-    puts "INFO: Adding current preflight stub for ${ip_name}"
-    add_files -norecurse $preflight_stub
-    lappend preflight_stub_files $preflight_stub
-}
-
 update_compile_order -fileset sources_1
 report_compile_order -used_in synthesis -file "${report_dir}/preflight_compile_order.rpt"
 

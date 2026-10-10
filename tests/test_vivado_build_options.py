@@ -9,12 +9,14 @@ RFDC_CHISEL = REPO_ROOT / "hardware" / "chisel" / "rfdc" / "src" / "elaborate.sc
 
 
 class VivadoBuildOptionsTests(unittest.TestCase):
-    def test_ila_depth_is_low_and_overridable(self):
-        for script_name in ("ila_dac_axis.tcl", "ila_s_axi_01.tcl", "ila_udp_ddr.tcl"):
+    def test_build_has_no_ila_option(self):
+        for script_name in ("create_project.tcl", "preflight.tcl"):
             script = (SCRIPTS / script_name).read_text(encoding="utf-8", errors="ignore")
-            self.assertIn("build_option_get ILA_DEPTH 1024", script)
-            self.assertIn("CONFIG.C_DATA_DEPTH ${ila_data_depth}", script)
-            self.assertNotIn("CONFIG.C_DATA_DEPTH {4096}", script)
+            self.assertNotIn("ENABLE_ILA", script)
+            self.assertNotIn("ila_", script)
+        self.assertEqual(list(SCRIPTS.glob("ila_*.tcl")), [])
+        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(encoding="utf-8", errors="ignore")
+        self.assertNotIn("ENABLE_ILA", top)
 
     def test_impl_reuses_completed_ooc_runs(self):
         script = (SCRIPTS / "run_impl.tcl").read_text(encoding="utf-8", errors="ignore")
@@ -132,39 +134,31 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertIn("assign TRIG_1 = new_output_first_transfer;", top)
         self.assertIn("wire [7:0] rfdc_all_valid", top)
 
-    def test_waveform_target_excludes_retired_playback_rtl_and_cache(self):
-        create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
-        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
-            encoding="utf-8", errors="ignore"
-        )
+    def test_retired_playback_and_sync_rtl_is_gone(self):
+        src = REPO_ROOT / "hardware" / "vivado" / "src"
+        top = (src / "Top.v").read_text(encoding="utf-8", errors="ignore")
+        # Every file in src/ enters the Vivado source set, so a retired module
+        # must be deleted rather than filtered out by the project script.
         for retired in (
             "udp_waveform_ddr_writer.v",
             "udp64_to_axis128_instr.v",
-        ):
-            self.assertIn(retired, create_project)
-        self.assertNotIn("module replay_cache_ram", top)
-        self.assertNotIn("replay_ram_ch1_i", top)
-        self.assertNotIn("replay_cache_ready_dac", top)
-
-    def test_waveform_target_excludes_retired_sync_trigger_hierarchy(self):
-        create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
-        top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
-            encoding="utf-8", errors="ignore"
-        )
-        for retired in (
             "sync_trigger_link.v",
             "dac_trigger_emitter.v",
             "dac_ext_trigger_capture.v",
             "dac_trigger_latency_probe.v",
+            "dac_trigger_scheduler.v",
         ):
-            self.assertIn(retired, create_project)
+            self.assertFalse((src / retired).exists(), retired)
         for retired_instance in (
             "sync_trigger_link_i",
             "dac_trigger_emitter_i",
             "dac_ext_trigger_capture_i",
             "dac_trigger_latency_probe_i",
+            "replay_ram_ch1_i",
         ):
             self.assertNotIn(retired_instance, top)
+        self.assertNotIn("module replay_cache_ram", top)
+        self.assertNotIn("replay_cache_ready_dac", top)
 
     def test_waveform_target_has_no_retired_sync_or_role_generics(self):
         target_config = (SCRIPTS / "target_config.tcl").read_text(encoding="utf-8", errors="ignore")
@@ -233,14 +227,8 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
             encoding="utf-8", errors="ignore"
         )
-        capture = (REPO_ROOT / "hardware" / "vivado" / "src" / "dac_ext_trigger_capture.v").read_text(
-            encoding="utf-8", errors="ignore"
-        )
         self.assertNotIn("TARGET_DAC_DELAY_CYCLES", top)
         self.assertNotIn("dac_trigger_scheduler", top)
-        self.assertIn("assign trigger_pulse = accept;", capture)
-        self.assertFalse((REPO_ROOT / "hardware" / "vivado" / "src" / "dac_trigger_scheduler.v").exists())
-
 
 if __name__ == "__main__":
     unittest.main()

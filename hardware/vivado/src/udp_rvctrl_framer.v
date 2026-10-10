@@ -1,19 +1,16 @@
 `timescale 1ns/1ps
 
-// RFCTRL2 control-plane packet framer (restored).
+// RFCTRL2 control-plane packet framer.
 //
-// The unified waveform refactor split the old udp_waveform_ddr_writer into
-// waveform_upload_writer (WAVECTR0 upload path) but dropped the RFCTRL2
-// classification/framing branch, leaving pl_riscv_control_v1's rvctrl_* input
-// undriven.  That FSM is the only handler for NETWORK_GET / HELLO / STATUS /
-// TDC_REG / RFDC_APPLY, so board discovery and identity silently died.
+// waveform_upload_writer handles only the WAVECTR0 upload path, so this
+// module owns the RFCTRL2 classification/framing branch that drives
+// pl_riscv_control_v1's rvctrl_* input.  That FSM is the only handler for
+// NETWORK_GET / HELLO / STATUS / TDC_REG / RFDC_APPLY; without this framer
+// board discovery and identity do not work.
 //
-// This module re-adds exactly that branch: it recognizes the RFCTRL2 magic,
-// strips it, and re-frames the remaining 64-bit words into the tfirst/tlast/
-// word_count/protocol contract pl_riscv_control_v1 expects.  It is a faithful
-// port of the ST_RVCTRL1_* state machine from udp_waveform_ddr_writer.v, with
-// the waveform/instruction/legacy paths removed and rvctrl2_mode hardwired so
-// protocol is always RF2 (2'd2).
+// It recognizes the RFCTRL2 magic, strips it, and re-frames the remaining
+// 64-bit words into the tfirst/tlast/word_count/protocol contract
+// pl_riscv_control_v1 expects.  protocol is always RF2 (2'd2).
 //
 // Wire format (RFCTRL2, see software/dr47/protocol.py pack_rfctrl2_packet):
 //   word0 = 64'h00324C5254434652 (magic)

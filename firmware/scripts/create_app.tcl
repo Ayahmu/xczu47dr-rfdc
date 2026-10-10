@@ -66,13 +66,7 @@ proc copy_source_tree {src dst exclude_files} {
 setws ${workspace_dir}
 
 set import_src_dir [file join ${workspace_dir} import_src]
-if {$board_define eq "BOARD_CUSTOM_XCZU47DR"} {
-    copy_source_tree ${src_dir} ${import_src_dir} [list bandwidth_main.c]
-} elseif {$board_define eq "BOARD_CUSTOM_XCZU47DR_BW"} {
-    copy_source_tree ${src_dir} ${import_src_dir} [list main.c main.h]
-} else {
-    copy_source_tree ${src_dir} ${import_src_dir} [list]
-}
+copy_source_tree ${src_dir} ${import_src_dir} [list]
 
 # Create platform from XSA
 puts "Creating platform from XSA..."

@@ -28,18 +28,15 @@ proc rf2_identity_source_dirty {script_path} {
 }
 
 proc rf2_identity_profile_id {target} {
-    if {$target eq "custom_xczu47dr_bw"} {
-        return 3
-    }
     return 1
 }
 
-proc rf2_identity_write_manifest {manifest_file target source_commit build_profile_id trigger_path_version ila_enabled {source_dirty 0}} {
+proc rf2_identity_write_manifest {manifest_file target source_commit build_profile_id trigger_path_version {source_dirty 0}} {
     set parent [file dirname ${manifest_file}]
     file mkdir ${parent}
     set fd [open ${manifest_file} w]
-    puts ${fd} [format {{"target":"%s","protocol_version":3,"build_profile_id":%d,"trigger_path_version":%d,"source_commit":"%s","source_dirty":%d,"ila_enabled":%d}} \
-        ${target} ${build_profile_id} ${trigger_path_version} ${source_commit} ${source_dirty} ${ila_enabled}]
+    puts ${fd} [format {{"target":"%s","protocol_version":3,"build_profile_id":%d,"trigger_path_version":%d,"source_commit":"%s","source_dirty":%d}} \
+        ${target} ${build_profile_id} ${trigger_path_version} ${source_commit} ${source_dirty}]
     close ${fd}
     if {${source_dirty}} {
         puts "WARNING: building from a working tree with uncommitted changes; RF2_SOURCE_COMMIT_ID=${source_commit} names HEAD, not the exact sources"

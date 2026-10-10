@@ -27,8 +27,7 @@ class BuildIdentityTests(unittest.TestCase):
             manifest = tmp_path / "build_manifest.json"
             manifest.write_text(
                 '{"target":"custom_xczu47dr_waveform","protocol_version":3,"build_profile_id":1,'
-                f'"trigger_path_version":3,"source_commit":"{manifest_commit}","source_dirty":0,'
-                '"ila_enabled":0}'
+                f'"trigger_path_version":3,"source_commit":"{manifest_commit}","source_dirty":0}}'
             )
             (tmp_path / "TopCustomXczu47dr.tcl").write_text(
                 "set_property verilog_define {CUSTOM_XCZU47DR RF2_BUILD_PROFILE_ID=32'd1 "
@@ -60,7 +59,7 @@ class BuildIdentityTests(unittest.TestCase):
             script = Path(tmp) / "w.tcl"
             script.write_text(
                 f"source {{{IDENTITY}}}\n"
-                f"rf2_identity_write_manifest {{{manifest}}} custom_xczu47dr_waveform 01f7681a 1 3 0 1\n"
+                f"rf2_identity_write_manifest {{{manifest}}} custom_xczu47dr_waveform 01f7681a 1 3 1\n"
             )
             result = subprocess.run(["tclsh", str(script)], capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)

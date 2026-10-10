@@ -1,6 +1,6 @@
 # dr47 Python 驱动
 
-这是直接通过 UDP 控制单板 WAVECTR0/RFCTRL2 服务的驱动包，不依赖网页服务。RFCTRL2 在这里仅表示板端封套和 RFDC/诊断服务，不表示旧播放入口。
+这是直接通过 UDP 控制单板 WAVECTR0/RFCTRL2 服务的驱动包。RFCTRL2 在这里仅表示板端封套和 RFDC/诊断服务，不表示旧播放入口。
 安装和板级流程请看[软件版本说明](../../docs/软件版本说明.md)，完整接口请看
 [API 接口参考](../../docs/API参考.md)。
 
@@ -24,24 +24,30 @@ with Dr47Device(
 zone=2；上传的 IQ 只放低频包络。`set_xy_nco_frequency()` 仅用于直接设置
 `-3.2..+3.2 GHz` 的 RFDC NCO。
 
-## 板级测试入口
+## 测试脚本
 
-当前板级波形示例均使用单板 WAVECTR0，不依赖双板 SYNC、master/slave 角色或旧 ARM/TRIGGER
-播放命令。外部 Trigger 示例上传 CH1/CH2 后等待 XS19；软件示例上传后发送一次 `PLAY`。
-所有用户配置均为脚本顶部的直接常量，不读取命令行参数或环境变量。
+所有面向使用者的测试脚本都在 `examples/` 目录。配置是脚本顶部的常量（板卡 IP、主机网卡、
+源 IP、通道、频率等），不读命令行参数或环境变量；改好常量后直接运行，结尾打印 `PASS` 或
+`FAIL`。
+
+| 脚本 | 用途 | 需要 |
+|---|---|---|
+| `waveform_software_play_example.py` | 发波：上传一包高斯脉冲到 CH1/CH2，发送软件 `PLAY` | 板卡、示波器 |
+| `waveform_external_trigger_example.py` | 发波：上传后等待 XS19 外部 Trigger 启动 | 板卡、示波器、触发源 |
+| `waveform_bulk_upload_speed_example.py` | 板上测速：经 100G 批量通路上传随机波形，报告速率、丢帧和补发，再完整播放一遍 | 板卡 |
+| `network_discovery_example.py` | 广播发现板卡并读取网络配置 | 板卡 |
+| `simulator_quickstart.py` | 用内存模拟器走一遍上传和播放，检查安装 | 无 |
 
 ~~~bash
-.venv/bin/python software/dr47/examples/waveform_external_trigger_example.py
-.venv/bin/python software/dr47/examples/waveform_software_play_example.py
+python software/dr47/examples/waveform_bulk_upload_speed_example.py
+python -m dr47.examples.simulator_quickstart          # 安装 wheel 后的写法
 ~~~
-
-`simulator_quickstart.py` 和 `network_discovery_example.py` 是不直接发射波形的 SDK 教学
-样例。安装 wheel 后可用 `python -m dr47.examples.<模块名>` 运行。
 
 ## 本地验证
 
 ~~~bash
-PYTHONPATH=software python -m unittest discover -s tests -p 'test_*.py' -q
+python -m pip install -r software/requirements.txt
+python -m pytest tests -q          # 或 make test；RTL 仿真需要 Vivado 在 PATH 中，否则自动跳过
 ~~~
 
 ## 统一单板波形播放
