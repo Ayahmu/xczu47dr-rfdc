@@ -315,6 +315,11 @@ if {!$download_elf_only} {
 
     puts "Resetting system..."
     select_board_target $target psu
+    # Keep the BootROM in JTAG mode for this reset (CRL_APB.BOOT_MODE_USER,
+    # cleared by the next power-on reset).  With the mode pins on QSPI it
+    # would otherwise start the image in the flash while the steps below
+    # load their own.
+    mwr 0xFF5E0200 0x0100
     if {[catch {rst -system} reset_error]} {
         puts "WARNING: rst -system failed on selected PS target: ${reset_error}"
         puts "WARNING: Continuing with psu_init/fpga/dow; some XSCT target names such as PS TAP do not support system reset."

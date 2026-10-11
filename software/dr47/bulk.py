@@ -12,14 +12,20 @@ addresses.  One socket per thread looks faster and is not: the card
 interleaves its queues frame by frame, the board then has to switch DDR4 rows
 on every frame, and at line rate it drops about a fifth of them.
 
+The kernel may still move the one socket to another queue, and frames that
+wait in the socket at that moment are interleaved with the ones that follow.
+The send buffer bounds that backlog; :meth:`BulkSender.queued_bytes` lets a
+sender wait until nothing is left before it goes on.
+
 ``BulkSender`` only sends.  Which chunks arrived is the board's knowledge;
 :meth:`dr47.device.Dr47Device.upload_image_bulk` asks and resends.
 
 The inner loop exists twice.  The Python one runs in the calling thread and
 manages roughly 9 Gb/s; the interpreter lock would serialise more threads.
-``_fastsend.c`` does the same work in C; it is compiled on first use with the
-system C compiler into the user's cache directory and loaded with ctypes.
-Without a compiler, or with ``DR47_FASTSEND=0``, the Python loop is used.
+``_fastsend.c`` does the same work in C and is loaded with ctypes.  A binary
+wheel ships it compiled next to this module; from a source tree it is compiled
+on first use with the system C compiler into the user's cache directory.
+Without either, or with ``DR47_FASTSEND=0``, the Python loop is used.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import hashlib
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -74,28 +81,45 @@ _fastsend_lib = _UNSET
 _fastsend_lock = threading.Lock()
 
 
-def _build_fastsend() -> ctypes.CDLL | None:
-    source = Path(__file__).with_name("_fastsend.c")
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def _fastsend_library() -> Path | None:
+    """The sender core as a shared library: the one shipped with the package,
+    else one compiled from ``_fastsend.c`` into the user's cache."""
+    shipped = sorted(_PACKAGE_DIR.glob("_fastsend*.so"))
+    if shipped:
+        return shipped[0]
+    source = _PACKAGE_DIR / "_fastsend.c"
     compiler = shutil.which(os.environ.get("CC", "cc")) or shutil.which("gcc")
-    if not sys.platform.startswith("linux") or compiler is None or not source.is_file():
+    if compiler is None or not source.is_file():
         return None
     code = source.read_bytes()
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "dr47"
     target = cache / f"_fastsend-{hashlib.sha256(code).hexdigest()[:16]}.so"
+    if not target.is_file():
+        cache.mkdir(parents=True, exist_ok=True)
+        # Build next to the target and rename, so a concurrent process
+        # never loads a half-written library.
+        with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            subprocess.run([compiler, "-O2", "-shared", "-fPIC", "-pthread", "-o", str(temporary), str(source)],
+                           check=True, capture_output=True, timeout=120)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return target
+
+
+def _open_fastsend() -> ctypes.CDLL | None:
+    if not sys.platform.startswith("linux"):
+        return None
     try:
-        if not target.is_file():
-            cache.mkdir(parents=True, exist_ok=True)
-            # Build next to the target and rename, so a concurrent process
-            # never loads a half-written library.
-            with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
-                temporary = Path(handle.name)
-            try:
-                subprocess.run([compiler, "-O2", "-shared", "-fPIC", "-pthread", "-o", str(temporary), str(source)],
-                               check=True, capture_output=True, timeout=120)
-                os.replace(temporary, target)
-            finally:
-                temporary.unlink(missing_ok=True)
-        lib = ctypes.CDLL(str(target))
+        library = _fastsend_library()
+        if library is None:
+            return None
+        lib = ctypes.CDLL(str(library))
         lib.dr47_bulk_send.restype = ctypes.c_int64
         lib.dr47_bulk_send.argtypes = [
             ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64,
@@ -110,11 +134,11 @@ def _build_fastsend() -> ctypes.CDLL | None:
 
 
 def load_fastsend() -> ctypes.CDLL | None:
-    """The compiled sender core, or None when it cannot be built or is disabled."""
+    """The compiled sender core, or None when it is neither shipped nor buildable, or is disabled."""
     global _fastsend_lib
     with _fastsend_lock:
         if _fastsend_lib is _UNSET:
-            _fastsend_lib = None if os.environ.get("DR47_FASTSEND", "1") == "0" else _build_fastsend()
+            _fastsend_lib = None if os.environ.get("DR47_FASTSEND", "1") == "0" else _open_fastsend()
         return _fastsend_lib
 
 
@@ -124,21 +148,23 @@ class BulkSender:
     ``threads`` is the number of sender threads of the C core; they share one
     socket (see the module docstring).  ``accelerate`` selects that core:
     ``None`` uses it when it is available, ``False`` never, ``True`` requires
-    it.
+    it.  ``send_buffer_bytes`` is the socket send buffer to ask for; the
+    kernel caps it at ``net.core.wmem_max``.
     """
 
     def __init__(self, ip: str, port: int, *, udp_interface: str = "", udp_source_ip: str = "",
-                 threads: int = 4, accelerate: bool | None = None) -> None:
+                 threads: int = 4, accelerate: bool | None = None, send_buffer_bytes: int = 4 << 20) -> None:
         self.ip = str(ip)
         self.port = int(port)
         self.udp_interface = str(udp_interface or "")
         self.udp_source_ip = str(udp_source_ip or "")
         self.threads = max(1, int(threads))
+        self.send_buffer_bytes = int(send_buffer_bytes)
         self._sock: socket.socket | None = None
         self._gso = sys.platform.startswith("linux")
         self._lib = None if accelerate is False else load_fastsend()
         if accelerate and self._lib is None:
-            raise TransportError("the C bulk sender is not available (no C compiler, or DR47_FASTSEND=0)")
+            raise TransportError("the C bulk sender is not available (not shipped and no C compiler, or DR47_FASTSEND=0)")
 
     @property
     def accelerated(self) -> bool:
@@ -152,7 +178,7 @@ class BulkSender:
                     sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, self.udp_interface.encode("ascii") + b"\0")
                 if self.udp_source_ip:
                     sock.bind((self.udp_source_ip, 0))
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.send_buffer_bytes)
                 sock.connect((self.ip, self.port))
             except OSError as exc:
                 sock.close()
@@ -167,6 +193,14 @@ class BulkSender:
             except OSError:
                 pass
             self._sock = None
+
+    def queued_bytes(self) -> int:
+        """Socket memory still held by datagrams the network card has not sent; 0 once all have left."""
+        if self._sock is None:
+            return 0
+        import fcntl
+        import termios
+        return struct.unpack("i", fcntl.ioctl(self._sock, termios.TIOCOUTQ, bytes(4)))[0]
 
     def send(self, image, start: int, end: int, *, session: int, epoch: int, payload_bytes: int) -> int:
         """Send image[start:end]; returns the number of datagrams handed to the kernel.

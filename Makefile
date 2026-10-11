@@ -47,7 +47,7 @@ ELF ?= $(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf
 # exists so the tests do not run against a system interpreter without them.
 PYTHON ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
 
-.PHONY: help all test driver-wheel driver-smoke driver-release driver-version driver-bump hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean run program check-tools clean
+.PHONY: help all test driver-wheel driver-release driver-version driver-bump hardware hardware-fast hardware-10mhz hardware-250mhz hardware-both hardware-clean chisel chisel-clean vivado-project preflight synth xdc-check impl bitstream xsa firmware firmware-create firmware-build firmware-clean artifacts artifacts-hash artifacts-clean run program bootbin flash boot-qspi check-tools clean
 
 help:
 	@echo "XCZU47DR RFDC top-level build"
@@ -57,11 +57,12 @@ help:
 	@echo "  make test             Run the software, build-script and RTL simulation tests"
 	@echo "  make hardware         Build one version (REFERENCE_MHZ, default 250) into ARTIFACT_DIR"
 	@echo "  make hardware-fast    Reuse the current Vivado project for RTL/constraint iterations"
-	@echo "  make firmware         Create/rebuild firmware app and ELF from current XSA"
+	@echo "  make firmware         Create/rebuild firmware app, ELF and BOOT.BIN from current XSA"
 	@echo "  make artifacts        Verify the selected role's checked-in artifacts"
 	@echo "  make artifacts-hash   Refresh artifacts/SHA256SUMS atomically"
 	@echo "  make artifacts-clean  Remove local checked-in artifacts explicitly"
-	@echo "  make driver-release   Build and verify the distributable Python SDK bundle"
+	@echo "  make driver-wheel     Build and test the binary driver wheels (Docker, one per Python version)"
+	@echo "  make driver-release   Build the wheels and bundle them into the distributable SDK ZIP"
 	@echo "  make driver-version   Show the driver version (source and installed)"
 	@echo "  make driver-bump PART=patch|minor|major   or   VERSION=x.y.z   Change the driver version"
 	@echo ""
@@ -86,6 +87,9 @@ help:
 	@echo "Board targets:"
 	@echo "  make program          Program XSA and download the matching ELF over JTAG"
 	@echo "  make run              Alias for make program"
+	@echo "  make bootbin          Pack FSBL, PMU firmware, bitstream and ELF into artifacts/BOOT.BIN"
+	@echo "  make flash            Write artifacts/BOOT.BIN to the QSPI flash over JTAG and verify it"
+	@echo "  make boot-qspi        Restart the board from the QSPI flash (mode pins untouched)"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make hardware-clean   Clean Vivado work, reports, and ignored output"
@@ -114,14 +118,13 @@ test:
 	$(PYTHON) -m pytest tests -q
 	bash -n firmware/build.sh
 
+# The delivered driver: binary wheels (compiled modules, one wheel per Python
+# version) built and tested in the manylinux container, then bundled with the
+# documentation and the examples.  Needs Docker.
 driver-wheel:
-	mkdir -p "$(ROOT)/dist"
-	$(PYTHON) -m pip wheel --no-deps -w "$(ROOT)/dist" "$(SOFTWARE_DIR)/dr47"
+	$(PYTHON) software/build_driver_wheels.py
 
-driver-smoke: driver-wheel
-	$(PYTHON) -c "import glob, runpy, sys; wheels=glob.glob('$(ROOT)/dist/47dr_driver-*-py3-none-any.whl'); assert wheels, 'driver wheel missing'; wheel=sorted(wheels)[-1]; sys.path.insert(0, wheel); import dr47 as d; assert '.whl/' in d.__file__, d.__file__; print('wheel version', d.__version__, 'from', d.__file__); runpy.run_module('dr47.examples.simulator_quickstart', run_name='__main__')"
-
-driver-release: driver-smoke
+driver-release: driver-wheel
 	$(PYTHON) software/build_driver_release.py
 
 driver-version:
@@ -181,16 +184,19 @@ xsa: bitstream
 	@echo "INFO: Exporting TARGET=$(TARGET) PROJECT=$(TARGET_PROJECT_BASENAME)"
 	cd $(VIVADO_DIR) && VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(VIVADO_OUTPUT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" vivado -mode batch -notrace -source scripts/export_xsa.tcl -tclargs $(TARGET)
 	@for stale in "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).bit" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).ltx" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_psu_init.tcl"; do test ! -e "$$stale" || { echo "Removing non-production artifact $$stale"; unlink "$$stale"; }; done
+	@for stale in "$(ARTIFACT_DIR)/BOOT.BIN" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_fsbl.elf"; do test ! -e "$$stale" || { echo "Removing $$stale: it was packed from the previous XSA; run make firmware"; unlink "$$stale"; }; done
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 hardware:
 	@echo "INFO: TARGET=$(TARGET) REFERENCE_MHZ=$(REFERENCE_MHZ) PROJECT=$(TARGET_PROJECT_BASENAME) XSA=$(XSA)"
 	cd $(VIVADO_DIR) && TARGET=$(TARGET) REFERENCE_MHZ=$(REFERENCE_MHZ) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh --clean
+	@for stale in "$(ARTIFACT_DIR)/BOOT.BIN" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_fsbl.elf"; do test ! -e "$$stale" || { echo "Removing $$stale: it was packed from the previous XSA; run make firmware"; unlink "$$stale"; }; done
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 hardware-fast:
 	@echo "INFO: Fast hardware build reusing PROJECT=$(TARGET_PROJECT_BASENAME) (keeps the project's existing REFERENCE_MHZ)"
 	cd $(VIVADO_DIR) && TARGET=$(TARGET) REFERENCE_MHZ=$(REFERENCE_MHZ) VIVADO_WORK_DIR="$(VIVADO_WORK_DIR)" VIVADO_OUTPUT_DIR="$(ARTIFACT_DIR)" VIVADO_REPORT_DIR="$(VIVADO_REPORT_DIR)" ./build.sh
+	@for stale in "$(ARTIFACT_DIR)/BOOT.BIN" "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_fsbl.elf"; do test ! -e "$$stale" || { echo "Removing $$stale: it was packed from the previous XSA; run make firmware"; unlink "$$stale"; }; done
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 # Dual-version builds.  Each reference frequency gets its own Vivado work tree,
@@ -244,7 +250,7 @@ chisel-clean:
 	rm -rf "$(CHISEL_DIR)/out" "$(CHISEL_DIR)/generated" "$(CHISEL_DIR)/Verilog"
 
 firmware:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh clean && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh create && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh bootbin
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 firmware-create:
@@ -252,7 +258,7 @@ firmware-create:
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 firmware-build:
-	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh build && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh bootbin
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 firmware-clean:
@@ -272,7 +278,8 @@ artifacts-hash:
 	trap 'rmdir "$$lock"' EXIT; \
 	temporary_file="$(ARTIFACT_DIR)/SHA256SUMS.tmp.$$$$"; \
 	{ for file in \
-		custom_xczu47dr_waveform.xsa custom_xczu47dr_waveform.elf; do \
+		custom_xczu47dr_waveform.xsa custom_xczu47dr_waveform.elf \
+		BOOT.BIN custom_xczu47dr_waveform_fsbl.elf; do \
 		test -f "$(ARTIFACT_DIR)/$$file" && (cd "$(ARTIFACT_DIR)" && sha256sum "$$file") || true; \
 	done; } > "$$temporary_file"; \
 	mv -f "$$temporary_file" "$(ARTIFACT_DIR)/SHA256SUMS"
@@ -280,9 +287,25 @@ artifacts-clean:
 	@echo "Removing checked-in artifacts under $(ARTIFACT_DIR)"
 	unlink "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).xsa" 2>/dev/null || true
 	unlink "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME).elf" 2>/dev/null || true
+	unlink "$(ARTIFACT_DIR)/BOOT.BIN" 2>/dev/null || true
+	unlink "$(ARTIFACT_DIR)/$(TARGET_OUTPUT_BASENAME)_fsbl.elf" 2>/dev/null || true
 	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
 
 run program:
 	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh program
+
+# Standalone boot.  bootbin packs the FSBL and PMU firmware of the Vitis
+# workspace, the XSA's bitstream and the ELF into BOOT.BIN; flash writes it to
+# the QSPI flash; boot-qspi restarts the board from the flash over JTAG, which
+# checks the image without moving the boot-mode switches.
+bootbin:
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh bootbin
+	+$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" artifacts-hash
+
+flash:
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh flash
+
+boot-qspi:
+	cd $(FIRMWARE_DIR) && TARGET=$(TARGET) ARTIFACT_DIR="$(ARTIFACT_DIR)" ./build.sh boot-qspi
 
 clean: firmware-clean hardware-clean chisel-clean

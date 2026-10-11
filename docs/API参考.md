@@ -7,19 +7,15 @@
 ## 安装与导入
 
 ```bash
-python -m pip install 47dr_driver-<版本>-py3-none-any.whl
+python -m pip install --find-links packages 47dr-driver      # 在 SDK 目录下执行
 ```
 
 ```python
 from dr47 import Dr47Device
 ```
 
-SDK ZIP 中的 `examples/` 目录包含模拟器、网络发现、软件 Trigger 发波、外部 Trigger
-发波和 100G 上传测速脚本。先运行模拟器示例可以在没有板卡时检查安装：
-
-```bash
-python -m dr47.examples.simulator_quickstart
-```
+安装、接线、发现板卡和示例脚本的用法见[软件使用说明](软件版本说明.md)。本文按功能列出接口：
+连接、网络、RFDC 配置、波形上传与播放、外部 Trigger 和错误处理。
 
 ## 连接与身份校验
 
@@ -60,8 +56,8 @@ device.close()
 不匹配时抛出 `ProtocolVersionError`。
 
 `DeviceStatus` 包含 `connected`、`ip`、`port`、`state`、`capabilities` 和 `message`。
-`DeviceCapabilities` 还提供 RFDC/MTS/NCO 状态、同步状态、Trigger 计数、播放状态和
-每通道 `RfdcChannelReadback`。播放状态为 `idle`、`upload`、`ready`、`prefetch`、`wait_trigger`、`playing`、
+`DeviceCapabilities` 提供板卡身份（`device_uid`、`build_profile`、`source_commit_id`）、
+RFDC/MTS/NCO 就绪状态、播放状态和每通道的 `RfdcChannelReadback`。播放状态为 `idle`、`upload`、`ready`、`prefetch`、`wait_trigger`、`playing`、
 `draining`、`done`、`error` 或 `fault`。
 
 ## 网络发现与配置
@@ -164,11 +160,20 @@ record = place_interleaved_iq_in_record(
 
 ### 上传和播放配置
 
-波形协议为单板专用的 `WAVECTR0`，不再提供旧 ARM、PREPARE、RFCTRL2 TRIGGER 或
-ABORT_MUTE 播放命令。8 个通道使用统一的交织 512-bit DDR 图像：每个 DDR beat 为 64 bytes，每个通道占 8 bytes；四个 DDR beat 组成每通道一个 32-byte DAC beat。
-`total_beats` 表示每通道 DAC beat 数，`total_bytes = total_beats * 256`，不因 mask 缩短。所有地址和长度均以 bytes 或 beats 明确表达。
+一般只需要 `upload_waveforms()`：它把各通道的波形打包、上传并提交，返回值里的 `session` 用于
+后续的 `play()`、`pause()`、`stop()`、`abort()` 和 `waveform_status()`。
 
-低层接口如下：
+```python
+uploaded = board.upload_waveforms({1: wave_ch1, 2: wave_ch2}, loop_count=1)
+board.play(session=int(uploaded["session"]))
+print(board.waveform_status(session=int(uploaded["session"])))
+```
+
+波形协议名为 `WAVECTR0`。8 个通道共用一幅交织的 512-bit DDR 图像：每个 DDR beat 为
+64 bytes，每个通道占 8 bytes；四个 DDR beat 组成每通道一个 32-byte 的 DAC beat（20 ns）。
+`total_beats` 是每通道的 DAC beat 数，`total_bytes = total_beats * 256`，不因通道掩码缩短。
+
+需要自己控制分片时使用低层接口：
 
 ```python
 board.begin_waveform(
@@ -196,9 +201,9 @@ bytes 连续接收后成功，并自动进入 `PREFETCH`。启动水位达到后
 descriptor 和错误。`play()`、`pause()`、`stop()`、`abort()` 被板端拒绝时抛出
 `DeviceStatusError`（例如在 `ERROR` 状态下 `PLAY`），不会静默返回。
 
-`upload_waveforms()` 是上述流程的便捷封装，会把输入通道补零并打包为统一 interleaved
-图像，然后执行 BEGIN、DATA 和 COMMIT（大图像自动改走下文的批量通路）。`loop_count` 表示包含首轮在内的总播放次数；
-它不接受 instruction sequence 或播放延迟参数。各轮之间无缝衔接：DDR 读取器把所有轮次
+`upload_waveforms()` 封装了上述流程：把输入通道补零、打包成一幅图像，然后执行 BEGIN、DATA 和
+COMMIT（大图像自动改走下文的批量通路）。`loop_count` 是包含首轮在内的总播放次数。各轮之间
+无缝衔接：DDR 读取器把所有轮次
 连续送入 FIFO，DAC 输出在轮次边界不插入空闲拍；TRIG_1 在每一轮的第一拍各输出一次。
 单轮过短时读取器的 DDR 往返延迟无法被流水掩盖，播放会以 underflow 进入 `ERROR`。
 板上实测：单轮 2 拍（40 ns）在约 5000 轮后 underflow，3 拍（60 ns）及以上 2 秒连续循环
@@ -218,8 +223,8 @@ print(result["transport"], result["resent_chunks"])
 ```
 
 - `upload_waveforms(..., transport="auto" | "bulk" | "packet", bulk_threshold_bytes=1 << 20)`：
-  `"auto"` 在图像不小于 1 MiB 且 bitstream 带批量通路时走批量通路，否则走 `DATA`；旧
-  bitstream 会拒绝批量 `BEGIN`，驱动自动退回 `DATA`。返回值的 `transport` 说明实际走了哪条。
+  `"auto"` 在图像不小于 1 MiB 时走批量通路，否则走 `DATA`；板卡的 bitstream 不带批量通路时
+  驱动自动退回 `DATA`。返回值的 `transport` 说明实际走了哪条。
 - `upload_image_bulk(image, *, session, channel_mask, total_beats, loop_count=1, payload_bytes=None, max_resends_per_chunk=8, progress_callback=None)`：
   上传一份已经打包好的图像（任意 bytes-like 对象）或一个 `LaneImage`，完成后 `COMMIT`。
 - `dr47.waveforms.LaneImage(channel_waves, *, samples=0)`：描述“8 个通道数组打包后的图像”
@@ -247,9 +252,8 @@ epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的�
 
 使用条件和限制：
 
-- 主机为 Linux，网卡支持 UDP 分段卸载（GSO）；驱动首次使用时用系统 C 编译器把
-  `_fastsend.c` 编译到 `~/.cache/dr47/`。没有编译器或设置 `DR47_FASTSEND=0` 时退回纯
-  Python 发送（约 9 Gb/s）。
+- 主机为 Linux，网卡支持 UDP 分段卸载（GSO）。发送核心用 C 实现，随 wheel 预编译提供；
+  设置 `DR47_FASTSEND=0` 时退回纯 Python 发送（约 9 Gb/s）。
 - 输入为 `interleaved_iq` 或 `packed_iq` 的 `int16`/`int32` 数组时不做额外拷贝；其他格式
   先由 numpy 转换，转换耗时计入上传时间。
 - 所有发送线程共用一个 socket。每线程一个 socket 时网卡会把各队列的包逐帧交错，板卡每
@@ -260,39 +264,53 @@ epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的�
 
 ### 100G 压测
 
-`software/dr47/examples/waveform_100g_stress_example.py` 按发送线程数分档，在同一个批量会话里
-把一幅图像连续发满设定的时间，不补发、不 `COMMIT`，每档报告带宽、丢包率和丢包环节：
+`examples/waveform_100g_stress_example.py` 用 4 个发送线程把链路打满，在同一个批量会话里
+把一幅图像连续发满 `DURATION_S`（默认 20 s），不补发、不 `COMMIT`，报告带宽、丢包率和丢包环节。
+
+压测要反映的是链路和板卡，所以脚本先把主机一侧的影响排除掉：
+
+- **帧按地址顺序到达。** Linux 会给 socket 更换网卡发送队列（`net.core.txq_reselection_ms`，
+  默认每 1000 ms 强制重选一次）。更换时 socket 里如果还积压着帧，新旧两个队列的帧会交错到达，
+  板卡每写一帧都要换 DDR4 行，写入跟不上，帧 FIFO 溢出。这是主机发送顺序造成的丢帧，不是
+  链路或板卡在线速下丢的。脚本把 socket 发送缓冲限制在 1 MiB（`SEND_BUFFER_BYTES`），一遍最多
+  发 1 GiB（约 0.09 s），每一遍开始前等 socket 排空。
+- **链路确实被打满。** 线路速率低于 `MIN_WIRE_RATE_GBPS`（默认 99）时判 FAIL，提示瓶颈在主机，
+  结果不代表硬件的上限。主机的 `net.core.wmem_max` 要不小于 1 MiB（发行版默认的 212992 不够，
+  用 `sysctl -w net.core.wmem_max=4194304` 调大）。
+- **主机自己没有丢帧。** 网卡实际发出的帧数少于交给内核的数据报数时判 FAIL。
 
 | 输出项 | 含义 |
 |---|---|
 | `goodput` / `wire` | 只算波形数据的速率 / 含帧头、FCS、前导码和帧间隔的线路速率（上限 100 Gb/s） |
-| `sent`、`on_wire` | 主机交给内核的数据报数、网卡实际发出的帧数 |
-| `tx_queues` | 这一档里承担过流量的网卡发送队列数 |
+| `sent`、`on_wire` | 主机交给内核的数据报数、网卡实际发出的帧数（含控制报文，比 `sent` 多几百帧是正常的） |
 | `board_rx` | 板端分类器看到的批量帧数；等于 `sent` 说明链路没有丢帧 |
 | `bad_fcs`、`fifo_full`、`rejected` | CMAC 判坏的帧、板端帧 FIFO 满而丢弃的帧、DDR 写入器拒收的帧 |
 | `stored`、`loss` | 完整写入 DDR4 的帧数；`loss = (sent - stored) / sent` |
 
-判据是脚本顶部的 `MAX_LINK_LOSS_RATE`（链路丢帧，默认 0）和 `MAX_LOSS_RATE`（总丢包，默认 1e-3）。
+判据是脚本顶部的 `MAX_LOSS_RATE`（默认 0，一帧都不能丢）和 `MIN_WIRE_RATE_GBPS`。
 
-板上实测（MTU 1500，每个数据报 1024 bytes 有效载荷，图像 1024 MiB，每档 20 s；1、2、4 线程连续跑三轮，3 线程一轮）：
+每次跑完，脚本在 `REPORT_DIR`（默认当前目录下的 `stress_reports/`，设为 `""` 则不生成）里写一份
+`stress_<时间>.html` 和同名的 `.json`。HTML 是不依赖网络的单文件网页，用浏览器打开，内容是
+带宽和丢包率、主机侧的三项检查、帧的去向（按环节）、整个过程逐遍的线路速率和板端丢帧，以及与
+终端输出相同的数据表；JSON 是同一份原始数据，便于两次压测之间对比。
 
-| 发送线程 | goodput | 线路速率 | 丢包率（各轮） | 丢包环节 |
-|---|---|---|---|---|
-| 1 | 49.1–49.3 Gb/s | 53.3–53.5 Gb/s | 0 / 0 / 0 | 无 |
-| 2 | 83.6–85.3 Gb/s | 90.8–92.7 Gb/s | 8.9e-6 / 0 / 1.1e-5 | 全部是 `fifo_full` |
-| 3 | 91.8 Gb/s | 99.7 Gb/s | 1.8e-5 | 全部是 `fifo_full` |
-| 4 | 91.8–91.9 Gb/s | 99.7 Gb/s | 2.6e-6 / 6.0e-6 / 5.8e-6 | 全部是 `fifo_full` |
+板上实测（MTU 1500，每个数据报 1024 bytes 有效载荷，图像 1024 MiB，4 个发送线程）：
 
-- 链路本身没有丢帧：十档合计 1.88×10⁹ 帧，每一档 `board_rx` 都等于 `sent`，`bad_fcs` 为 0
-  （按零差错估计，帧丢失率的 95% 置信上限约 2×10⁻⁹）。
-- 接近线速时的丢包全部发生在板端帧 FIFO，起因在主机：网卡按 CPU 分发送队列（XPS），内核
-  不时为 socket 重选队列，20 s 内 2 线程用过 14–19 个队列、4 线程用过 33–35 个。切换的
-  瞬间两个队列的帧交错到达，板卡每写一帧都要换 DDR4 行，写入暂时跟不上，4096 字的帧 FIFO
-  溢出，一档里丢几百到四千帧。单线程同样会换队列（5–9 个），但 53 Gb/s 下写入有余量，不丢。
+| 持续时间 | 轮数 | goodput | 线路速率 | 发出的帧 | 丢帧 |
+|---|---|---|---|---|---|
+| 20 s | 7 | 91.5–91.7 Gb/s | 99.4–99.5 Gb/s | 每轮 2.24×10⁸ | 0 |
+| 120 s | 1 | 91.7 Gb/s | 99.5 Gb/s | 1.34×10⁹ | 0 |
+
+- 八轮合计 2.91×10⁹ 帧（约 2.7 TiB 数据），每一轮 `board_rx` 和 `stored` 都等于 `sent`，
+  `bad_fcs`、`fifo_full`、`rejected` 都是 0。按零差错估计，帧丢失率的 95% 置信上限约 1.0×10⁻⁹。
+- 线路速率是 99.4–99.5 而不是 100 Gb/s：一遍 1 GiB 在线速下要 93.3 ms，实测每遍约 93.8 ms，
+  多出的约 0.5 ms 是两遍之间排空 socket、查询板端计数器的间隙。
+- 不控制发送端时（4 MiB 发送缓冲、不等排空），同一套硬件在 4 线程下每 20 s 丢 600–11000 帧
+  （丢包率 3×10⁻⁶–5×10⁻⁵），全部是 `fifo_full`；逐个核对过的丢帧事件都落在内核强制重选发送
+  队列的时刻。板卡要求相邻数据报的地址基本连续（见上一节的使用条件），压测不考核帧交错到达
+  的情形。
 - 正式上传不受影响：缺帧的 1 MiB 分块由驱动补发，`upload_waveforms()` 的结果里
   `resent_chunks` 列出补发过的分块。
-- 要在压测里去掉这部分丢包，需要用 root 权限把网卡收敛到单个发送队列（例如
-  `ethtool -L <网卡> combined 1`）。测试主机没有 root 权限，这一条没有实测。
 
 
 ## 外部 Trigger
@@ -301,8 +319,6 @@ epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的�
 只在 `WAIT_TRIGGER` 状态被消费；在 `IDLE`、`UPLOAD`、`PREFETCH`、`READY`、`PLAYING`
 或 `ERROR` 中到达的事件都会丢弃，不会形成待启动请求。状态查询中的计数区分
 `trigger_seen_count`、`trigger_dropped_count` 和实际启动计数。
-
-单板播放不依赖 HMC 多板同步、软件回包或旧 GPIO 门控路径。
 
 ## 错误处理
 
@@ -317,6 +333,6 @@ FIFO 水位、`underflow_count`、`error_count` 以及 Trigger 的 seen/dropped/
 
 ## 版本与兼容性
 
-当前公开包不包含 TDC 校准、补偿或 TDC 公共 API。驱动、XSA 和 ELF 应来自同一发布
-版本；`make program` 会从 XSA 提取内嵌 bitstream 与 `psu_init.tcl`，
-不需要额外的 `.bit` 或 `_psu_init.tcl` 文件。
+驱动不提供 TDC 校准和补偿接口。驱动和板卡固件应来自同一发布版本；
+驱动连接时校验板卡的协议版本、build profile 和 Trigger path version，不匹配时抛出
+`ProtocolVersionError`。

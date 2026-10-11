@@ -280,6 +280,30 @@ def test_bulk_sender_threads_share_one_socket(accelerate):
     assert sorted(offsets) == list(range(0, len(image), 1024))
 
 
+def test_bulk_sender_bounds_and_reports_what_waits_in_the_socket():
+    """When the kernel moves the socket to another transmit queue, the frames
+    still waiting on the old one are interleaved with the new ones.  The send
+    buffer bounds that backlog, and a sender can wait until nothing is left."""
+    import socket
+    from dr47.bulk import BulkSender
+
+    image = _image(4096)
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver.bind(("127.0.0.1", 0))
+    sender = BulkSender("127.0.0.1", receiver.getsockname()[1], accelerate=False, send_buffer_bytes=65536)
+    try:
+        assert sender.queued_bytes() == 0                    # nothing has been sent
+        assert sender.send(image, 0, len(image), session=1, epoch=0, payload_bytes=1024) == 4
+        _receive_bulk(receiver, 4)
+        assert sender.queued_bytes() == 0                    # loopback has taken all of it
+        # The kernel keeps twice what was asked for, to cover its own bookkeeping.
+        assert sender._socket().getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF) == 2 * 65536
+    finally:
+        sender.close()
+        receiver.close()
+    assert sender.queued_bytes() == 0                        # and nothing once it is closed
+
+
 @pytest.mark.parametrize("accelerate", [False, True], ids=["python", "c"])
 def test_bulk_sender_gathers_the_lanes_while_sending(accelerate):
     """The channel arrays go straight to the wire; no full image is built."""
@@ -374,6 +398,36 @@ def test_bulk_sender_works_without_the_c_library(monkeypatch):
         receiver.close()
     with pytest.raises(bulk.TransportError):
         bulk.BulkSender("127.0.0.1", 9, accelerate=True)
+
+
+def test_fast_sender_uses_a_library_shipped_next_to_the_module(tmp_path, monkeypatch):
+    """A binary wheel carries the sender core prebuilt: no compiler, no C source."""
+    import shutil
+    import subprocess
+    import dr47.bulk as bulk
+
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("no C compiler to build the stand-in library")
+    source = ROOT / "software" / "dr47" / "_fastsend.c"
+    shipped = tmp_path / "_fastsend.cpython-311-x86_64-linux-gnu.so"
+    subprocess.run([compiler, "-O2", "-shared", "-fPIC", "-pthread", "-o", str(shipped), str(source)], check=True)
+
+    monkeypatch.setattr(bulk, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(bulk.shutil, "which", lambda name: None)       # no compiler on this host
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(bulk, "_fastsend_lib", bulk._UNSET)
+    library = bulk.load_fastsend()
+    assert library is not None and library._name == str(shipped)
+    assert not (tmp_path / "cache").exists()
+
+
+def test_fast_sender_is_unavailable_without_library_or_source(tmp_path, monkeypatch):
+    import dr47.bulk as bulk
+
+    monkeypatch.setattr(bulk, "_PACKAGE_DIR", tmp_path)                # neither *.so nor _fastsend.c
+    monkeypatch.setattr(bulk, "_fastsend_lib", bulk._UNSET)
+    assert bulk.load_fastsend() is None
 
 
 def test_fast_sender_is_not_built_when_disabled(monkeypatch):

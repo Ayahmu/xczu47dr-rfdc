@@ -1,11 +1,8 @@
 # dr47 Python 驱动
 
-这是直接通过 UDP 控制单板 WAVECTR0/RFCTRL2 服务的驱动包。RFCTRL2 在这里仅表示板端封套和 RFDC/诊断服务，不表示旧播放入口。
-安装和板级流程请看[软件版本说明](../../docs/软件版本说明.md)，完整接口请看
+`dr47` 通过 UDP 控制 47DR 板卡：发现和配置板卡、设置 RFDC 频率和通道、上传波形并启动播放。
+安装和第一次使用的步骤见[软件使用说明](../../docs/软件版本说明.md)，完整接口见
 [API 接口参考](../../docs/API参考.md)。
-
-当前版本的对外交付范围不包含 TDC 校准、补偿或诊断；发布 wheel 会移除
-`dr47.tdc`。仓库中保留的相关研发代码和底层寄存器入口不属于当前公共 API。
 
 ## 快速导入
 
@@ -35,40 +32,28 @@ zone=2；上传的 IQ 只放低频包络。`set_xy_nco_frequency()` 仅用于直
 | `waveform_software_play_example.py` | 发波：上传一包高斯脉冲到 CH1/CH2，发送软件 `PLAY` | 板卡、示波器 |
 | `waveform_external_trigger_example.py` | 发波：上传后等待 XS19 外部 Trigger 启动 | 板卡、示波器、触发源 |
 | `waveform_bulk_upload_speed_example.py` | 板上测速：经 100G 批量通路上传随机波形，报告速率、丢帧和补发，再完整播放一遍 | 板卡 |
-| `waveform_100g_stress_example.py` | 100G 压测：按发送线程数分档持续灌数据，报告带宽、丢包率和丢包环节 | 板卡 |
+| `waveform_100g_stress_example.py` | 100G 压测：把链路打满持续灌数据，报告带宽、丢包率和丢包环节（判据：一帧不丢），并生成一份 HTML 报告 | 板卡 |
 | `network_discovery_example.py` | 广播发现板卡并读取网络配置 | 板卡 |
 | `simulator_quickstart.py` | 用内存模拟器走一遍上传和播放，检查安装 | 无 |
 
 ~~~bash
-python software/dr47/examples/waveform_bulk_upload_speed_example.py
-python -m dr47.examples.simulator_quickstart          # 安装 wheel 后的写法
+python examples/waveform_bulk_upload_speed_example.py     # SDK 目录下的脚本，改好顶部常量后运行
+python -m dr47.examples.simulator_quickstart               # 随驱动安装的同一批脚本
 ~~~
 
-## 本地验证
+## 波形上传和播放
 
-~~~bash
-python -m pip install -r software/requirements.txt
-python -m pytest tests -q          # 或 make test；RTL 仿真需要 Vivado 在 PATH 中，否则自动跳过
-~~~
-
-## 统一单板波形播放
-
-新链路只使用 `BEGIN → DATA → COMMIT → PREFETCH → WAIT_TRIGGER → PLAYING`。
-8 个通道共享一个 `total_beats` 和交织 512-bit DDR 布局；DATA 分片必须按
-`packet_seq`、`byte_offset` 连续到达，并通过 payload CRC。重复分片只返回当前确认，
-不会重复写 DDR。`COMMIT` 成功后自动预取，不再使用 ARM/PREPARE。
+`upload_waveforms()` 把各通道的波形打包上传并提交，板卡随后自动预取，准备好后进入
+`WAIT_TRIGGER`，由软件 `PLAY` 或 XS19 外部 Trigger 启动：
 
 ```python
-board.begin_waveform(session=1, total_bytes=len(image), channel_mask=0xff,
-                     total_beats=len(image) // 256, loop_count=1)
-for packet_seq, offset in enumerate(range(0, len(image), 1024)):
-    board.data_waveform(session=1, packet_seq=packet_seq, byte_offset=offset,
-                        payload=image[offset:offset + 1024])
-board.commit_waveform(session=1)
-board.play(session=1)       # WAIT_TRIGGER 立即启动；READY/DONE 先重新预取
-board.pause(session=1)      # 停止门控并回到 READY
-board.stop(session=1)
-board.abort(session=1)      # 清除 descriptor/session，回到 IDLE
+uploaded = board.upload_waveforms({1: wave_ch1, 2: wave_ch2}, loop_count=1)
+session = int(uploaded["session"])
+board.play(session=session)       # 立即启动；已播完或已停止时先重新预取
+board.pause(session=session)      # 停止输出，回到 READY，波形保留
+board.stop(session=session)
+board.abort(session=session)      # 清除波形和错误，回到 IDLE
+print(board.waveform_status(session=session))
 ```
 
 不小于 1 MiB 的图像由 `upload_waveforms()` 自动改走批量通路：数据报不逐包应答，发往
@@ -76,5 +61,5 @@ board.abort(session=1)      # 清除 descriptor/session，回到 IDLE
 板上实测 8 通道整片 DDR4（8 GiB）0.75 s 传完，91.6 Gb/s。条件和限制见 API 接口参考
 的“批量上传”一节。
 
-`waveform_status()` 返回 session、descriptor、状态、错误码和首个错误 offset。
-外部窄 Trigger 只在 `WAIT_TRIGGER` 消费；其他状态的 Trigger 丢弃且不排队。
+`waveform_status()` 返回当前状态、播放位置、错误码以及 underflow 和 Trigger 计数。外部 Trigger
+只在 `WAIT_TRIGGER` 状态被接受，其他时刻到达的事件丢弃且不排队。

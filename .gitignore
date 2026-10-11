@@ -27,9 +27,11 @@ __pycache__/
 *.egg-info/
 software/dr47/build/
 /dist/
+stress_reports/
 
-# Build outputs.  artifacts/ holds the one checked-in XSA + ELF handoff; every
-# other binary, and the per-build files written next to them, stays out.
+# Build outputs.  artifacts/ holds the one checked-in handoff: XSA, ELF and the
+# boot image made from them.  Every other binary, and the per-build files
+# written next to them, stays out.
 *.o
 *.elf
 *.bin
@@ -38,8 +40,11 @@ software/dr47/build/
 *.xsa
 !/artifacts/custom_xczu47dr_waveform.xsa
 !/artifacts/custom_xczu47dr_waveform.elf
+!/artifacts/custom_xczu47dr_waveform_fsbl.elf
+!/artifacts/BOOT.BIN
 artifacts/*_timing.rpt
 artifacts/.program_*.xsa/
+artifacts/.bootbin_*/
 artifacts/10mhz/
 artifacts/250mhz/
 
