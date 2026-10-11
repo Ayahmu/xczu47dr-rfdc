@@ -1,8 +1,19 @@
 `timescale 1ns / 1ps
 
+// RFCTRL2 control-plane command processor.
+//
+// Receives the re-framed RFCTRL2 request words from udp_rvctrl_framer and
+// serves the board-wide operations: HELLO/STATUS, structured RFDC apply and
+// readback, runtime network identity, and TDC register access.  Waveform
+// playback has its own WAVECTR0 protocol (waveform_upload_writer); nothing
+// here can start, stop or arm playback.
+//
+// A request is stored whole, decoded one cycle later and answered through a
+// two-entry response request queue, so a reply held up by ARP or by the
+// previous response is not lost.  Operations that take time (RFDC apply,
+// network apply/restart, TDC register) answer when the worker finishes.
 module pl_riscv_control_v1 #(
     parameter integer MAX_PAYLOAD_WORDS = 64,
-    parameter integer ENABLE_UNSAFE_RFDC_MMIO = 1,
     parameter [31:0] BUILD_PROFILE_ID = 32'd1,
     parameter [31:0] TRIGGER_PATH_VERSION = 32'd3,
     parameter [31:0] SOURCE_COMMIT_ID = 32'd0,
@@ -16,10 +27,6 @@ module pl_riscv_control_v1 #(
     input  wire         rvctrl_tfirst,
     input  wire         rvctrl_tlast,
     input  wire [31:0]  rvctrl_word_count,
-    input  wire [1:0]   rvctrl_protocol,
-
-    output reg          rfctrl2_sync_epoch_pulse,
-    output reg  [63:0]  rfctrl2_epoch,
 
     output reg          rfdc_apply_start,
     output reg  [31:0]  rfdc_apply_sequence,
@@ -50,17 +57,6 @@ module pl_riscv_control_v1 #(
     input  wire         playback_armed,
     input  wire         playback_prepared,
     input  wire         playback_running,
-    input  wire         sync_role_master,
-    input  wire         sync_bypass,
-    input  wire         sync_seen,
-    input  wire         sync_link_ready,
-    input  wire         sync_align_busy,
-    input  wire         sync_align_failed,
-    input  wire [5:0]   sync_alignment_epoch,
-    input  wire [15:0]  sync_alignment_error,
-    input  wire [31:0]  trigger_input_count,
-    input  wire [31:0]  trigger_accepted_count,
-    input  wire [31:0]  trigger_output_count,
     input  wire [2:0]   ext_trigger_phase_slot,
     input  wire         ext_trigger_phase_valid,
     input  wire         ext_trigger_phase_overflow,
@@ -74,8 +70,6 @@ module pl_riscv_control_v1 #(
     input  wire         tdc_reg_ready,
     input  wire [31:0]  tdc_reg_rdata,
     input  wire [15:0]  tdc_reg_error,
-    input  wire [31:0]  playback_admitted_count,
-    input  wire [31:0]  playback_skipped_count,
     input  wire [511:0] rfdc_actual_nco_hz,
     input  wire [15:0]  rfdc_actual_nyquist_zone,
     input  wire [255:0] rfdc_actual_phase_mdeg,
@@ -108,158 +102,59 @@ module pl_riscv_control_v1 #(
     input  wire [31:0] network_capabilities,
     input  wire [31:0] network_status_flags,
     input  wire [15:0] network_link_state,
+    // Playback observability reported in STATUS; owned by the waveform path.
     input  wire [7:0]  play_config_channel_mask,
     input  wire [7:0]  play_fifo_valid_mask,
     input  wire [7:0]  play_fifo_ready_mask,
-    input  wire [7:0]  play_executor_state,
-    input  wire [31:0] play_ddr_read_counter,
-    input  wire [31:0] play_bad_instr_count,
     input  wire        play_prefill_ready,
-    input  wire        play_active_valid,
-    input  wire        play_pending_valid,
-    // RFCTRL2 v3 diagnostic snapshot inputs.  Sources are expected to be
-    // locally latched in their native clock domain before crossing here.
-    input  wire [63:0] diag_trigger_capture_tick,
-    input  wire [63:0] diag_trigger_launch_tick,
-    input  wire [63:0] diag_playback_start_tick,
-    input  wire [63:0] diag_first_valid_tick,
-    input  wire [31:0] diag_direct_input_count,
-    input  wire [31:0] diag_direct_accept_count,
-    input  wire        diag_trigger_pulse,
-    input  wire        diag_trigger_launch,
-    input  wire        diag_prepared_dac,
-    input  wire        diag_output_permitted_dac,
-    input  wire [7:0]  diag_underflow_mask,
-    input  wire        diag_replay_ready,
-    input  wire        diag_replay_active,
-    input  wire        diag_snapshot_ack_toggle,
-    output reg         diag_snapshot_request_toggle,
-    output reg         diag_clear_events_pulse,
-    output reg         diag_clear_counters_pulse,
 
     output reg  [63:0]  rvresp_tdata,
     output reg          rvresp_tvalid,
     input  wire         rvresp_tready,
     output reg          rvresp_tlast,
-    output reg  [15:0]  rvresp_word_count,
-
-    output reg  [17:0]  m_axil_awaddr,
-    output reg          m_axil_awvalid,
-    input  wire         m_axil_awready,
-    output reg  [31:0]  m_axil_wdata,
-    output reg  [3:0]   m_axil_wstrb,
-    output reg          m_axil_wvalid,
-    input  wire         m_axil_wready,
-    input  wire [1:0]   m_axil_bresp,
-    input  wire         m_axil_bvalid,
-    output reg          m_axil_bready,
-
-    output reg  [17:0]  m_axil_araddr,
-    output reg          m_axil_arvalid,
-    input  wire         m_axil_arready,
-    input  wire [31:0]  m_axil_rdata,
-    input  wire [1:0]   m_axil_rresp,
-    input  wire         m_axil_rvalid,
-    output reg          m_axil_rready,
-
-    output reg  [31:0]  dbg_status,
-    output reg  [31:0]  dbg_last_seq,
-    output reg  [31:0]  dbg_last_cmd,
-    output reg  [31:0]  dbg_ping_count,
-    output reg  [31:0]  dbg_play_count,
-    output reg  [31:0]  dbg_trigger_count,
-    output reg  [31:0]  dbg_mmio_write_count,
-    output reg  [31:0]  dbg_error_count,
-    output reg  [31:0]  dbg_scratch,
-    output reg  [3:0]   dbg_state
+    output reg  [15:0]  rvresp_word_count
 );
-
-  localparam [31:0] RV0_CMD_PING             = 32'h00000001;
-  localparam [31:0] RV0_CMD_WRITE_MMIO       = 32'h00000004;
-
-  localparam [31:0] RV1_OP_PING             = 32'h00000001;
-  localparam [31:0] RV1_OP_MMIO_READ32      = 32'h00000002;
-  localparam [31:0] RV1_OP_MMIO_WRITE32     = 32'h00000003;
-  localparam [31:0] RV1_OP_MMIO_RMW32       = 32'h00000004;
-  localparam [31:0] RV1_OP_MMIO_BATCH       = 32'h00000005;
-  localparam [31:0] RV1_OP_RFDC_CH_ENABLE   = 32'h00000008;
-  localparam [31:0] RV1_OP_RFDC_SET_NCO     = 32'h00000009;
-  localparam [31:0] RV1_OP_STATUS_READ      = 32'h0000000A;
 
   localparam [31:0] RF2_OP_HELLO             = 32'h00000001;
   localparam [31:0] RF2_OP_STATUS            = 32'h00000002;
   localparam [31:0] RF2_OP_RFDC_APPLY        = 32'h00000003;
-  localparam [31:0] RF2_OP_UPLOAD_BEGIN      = 32'h00000004;
-  localparam [31:0] RF2_OP_UPLOAD_COMMIT     = 32'h00000005;
-  localparam [31:0] RF2_OP_SYNC_EPOCH        = 32'h00000007;
   localparam [31:0] RF2_OP_RFDC_GET_CONFIG   = 32'h0000000B;
-  // Structured RFDC apply, RFDC readback, and runtime network identity
-  // configuration are all advertised through HELLO/STATUS.
-  localparam [31:0] RF2_CAPABILITIES         = 32'h00FF0000;
-  localparam [31:0] RF2_RFDC_REQUEST_BYTES   = 32'd200;
-  localparam [31:0] RF2_NETWORK_APPLY_BYTES  = 32'd32;
-  localparam [31:0] RF2_NETWORK_RESPONSE_BYTES = 32'd80;
   localparam [31:0] RF2_OP_NETWORK_GET       = 32'h0000000C;
   localparam [31:0] RF2_OP_NETWORK_APPLY     = 32'h0000000D;
   localparam [31:0] RF2_OP_NETWORK_RESTART   = 32'h0000000E;
   localparam [31:0] RF2_OP_TDC_REG           = 32'h00000011;
-  localparam [31:0] RF2_OP_DIAG_SNAPSHOT     = 32'h00000012;
-  localparam [31:0] RF2_OP_DIAG_CONTROL       = 32'h00000013;
+  // Capability bits advertised through HELLO/STATUS: PL RFDC config (16),
+  // RFDC readback (17), runtime network identity (18), DAC MTS (19), NCO
+  // sync (20) and the external Trigger input (22).
+  localparam [31:0] RF2_CAPABILITIES         = 32'h005F0000;
+  localparam [31:0] RF2_RFDC_REQUEST_BYTES   = 32'd200;
+  localparam [31:0] RF2_NETWORK_APPLY_BYTES  = 32'd32;
+  localparam [31:0] RF2_NETWORK_RESPONSE_BYTES = 32'd80;
 
-  localparam [31:0] RV1_VERSION = 32'd1;
   localparam [31:0] RF2_VERSION = 32'd3;
-  localparam [1:0] RVCTRL_PROTOCOL_LEGACY = 2'd0;
-  localparam [1:0] RVCTRL_PROTOCOL_V1     = 2'd1;
-  localparam [1:0] RVCTRL_PROTOCOL_RF2    = 2'd2;
-  localparam [63:0] RVRESP1_MAGIC = 64'h0031505345525652;
   localparam [63:0] RFRESP2_MAGIC = 64'h0032505345524652;
 
-  localparam [3:0] ST_IDLE       = 4'd0;
-  localparam [3:0] ST_RECEIVE    = 4'd1;
-  localparam [3:0] ST_PROCESS    = 4'd2;
-  localparam [3:0] ST_MMIO_WRITE = 4'd4;
-  localparam [3:0] ST_MMIO_READ  = 4'd5;
-  localparam [3:0] ST_MMIO_RMW_W = 4'd6;
-  localparam [3:0] ST_BATCH_LOAD = 4'd7;
-  localparam [3:0] ST_NCO_SCAN   = 4'd8;
+  localparam [15:0] RF2_STATUS_OK            = 16'h0000;
+  localparam [15:0] RF2_STATUS_BAD_VERSION   = 16'h0001;
+  localparam [15:0] RF2_STATUS_UNSUPPORTED   = 16'h0002;
+  localparam [15:0] RF2_STATUS_BAD_REQUEST   = 16'h0003;
+  localparam [15:0] RF2_STATUS_BUSY          = 16'h0004;
+  localparam [15:0] RF2_STATUS_RFDC_NOT_READY = 16'h0005;
+  localparam [15:0] RF2_STATUS_AXI_TIMEOUT   = 16'h0009;
+
   localparam [2:0] RESP_REQ_NONE    = 3'd0;
   localparam [2:0] RESP_REQ_0       = 3'd1;
   localparam [2:0] RESP_REQ_1       = 3'd2;
-  localparam [2:0] RESP_REQ_2       = 3'd3;
   localparam [2:0] RESP_REQ_STATUS  = 3'd4;
   localparam [2:0] RESP_REQ_RFDC    = 3'd5;
   localparam [2:0] RESP_REQ_NETWORK = 3'd6;
-  localparam [2:0] RESP_REQ_DIAG    = 3'd7;
-  localparam [4:0] DEC_UNSUPPORTED       = 5'd0;
-  localparam [4:0] DEC_RF2_HELLO         = 5'd1;
-  localparam [4:0] DEC_RF2_STATUS        = 5'd2;
-  localparam [4:0] DEC_RF2_NETWORK_GET   = 5'd3;
-  localparam [4:0] DEC_RF2_NETWORK_APPLY = 5'd4;
-  localparam [4:0] DEC_RF2_NETWORK_RESTART = 5'd5;
-  localparam [4:0] DEC_RF2_RFDC_APPLY    = 5'd6;
-  localparam [4:0] DEC_RF2_RFDC_GET      = 5'd7;
-  localparam [4:0] DEC_RF2_SYNC_EPOCH    = 5'd9;
-  localparam [4:0] DEC_RV_PING           = 5'd13;
-  localparam [4:0] DEC_RV_WRITE_MMIO     = 5'd16;
-  localparam [4:0] DEC_RV1_MMIO_READ32   = 5'd17;
-  localparam [4:0] DEC_RV1_MMIO_RMW32    = 5'd18;
-  localparam [4:0] DEC_RV1_MMIO_BATCH    = 5'd19;
-  localparam [4:0] DEC_RV1_RFDC_CH_ENABLE = 5'd20;
-  localparam [4:0] DEC_RV1_RFDC_SET_NCO  = 5'd21;
-  localparam [4:0] DEC_RV1_STATUS_READ   = 5'd22;
-  localparam [4:0] DEC_RF2_TDC_REG       = 5'd25;
-  localparam [4:0] DEC_RF2_DIAG_SNAPSHOT = 5'd26;
-  localparam [4:0] DEC_RF2_DIAG_CONTROL  = 5'd27;
   localparam integer RX_COUNT_WIDTH = $clog2(MAX_PAYLOAD_WORDS + 1);
-  localparam [31:0] MAX_PAYLOAD_WORDS_U32 = MAX_PAYLOAD_WORDS;
   localparam [RX_COUNT_WIDTH-1:0] MAX_PAYLOAD_WORDS_COUNT = MAX_PAYLOAD_WORDS;
 
   reg [31:0] payload_words [0:MAX_PAYLOAD_WORDS-1];
   reg [RX_COUNT_WIDTH-1:0] rx_index;
   reg [RX_COUNT_WIDTH-1:0] rx_expected_words;
   reg        rx_drop;
-  reg        rx_is_v1;
-  reg        rx_is_v2;
   reg        process_pending;
   reg        decode_pending;
 
@@ -267,28 +162,13 @@ module pl_riscv_control_v1 #(
   reg [31:0] cmd_seq;
   reg [31:0] cmd_flags;
   reg [31:0] cmd_payload_bytes;
-  reg [31:0] cmd_base;
   reg        cmd_version_valid;
-  reg [4:0]  cmd_kind;
 
-  reg [17:0] mmio_addr;
-  reg [31:0] mmio_wdata;
-  reg [31:0] mmio_mask;
-  reg [31:0] batch_index;
-  reg [31:0] batch_count;
-  reg [31:0] nco_index;
-  reg [31:0] nco_apply_mask;
-  reg [31:0] nco_zone_accum;
-  reg        aw_done;
-  reg        w_done;
-  reg        b_done;
-  reg [1:0]  bresp_latched;
   reg [63:0] resp_words [0:47];
   reg [5:0]  resp_index;
   reg [5:0]  resp_count;
   reg        rfdc_response_pending;
   reg [31:0] rfdc_response_sequence;
-  reg [31:0] rfdc_response_opcode;
   reg        rfdc_payload_fields_invalid_latched;
   reg        network_response_pending;
   reg [31:0] tdc_reg_timeout;
@@ -298,35 +178,25 @@ module pl_riscv_control_v1 #(
   reg [15:0] tdc_response_error;
   reg [31:0] network_response_sequence;
   reg [31:0] network_response_opcode;
+  // Two-entry response request FIFO.  The UDP response TX path can be
+  // temporarily occupied by ARP or a previous RFRESP2 frame; retaining one
+  // additional decoded response prevents a back-to-back STATUS/HELLO request
+  // from being silently discarded at this boundary.  A third response
+  // arriving while both entries are held is dropped; the host retries.
   reg        resp_request_valid;
   reg [2:0]  resp_request_kind;
-  reg [63:0] resp_request_magic;
-  reg [15:0] resp_request_version;
   reg [31:0] resp_request_opcode;
   reg [15:0] resp_request_status;
   reg [31:0] resp_request_sequence;
   reg [31:0] resp_request_payload_bytes;
   reg [63:0] resp_request_payload0;
-  reg [63:0] resp_request_payload1;
-  // Two-entry response request FIFO.  The UDP response TX path can be
-  // temporarily occupied by ARP or a previous RFRESP2 frame; retaining one
-  // additional decoded response prevents a back-to-back STATUS/HELLO request
-  // from being silently discarded at this boundary.
   reg        resp_request_valid2;
   reg [2:0]  resp_request_kind2;
-  reg [63:0] resp_request_magic2;
-  reg [15:0] resp_request_version2;
   reg [31:0] resp_request_opcode2;
   reg [15:0] resp_request_status2;
   reg [31:0] resp_request_sequence2;
   reg [31:0] resp_request_payload_bytes2;
   reg [63:0] resp_request_payload02;
-  reg [63:0] resp_request_payload12;
-  reg        dbg_error_pending;
-  reg [63:0] diag_generation;
-  reg        diag_snapshot_wait;
-  reg [31:0] diag_snapshot_pending_seq;
-  reg        diag_snapshot_ack_seen;
 
   wire [31:0] rx_word_count_clean = rvctrl_word_count;
   wire [RX_COUNT_WIDTH-1:0] rx_word_count_narrow =
@@ -356,91 +226,34 @@ module pl_riscv_control_v1 #(
   wire [RX_COUNT_WIDTH-1:0] active_words_after_beat = active_rx_index +
       (active_second_word ? {{(RX_COUNT_WIDTH-2){1'b0}}, 2'd2} :
                             {{(RX_COUNT_WIDTH-1){1'b0}}, 1'b1});
-  wire        write_done = aw_done && w_done && b_done;
-  wire [63:0] response_magic = rx_is_v2 ? RFRESP2_MAGIC : RVRESP1_MAGIC;
-  wire [15:0] response_version = rx_is_v2 ? RF2_VERSION[15:0] : RV1_VERSION[15:0];
 
   integer i;
   integer r;
-  integer p;
-  function [4:0] decode_kind;
-    input is_v1;
-    input is_v2;
-    input [31:0] opcode;
-    begin
-      decode_kind = DEC_UNSUPPORTED;
-      if (is_v2) begin
-        case (opcode)
-          RF2_OP_HELLO: decode_kind = DEC_RF2_HELLO;
-          RF2_OP_STATUS: decode_kind = DEC_RF2_STATUS;
-          RF2_OP_NETWORK_GET: decode_kind = DEC_RF2_NETWORK_GET;
-          RF2_OP_NETWORK_APPLY: decode_kind = DEC_RF2_NETWORK_APPLY;
-          RF2_OP_NETWORK_RESTART: decode_kind = DEC_RF2_NETWORK_RESTART;
-          RF2_OP_RFDC_APPLY: decode_kind = DEC_RF2_RFDC_APPLY;
-          RF2_OP_RFDC_GET_CONFIG: decode_kind = DEC_RF2_RFDC_GET;
-          RF2_OP_SYNC_EPOCH: decode_kind = DEC_RF2_SYNC_EPOCH;
-          RF2_OP_TDC_REG: decode_kind = DEC_RF2_TDC_REG;
-          RF2_OP_DIAG_SNAPSHOT: decode_kind = DEC_RF2_DIAG_SNAPSHOT;
-          RF2_OP_DIAG_CONTROL: decode_kind = DEC_RF2_DIAG_CONTROL;
-          default: decode_kind = DEC_UNSUPPORTED;
-        endcase
-      end else if (is_v1) begin
-        case (opcode)
-          RV1_OP_PING: decode_kind = DEC_RV_PING;
-          RV1_OP_MMIO_WRITE32: decode_kind = DEC_RV_WRITE_MMIO;
-          RV1_OP_MMIO_READ32: decode_kind = DEC_RV1_MMIO_READ32;
-          RV1_OP_MMIO_RMW32: decode_kind = DEC_RV1_MMIO_RMW32;
-          RV1_OP_MMIO_BATCH: decode_kind = DEC_RV1_MMIO_BATCH;
-          RV1_OP_RFDC_CH_ENABLE: decode_kind = DEC_RV1_RFDC_CH_ENABLE;
-          RV1_OP_RFDC_SET_NCO: decode_kind = DEC_RV1_RFDC_SET_NCO;
-          RV1_OP_STATUS_READ: decode_kind = DEC_RV1_STATUS_READ;
-          default: decode_kind = DEC_UNSUPPORTED;
-        endcase
-      end else begin
-        case (opcode)
-          RV0_CMD_PING: decode_kind = DEC_RV_PING;
-          RV0_CMD_WRITE_MMIO: decode_kind = DEC_RV_WRITE_MMIO;
-          default: decode_kind = DEC_UNSUPPORTED;
-        endcase
-      end
-    end
-  endfunction
 
   task request_response;
     input [2:0]  kind;
-    input [63:0] magic;
-    input [15:0] version;
     input [31:0] opcode;
     input [15:0] status_code;
     input [31:0] resp_seq;
     input [31:0] payload_bytes;
     input [63:0] payload0;
-    input [63:0] payload1;
     begin
       if (!resp_request_valid) begin
         resp_request_valid <= 1'b1;
         resp_request_kind <= kind;
-        resp_request_magic <= magic;
-        resp_request_version <= version;
         resp_request_opcode <= opcode;
         resp_request_status <= status_code;
         resp_request_sequence <= resp_seq;
         resp_request_payload_bytes <= payload_bytes;
         resp_request_payload0 <= payload0;
-        resp_request_payload1 <= payload1;
       end else if (!resp_request_valid2) begin
         resp_request_valid2 <= 1'b1;
         resp_request_kind2 <= kind;
-        resp_request_magic2 <= magic;
-        resp_request_version2 <= version;
         resp_request_opcode2 <= opcode;
         resp_request_status2 <= status_code;
         resp_request_sequence2 <= resp_seq;
         resp_request_payload_bytes2 <= payload_bytes;
         resp_request_payload02 <= payload0;
-        resp_request_payload12 <= payload1;
-      end else begin
-        dbg_error_pending <= 1'b1;
       end
     end
   endtask
@@ -450,30 +263,7 @@ module pl_riscv_control_v1 #(
     input [15:0] status_code;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_0, response_magic, response_version, opcode, status_code, resp_seq, 32'd0, 64'd0, 64'd0);
-    end
-  endtask
-
-  task queue_resp1;
-    input [31:0] opcode;
-    input [15:0] status_code;
-    input [31:0] resp_seq;
-    input [31:0] payload_bytes;
-    input [63:0] payload0;
-    begin
-      request_response(RESP_REQ_1, response_magic, response_version, opcode, status_code, resp_seq, payload_bytes, payload0, 64'd0);
-    end
-  endtask
-
-  task queue_resp2;
-    input [31:0] opcode;
-    input [15:0] status_code;
-    input [31:0] resp_seq;
-    input [31:0] payload_bytes;
-    input [63:0] payload0;
-    input [63:0] payload1;
-    begin
-      request_response(RESP_REQ_2, response_magic, response_version, opcode, status_code, resp_seq, payload_bytes, payload0, payload1);
+      request_response(RESP_REQ_0, opcode, status_code, resp_seq, 32'd0, 64'd0);
     end
   endtask
 
@@ -481,16 +271,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_STATUS, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd128, 64'd0, 64'd0);
-    end
-  endtask
-
-  task queue_rf2_diag;
-    input [31:0] opcode;
-    input [31:0] resp_seq;
-    begin
-      request_response(RESP_REQ_DIAG, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode,
-                       16'h0000, resp_seq, 32'd152, 64'd0, 64'd0);
+      request_response(RESP_REQ_STATUS, opcode, RF2_STATUS_OK, resp_seq, 32'd128, 64'd0);
     end
   endtask
 
@@ -498,7 +279,7 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_RFDC, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, 16'h0000, resp_seq, 32'd352, 64'd0, 64'd0);
+      request_response(RESP_REQ_RFDC, opcode, RF2_STATUS_OK, resp_seq, 32'd352, 64'd0);
     end
   endtask
 
@@ -506,7 +287,20 @@ module pl_riscv_control_v1 #(
     input [31:0] opcode;
     input [31:0] resp_seq;
     begin
-      request_response(RESP_REQ_NETWORK, RFRESP2_MAGIC, RF2_VERSION[15:0], opcode, network_status, resp_seq, RF2_NETWORK_RESPONSE_BYTES, 64'd0, 64'd0);
+      request_response(RESP_REQ_NETWORK, opcode, network_status, resp_seq, RF2_NETWORK_RESPONSE_BYTES, 64'd0);
+    end
+  endtask
+
+  // The loaders below run only while rvresp_tvalid is low.
+  task start_response;
+    input [5:0] words;
+    begin
+      resp_count <= words;
+      resp_index <= 6'd0;
+      rvresp_word_count <= {10'd0, words};
+      rvresp_tdata <= RFRESP2_MAGIC;
+      rvresp_tvalid <= 1'b1;
+      rvresp_tlast <= 1'b0;
     end
   endtask
 
@@ -515,210 +309,10 @@ module pl_riscv_control_v1 #(
     input [15:0] status_code;
     input [31:0] resp_seq;
     begin
-      if (!rvresp_tvalid) begin
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {opcode, status_code, resp_request_version};
-        resp_words[2] <= {32'd0, resp_seq};
-        resp_count <= 4'd3;
-        resp_index <= 4'd0;
-        rvresp_word_count <= 16'd3;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
-      end
-    end
-  endtask
-
-  task load_rf2_status;
-    input [31:0] opcode;
-    input [31:0] resp_seq;
-    reg [31:0] state_flags;
-    begin
-      if (!rvresp_tvalid) begin
-        state_flags = {
-            23'd0, dac_mts_required, nco_sync_ready, dac_mts_failed, dac_mts_ready,
-            playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready
-        };
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {opcode, 16'h0000, resp_request_version};
-        resp_words[2] <= {resp_request_payload_bytes, resp_seq};
-        resp_words[3] <= {state_flags, RF2_CAPABILITIES};
-        resp_words[4] <= {rfdc_result_revision, 24'd0, rfdc_config_valid_mask};
-        resp_words[5] <= {rfdc_failure_stage, 16'd0, rfdc_apply_status};
-        resp_words[6] <= {32'd0, 14'd0, rfdc_failure_address};
-        resp_words[7] <= {24'd0, play_fifo_valid_mask, 24'd0, play_config_channel_mask};
-        resp_words[8] <= {24'd0, play_executor_state, 24'd0, play_fifo_ready_mask};
-        resp_words[9] <= {play_bad_instr_count, play_ddr_read_counter};
-        resp_words[10] <= {30'd0, play_active_valid, play_pending_valid, 31'd0, play_prefill_ready};
-        resp_words[11] <= {
-            nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
-            1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
-        };
-        // Payload bytes 72..75 are the 32-bit sync flags; bytes 76..79
-        // are the trigger-path version. Four flags require 28 padding bits:
-        // a 31-bit low field shifts version 3 to 1 in the host's high word.
-        resp_words[12] <= {TRIGGER_PATH_VERSION,
-                            28'd0, sync_role_master, sync_bypass,
-                            sync_link_ready, sync_seen};
-        resp_words[13] <= {trigger_accepted_count, trigger_input_count};
-        resp_words[14] <= {32'd0, trigger_output_count};
-        // Appended strict-alignment state.  The low six bits are the
-        // acknowledged hardware epoch; bits 22/23 are busy/failed.
-        resp_words[15] <= {32'd0, 8'd0, sync_align_failed, sync_align_busy,
-                           16'd0, sync_alignment_epoch};
-        resp_words[16] <= {SOURCE_COMMIT_ID, BUILD_PROFILE_ID[15:0],
-                           sync_alignment_error};
-        resp_words[17] <= {
-            32'd0,
-            ext_trigger_phase_ps_x10,
-            ext_trigger_tap_index,
-            2'd0,
-            ext_trigger_phase_metastable,
-            ext_trigger_phase_overflow,
-            ext_trigger_phase_valid,
-            ext_trigger_phase_slot
-        };
-        resp_words[18] <= {playback_skipped_count, playback_admitted_count};
-        resp_count <= 6'd19;
-        resp_index <= 6'd0;
-        rvresp_word_count <= 16'd19;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
-      end
-    end
-  endtask
-
-  // Fixed 160-byte v3 snapshot body. Header words are emitted by the common
-  // response path; the body is deliberately word-aligned for software reads.
-  task load_rf2_diag;
-    input [31:0] opcode;
-    input [31:0] resp_seq;
-    begin
-      if (!rvresp_tvalid) begin
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {opcode, 16'h0000, resp_request_version};
-        resp_words[2] <= {32'd152, resp_seq};
-        resp_words[3] <= diag_generation;
-        resp_words[4] <= {32'd0, trigger_input_count};
-        resp_words[5] <= diag_trigger_capture_tick;
-        resp_words[6] <= {32'd0, trigger_accepted_count};
-        resp_words[7] <= {32'd0, playback_skipped_count};
-        resp_words[8] <= 64'd0;
-        resp_words[9] <= diag_trigger_launch_tick;
-        resp_words[10] <= diag_playback_start_tick;
-        resp_words[11] <= diag_first_valid_tick;
-        resp_words[12] <= {32'd0, diag_trigger_launch_tick[31:0] - diag_trigger_capture_tick[31:0]};
-        resp_words[13] <= {32'd0, diag_first_valid_tick[31:0] - diag_trigger_launch_tick[31:0]};
-        // Snapshot flags are deliberately packed from bit zero upward so the
-        // software decoder can inspect them without depending on HDL field
-        // ordering.  Bits 8..15 contain the per-channel underflow mask.
-        resp_words[14] <= {48'd0, diag_underflow_mask, 2'd0,
-                           diag_output_permitted_dac, diag_prepared_dac,
-                           diag_trigger_launch, diag_trigger_pulse,
-                           diag_replay_active, diag_replay_ready};
-        resp_words[15] <= {32'd0, rfdc_apply_status, rfdc_failure_stage[15:0]};
-        resp_words[16] <= {44'd0, rfdc_failure_axi_response, rfdc_failure_address};
-        resp_words[17] <= {diag_direct_accept_count, diag_direct_input_count};
-        resp_words[18] <= {32'd0, play_ddr_read_counter};
-        resp_words[19] <= {32'd0, play_ddr_read_counter};
-        resp_words[20] <= {32'd0, diag_trigger_pulse, diag_trigger_launch,
-                           6'd0, SOURCE_COMMIT_ID[23:0]};
-        resp_words[21] <= {32'd0, TRIGGER_PATH_VERSION};
-        resp_count <= 6'd22;
-        resp_index <= 6'd0;
-        rvresp_word_count <= 16'd22;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
-      end
-    end
-  endtask
-
-  task load_rfdc_response;
-    input [31:0] opcode;
-    input [31:0] resp_seq;
-    integer channel;
-    integer base_word;
-    reg [31:0] state_flags;
-    begin
-      if (!rvresp_tvalid) begin
-        state_flags = {27'd0, playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {
-            opcode,
-            (opcode == RF2_OP_RFDC_GET_CONFIG) ? 16'h0000 : rfdc_apply_status,
-            resp_request_version
-        };
-        resp_words[2] <= {resp_request_payload_bytes, resp_seq};
-        resp_words[3] <= {{24{1'b0}}, rfdc_result_applied_mask, rfdc_result_revision};
-        resp_words[4] <= {{24{1'b0}}, rfdc_config_valid_mask, {24'd0, rfdc_result_error_mask}};
-        resp_words[5] <= {{14{1'b0}}, rfdc_failure_address, rfdc_failure_stage};
-        resp_words[6] <= {state_flags, 30'd0, rfdc_failure_axi_response};
-        for (channel = 0; channel < 8; channel = channel + 1) begin
-          base_word = 7 + channel * 5;
-          resp_words[base_word] <= rfdc_actual_nco_hz[channel*64 +: 64];
-          resp_words[base_word+1] <= {
-              rfdc_actual_phase_mdeg[channel*32 +: 32],
-              30'd0, rfdc_actual_nyquist_zone[channel*2 +: 2]
-          };
-          resp_words[base_word+2] <= {
-              rfdc_channel_status[channel*32 +: 32],
-              rfdc_actual_current_ua[channel*32 +: 32]
-          };
-          resp_words[base_word+3] <= rfdc_actual_nco_word[channel*64 +: 64];
-          resp_words[base_word+4] <= {
-              rfdc_actual_vop_code[channel*32 +: 32],
-              rfdc_actual_phase_word[channel*32 +: 32]
-          };
-        end
-        resp_count <= 6'd47;
-        resp_index <= 6'd0;
-        rvresp_word_count <= 16'd47;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
-      end
-    end
-  endtask
-
-  task load_network_response;
-    input [31:0] opcode;
-    input [31:0] resp_seq;
-    reg [31:0] state_flags;
-    begin
-      if (!rvresp_tvalid) begin
-        state_flags = network_status_flags;
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {opcode, resp_request_status, resp_request_version};
-        resp_words[2] <= {resp_request_payload_bytes, resp_seq};
-        resp_words[3] <= network_device_uid;
-        resp_words[4] <= {network_bootstrap_ip, network_current_ip};
-        resp_words[5] <= network_current_mac;
-        resp_words[6] <= {{16{1'b0}}, network_link_state, network_current_port, network_result_revision};
-        resp_words[7] <= {state_flags, network_capabilities};
-        resp_words[8] <= network_bootstrap_mac;
-        resp_words[9] <= {32'd0, network_current_subnet};
-        resp_words[10] <= {32'd0, network_current_gateway};
-        resp_words[11] <= {network_status_flags, BUILD_PROFILE_ID};
-        resp_words[12] <= {56'd0, rfdc_config_valid_mask};
-        resp_count <= 6'd13;
-        resp_index <= 6'd0;
-        rvresp_word_count <= 16'd13;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
-      end
+      resp_words[0] <= RFRESP2_MAGIC;
+      resp_words[1] <= {opcode, status_code, RF2_VERSION[15:0]};
+      resp_words[2] <= {32'd0, resp_seq};
+      start_response(6'd3);
     end
   endtask
 
@@ -729,86 +323,127 @@ module pl_riscv_control_v1 #(
     input [31:0] payload_bytes;
     input [63:0] payload0;
     begin
-      if (!rvresp_tvalid) begin
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {opcode, status_code, resp_request_version};
-        resp_words[2] <= {payload_bytes, resp_seq};
-        resp_words[3] <= payload0;
-        resp_count <= 4'd4;
-        resp_index <= 4'd0;
-        rvresp_word_count <= 16'd4;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
-      end
+      resp_words[0] <= RFRESP2_MAGIC;
+      resp_words[1] <= {opcode, status_code, RF2_VERSION[15:0]};
+      resp_words[2] <= {payload_bytes, resp_seq};
+      resp_words[3] <= payload0;
+      start_response(6'd4);
     end
   endtask
 
-  task load_resp2;
+  // Fixed 128-byte STATUS/HELLO payload.  Words marked reserved carried the
+  // retired instruction-executor and multi-board SYNC status; they stay in
+  // the layout as zeros so every live field keeps its offset.
+  task load_rf2_status;
     input [31:0] opcode;
-    input [15:0] status_code;
     input [31:0] resp_seq;
-    input [31:0] payload_bytes;
-    input [63:0] payload0;
-    input [63:0] payload1;
+    reg [31:0] state_flags;
     begin
-      if (!rvresp_tvalid) begin
-        resp_words[0] <= resp_request_magic;
-        resp_words[1] <= {opcode, status_code, resp_request_version};
-        resp_words[2] <= {payload_bytes, resp_seq};
-        resp_words[3] <= payload0;
-        resp_words[4] <= payload1;
-        resp_count <= 4'd5;
-        resp_index <= 4'd0;
-        rvresp_word_count <= 16'd5;
-        rvresp_tdata <= resp_request_magic;
-        rvresp_tvalid <= 1'b1;
-        rvresp_tlast <= 1'b0;
-      end else begin
-        dbg_error_pending <= 1'b1;
+      state_flags = {
+          23'd0, dac_mts_required, nco_sync_ready, dac_mts_failed, dac_mts_ready,
+          playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready
+      };
+      resp_words[0] <= RFRESP2_MAGIC;
+      resp_words[1] <= {opcode, RF2_STATUS_OK, RF2_VERSION[15:0]};
+      resp_words[2] <= {resp_request_payload_bytes, resp_seq};
+      resp_words[3] <= {state_flags, RF2_CAPABILITIES};
+      resp_words[4] <= {rfdc_result_revision, 24'd0, rfdc_config_valid_mask};
+      resp_words[5] <= {rfdc_failure_stage, 16'd0, rfdc_apply_status};
+      resp_words[6] <= {32'd0, 14'd0, rfdc_failure_address};
+      resp_words[7] <= {24'd0, play_fifo_valid_mask, 24'd0, play_config_channel_mask};
+      resp_words[8] <= {32'd0, 24'd0, play_fifo_ready_mask};
+      resp_words[9] <= 64'd0;                                   // reserved
+      resp_words[10] <= {32'd0, 31'd0, play_prefill_ready};
+      resp_words[11] <= {
+          nco_sync_epoch, dac_mts_error, 8'd0, dac_mts_tile_mask,
+          1'b0, dac_mts_required, dac_mts_failed, dac_mts_ready
+      };
+      // Payload bytes 76..79 are the trigger-path version.
+      resp_words[12] <= {TRIGGER_PATH_VERSION, 32'd0};
+      resp_words[13] <= 64'd0;                                  // reserved
+      resp_words[14] <= 64'd0;                                  // reserved
+      resp_words[15] <= 64'd0;                                  // reserved
+      resp_words[16] <= {SOURCE_COMMIT_ID, BUILD_PROFILE_ID[15:0], 16'd0};
+      resp_words[17] <= {
+          32'd0,
+          ext_trigger_phase_ps_x10,
+          ext_trigger_tap_index,
+          2'd0,
+          ext_trigger_phase_metastable,
+          ext_trigger_phase_overflow,
+          ext_trigger_phase_valid,
+          ext_trigger_phase_slot
+      };
+      resp_words[18] <= 64'd0;                                  // reserved
+      start_response(6'd19);
+    end
+  endtask
+
+  task load_rfdc_response;
+    input [31:0] opcode;
+    input [31:0] resp_seq;
+    integer channel;
+    integer base_word;
+    reg [31:0] state_flags;
+    begin
+      state_flags = {27'd0, playback_prepared, playback_running, playback_armed, rfdc_apply_busy, rfdc_ready};
+      resp_words[0] <= RFRESP2_MAGIC;
+      resp_words[1] <= {
+          opcode,
+          (opcode == RF2_OP_RFDC_GET_CONFIG) ? 16'h0000 : rfdc_apply_status,
+          RF2_VERSION[15:0]
+      };
+      resp_words[2] <= {resp_request_payload_bytes, resp_seq};
+      resp_words[3] <= {{24{1'b0}}, rfdc_result_applied_mask, rfdc_result_revision};
+      resp_words[4] <= {{24{1'b0}}, rfdc_config_valid_mask, {24'd0, rfdc_result_error_mask}};
+      resp_words[5] <= {{14{1'b0}}, rfdc_failure_address, rfdc_failure_stage};
+      resp_words[6] <= {state_flags, 30'd0, rfdc_failure_axi_response};
+      for (channel = 0; channel < 8; channel = channel + 1) begin
+        base_word = 7 + channel * 5;
+        resp_words[base_word] <= rfdc_actual_nco_hz[channel*64 +: 64];
+        resp_words[base_word+1] <= {
+            rfdc_actual_phase_mdeg[channel*32 +: 32],
+            30'd0, rfdc_actual_nyquist_zone[channel*2 +: 2]
+        };
+        resp_words[base_word+2] <= {
+            rfdc_channel_status[channel*32 +: 32],
+            rfdc_actual_current_ua[channel*32 +: 32]
+        };
+        resp_words[base_word+3] <= rfdc_actual_nco_word[channel*64 +: 64];
+        resp_words[base_word+4] <= {
+            rfdc_actual_vop_code[channel*32 +: 32],
+            rfdc_actual_phase_word[channel*32 +: 32]
+        };
       end
+      start_response(6'd47);
     end
   endtask
 
-  task start_write;
-    input [31:0] addr;
-    input [31:0] data;
+  task load_network_response;
+    input [31:0] opcode;
+    input [31:0] resp_seq;
+    reg [31:0] state_flags;
     begin
-      mmio_addr <= addr[17:0];
-      mmio_wdata <= data;
-      m_axil_awaddr <= addr[17:0];
-      m_axil_awvalid <= 1'b1;
-      m_axil_wdata <= data;
-      m_axil_wstrb <= 4'hF;
-      m_axil_wvalid <= 1'b1;
-      m_axil_bready <= 1'b1;
-      aw_done <= 1'b0;
-      w_done <= 1'b0;
-      b_done <= 1'b0;
-      bresp_latched <= 2'b00;
-      dbg_state <= ST_MMIO_WRITE;
-    end
-  endtask
-
-  task start_read;
-    input [31:0] addr;
-    begin
-      mmio_addr <= addr[17:0];
-      m_axil_araddr <= addr[17:0];
-      m_axil_arvalid <= 1'b1;
-      m_axil_rready <= 1'b1;
-      dbg_state <= ST_MMIO_READ;
+      state_flags = network_status_flags;
+      resp_words[0] <= RFRESP2_MAGIC;
+      resp_words[1] <= {opcode, resp_request_status, RF2_VERSION[15:0]};
+      resp_words[2] <= {resp_request_payload_bytes, resp_seq};
+      resp_words[3] <= network_device_uid;
+      resp_words[4] <= {network_bootstrap_ip, network_current_ip};
+      resp_words[5] <= network_current_mac;
+      resp_words[6] <= {{16{1'b0}}, network_link_state, network_current_port, network_result_revision};
+      resp_words[7] <= {state_flags, network_capabilities};
+      resp_words[8] <= network_bootstrap_mac;
+      resp_words[9] <= {32'd0, network_current_subnet};
+      resp_words[10] <= {32'd0, network_current_gateway};
+      resp_words[11] <= {network_status_flags, BUILD_PROFILE_ID};
+      resp_words[12] <= {56'd0, rfdc_config_valid_mask};
+      start_response(6'd13);
     end
   endtask
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      rfctrl2_sync_epoch_pulse <= 1'b0;
-      rfctrl2_epoch <= 64'd0;
-      diag_clear_events_pulse <= 1'b0;
-      diag_clear_counters_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
       rfdc_apply_sequence <= 32'd0;
       rfdc_apply_revision <= 32'd0;
@@ -825,8 +460,6 @@ module pl_riscv_control_v1 #(
       network_apply_gateway <= 32'd0;
       network_apply_port <= 16'd0;
       network_restart_start <= 1'b0;
-      diag_clear_events_pulse <= 1'b0;
-      diag_clear_counters_pulse <= 1'b0;
       tdc_reg_valid <= 1'b0;
       tdc_reg_write <= 1'b0;
       tdc_reg_addr <= 16'd0;
@@ -840,86 +473,38 @@ module pl_riscv_control_v1 #(
       rvresp_tvalid <= 1'b0;
       rvresp_tlast <= 1'b0;
       rvresp_word_count <= 16'd0;
-      m_axil_awaddr <= 18'd0;
-      m_axil_awvalid <= 1'b0;
-      m_axil_wdata <= 32'd0;
-      m_axil_wstrb <= 4'h0;
-      m_axil_wvalid <= 1'b0;
-      m_axil_bready <= 1'b0;
-      m_axil_araddr <= 18'd0;
-      m_axil_arvalid <= 1'b0;
-      m_axil_rready <= 1'b0;
-      dbg_status <= 32'd0;
-      dbg_last_seq <= 32'd0;
-      dbg_last_cmd <= 32'd0;
-      dbg_ping_count <= 32'd0;
-      dbg_play_count <= 32'd0;
-      dbg_trigger_count <= 32'd0;
-      dbg_mmio_write_count <= 32'd0;
-      dbg_error_count <= 32'd0;
-      dbg_error_pending <= 1'b0;
-      dbg_scratch <= 32'd0;
-      dbg_state <= ST_IDLE;
       rx_index <= {RX_COUNT_WIDTH{1'b0}};
       rx_expected_words <= {RX_COUNT_WIDTH{1'b0}};
       rx_drop <= 1'b0;
-      rx_is_v1 <= 1'b0;
-      rx_is_v2 <= 1'b0;
       process_pending <= 1'b0;
       decode_pending <= 1'b0;
       cmd_opcode <= 32'd0;
       cmd_seq <= 32'd0;
       cmd_flags <= 32'd0;
       cmd_payload_bytes <= 32'd0;
-      cmd_base <= 32'd0;
       cmd_version_valid <= 1'b0;
-      cmd_kind <= DEC_UNSUPPORTED;
-      mmio_addr <= 18'd0;
-      mmio_wdata <= 32'd0;
-      mmio_mask <= 32'd0;
-      batch_index <= 32'd0;
-      batch_count <= 32'd0;
-      nco_index <= 32'd0;
-      nco_apply_mask <= 32'd0;
-      nco_zone_accum <= 32'd0;
-      aw_done <= 1'b0;
-      w_done <= 1'b0;
-      b_done <= 1'b0;
-      bresp_latched <= 2'b00;
-      resp_index <= 4'd0;
-      resp_count <= 4'd0;
+      resp_index <= 6'd0;
+      resp_count <= 6'd0;
       rfdc_response_pending <= 1'b0;
       rfdc_response_sequence <= 32'd0;
-      rfdc_response_opcode <= RF2_OP_RFDC_APPLY;
       rfdc_payload_fields_invalid_latched <= 1'b0;
       network_response_pending <= 1'b0;
       network_response_sequence <= 32'd0;
       network_response_opcode <= RF2_OP_NETWORK_APPLY;
       resp_request_valid <= 1'b0;
       resp_request_kind <= RESP_REQ_NONE;
-      resp_request_magic <= 64'd0;
-      resp_request_version <= 16'd0;
       resp_request_opcode <= 32'd0;
       resp_request_status <= 16'd0;
       resp_request_sequence <= 32'd0;
       resp_request_payload_bytes <= 32'd0;
       resp_request_payload0 <= 64'd0;
-      resp_request_payload1 <= 64'd0;
       resp_request_valid2 <= 1'b0;
       resp_request_kind2 <= RESP_REQ_NONE;
-      resp_request_magic2 <= 64'd0;
-      resp_request_version2 <= 16'd0;
       resp_request_opcode2 <= 32'd0;
       resp_request_status2 <= 16'd0;
       resp_request_sequence2 <= 32'd0;
       resp_request_payload_bytes2 <= 32'd0;
       resp_request_payload02 <= 64'd0;
-      resp_request_payload12 <= 64'd0;
-      diag_generation <= 64'd0;
-      diag_snapshot_wait <= 1'b0;
-      diag_snapshot_pending_seq <= 32'd0;
-      diag_snapshot_ack_seen <= 1'b0;
-      diag_snapshot_request_toggle <= 1'b0;
       for (i = 0; i < MAX_PAYLOAD_WORDS; i = i + 1) begin
         payload_words[i] <= 32'd0;
       end
@@ -927,15 +512,9 @@ module pl_riscv_control_v1 #(
         resp_words[i] <= 64'd0;
       end
     end else begin
-      rfctrl2_sync_epoch_pulse <= 1'b0;
       rfdc_apply_start <= 1'b0;
       network_apply_start <= 1'b0;
       network_restart_start <= 1'b0;
-
-      if (dbg_error_pending) begin
-        dbg_error_count <= dbg_error_count + 32'd1;
-        dbg_error_pending <= 1'b0;
-      end
 
       if (resp_request_valid && !rvresp_tvalid) begin
         case (resp_request_kind)
@@ -951,21 +530,8 @@ module pl_riscv_control_v1 #(
                 resp_request_payload0
             );
           end
-          RESP_REQ_2: begin
-            load_resp2(
-                resp_request_opcode,
-                resp_request_status,
-                resp_request_sequence,
-                resp_request_payload_bytes,
-                resp_request_payload0,
-                resp_request_payload1
-            );
-          end
           RESP_REQ_STATUS: begin
             load_rf2_status(resp_request_opcode, resp_request_sequence);
-          end
-          RESP_REQ_DIAG: begin
-            load_rf2_diag(resp_request_opcode, resp_request_sequence);
           end
           RESP_REQ_RFDC: begin
             load_rfdc_response(resp_request_opcode, resp_request_sequence);
@@ -974,19 +540,15 @@ module pl_riscv_control_v1 #(
             load_network_response(resp_request_opcode, resp_request_sequence);
           end
           default: begin
-            dbg_error_pending <= 1'b1;
           end
         endcase
         if (resp_request_valid2) begin
           resp_request_kind <= resp_request_kind2;
-          resp_request_magic <= resp_request_magic2;
-          resp_request_version <= resp_request_version2;
           resp_request_opcode <= resp_request_opcode2;
           resp_request_status <= resp_request_status2;
           resp_request_sequence <= resp_request_sequence2;
           resp_request_payload_bytes <= resp_request_payload_bytes2;
           resp_request_payload0 <= resp_request_payload02;
-          resp_request_payload1 <= resp_request_payload12;
           resp_request_valid2 <= 1'b0;
           resp_request_valid <= 1'b1;
         end else begin
@@ -997,7 +559,7 @@ module pl_riscv_control_v1 #(
 
       if (rfdc_response_pending && rfdc_apply_done) begin
         rfdc_response_pending <= 1'b0;
-        queue_rfdc_response(rfdc_response_opcode, rfdc_response_sequence);
+        queue_rfdc_response(RF2_OP_RFDC_APPLY, rfdc_response_sequence);
       end
 
       if (network_response_pending && network_done) begin
@@ -1010,7 +572,7 @@ module pl_riscv_control_v1 #(
           tdc_reg_valid <= 1'b0;
           tdc_response_pending <= 1'b1;
           tdc_response_data <= tdc_reg_ready ? tdc_reg_rdata : 32'd0;
-          tdc_response_error <= tdc_reg_ready ? tdc_reg_error : 16'h0009;
+          tdc_response_error <= tdc_reg_ready ? tdc_reg_error : RF2_STATUS_AXI_TIMEOUT;
         end else begin
           tdc_reg_timeout <= tdc_reg_timeout + 32'd1;
         end
@@ -1031,34 +593,12 @@ module pl_riscv_control_v1 #(
         end
       end
 
-      if (m_axil_awvalid && m_axil_awready) begin
-        m_axil_awvalid <= 1'b0;
-        aw_done <= 1'b1;
-      end
-      if (m_axil_wvalid && m_axil_wready) begin
-        m_axil_wvalid <= 1'b0;
-        w_done <= 1'b1;
-      end
-      if (m_axil_bvalid && m_axil_bready) begin
-        b_done <= 1'b1;
-        bresp_latched <= m_axil_bresp;
-      end
-      if (m_axil_arvalid && m_axil_arready) begin
-        m_axil_arvalid <= 1'b0;
-      end
-
       if (rvctrl_tvalid && !rfdc_response_pending) begin
-        dbg_state <= ST_RECEIVE;
         if (rvctrl_tfirst) begin
           rx_index <= {RX_COUNT_WIDTH{1'b0}};
           rx_expected_words <= rx_word_count_narrow;
-          rx_is_v1 <= (rvctrl_protocol == RVCTRL_PROTOCOL_V1);
-          rx_is_v2 <= (rvctrl_protocol == RVCTRL_PROTOCOL_RF2);
           rx_drop <= !first_count_ok;
           rfdc_payload_fields_invalid_latched <= 1'b0;
-          if (!first_count_ok) begin
-            dbg_error_pending <= 1'b1;
-          end
         end
 
         // RFCTRL2 RFDC_APPLY reserves the odd word at the end of every
@@ -1082,85 +622,42 @@ module pl_riscv_control_v1 #(
           rx_index <= active_rx_index + {{(RX_COUNT_WIDTH-2){1'b0}}, 2'd2};
         else
           rx_index <= MAX_PAYLOAD_WORDS_COUNT;
+        // A request whose length does not match its header is dropped whole.
         if (rvctrl_tlast) begin
           process_pending <= active_count_ok && !active_drop &&
                              (active_words_after_beat == active_expected_words);
-          if (active_words_after_beat != active_expected_words)
-            dbg_error_pending <= 1'b1;
         end
       end else if (process_pending) begin
         process_pending <= 1'b0;
         decode_pending <= 1'b1;
-        dbg_state <= ST_PROCESS;
-
-        if (rx_is_v2) begin
-          cmd_flags <= {16'd0, payload_words[0][31:16]};
-          cmd_opcode <= payload_words[1];
-          cmd_seq <= payload_words[2];
-          cmd_payload_bytes <= payload_words[3];
-          cmd_base <= 32'd4;
-          cmd_version_valid <= (payload_words[0][15:0] == RF2_VERSION[15:0]);
-          cmd_kind <= decode_kind(1'b0, 1'b1, payload_words[1]);
-          dbg_last_cmd <= payload_words[1];
-          dbg_last_seq <= payload_words[2];
-        end else if (rx_is_v1) begin
-          cmd_flags <= {16'd0, payload_words[0][31:16]};
-          cmd_opcode <= payload_words[1];
-          cmd_seq <= payload_words[2];
-          cmd_payload_bytes <= payload_words[3];
-          cmd_base <= 32'd4;
-          cmd_version_valid <= (payload_words[0][15:0] == RV1_VERSION[15:0]);
-          cmd_kind <= decode_kind(1'b1, 1'b0, payload_words[1]);
-          dbg_last_cmd <= payload_words[1];
-          dbg_last_seq <= payload_words[2];
-        end else begin
-          cmd_flags <= 32'd0;
-          cmd_opcode <= payload_words[0];
-          cmd_seq <= payload_words[1];
-          cmd_payload_bytes <= (rx_expected_words > 32'd2) ? ((rx_expected_words - 32'd2) << 2) : 32'd0;
-          cmd_base <= 32'd2;
-          cmd_version_valid <= 1'b1;
-          cmd_kind <= decode_kind(1'b0, 1'b0, payload_words[0]);
-          dbg_last_cmd <= payload_words[0];
-          dbg_last_seq <= payload_words[1];
-        end
-      end else if (diag_snapshot_wait &&
-                   (diag_snapshot_ack_toggle === ~diag_snapshot_ack_seen) &&
-                   !resp_request_valid && !resp_request_valid2 && !rvresp_tvalid) begin
-        // The DAC domain has latched the complete held snapshot and returned
-        // an acknowledgement.  Queue the response only after that handshake
-        // so every multi-bit diagnostic field is internally coherent.
-        diag_snapshot_ack_seen <= diag_snapshot_ack_toggle;
-        diag_snapshot_wait <= 1'b0;
-        diag_generation <= diag_generation + 64'd1;
-        queue_rf2_diag(RF2_OP_DIAG_SNAPSHOT, diag_snapshot_pending_seq);
+        cmd_flags <= {16'd0, payload_words[0][31:16]};
+        cmd_opcode <= payload_words[1];
+        cmd_seq <= payload_words[2];
+        cmd_payload_bytes <= payload_words[3];
+        cmd_version_valid <= (payload_words[0][15:0] == RF2_VERSION[15:0]);
       end else if (tdc_response_pending && !resp_request_valid &&
                    !resp_request_valid2 &&
                    !(rfdc_response_pending && rfdc_apply_done) &&
                    !(network_response_pending && network_done)) begin
         // Queue completion separately so a following packet cannot change its sequence.
-        request_response(RESP_REQ_1, RFRESP2_MAGIC, RF2_VERSION[15:0],
-                         RF2_OP_TDC_REG, tdc_response_error, tdc_response_sequence,
-                         32'd8, {tdc_response_data, 16'd0, tdc_reg_addr}, 64'd0);
+        request_response(RESP_REQ_1, RF2_OP_TDC_REG, tdc_response_error, tdc_response_sequence,
+                         32'd8, {tdc_response_data, 16'd0, tdc_reg_addr});
         tdc_response_pending <= 1'b0;
       end else if (decode_pending) begin
         decode_pending <= 1'b0;
-        dbg_state <= ST_PROCESS;
 
-        if ((rx_is_v1 || rx_is_v2) && !cmd_version_valid) begin
-          dbg_status <= 32'hBAD1_0001;
-          dbg_error_pending <= 1'b1;
-          queue_resp0(cmd_opcode, 16'h0001, cmd_seq);
+        if (!cmd_version_valid) begin
+          queue_resp0(cmd_opcode, RF2_STATUS_BAD_VERSION, cmd_seq);
         end else begin
-          case (cmd_kind)
-            DEC_RF2_TDC_REG: begin
+          case (cmd_opcode)
+            RF2_OP_TDC_REG: begin
               if (cmd_payload_bytes != 32'd16 || rx_expected_words != 32'd8 ||
                   cmd_flags != 32'd0 || payload_words[4] > 32'd1 ||
                   payload_words[5][31:16] != 16'd0 ||
                   payload_words[5][1:0] != 2'd0 || payload_words[7] != 32'd0) begin
-                queue_resp0(RF2_OP_TDC_REG, 16'h0003, cmd_seq);
+                queue_resp0(RF2_OP_TDC_REG, RF2_STATUS_BAD_REQUEST, cmd_seq);
               end else if (tdc_reg_valid || tdc_response_pending) begin
-                queue_resp0(RF2_OP_TDC_REG, 16'h0004, cmd_seq);
+                queue_resp0(RF2_OP_TDC_REG, RF2_STATUS_BUSY, cmd_seq);
               end else begin
                 tdc_reg_valid <= 1'b1;
                 tdc_reg_write <= payload_words[4][0];
@@ -1170,50 +667,21 @@ module pl_riscv_control_v1 #(
                 tdc_response_sequence <= cmd_seq;
               end
             end
-            DEC_RF2_DIAG_SNAPSHOT: begin
-              if (cmd_payload_bytes != 32'd0 || rx_expected_words != 32'd4) begin
-                queue_resp0(RF2_OP_DIAG_SNAPSHOT, 16'h0003, cmd_seq);
-              end else if (diag_snapshot_wait || rvresp_tvalid || resp_request_valid || resp_request_valid2) begin
-                queue_resp0(RF2_OP_DIAG_SNAPSHOT, 16'h0004, cmd_seq);
-              end else begin
-                diag_snapshot_pending_seq <= cmd_seq;
-                diag_snapshot_request_toggle <= ~diag_snapshot_request_toggle;
-                diag_snapshot_wait <= 1'b1;
-              end
-            end
-            DEC_RF2_DIAG_CONTROL: begin
-              if ((cmd_payload_bytes != 32'd8) || (rx_expected_words != 32'd6)) begin
-                queue_resp0(RF2_OP_DIAG_CONTROL, 16'h0003, cmd_seq);
-              end else begin
-                // W1C control is converted to one-cycle pulses.  Top-level
-                // logic transports these pulses with a toggle CDC into the
-                // native DAC domain, so a diagnostic clear never samples a
-                // multi-bit bus asynchronously.
-                diag_clear_events_pulse <= (payload_words[4] != 32'd0);
-                diag_clear_counters_pulse <= payload_words[5][0];
-                queue_resp0(RF2_OP_DIAG_CONTROL, 16'h0000, cmd_seq);
-              end
-            end
-            DEC_RF2_HELLO: begin
-              dbg_status <= 32'h2000_0001;
+            RF2_OP_HELLO: begin
               queue_rf2_status(RF2_OP_HELLO, cmd_seq);
             end
-            DEC_RF2_STATUS: begin
-              dbg_status <= 32'h2000_0002;
+            RF2_OP_STATUS: begin
               queue_rf2_status(RF2_OP_STATUS, cmd_seq);
             end
-            DEC_RF2_NETWORK_GET: begin
-              dbg_status <= 32'h2000_000C;
+            RF2_OP_NETWORK_GET: begin
               queue_network_response(RF2_OP_NETWORK_GET, cmd_seq);
             end
-            DEC_RF2_NETWORK_APPLY: begin
+            RF2_OP_NETWORK_APPLY: begin
               if ((cmd_payload_bytes != RF2_NETWORK_APPLY_BYTES) ||
                   (rx_expected_words != 32'd12)) begin
-                dbg_status <= 32'hBAD2_000D;
-                queue_resp0(RF2_OP_NETWORK_APPLY, 16'h0003, cmd_seq);
+                queue_resp0(RF2_OP_NETWORK_APPLY, RF2_STATUS_BAD_REQUEST, cmd_seq);
               end else if (network_busy) begin
-                dbg_status <= 32'hBAD2_100D;
-                queue_resp0(RF2_OP_NETWORK_APPLY, 16'h0004, cmd_seq);
+                queue_resp0(RF2_OP_NETWORK_APPLY, RF2_STATUS_BUSY, cmd_seq);
               end else begin
                 network_apply_revision <= payload_words[4];
                 network_apply_ip <= payload_words[5];
@@ -1225,38 +693,29 @@ module pl_riscv_control_v1 #(
                 network_response_pending <= 1'b1;
                 network_response_sequence <= cmd_seq;
                 network_response_opcode <= RF2_OP_NETWORK_APPLY;
-                dbg_status <= 32'h2000_000D;
               end
             end
-            DEC_RF2_NETWORK_RESTART: begin
+            RF2_OP_NETWORK_RESTART: begin
               if (cmd_payload_bytes != 32'd0 || rx_expected_words != 32'd4) begin
-                dbg_status <= 32'hBAD2_000E;
-                queue_resp0(RF2_OP_NETWORK_RESTART, 16'h0003, cmd_seq);
+                queue_resp0(RF2_OP_NETWORK_RESTART, RF2_STATUS_BAD_REQUEST, cmd_seq);
               end else if (network_busy) begin
-                dbg_status <= 32'hBAD2_100E;
-                queue_resp0(RF2_OP_NETWORK_RESTART, 16'h0004, cmd_seq);
+                queue_resp0(RF2_OP_NETWORK_RESTART, RF2_STATUS_BUSY, cmd_seq);
               end else begin
                 network_restart_start <= 1'b1;
                 network_response_pending <= 1'b1;
                 network_response_sequence <= cmd_seq;
                 network_response_opcode <= RF2_OP_NETWORK_RESTART;
-                dbg_status <= 32'h2000_000E;
               end
             end
-            DEC_RF2_RFDC_APPLY: begin
+            RF2_OP_RFDC_APPLY: begin
               if ((cmd_payload_bytes != RF2_RFDC_REQUEST_BYTES) ||
                   (rx_expected_words != 32'd54) ||
                   rfdc_payload_fields_invalid_latched) begin
-                dbg_status <= 32'hBAD2_0003;
-                dbg_error_pending <= 1'b1;
-                queue_resp0(RF2_OP_RFDC_APPLY, 16'h0003, cmd_seq);
-              end else if (!rfdc_ready || !dac_mts_ready || dac_mts_failed ||
-                           sync_align_busy || sync_align_failed) begin
-                dbg_status <= 32'hBAD2_2003;
-                queue_resp0(RF2_OP_RFDC_APPLY, 16'h0005, cmd_seq);
+                queue_resp0(RF2_OP_RFDC_APPLY, RF2_STATUS_BAD_REQUEST, cmd_seq);
+              end else if (!rfdc_ready || !dac_mts_ready || dac_mts_failed) begin
+                queue_resp0(RF2_OP_RFDC_APPLY, RF2_STATUS_RFDC_NOT_READY, cmd_seq);
               end else if (rfdc_apply_busy) begin
-                dbg_status <= 32'hBAD2_0004;
-                queue_resp0(RF2_OP_RFDC_APPLY, 16'h0004, cmd_seq);
+                queue_resp0(RF2_OP_RFDC_APPLY, RF2_STATUS_BUSY, cmd_seq);
               end else begin
                 rfdc_apply_sequence <= cmd_seq;
                 rfdc_apply_revision <= payload_words[4];
@@ -1272,166 +731,16 @@ module pl_riscv_control_v1 #(
                 rfdc_apply_start <= 1'b1;
                 rfdc_response_pending <= 1'b1;
                 rfdc_response_sequence <= cmd_seq;
-                rfdc_response_opcode <= RF2_OP_RFDC_APPLY;
-                dbg_status <= 32'h2000_0003;
               end
             end
-            DEC_RF2_RFDC_GET: begin
+            RF2_OP_RFDC_GET_CONFIG: begin
               queue_rfdc_response(RF2_OP_RFDC_GET_CONFIG, cmd_seq);
             end
-            DEC_RF2_SYNC_EPOCH: begin
-              if ((cmd_payload_bytes != 32'd8) || !sync_role_master || sync_bypass) begin
-                dbg_status <= 32'hBAD2_0007;
-                queue_resp0(RF2_OP_SYNC_EPOCH, 16'h0006, cmd_seq);
-              end else if (sync_align_busy && !sync_align_failed) begin
-                dbg_status <= 32'hBAD2_1007;
-                queue_resp0(RF2_OP_SYNC_EPOCH, 16'h0004, cmd_seq);
-              end else begin
-                rfctrl2_epoch <= {payload_words[5], payload_words[4]};
-                rfctrl2_sync_epoch_pulse <= 1'b1;
-                dbg_status <= 32'h2000_0007;
-                queue_resp1(RF2_OP_SYNC_EPOCH, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
-              end
-            end
-            DEC_RV_PING: begin
-              dbg_status <= rx_is_v1 ? 32'h1000_0001 : 32'h0000_0001;
-              dbg_ping_count <= dbg_ping_count + 32'd1;
-              if (rx_is_v1) queue_resp0(RV1_OP_PING, 16'h0000, cmd_seq);
-            end
-            DEC_RV_WRITE_MMIO: begin
-              if (ENABLE_UNSAFE_RFDC_MMIO) begin
-                start_write(payload_words[rx_is_v1 ? 4 : 2], payload_words[rx_is_v1 ? 5 : 3]);
-              end else begin
-                dbg_status <= rx_is_v1 ? 32'hBAD1_0002 : 32'hBAD0_0001;
-                dbg_error_pending <= 1'b1;
-                if (rx_is_v1) queue_resp0(RV1_OP_MMIO_WRITE32, 16'h0002, cmd_seq);
-              end
-            end
-            DEC_RV1_MMIO_READ32: begin
-              start_read(payload_words[4]);
-            end
-            DEC_RV1_MMIO_RMW32: begin
-              if (ENABLE_UNSAFE_RFDC_MMIO) begin
-                mmio_mask <= payload_words[5];
-                mmio_wdata <= payload_words[6];
-                start_read(payload_words[4]);
-              end else begin
-                dbg_status <= 32'hBAD1_0002;
-                dbg_error_pending <= 1'b1;
-                queue_resp0(RV1_OP_MMIO_RMW32, 16'h0002, cmd_seq);
-              end
-            end
-            DEC_RV1_MMIO_BATCH: begin
-              if (ENABLE_UNSAFE_RFDC_MMIO) begin
-                batch_count <= payload_words[4];
-                batch_index <= 32'd0;
-                dbg_state <= ST_BATCH_LOAD;
-              end else begin
-                dbg_status <= 32'hBAD1_0002;
-                dbg_error_pending <= 1'b1;
-                queue_resp0(RV1_OP_MMIO_BATCH, 16'h0002, cmd_seq);
-              end
-            end
-            DEC_RV1_RFDC_CH_ENABLE: begin
-              if (ENABLE_UNSAFE_RFDC_MMIO) begin
-                dbg_scratch <= payload_words[4];
-                dbg_status <= 32'h1000_0008;
-                queue_resp1(RV1_OP_RFDC_CH_ENABLE, 16'h0000, cmd_seq, 32'd8, {payload_words[5], payload_words[4]});
-              end else begin
-                dbg_status <= 32'hBAD1_0002;
-                dbg_error_pending <= 1'b1;
-                queue_resp0(RV1_OP_RFDC_CH_ENABLE, 16'h0002, cmd_seq);
-              end
-            end
-            DEC_RV1_RFDC_SET_NCO: begin
-              if (ENABLE_UNSAFE_RFDC_MMIO) begin
-                nco_apply_mask <= payload_words[4];
-                nco_index <= 32'd0;
-                nco_zone_accum <= 32'd0;
-                dbg_state <= ST_NCO_SCAN;
-              end else begin
-                dbg_status <= 32'hBAD1_0002;
-                dbg_error_pending <= 1'b1;
-                queue_resp0(RV1_OP_RFDC_SET_NCO, 16'h0002, cmd_seq);
-              end
-            end
-            DEC_RV1_STATUS_READ: begin
-              dbg_status <= 32'h1000_000A;
-              queue_resp2(
-                  RV1_OP_STATUS_READ,
-                  16'h0000,
-                  cmd_seq,
-                  32'd16,
-                  {dbg_last_cmd, 32'h1000_000A},
-                  {dbg_error_count, dbg_scratch}
-              );
-            end
             default: begin
-              dbg_status <= rx_is_v1 ? 32'hBAD1_0002 : (rx_is_v2 ? 32'hBAD2_0002 : 32'hBAD0_0001);
-              dbg_error_pending <= 1'b1;
-              if (rx_is_v1 || rx_is_v2) queue_resp0(cmd_opcode, 16'h0002, cmd_seq);
+              queue_resp0(cmd_opcode, RF2_STATUS_UNSUPPORTED, cmd_seq);
             end
           endcase
         end
-      end else if (dbg_state == ST_MMIO_WRITE) begin
-        if (write_done) begin
-          m_axil_bready <= 1'b0;
-          dbg_scratch <= mmio_wdata;
-          dbg_mmio_write_count <= dbg_mmio_write_count + 32'd1;
-          dbg_status <= (bresp_latched == 2'b00) ? 32'h1000_0003 : 32'hBAD1_0010;
-          if (bresp_latched != 2'b00) dbg_error_pending <= 1'b1;
-          if (rx_is_v1 && (cmd_opcode != RV1_OP_MMIO_BATCH)) begin
-            queue_resp1(cmd_opcode, {14'd0, bresp_latched}, cmd_seq, 32'd8, {mmio_wdata, 14'd0, mmio_addr});
-          end
-          aw_done <= 1'b0;
-          w_done <= 1'b0;
-          b_done <= 1'b0;
-          dbg_state <= (cmd_opcode == RV1_OP_MMIO_BATCH && batch_index < batch_count) ? ST_BATCH_LOAD : ST_IDLE;
-        end
-      end else if (dbg_state == ST_MMIO_READ) begin
-        if (m_axil_rvalid) begin
-          m_axil_rready <= 1'b0;
-          dbg_scratch <= m_axil_rdata;
-          if (cmd_opcode == RV1_OP_MMIO_RMW32) begin
-            start_write({14'd0, mmio_addr}, (m_axil_rdata & ~mmio_mask) | (mmio_wdata & mmio_mask));
-            dbg_state <= ST_MMIO_RMW_W;
-          end else begin
-            dbg_status <= (m_axil_rresp == 2'b00) ? 32'h1000_0002 : 32'hBAD1_0011;
-            if (m_axil_rresp != 2'b00) dbg_error_pending <= 1'b1;
-            queue_resp1(RV1_OP_MMIO_READ32, {14'd0, m_axil_rresp}, cmd_seq, 32'd8, {m_axil_rdata, 14'd0, mmio_addr});
-            dbg_state <= ST_IDLE;
-          end
-        end
-      end else if (dbg_state == ST_MMIO_RMW_W) begin
-        dbg_state <= ST_MMIO_WRITE;
-      end else if (dbg_state == ST_BATCH_LOAD) begin
-        if (batch_index >= batch_count) begin
-          dbg_status <= 32'h1000_0005;
-          queue_resp1(RV1_OP_MMIO_BATCH, 16'h0000, cmd_seq, 32'd8, {batch_count, 32'd0});
-          dbg_state <= ST_IDLE;
-        end else if ((32'd5 + (batch_index << 1) + 32'd1) < MAX_PAYLOAD_WORDS_U32) begin
-          start_write(payload_words[32'd5 + (batch_index << 1)],
-                      payload_words[32'd6 + (batch_index << 1)]);
-          batch_index <= batch_index + 32'd1;
-        end else begin
-          dbg_status <= 32'hBAD1_0005;
-          dbg_error_pending <= 1'b1;
-          dbg_state <= ST_IDLE;
-        end
-      end else if (dbg_state == ST_NCO_SCAN) begin
-        // Legacy diagnostics only. Production builds disable this path and use
-        // structured RFCTRL2 RFDC_APPLY with hardware readback instead.
-        if (nco_index >= 32'd8) begin
-          dbg_scratch <= {nco_apply_mask[7:0], nco_zone_accum[23:0]};
-          dbg_status <= 32'h1000_0009;
-          queue_resp1(RV1_OP_RFDC_SET_NCO, 16'h0000, cmd_seq, 32'd8, {nco_apply_mask, nco_zone_accum});
-          dbg_state <= ST_IDLE;
-        end else begin
-          nco_zone_accum <= nco_zone_accum ^ payload_words[32'd7 + (nco_index * 32'd4)];
-          nco_index <= nco_index + 32'd1;
-        end
-      end else begin
-        dbg_state <= ST_IDLE;
       end
     end
   end

@@ -108,7 +108,7 @@ device.commit()
 | `set_xy_target_frequency(channel, target_rf_ghz, dac_fs_ghz=6.4)` | 通道 1-8、目标模拟频率和 DAC 采样率。 | 返回 NCO/Nyquist 规划字典；目标频率必须在 `[0, dac_fs_ghz]`。 |
 | `set_xy_nco_frequency(channel, frequency_ghz)` | 通道 1-8，RFDC NCO，范围约 `-3.2..3.2 GHz`。 | 返回状态码。 |
 | `set_qc_on_off(channel_type, channel, on_off="on")` | 输出类型、通道和 `on`/`off`。 | 返回状态码。 |
-| `set_qr_on_off(gen_type, channel, on_off="on")` | 读取/DAQ 路径控制；当前硬件不支持 ADC 输入。 | 返回状态码或抛出 `UnsupportedParameterError`。 |
+| `set_qr_on_off(gen_type, channel, on_off="on")` | 读取/DAQ 路径控制；当前硬件不支持 ADC 输入。 | 返回状态码或抛出 `UnsupportedCapabilityError`。 |
 | `apply_rfdc_config(nco_ghz=None, nyquist_zone=None, phase_deg=None, revision=None, channel_mask=0xff)` | Mapping（键为通道号）或 8 项 Sequence；可一次提交多通道。 | 返回状态码。 |
 | `commit()` | 无参数。批量提交暂存的 RFDC 配置。 | 返回状态码。播放器必须处于 `idle`；忙时会抛出/处理 `DeviceBusyError`。 |
 
@@ -119,9 +119,8 @@ device.commit()
 ### 底层协议方法
 
 需要精确控制协议时可使用 `rfctrl2_hello()`、`rfctrl2_status()`、
-`rfctrl2_rfdc_apply(...)` 和 `rfctrl2_rfdc_get_config()`。这些方法只覆盖身份、状态、
-RFDC 配置和诊断；波形播放必须使用下面的 WAVECTR0 方法，不再提供旧 ARM、TRIGGER、
-ABORT_MUTE 或 instruction-stream 入口。
+`rfctrl2_rfdc_apply(...)` 和 `rfctrl2_rfdc_get_config()`。这些方法只覆盖身份、状态和
+RFDC 配置；波形播放必须使用下面的 WAVECTR0 方法。
 
 ## 波形生成与上传
 
@@ -139,7 +138,7 @@ ABORT_MUTE 或 instruction-stream 入口。
 ```python
 from dr47 import (
     make_iq_sine_interleaved, make_iq_gaussian_sine_interleaved,
-    place_interleaved_iq_in_record, make_burst_record,
+    place_interleaved_iq_in_record,
     ezq_wave_to_interleaved_int16,
 )
 
@@ -147,8 +146,8 @@ wave = make_iq_gaussian_sine_interleaved(
     frequency_hz=50e6, phase_rad=0.0, amplitude=0.4,
     sample_rate_hz=400e6, duration_s=2e-6, fwhm_s=0.6e-6,
 )
-record, info = make_burst_record(
-    wave, first_delay_ns=0, interval_ns=1000, sample_rate_hz=400e6,
+record = place_interleaved_iq_in_record(
+    wave, delay_s=1e-6, record_duration_s=4e-6, sample_rate_hz=400e6,
 )
 ```
 
@@ -161,7 +160,6 @@ record, info = make_burst_record(
 - `make_iq_sine_interleaved(frequency_hz, phase_rad, amplitude, sample_rate_hz, *, sample_count, q_sign=-1)`：生成固定样本数的正弦 IQ。
 - `make_iq_gaussian_sine_interleaved(..., duration_s, *, sample_count=None, fwhm_s=None, q_sign=-1, hls_xy_drag=False, drag_alpha=0.5, drag_delta_hz=-200e6)`：生成高斯包络 IQ，可选 DRAG 修正。
 - `place_interleaved_iq_in_record(active_wave, *, delay_s, record_duration_s, sample_rate_hz)`：将有效波形放入带前置零和尾部零的记录。
-- `make_burst_record(active_wave, *, first_delay_ns, interval_ns, sample_rate_hz=400e6)`：生成带零填充间隔的波形记录和描述字典；它不创建板端播放指令。
 - `ezq_wave_to_interleaved_int16(wave, wave_format="packed_iq", *, copy=True)`：完成输入格式转换；`copy=False` 时已是线上顺序的数据直接返回视图。
 
 ### 上传和播放配置
@@ -243,7 +241,7 @@ epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的�
 | `upload_waveforms()`，8 通道 `int16` 数据，整片 DDR4（8191 MiB） | 0.75 s，91.6 Gb/s（约 11.5 GB/s），无丢包、无补发 |
 | 线路占用 | 100 Gb/s（有效载荷占每帧 1112 bytes 线路开销中的 1024 bytes） |
 | 发送线程数（8 通道数组边取数边发） | 1 线程约 35 Gb/s，2 线程约 67 Gb/s，3 线程 78–88 Gb/s，4 线程及以上跑满（驱动默认 4 线程） |
-| 发送线程数（已打包好的图像） | 1 线程约 47 Gb/s，2 线程及以上跑满 |
+| 发送线程数（已打包好的图像，持续 20 s） | 1 线程约 49 Gb/s，2 线程约 84 Gb/s，3 线程及以上跑满（91.8 Gb/s） |
 | 数据正确性 | 64 MiB 全量、8 GiB 抽样 3398 处经 JTAG 从 DDR4 读回逐字节一致；人为丢包后补发的图像同样一致 |
 | 播放 | 8191 MiB 上传后完整播放 33 550 336 拍，无 underflow；示波器上与 `DATA` 方式上传的同一记录输出一致 |
 
@@ -260,6 +258,43 @@ epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的�
 - 接口 MTU 为 9000 时驱动自动改用 8192 bytes 的数据报；这一档只做过仿真，未上板验证。
 - 批量会话期间 `DATA` 命令被拒绝；`COMMIT` 在图像不完整时返回 `INCOMPLETE`。
 
+### 100G 压测
+
+`software/dr47/examples/waveform_100g_stress_example.py` 按发送线程数分档，在同一个批量会话里
+把一幅图像连续发满设定的时间，不补发、不 `COMMIT`，每档报告带宽、丢包率和丢包环节：
+
+| 输出项 | 含义 |
+|---|---|
+| `goodput` / `wire` | 只算波形数据的速率 / 含帧头、FCS、前导码和帧间隔的线路速率（上限 100 Gb/s） |
+| `sent`、`on_wire` | 主机交给内核的数据报数、网卡实际发出的帧数 |
+| `tx_queues` | 这一档里承担过流量的网卡发送队列数 |
+| `board_rx` | 板端分类器看到的批量帧数；等于 `sent` 说明链路没有丢帧 |
+| `bad_fcs`、`fifo_full`、`rejected` | CMAC 判坏的帧、板端帧 FIFO 满而丢弃的帧、DDR 写入器拒收的帧 |
+| `stored`、`loss` | 完整写入 DDR4 的帧数；`loss = (sent - stored) / sent` |
+
+判据是脚本顶部的 `MAX_LINK_LOSS_RATE`（链路丢帧，默认 0）和 `MAX_LOSS_RATE`（总丢包，默认 1e-3）。
+
+板上实测（MTU 1500，每个数据报 1024 bytes 有效载荷，图像 1024 MiB，每档 20 s；1、2、4 线程连续跑三轮，3 线程一轮）：
+
+| 发送线程 | goodput | 线路速率 | 丢包率（各轮） | 丢包环节 |
+|---|---|---|---|---|
+| 1 | 49.1–49.3 Gb/s | 53.3–53.5 Gb/s | 0 / 0 / 0 | 无 |
+| 2 | 83.6–85.3 Gb/s | 90.8–92.7 Gb/s | 8.9e-6 / 0 / 1.1e-5 | 全部是 `fifo_full` |
+| 3 | 91.8 Gb/s | 99.7 Gb/s | 1.8e-5 | 全部是 `fifo_full` |
+| 4 | 91.8–91.9 Gb/s | 99.7 Gb/s | 2.6e-6 / 6.0e-6 / 5.8e-6 | 全部是 `fifo_full` |
+
+- 链路本身没有丢帧：十档合计 1.88×10⁹ 帧，每一档 `board_rx` 都等于 `sent`，`bad_fcs` 为 0
+  （按零差错估计，帧丢失率的 95% 置信上限约 2×10⁻⁹）。
+- 接近线速时的丢包全部发生在板端帧 FIFO，起因在主机：网卡按 CPU 分发送队列（XPS），内核
+  不时为 socket 重选队列，20 s 内 2 线程用过 14–19 个队列、4 线程用过 33–35 个。切换的
+  瞬间两个队列的帧交错到达，板卡每写一帧都要换 DDR4 行，写入暂时跟不上，4096 字的帧 FIFO
+  溢出，一档里丢几百到四千帧。单线程同样会换队列（5–9 个），但 53 Gb/s 下写入有余量，不丢。
+- 正式上传不受影响：缺帧的 1 MiB 分块由驱动补发，`upload_waveforms()` 的结果里
+  `resent_chunks` 列出补发过的分块。
+- 要在压测里去掉这部分丢包，需要用 root 权限把网卡收敛到单个发送队列（例如
+  `ethtool -L <网卡> combined 1`）。测试主机没有 root 权限，这一条没有实测。
+
+
 ## 外部 Trigger
 
 外部窄脉冲由板端异步置位 latch 捕获，再经过约束的同步路径进入 DAC 域。Trigger
@@ -269,23 +304,15 @@ epoch 并只重发这一块，直到全部完整才 `COMMIT`。仍在路上的�
 
 单板播放不依赖 HMC 多板同步、软件回包或旧 GPIO 门控路径。
 
-## 诊断与错误处理
+## 错误处理
 
-```python
-snapshot = device.read_diagnostics()
-print(snapshot.trigger_to_launch_last, snapshot.launch_to_first_valid_last)
-device.clear_diagnostics(events=0xffffffff, counters=True)
-```
-
-`DiagnosticsSnapshot` 包含触发输入/接受/拒绝计数、capture/launch/playback 时间戳、
-replay 状态、每通道 FIFO 水位、underflow/mute/abort、RFDC 状态和失败阶段、DMA
-chunk/outstanding beat 以及 refill 起止时间。诊断寄存器在硬件侧先锁存，再通过快照
-代次读取，适合定位延迟和状态竞态。
+播放和 Trigger 的运行状态都在 `waveform_status()` 的返回值里：当前拍、循环位置、各通道
+FIFO 水位、`underflow_count`、`error_count` 以及 Trigger 的 seen/dropped/fire 计数。
 
 常见异常：`ConnectionError`（网络不可达）、`TransportTimeout`（响应超时）、
 `ProtocolVersionError`（协议/身份不匹配）、`DeviceBusyError`（硬件忙）、
 `DeviceNotReadyError`（未准备）、`ParameterRangeError`（参数越界）、
-`UnsupportedCapabilityError`/`UnsupportedParameterError`（当前板卡不支持）和
+`UnsupportedCapabilityError`（当前板卡不支持）和
 `DeviceStatusError`（板端返回非零状态）。异常对象带有操作名和板端状态码。
 
 ## 版本与兼容性

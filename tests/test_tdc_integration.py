@@ -24,9 +24,6 @@ class TdcIntegrationTests(unittest.TestCase):
     def test_timestamp_scheduling_and_tail(self):
         self.simulate("tdc_compensating_trigger", [], "PASS: full-phase timestamp scheduler")
 
-    def test_trigger_admission_and_sources(self):
-        self.simulate("tdc_trigger_request_mux", [], "PASS: slave SYNC gate")
-
     def test_fifo_read_reset_release(self):
         self.simulate("tdc_async_fifo", [], "PASS: FIFO read admission releases on rd_clk")
 

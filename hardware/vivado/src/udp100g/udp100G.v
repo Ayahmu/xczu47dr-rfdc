@@ -50,16 +50,11 @@ module udp_100G
     input  wire         network_clear_arp_cache,
     input  wire         network_restart_pulse,
 
-    input  wire         fifo64_wr,
-    input  wire[63:0]   fifo64_din,
-    output wire         fifo64_af,
-
     input  wire         resp64_tvalid,
     input  wire[63:0]   resp64_tdata,
     input  wire         resp64_tlast,
     input  wire[15:0]   resp64_word_count,
     output wire         resp64_tready,
-    output wire[7:0]    control_tx_debug,
 
     output wire         rcv_vld,
     output wire[63:0]   rcv_dat,
@@ -72,21 +67,17 @@ module udp_100G
     output wire         m_bulk_axis_tlast,
     output wire [31:0]  bulk_rx_frames,
     output wire [31:0]  bulk_rx_dropped_full,
-    output wire [31:0]  bulk_rx_dropped_bad,
-
-    input   wire    [23:0]       gap_num_vio       ,
-    input   wire                 loop_en
+    output wire [31:0]  bulk_rx_dropped_bad
 );
 
     assign qsfp_lpmode = 1'b0;
     assign qsfp_resetn = 1'b1;
 
+    wire            clk_axis        ;
     // The CMAC TX user clock (clk_axis) is the natural code-density phase
     // source for the TDC calibration path; it is independent of the DDR
     // and DAC clocks.
     assign calibration_clk_out = clk_axis;
-
-    wire            clk_axis        ;
 
     wire            user_rx_reset_0 ;
     wire            user_tx_reset_0 ;
@@ -178,8 +169,6 @@ module udp_100G
         // Ethernet adapter
         //  . Clock and Reset
         .clk         (clk_axis),
-        .rst         (rst),
-
         .user_rx_reset_0 (user_rx_reset_0),
         .user_tx_reset_0 (user_tx_reset_0),
         //-------------------------------------------------------------------------
@@ -222,23 +211,14 @@ module udp_100G
         .network_local_ip(network_local_ip),
         .network_gateway_ip(network_gateway_ip),
         .network_subnet_mask(network_subnet_mask),
-        .network_udp_port(network_udp_port),
         .network_clear_arp_cache(network_clear_arp_cache),
         .network_restart_pulse(network_restart_pulse),
-
-        .loop_en   (loop_en   ),
-        .gap_num_vio(gap_num_vio),
-
-        .fifo64_wr (fifo64_wr ),
-        .fifo64_din(fifo64_din),
-        .fifo64_af (fifo64_af ),
 
         .resp64_tvalid(resp64_tvalid),
         .resp64_tdata(resp64_tdata),
         .resp64_tlast(resp64_tlast),
         .resp64_word_count(resp64_word_count),
         .resp64_tready(resp64_tready),
-        .control_tx_debug(control_tx_debug),
 
         .rcv_vld   (rcv_vld),
         .rcv_dat   (rcv_dat),

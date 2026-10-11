@@ -30,6 +30,7 @@ JTAG_CABLE_SERIAL=<序列号> make program
 # 测试脚本都在 software/dr47/examples/，清单见 software/dr47/README.md
 python software/dr47/examples/waveform_software_play_example.py          # 发波
 python software/dr47/examples/waveform_bulk_upload_speed_example.py     # 板上测速
+python software/dr47/examples/waveform_100g_stress_example.py           # 100G 压测
 
 # 运行回归或生成对外 SDK
 make test

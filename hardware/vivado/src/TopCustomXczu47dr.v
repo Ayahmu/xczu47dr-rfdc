@@ -1,12 +1,4 @@
 module TopCustomXczu47dr #(
-    parameter integer IS_MASTER = 1,
-    // Bench-measurement variant: XS20/TRIG_3 mirrors the XS18 Trigger output so
-    // a single board can loop XS18->XS19 and still give the scope a Trigger
-    // time reference.  No SYNC input in that build; bypass mode only.
-    parameter integer XS20_TRIG_OUT = 0,
-    // 1 = emit the XS18/XS20 pulse from dac_axis_clk (same domain as the RF
-    // launch) so a single-board loopback measures ~0 jitter.
-    parameter integer TRIG_EMIT_DAC = 0,
     // External XS17 reference frequency in MHz (250 or 10).
     parameter integer REFERENCE_MHZ = 250
 ) (
@@ -18,18 +10,13 @@ module TopCustomXczu47dr #(
     output H7044_SDATA_0,
 
     output RST_88E1111,
+    // XS18: first-sample marker output.  XS19: external playback Trigger input.
     output TRIG_1,
     input  TRIG_2,
-    inout  TRIG_3,
 
-    // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
-    input  PL_CLK_P_0,
-    input  PL_CLK_N_0,
+    // PL_SYSREF from HMC7044 (differential LVDS)
     input  PL_SYSREF_P_0,
     input  PL_SYSREF_N_0,
-
-    input  EXT_TRIGGER_P,
-    input  EXT_TRIGGER_N,
 
     // 100G QSFP28 UDP link (CMAC CAUI-4, RS-FEC).
     input  qsfp_refclk_p,
@@ -85,16 +72,10 @@ module TopCustomXczu47dr #(
 
 
   Top #(
-      .IS_MASTER(IS_MASTER),
-      .XS20_TRIG_OUT(XS20_TRIG_OUT),
-      .TRIG_EMIT_DAC(TRIG_EMIT_DAC),
       .REFERENCE_MHZ(REFERENCE_MHZ)
   ) top_i (
       .TRIG_1(TRIG_1),
       .TRIG_2(TRIG_2),
-      .TRIG_3(TRIG_3),
-      // XS19 is the only external playback-trigger input.
-      .dac_trigger_start(1'b0),
 
       // HMC7044 control ports
       .RESET_H7044_H_0(RESET_H7044_H_0),
@@ -103,14 +84,9 @@ module TopCustomXczu47dr #(
       .H7044_SCLK_0(H7044_SCLK_0),
       .H7044_SDATA_0(H7044_SDATA_0),
       
-      // PL_CLK and PL_SYSREF
-      .PL_CLK_P_0(PL_CLK_P_0),
-      .PL_CLK_N_0(PL_CLK_N_0),
+      // PL_SYSREF
       .PL_SYSREF_P_0(PL_SYSREF_P_0),
       .PL_SYSREF_N_0(PL_SYSREF_N_0),
-      
-      .EXT_TRIGGER_P(EXT_TRIGGER_P),
-      .EXT_TRIGGER_N(EXT_TRIGGER_N),
 
       // 100G QSFP28 UDP link
       .qsfp_refclk_p(qsfp_refclk_p),

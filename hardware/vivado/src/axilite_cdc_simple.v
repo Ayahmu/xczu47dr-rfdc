@@ -73,10 +73,6 @@ module axilite_cdc_simple (
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ack_sync_s;
 
   reg        req_seen_m;
-  reg        m_req_write;
-  reg [17:0] m_req_addr;
-  reg [31:0] m_req_wdata;
-  reg [3:0]  m_req_wstrb;
   reg        m_aw_done;
   reg        m_w_done;
 
@@ -181,10 +177,6 @@ module axilite_cdc_simple (
       m_state <= M_IDLE;
       req_sync_m <= 3'b000;
       req_seen_m <= 1'b0;
-      m_req_write <= 1'b0;
-      m_req_addr <= 18'd0;
-      m_req_wdata <= 32'd0;
-      m_req_wstrb <= 4'd0;
       m_awaddr <= 18'd0;
       m_awvalid <= 1'b0;
       m_wdata <= 32'd0;
@@ -213,10 +205,6 @@ module axilite_cdc_simple (
           m_w_done <= 1'b0;
           if (req_sync_m[2] != req_seen_m) begin
             req_seen_m <= req_sync_m[2];
-            m_req_write <= req_is_write_s;
-            m_req_addr <= req_addr_s;
-            m_req_wdata <= req_wdata_s;
-            m_req_wstrb <= req_wstrb_s;
             if (req_is_write_s) begin
               m_awaddr <= req_addr_s;
               m_awvalid <= 1'b1;

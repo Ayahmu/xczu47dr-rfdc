@@ -294,14 +294,24 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: ARP cache learns only local-subnet senders",
         )
 
-    def test_pl_riscv_control_v1_rejects_removed_rfctrl2_playback(self):
+    def test_firmware_status_register(self):
+        self.run_sim(
+            "tb_firmware_status_reg",
+            [
+                ROOT / "hardware/vivado/src/firmware_status_reg.v",
+                ROOT / "tests/tb_firmware_status_reg.sv",
+            ],
+            "PASS: firmware status register stores the word, reads back hmc_done and ignores stray accesses",
+        )
+
+    def test_pl_riscv_control_v1_decodes_rfctrl2_and_rejects_unsupported(self):
         self.run_sim(
             "tb_pl_riscv_control_v1",
             [
                 ROOT / "hardware/vivado/src/pl_riscv_control_v1.v",
                 ROOT / "tests/tb_pl_riscv_control_v1.sv",
             ],
-            "PASS: PL control shim rejects removed RFCTRL2 playback commands and preserves RFDC_APPLY/SYNC_EPOCH",
+            "PASS: RFCTRL2 control decodes STATUS/TDC/RFDC_APPLY and rejects unsupported operations",
         )
 
     def test_pl_rfdc_runtime_controller_closes_the_axi_readback_loop(self):

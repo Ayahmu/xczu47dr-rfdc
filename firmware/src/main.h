@@ -29,24 +29,10 @@
 #endif
 #endif
 
-// Necessary to use this define when using jtagterminal but not SDK jtaguart console
-//#define STRIP_CHAR_CR
-
-// Memory and GPIO definitions
-#if defined(BOARD_CUSTOM_XCZU47DR) && defined(XPAR_DDR4_0_C0_DDR4_MEMORY_MAP_BASEADDR)
-#define DDR4_BASE ((UINTPTR)XPAR_DDR4_0_C0_DDR4_MEMORY_MAP_BASEADDR)
-#elif defined(BOARD_CUSTOM_XCZU47DR) && defined(XPAR_TOP_I_DESIGN_1_I_M_AXI_PS_DDR_BASEADDR)
-#define DDR4_BASE ((UINTPTR)XPAR_TOP_I_DESIGN_1_I_M_AXI_PS_DDR_BASEADDR)
-#elif defined(BOARD_CUSTOM_XCZU47DR)
-#define DDR4_BASE ((UINTPTR)0x0000004800000000ULL)
-#else
-#define DDR4_BASE ((UINTPTR)0x00000000U)  // ZynqMP PS DDR base address
-#endif
+/* PL firmware status register (firmware_status_reg.v): write the status word,
+ * read back the HMC7044 done flag in bit 31. */
 #define GPIO_BASE_ADDR XPAR_M_AXI_GPIO_BASEADDR
-#define GPIO_DATA_CH1_OFFSET 0x00
-#define GPIO_TRI_CH1_OFFSET 0x04
 #define GPIO_DATA_CH2_OFFSET 0x08
-#define GPIO_TRI_CH2_OFFSET 0x0C
 #define HMC7044_DONE_MASK 0x80000000U
 #define HMC7044_INPUT_REF_HZ 250000000U
 #define HMC7044_PLL1_PFD_HZ 10000000U
@@ -56,9 +42,8 @@
 #define RFDC_DEVICE_ID 	XPAR_XRFDC_0_DEVICE_ID
 #define RFDC_BASE       XPAR_XRFDC_0_BASEADDR
 
-// Number of Tiles and Blocks in device
+// Number of DAC tiles in the device
 #define NUM_TILES 4
-#define NUM_BLOCKS 4
 
 
 

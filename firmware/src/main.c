@@ -25,19 +25,15 @@
 #error "Define BOARD_CUSTOM_XCZU47DR"
 #endif
 
-#define URAM_PLAY_BASE XPAR_HIER_PLAY_AXI_BRAM_CTRL_0_S_AXI_BASEADDR
-
 void my_metal_default_log_handler(enum metal_log_level level,
 								  const char *format, ...);
 
-void reverse32bArray(u32 *src, int size);
 int rfdcStartup(void);
 int Configure_DAC_Output_Current(void);
 int Configure_Custom_DAC_Nyquist(void);
 int Configure_Custom_DAC_NCO(void);
 int Configure_DAC_MTS(void);
 int Align_DAC_NCO_To_SYSREF(void);
-int Reinitialize_RFDC_For_Sync(void);
 int Report_Custom_DAC_Status(const char *Stage);
 int Report_Custom_DAC_Clock_Status(const char *Stage);
 
@@ -56,17 +52,6 @@ int Report_Custom_DAC_Clock_Status(const char *Stage);
 #define DAC_OUTPUT_CURRENT_AC_UA 40500U
 #define DAC_OUTPUT_CURRENT_DC_UA 32000U
 /************************** Variable Definitions *****************************/
-
-// VT100 esc sequences
-char CHAR_ATTRIB_OFF[5] = "\x1B[0m";
-char BOLD_ON[5] = "\x1B[1m";
-char UNDERLINE_ON[5] = "\x1B[4m";
-char BLINK_ON[5] = "\x1B[5m";
-char REVERSE_ON[5] = "\x1B[5m";
-char CLR_SCREEN[5] = "\x1B[2J";
-
-#include "xtime_l.h"
-#define TEST_LENGTH (32 * 1024 * 1024)
 
 XRFdc RFdcInst; /* RFdc driver instance */
 
@@ -135,8 +120,6 @@ static const CustomDacChannel CustomDacChannels[] = {
 	{3, 2, "CH8", "Readout", -0.2, XRFDC_EVEN_NYQUIST_ZONE},
 };
 
-#define DEBUG_WAVEFORM_BYTES 4096U
-#define DEBUG_WAVEFORM_SAMPLES (DEBUG_WAVEFORM_BYTES / sizeof(s16))
 #define HMC7044_POLL_COUNT 50
 #define HMC7044_POLL_INTERVAL_US 100000
 #define DAC_MTS_TILE_MASK 0x0FU
@@ -144,8 +127,7 @@ static const CustomDacChannel CustomDacChannels[] = {
  *
  * XRFdc_MultiConverter_Init leaves Target_Latency at -1, which makes the driver
  * adopt whatever latency that particular run achieved.  The absolute DAC
- * datapath latency is then not reproducible across power cycles, across boards,
- * or across a re-run triggered by a SYNC epoch.
+ * datapath latency is then not reproducible across power cycles or boards.
  *
  * -1 here selects the two-pass auto-latch in Configure_DAC_MTS(): pass one
  * measures, the result is rounded up onto a coarse grid, and pass two pins that
@@ -164,42 +146,18 @@ static const CustomDacChannel CustomDacChannels[] = {
 #define FW_STATUS_MTS_TILE_SHIFT 4U
 #define FW_STATUS_MTS_ERROR_SHIFT 8U
 #define FW_STATUS_NCO_SYNC_READY (1U << 24)
-#define FW_STATUS_SYNC_ACK_SHIFT 25U
-#define FW_STATUS_SYNC_ACK_MASK (0x3FU << FW_STATUS_SYNC_ACK_SHIFT)
-#define SYNC_EVENT_EPOCH_MASK 0x3FU
-#define SYNC_EVENT_POLL_INTERVAL_US 10000U
-/* HMC7044 processes a SYNC rising edge in its VCXO-domain FSM over
- * 16 x 6 x tPD2.  With PLL2 R2=25 and VCXO=100 MHz, tPD2=250 ns, so the
- * divider/SYSREF reseed completes in 96 x 250 ns = 24 us.  Wait 1 ms for
- * margin before reinitializing the RFDC datapath and re-running MTS. */
-#define HMC7044_SYNC_SETTLE_US 1000U
 
 static u32 DacMtsStatus;
-static u32 SyncAckStatus;
 /* Kept in globals rather than locals so they survive Configure_DAC_MTS() and can
  * be read over JTAG (mrd on the symbol address) when the UART is unavailable. */
 static volatile int DacMtsMeasuredLatency = -1;
 static volatile int DacMtsAppliedTarget = -1;
 
-static u32 Read_Sync_Event_Epoch(void)
-{
-	u32 status = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
-	return (status >> FW_STATUS_SYNC_ACK_SHIFT) & SYNC_EVENT_EPOCH_MASK;
-}
-
-static void Publish_Sync_Alignment_Ack(u32 Epoch)
-{
-	SyncAckStatus = (Epoch & SYNC_EVENT_EPOCH_MASK) << FW_STATUS_SYNC_ACK_SHIFT;
-	DacMtsStatus = (DacMtsStatus & ~FW_STATUS_SYNC_ACK_MASK) | SyncAckStatus;
-	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
-}
-
 static void Publish_DAC_MTS_Status(u32 Ready, u32 Failed, u32 Error)
 {
 	DacMtsStatus = FW_STATUS_MTS_REQUIRED |
 		((DAC_MTS_TILE_MASK & 0xFU) << FW_STATUS_MTS_TILE_SHIFT) |
-		((Error & 0xFFFFU) << FW_STATUS_MTS_ERROR_SHIFT) |
-		SyncAckStatus;
+		((Error & 0xFFFFU) << FW_STATUS_MTS_ERROR_SHIFT);
 
 	if (Ready != 0U)
 		DacMtsStatus |= FW_STATUS_MTS_READY;
@@ -209,45 +167,14 @@ static void Publish_DAC_MTS_Status(u32 Ready, u32 Failed, u32 Error)
 	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
 }
 
-static void Publish_Sync_Alignment_Failure(u32 Epoch, u32 Error)
-{
-	SyncAckStatus = (Epoch & SYNC_EVENT_EPOCH_MASK) << FW_STATUS_SYNC_ACK_SHIFT;
-	Publish_DAC_MTS_Status(0U, 1U, Error);
-}
-
 static void Publish_DAC_NCO_Sync_Ready(void)
 {
 	DacMtsStatus |= FW_STATUS_NCO_SYNC_READY;
-	DacMtsStatus = (DacMtsStatus & ~FW_STATUS_SYNC_ACK_MASK) | SyncAckStatus;
 	Xil_Out32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET, DacMtsStatus);
-}
-
-static void preload_debug_waveforms(void)
-{
-	s16 *ch1 = (s16 *)(UINTPTR)DDR4_BASE;
-	s16 *ch2 = (s16 *)((UINTPTR)DDR4_BASE + DEBUG_WAVEFORM_BYTES);
-	u32 i;
-
-	for (i = 0U; i < DEBUG_WAVEFORM_SAMPLES; i++)
-	{
-		ch1[i] = (i & 0x20U) ? 12000 : -12000;
-		ch2[i] = (i & 0x20U) ? -12000 : 12000;
-	}
-
-	Xil_DCacheFlushRange((UINTPTR)ch1, DEBUG_WAVEFORM_BYTES);
-	Xil_DCacheFlushRange((UINTPTR)ch2, DEBUG_WAVEFORM_BYTES);
-	xil_printf("Preloaded debug waveforms: ch1=0x%08lx%08lx ch2=0x%08lx%08lx bytes=%lu\r\n",
-		   (unsigned long)(((u64)(UINTPTR)ch1) >> 32),
-		   (unsigned long)(((u64)(UINTPTR)ch1) & 0xffffffffU),
-		   (unsigned long)(((u64)(UINTPTR)ch2) >> 32),
-		   (unsigned long)(((u64)(UINTPTR)ch2) & 0xffffffffU),
-		   (unsigned long)DEBUG_WAVEFORM_BYTES);
 }
 
 int Init_GPIO(void)
 {
-	Xil_Out32(GPIO_BASE_ADDR + GPIO_TRI_CH1_OFFSET, 0x00000000);
-	Xil_Out32(GPIO_BASE_ADDR + GPIO_TRI_CH2_OFFSET, 0x00000000);
 	Publish_DAC_MTS_Status(0U, 0U, 0U);
 
 	return XST_SUCCESS;
@@ -680,115 +607,6 @@ int Align_DAC_NCO_To_SYSREF(void)
 	return XST_SUCCESS;
 }
 
-/* Reinitialize the RFDC datapath before each runtime MTS.  A master reset
- * clears the DAC mixer (NCO), nyquist-zone and output-current settings, so
- * the startup sequence and the baseline DAC configuration are re-applied
- * before the new MTS/NCO alignment.  The RFDC tile clock/PLL then re-locks
- * to the freshly re-seeded HMC7044 SYSREF and clock outputs. */
-int Reinitialize_RFDC_For_Sync(void)
-{
-	int Tile_Id;
-	int Status;
-	XRFdc *RFdcInstPtr = &RFdcInst;
-	XRFdc_IPStatus ipStatus = {0}; /* GetIPStatus never clears IsEnabled */
-	u32 val;
-
-	xil_printf("SYNC alignment: reinitializing RFDC (master reset + DAC startup).\r\n");
-
-	/* Master Reset the RFDC IP, then re-run the DAC power-on/startup
-	 * sequence for every enabled DAC tile. */
-	Xil_Out32(RFDC_BASE + 0x0004, 1);
-	sleep(1);
-
-	XRFdc_GetIPStatus(RFdcInstPtr, &ipStatus);
-	for (Tile_Id = 0; Tile_Id <= 3; Tile_Id++)
-	{
-		if (ipStatus.DACTileStatus[Tile_Id].IsEnabled != 1)
-			continue;
-
-		val = XRFdc_ReadReg16(RFdcInstPtr,
-				      XRFDC_DAC_TILE_CTRL_STATS_ADDR(Tile_Id),
-				      XRFDC_ADC_DEBUG_RST_OFFSET);
-		if (val & XRFDC_DBG_RST_CAL_MASK)
-		{
-			xil_printf("SYNC alignment: DAC Tile%d not ready after reset.\r\n",
-				   Tile_Id);
-			return XST_FAILURE;
-		}
-
-		Status = XRFdc_StartUp(RFdcInstPtr, 1, Tile_Id);
-		if (Status != XST_SUCCESS)
-		{
-			xil_printf("SYNC alignment: XRFdc_StartUp failed for DAC Tile%d status=%d.\r\n",
-				   Tile_Id, Status);
-			return XST_FAILURE;
-		}
-		usleep(200000);
-	}
-
-	/* A master reset clears the DAC mixer/nyquist/output settings, so
-	 * restore the baseline configuration before the runtime MTS. */
-	if (Configure_Custom_DAC_Nyquist() != XST_SUCCESS)
-		return XST_FAILURE;
-	if (Configure_Custom_DAC_NCO() != XST_SUCCESS)
-		return XST_FAILURE;
-	if (Configure_DAC_Output_Current() != XST_SUCCESS)
-		return XST_FAILURE;
-
-	xil_printf("SYNC alignment: RFDC reinitialization complete.\r\n");
-	return XST_SUCCESS;
-}
-
-/* Re-run the complete runtime alignment transaction for one real PL SYNC
- * event.  The PL playback gate is already closed while this function runs;
- * only the matching epoch ACK below can reopen it. */
-static int Realign_DAC_For_Sync_Epoch(u32 Epoch)
-{
-	int Status;
-
-	xil_printf("SYNC alignment epoch %lu: waiting HMC7044 sync, reinitializing RFDC, rerunning MTS/NCO.\r\n",
-		   (unsigned long)Epoch);
-	DacMtsStatus &= ~(FW_STATUS_MTS_READY | FW_STATUS_MTS_FAILED |
-				  FW_STATUS_NCO_SYNC_READY);
-	Publish_DAC_MTS_Status(0U, 0U, 0U);
-
-	/* Wait for the HMC7044 VCXO-domain FSM to finish reseeding its output
-	 * dividers/SYSREF timer before touching the RFDC datapath. */
-	usleep(HMC7044_SYNC_SETTLE_US);
-
-	Status = Reinitialize_RFDC_For_Sync();
-	if (Status != XST_SUCCESS)
-	{
-		Publish_Sync_Alignment_Failure(Epoch, XST_FAILURE);
-		xil_printf("SYNC alignment epoch %lu: RFDC reinitialization failed; playback remains muted.\r\n",
-			   (unsigned long)Epoch);
-		return XST_FAILURE;
-	}
-
-	Status = Configure_DAC_MTS();
-	if (Status != XST_SUCCESS)
-	{
-		u32 MtsError = (DacMtsStatus >> FW_STATUS_MTS_ERROR_SHIFT) & 0xFFFFU;
-		Publish_Sync_Alignment_Failure(Epoch, MtsError);
-		xil_printf("SYNC alignment epoch %lu: DAC MTS failed; playback remains muted.\r\n",
-			   (unsigned long)Epoch);
-		return XST_FAILURE;
-	}
-	Status = Align_DAC_NCO_To_SYSREF();
-	if (Status != XST_SUCCESS)
-	{
-		Publish_Sync_Alignment_Failure(Epoch, XST_FAILURE);
-		xil_printf("SYNC alignment epoch %lu: NCO SYSREF alignment failed; playback remains muted.\r\n",
-			   (unsigned long)Epoch);
-		return XST_FAILURE;
-	}
-	Publish_DAC_NCO_Sync_Ready();
-	Publish_Sync_Alignment_Ack(Epoch);
-	xil_printf("SYNC alignment epoch %lu complete: MTS/NCO ready, ACK published.\r\n",
-		   (unsigned long)Epoch);
-	return XST_SUCCESS;
-}
-
 /*****************************************************************************/
 /**
  *
@@ -812,7 +630,6 @@ int main(void)
 	u32 Major;
 	int Status;
 	XRFdc_Config *ConfigPtr;
-	u32 LastSyncEventEpoch = 0U;
 	init_platform();
 	if (Init_GPIO() != XST_SUCCESS)
 		return XST_FAILURE;
@@ -853,10 +670,6 @@ int main(void)
 		xil_printf("ERROR: HMC7044 PL sequencer did not finish before RFDC startup.\r\n");
 		return XST_FAILURE;
 	}
-
-	u32 syncStatus = Xil_In32(GPIO_BASE_ADDR + GPIO_DATA_CH2_OFFSET);
-	xil_printf("XS20 SYNC startup status: 0x%08lx; RFDC initialization does not wait for external SYNC.\r\n",
-		   (unsigned long)syncStatus);
 
 	sleep(2);
 
@@ -937,25 +750,10 @@ int main(void)
 	Report_Custom_DAC_Status("after custom config");
 	Report_Custom_DAC_Clock_Status("after custom config");
 
-	// init_dma_ip(&AxiDma, CH0_DMA_DEV_ID, CH0_MM2S_INTR_ID, &INST);
-
-#if defined(ENABLE_FIRMWARE_DEBUG_WAVEFORM_PRELOAD)
-	// Host uploads all PL DDR waveform slots; firmware must not preload them.
-	preload_debug_waveforms();
-#endif
-
+	/* Everything from here on is served by the PL: the RFCTRL2/WAVECTR0 UDP
+	 * engines own runtime RFDC configuration, waveform upload and playback. */
 	while (1)
-	{
-		u32 SyncEventEpoch = Read_Sync_Event_Epoch();
-		if (SyncEventEpoch != LastSyncEventEpoch)
-		{
-			/* Consume each real PL event once.  A failed attempt is still
-			 * consumed and leaves the PL gate closed until a later SYNC. */
-			LastSyncEventEpoch = SyncEventEpoch;
-			(void)Realign_DAC_For_Sync_Epoch(SyncEventEpoch);
-		}
-		usleep(SYNC_EVENT_POLL_INTERVAL_US);
-	}
+		usleep(1000000);
 
 	return 0;
 }
@@ -1033,25 +831,6 @@ void my_metal_default_log_handler(enum metal_log_level level,
 		level = METAL_LOG_EMERGENCY;
 
 	xil_printf("%s%s", level_strs[level], msgOut);
-}
-
-void reverse32bArray(u32 *src, int size)
-{
-	u32 tmp[200];
-	int i, j;
-
-	// copy src into temp
-	for (i = 0, j = size - 1; i < size; i++, j--)
-	{
-		tmp[i] = src[j];
-	}
-
-	// copy swapped array to original
-	for (i = 0; i < size; i++)
-	{
-		src[i] = tmp[i];
-	}
-	return;
 }
 
 /*****************************************************************************/

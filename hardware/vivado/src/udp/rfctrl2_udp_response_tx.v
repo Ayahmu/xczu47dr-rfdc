@@ -15,7 +15,6 @@ module rfctrl2_udp_response_tx #(
     input  wire        rx_payload_fire,
     input  wire [63:0] rx_payload_data,
 
-    input  wire        tx_path_enable,
     input  wire        tx_header_ready,
     input  wire        tx_payload_ready,
 
@@ -25,7 +24,6 @@ module rfctrl2_udp_response_tx #(
     input  wire [15:0] response_word_count,
     output wire        response_ready,
 
-    output wire        tx_active,
     output reg         tx_header_valid,
     output reg  [31:0] tx_dest_ip,
     output reg  [15:0] tx_source_port,
@@ -33,10 +31,7 @@ module rfctrl2_udp_response_tx #(
     output reg  [15:0] tx_length,
     output wire [63:0] tx_payload_data,
     output wire        tx_payload_valid,
-    output wire        tx_payload_last,
-
-    output wire        request_inflight,
-    output wire [1:0]  dbg_state
+    output wire        tx_payload_last
 );
 
   localparam [1:0] ST_IDLE = 2'd0;
@@ -54,22 +49,18 @@ module rfctrl2_udp_response_tx #(
   reg [15:0] payload_words = 16'd0;
   reg [15:0] payload_index = 16'd0;
 
+  // "RFCTRL2\0" and "WAVECTR0", the two request magics this board answers.
   wire request_magic =
-      (rx_payload_data == 64'h00304C5254435652) ||
-      (rx_payload_data == 64'h00314C5254435652) ||
       (rx_payload_data == 64'h00324C5254434652) ||
       (rx_payload_data == 64'h5741564543545230);
   wire response_fire = response_valid && response_ready;
   wire final_response_word = response_last ||
       (payload_words != 16'd0 && payload_index == payload_words - 16'd1);
 
-  assign tx_active = state != ST_IDLE;
   assign response_ready = (state == ST_PAYLOAD) && tx_payload_ready;
   assign tx_payload_data = response_data;
   assign tx_payload_valid = (state == ST_PAYLOAD) && response_valid;
   assign tx_payload_last = tx_payload_valid && final_response_word;
-  assign request_inflight = request_inflight_reg;
-  assign dbg_state = state;
 
   always @(posedge clk) begin
     if (rst) begin
@@ -109,7 +100,7 @@ module rfctrl2_udp_response_tx #(
         ST_IDLE: begin
           tx_header_valid <= 1'b0;
           payload_index <= 16'd0;
-          if (tx_path_enable && response_valid && response_word_count != 16'd0) begin
+          if (response_valid && response_word_count != 16'd0) begin
             payload_words <= response_word_count;
             tx_dest_ip <= request_inflight_reg ? request_source_ip : pending_source_ip;
             tx_source_port <= request_inflight_reg ? request_dest_port : pending_dest_port;

@@ -32,7 +32,7 @@ module tb_waveform_prefetch_fits_full_load;
   reg [7:0] descriptor_channel_mask=8'hff;
   reg [31:0] descriptor_loop_count=1;
   reg [31:0] descriptor_generation=1;
-  reg [15:0] fifo_level_beats=0, fifo_free_beats=CAP;
+  reg [15:0] fifo_free_beats=CAP;
   wire command_ready_ddr;
   wire [2047:0] fifo_write_data; wire fifo_write_valid; reg [7:0] fifo_write_ready=8'hff;
   wire fifo_write_last;
@@ -59,7 +59,6 @@ module tb_waveform_prefetch_fits_full_load;
   integer issued=0, burst_beats=0, return_beat=0, fired=0;
   reg responding=1;
   always @* begin
-    fifo_level_beats = fifo_count;
     // Model a FIFO of exactly CAP beats so an oversized descriptor backpressures
     // the reader (never completes) and only the watermark can release PREFETCH.
     fifo_free_beats = (fifo_count >= CAP) ? 16'd0 : (CAP - fifo_count);

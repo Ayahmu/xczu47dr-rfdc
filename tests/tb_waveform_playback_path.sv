@@ -11,7 +11,7 @@ module tb_waveform_playback_path;
   reg [7:0] descriptor_channel_mask=8'hff;
   reg [31:0] descriptor_loop_count=2;
   reg [31:0] descriptor_generation=1;
-  reg [15:0] fifo_level_beats=0, fifo_free_beats=1024;
+  reg [15:0] fifo_free_beats=1024;
   wire command_ready_ddr;
   wire [2047:0] fifo_write_data; wire fifo_write_valid; reg [7:0] fifo_write_ready=8'hff;
   wire fifo_write_last;
@@ -42,7 +42,6 @@ module tb_waveform_playback_path;
   integer q_head=0, q_tail=0; reg [8:0] q_len [0:15];
   reg responding=1;
   always @* begin
-    fifo_level_beats = fifo_count;
     fifo_free_beats = 1024 - fifo_count;
   end
 

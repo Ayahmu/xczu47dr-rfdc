@@ -31,7 +31,7 @@ module tb_waveform_stream_throughput;
   reg [7:0] descriptor_channel_mask=8'hff;
   reg [31:0] descriptor_loop_count=1;
   reg [31:0] descriptor_generation=1;
-  reg [15:0] fifo_level_beats=0, fifo_free_beats=CAP;
+  reg [15:0] fifo_free_beats=CAP;
   wire command_ready_ddr;
   wire [2047:0] fifo_write_data; wire fifo_write_valid; reg [7:0] fifo_write_ready=8'hff;
   wire fifo_write_last;
@@ -57,7 +57,6 @@ module tb_waveform_stream_throughput;
   integer wr_total = 0, fifo_rd = 0, fired = 0;
   reg [2047:0] fifo_mem [0:255];
   always @* begin
-    fifo_level_beats = (wr_total - fifo_rd);
     fifo_free_beats = CAP - (wr_total - fifo_rd);   // real write-side free depth
   end
 

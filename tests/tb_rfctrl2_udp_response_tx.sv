@@ -11,7 +11,6 @@ module tb_rfctrl2_udp_response_tx;
   reg [15:0] rx_dest_port = 16'd0;
   reg        rx_payload_fire = 1'b0;
   reg [63:0] rx_payload_data = 64'd0;
-  reg        tx_path_enable = 1'b1;
   reg        tx_header_ready = 1'b0;
   reg        tx_payload_ready = 1'b0;
   reg        response_valid = 1'b0;
@@ -19,7 +18,6 @@ module tb_rfctrl2_udp_response_tx;
   reg        response_last = 1'b0;
   reg [15:0] response_word_count = 16'd0;
   wire       response_ready;
-  wire       tx_active;
   wire       tx_header_valid;
   wire [31:0] tx_dest_ip;
   wire [15:0] tx_source_port;
@@ -28,8 +26,7 @@ module tb_rfctrl2_udp_response_tx;
   wire [63:0] tx_payload_data;
   wire       tx_payload_valid;
   wire       tx_payload_last;
-  wire       request_inflight;
-  wire [1:0] dbg_state;
+  wire       request_inflight = dut.request_inflight_reg;
 
   integer payload_handshakes = 0;
   reg [63:0] accepted_words [0:2];
@@ -42,7 +39,6 @@ module tb_rfctrl2_udp_response_tx;
     .rx_dest_port(rx_dest_port),
     .rx_payload_fire(rx_payload_fire),
     .rx_payload_data(rx_payload_data),
-    .tx_path_enable(tx_path_enable),
     .tx_header_ready(tx_header_ready),
     .tx_payload_ready(tx_payload_ready),
     .response_valid(response_valid),
@@ -50,7 +46,6 @@ module tb_rfctrl2_udp_response_tx;
     .response_last(response_last),
     .response_word_count(response_word_count),
     .response_ready(response_ready),
-    .tx_active(tx_active),
     .tx_header_valid(tx_header_valid),
     .tx_dest_ip(tx_dest_ip),
     .tx_source_port(tx_source_port),
@@ -58,9 +53,7 @@ module tb_rfctrl2_udp_response_tx;
     .tx_length(tx_length),
     .tx_payload_data(tx_payload_data),
     .tx_payload_valid(tx_payload_valid),
-    .tx_payload_last(tx_payload_last),
-    .request_inflight(request_inflight),
-    .dbg_state(dbg_state)
+    .tx_payload_last(tx_payload_last)
   );
 
   always @(posedge clk) begin
@@ -133,7 +126,7 @@ module tb_rfctrl2_udp_response_tx;
     check_condition(accepted_words[1] == 64'h2222222222222222, "second payload word mismatch");
     check_condition(accepted_words[2] == 64'h3333333333333333, "third payload word mismatch");
     check_condition(!request_inflight, "request context must clear after the final response word");
-    check_condition(!tx_active && dbg_state == 2'd0, "transmitter must return to idle");
+    check_condition(dut.state == 2'd0, "transmitter must return to idle");
 
     $display("PASS: RFCTRL2 UDP response TX locks the exact requester and honors AXIS backpressure");
     $finish;

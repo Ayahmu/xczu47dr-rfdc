@@ -154,17 +154,9 @@ set src_dir "${vivado_dir}/src"
 if {[file exists ${src_dir}]} {
     puts "INFO: Adding RTL source files from ${src_dir}"
     set rtl_files [glob -nocomplain ${src_dir}/*.v ${src_dir}/*.sv ${src_dir}/*.vhd]
-    set filtered_rtl_files [list]
-    foreach rtl_file $rtl_files {
-        set rtl_tail [file tail $rtl_file]
-        if {$rtl_tail eq "design_1_wrapper.v" || $rtl_tail eq "axis_128_to_256.v"} {
-            continue
-        }
-        lappend filtered_rtl_files $rtl_file
-    }
-    if {[llength $filtered_rtl_files] > 0} {
-        add_files -norecurse $filtered_rtl_files
-        puts "INFO: Added [llength $filtered_rtl_files] RTL source files"
+    if {[llength $rtl_files] > 0} {
+        add_files -norecurse $rtl_files
+        puts "INFO: Added [llength $rtl_files] RTL source files"
     }
 }
 
@@ -238,20 +230,6 @@ set_property generate_synth_checkpoint true ${cmac_ip_file}
 generate_target all ${cmac_ip_file}
 puts "INFO: CMAC IP created and generated for the parent project"
 
-set fifo64_src_dir "${vivado_dir}/ip/fifo64_2"
-set fifo64_local_dir "${generated_ip_dir}/fifo64_2"
-if {[file exists ${fifo64_src_dir}] && ![file exists ${fifo64_local_dir}]} {
-    file copy -force ${fifo64_src_dir} ${fifo64_local_dir}
-}
-set fifo64_xci "${fifo64_local_dir}/fifo64.xci"
-if {[file exists ${fifo64_xci}]} {
-    puts "INFO: Adding reference fifo64 IP: ${fifo64_xci}"
-    add_files -norecurse ${fifo64_xci}
-    set_property generate_synth_checkpoint false [get_files ${fifo64_xci}]
-} else {
-    puts "WARN: Reference fifo64 IP not found: ${fifo64_xci}"
-}
-
 # Add constraint files
 set target_xdc_files [target_config_get $target xdc_files]
 set resolved_xdc_files [list]
@@ -286,15 +264,6 @@ if {[file exists ${async_fifo_script}]} {
     puts "INFO: AXIS Async FIFO IP created"
 } else {
     puts "WARN: AXIS Async FIFO script not found: ${async_fifo_script}"
-}
-
-# Create 200 MHz clock generator for external trigger phase detection
-set clk_200mhz_script "${script_path}/clk_gen_200mhz.tcl"
-if {[file exists ${clk_200mhz_script}]} {
-    source ${clk_200mhz_script}
-    puts "INFO: 200 MHz clock generator IP created"
-} else {
-    puts "WARN: 200 MHz clock generator script not found: ${clk_200mhz_script}"
 }
 
 # Create and configure Block Design

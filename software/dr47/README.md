@@ -35,6 +35,7 @@ zone=2；上传的 IQ 只放低频包络。`set_xy_nco_frequency()` 仅用于直
 | `waveform_software_play_example.py` | 发波：上传一包高斯脉冲到 CH1/CH2，发送软件 `PLAY` | 板卡、示波器 |
 | `waveform_external_trigger_example.py` | 发波：上传后等待 XS19 外部 Trigger 启动 | 板卡、示波器、触发源 |
 | `waveform_bulk_upload_speed_example.py` | 板上测速：经 100G 批量通路上传随机波形，报告速率、丢帧和补发，再完整播放一遍 | 板卡 |
+| `waveform_100g_stress_example.py` | 100G 压测：按发送线程数分档持续灌数据，报告带宽、丢包率和丢包环节 | 板卡 |
 | `network_discovery_example.py` | 广播发现板卡并读取网络配置 | 板卡 |
 | `simulator_quickstart.py` | 用内存模拟器走一遍上传和播放，检查安装 | 无 |
 

@@ -110,11 +110,9 @@ module waveform_upload_writer #(
   wire [31:0] next_generation = generation == 32'hffffffff ? 32'd1 : generation + 1'b1;
   reg [15:0] begin_reserved;
   reg [63:0] command_session_word;
-  reg [63:0] hdr0;
   reg [31:0] payload_bytes, payload_words, payload_index;
   reg [31:0] command_seq;
   reg [31:0] command_opcode;
-  reg [15:0] command_flags;
   wire command_opcode_requires_admission =
       command_opcode == OP_BEGIN || command_opcode == OP_COMMIT ||
       command_opcode == OP_PLAY || command_opcode == OP_PAUSE ||
@@ -281,8 +279,8 @@ module waveform_upload_writer #(
       ddr_base_addr <= DDR_ADDR_BASE; total_bytes <= 0; total_beats <= 0;
       channel_mask <= 0; loop_count <= 0; received_bytes <= 0;
       next_packet_seq <= 0; error_offset <= 0; error_count <= 0;
-      hdr0 <= 0; payload_bytes <= 0; payload_words <= 0; payload_index <= 0;
-      command_seq <= 0; command_opcode <= 0; command_flags <= 0; packet_error <= 0;
+      payload_bytes <= 0; payload_words <= 0; payload_index <= 0;
+      command_seq <= 0; command_opcode <= 0; packet_error <= 0;
       duplicate_packet <= 0; begin_session <= 0; begin_total_bytes <= 0;
       bulk_mode <= 0; bulk_phase <= 0; bulk_ctl_start <= 0; bulk_ctl_cmd <= 0; bulk_ctl_arg <= 0;
       payload_at_last <= 0;
@@ -549,8 +547,7 @@ module waveform_upload_writer #(
             response_expected_crc <= 0; response_actual_crc <= 0;
           end
           ST_HDR0: begin
-            hdr0 <= udp_tdata; command_opcode <= udp_tdata[63:32];
-            command_flags <= udp_tdata[31:16];
+            command_opcode <= udp_tdata[63:32];
             if (udp_tdata[31:0] != 32'd1 || udp_tdata[63:32] < 1 || udp_tdata[63:32] > OP_BULK_CHUNK_RESET)
               set_error(BAD_REQUEST, 0);
           bulk_phase <= 2'd0;

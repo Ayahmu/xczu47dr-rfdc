@@ -30,6 +30,7 @@ class ExampleScriptTests(unittest.TestCase):
             "waveform_external_trigger_example.py",
             "waveform_software_play_example.py",
             "waveform_bulk_upload_speed_example.py",
+            "waveform_100g_stress_example.py",
         })
         # Every script in the directory is listed in the driver README.
         readme = (ROOT / "software/dr47/README.md").read_text(encoding="utf-8")
@@ -44,6 +45,21 @@ class ExampleScriptTests(unittest.TestCase):
         self.assertIn("play", methods)
         self.assertIn("waveform_status", methods)
         for reported in ('result["transport"]', "resent_chunks", "underflow_count", "Gb/s"):
+            self.assertIn(reported, text)
+        for forbidden in ("argparse", "sys.argv", "os.environ", "os.getenv"):
+            self.assertNotIn(forbidden, text)
+
+    def test_stress_test_reports_bandwidth_and_loss_per_stage(self):
+        text = (EXAMPLES / "waveform_100g_stress_example.py").read_text(encoding="utf-8")
+        methods = called_methods(ast.parse(text))
+        # Raw single-send loss: the session is opened and read back, but never
+        # resent, committed or played.
+        for used in ("begin_waveform", "bulk_status", "send", "abort"):
+            self.assertIn(used, methods)
+        for unused in ("bulk_chunk_reset", "commit_waveform", "upload_waveforms", "play"):
+            self.assertNotIn(unused, methods)
+        for reported in ("goodput", "wire", "board_rx", "bad_fcs", "fifo_full", "rejected", "stored", "loss",
+                         "MAX_LOSS_RATE", "Gb/s"):
             self.assertIn(reported, text)
         for forbidden in ("argparse", "sys.argv", "os.environ", "os.getenv"):
             self.assertNotIn(forbidden, text)

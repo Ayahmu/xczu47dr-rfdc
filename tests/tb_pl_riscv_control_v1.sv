@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
 
+// pl_riscv_control_v1: RFCTRL2 request decode and RFRESP2 serialization.
 module tb_pl_riscv_control_v1;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -10,10 +11,7 @@ module tb_pl_riscv_control_v1;
   reg         rvctrl_tfirst = 1'b0;
   reg         rvctrl_tlast = 1'b0;
   reg [31:0]  rvctrl_word_count = 32'd0;
-  reg [1:0]   rvctrl_protocol = 2'd0;
 
-  wire         rfctrl2_sync_epoch_pulse;
-  wire [63:0]  rfctrl2_epoch;
   wire         rfdc_apply_start;
   wire [31:0]  rfdc_apply_sequence;
   wire [31:0]  rfdc_apply_revision;
@@ -40,41 +38,13 @@ module tb_pl_riscv_control_v1;
   reg [511:0]  rfdc_actual_nco_word = 512'd0;
   reg [255:0]  rfdc_actual_phase_word = 256'd0;
   reg [255:0]  rfdc_actual_vop_code = 256'd0;
-  wire [31:0] dbg_status;
-  wire [31:0] dbg_last_seq;
-  wire [31:0] dbg_play_count;
-  wire [31:0] dbg_trigger_count;
   wire [63:0] rvresp_tdata;
   wire        rvresp_tvalid;
   reg         rvresp_tready = 1'b1;
   wire        rvresp_tlast;
   wire [15:0] rvresp_word_count;
-  wire [17:0] m_axil_awaddr;
-  wire        m_axil_awvalid;
-  reg         m_axil_awready = 1'b1;
-  wire [31:0] m_axil_wdata;
-  wire [3:0]  m_axil_wstrb;
-  wire        m_axil_wvalid;
-  reg         m_axil_wready = 1'b1;
-  reg [1:0]   m_axil_bresp = 2'b00;
-  reg         m_axil_bvalid = 1'b0;
-  wire        m_axil_bready;
-  wire [17:0] m_axil_araddr;
-  wire        m_axil_arvalid;
-  reg         m_axil_arready = 1'b1;
-  reg [31:0]  m_axil_rdata = 32'd0;
-  reg [1:0]   m_axil_rresp = 2'b00;
-  reg         m_axil_rvalid = 1'b0;
-  wire        m_axil_rready;
 
-  reg rfctrl2_sync_seen = 1'b0;
   reg rfdc_apply_start_seen = 1'b0;
-  reg mmio_write_seen = 1'b0;
-  reg mmio_read_seen = 1'b0;
-  reg [17:0] mmio_write_addr = 18'd0;
-  reg [31:0] mmio_write_data = 32'd0;
-  reg [17:0] mmio_read_addr = 18'd0;
-  reg [31:0] mmio_write_events = 32'd0;
   integer response_packet_count = 0;
   reg [63:0] resp_words [0:47];
   reg [5:0] resp_count = 6'd0;
@@ -84,8 +54,6 @@ module tb_pl_riscv_control_v1;
   reg [31:0] request_current [0:7];
   integer channel;
   integer packet_beat;
-  integer sync_case;
-  reg [3:0] sync_flags = 4'b1011;
   wire tdc_valid, tdc_write;
   wire [15:0] tdc_address;
   wire [31:0] tdc_wdata;
@@ -103,9 +71,6 @@ module tb_pl_riscv_control_v1;
     .rvctrl_tfirst(rvctrl_tfirst),
     .rvctrl_tlast(rvctrl_tlast),
     .rvctrl_word_count(rvctrl_word_count),
-    .rvctrl_protocol(rvctrl_protocol),
-    .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
-    .rfctrl2_epoch(rfctrl2_epoch),
     .rfdc_apply_start(rfdc_apply_start),
     .rfdc_apply_sequence(rfdc_apply_sequence),
     .rfdc_apply_revision(rfdc_apply_revision),
@@ -129,12 +94,8 @@ module tb_pl_riscv_control_v1;
     .dac_mts_tile_mask(4'hF), .dac_mts_error(16'd0),
     .nco_sync_ready(1'b1), .nco_sync_epoch(32'd7),
     .playback_armed(1'b0),
+    .playback_prepared(1'b0),
     .playback_running(1'b0),
-    .sync_role_master(sync_flags[3]), .sync_bypass(sync_flags[2]), .sync_seen(sync_flags[0]),
-    .sync_link_ready(sync_flags[1]), .sync_align_busy(1'b0), .sync_align_failed(1'b0),
-    .sync_alignment_epoch(6'd0), .sync_alignment_error(16'd0),
-    .trigger_input_count(32'd0), .trigger_accepted_count(32'd0),
-    .trigger_output_count(32'd0),
     .ext_trigger_phase_slot(3'd2), .ext_trigger_phase_valid(1'b1),
     .ext_trigger_phase_overflow(1'b0), .ext_trigger_phase_metastable(1'b0),
     .ext_trigger_tap_index(8'd137), .ext_trigger_phase_ps_x10(16'd1234),
@@ -174,44 +135,12 @@ module tb_pl_riscv_control_v1;
     .play_config_channel_mask(8'h03),
     .play_fifo_valid_mask(8'h02),
     .play_fifo_ready_mask(8'h0F),
-    .play_executor_state(8'h05),
-    .play_ddr_read_counter(32'h34),
-    .play_bad_instr_count(32'h12),
     .play_prefill_ready(1'b1),
-    .play_active_valid(1'b1),
-    .play_pending_valid(1'b1),
     .rvresp_tdata(rvresp_tdata),
     .rvresp_tvalid(rvresp_tvalid),
     .rvresp_tready(rvresp_tready),
     .rvresp_tlast(rvresp_tlast),
-    .rvresp_word_count(rvresp_word_count),
-    .m_axil_awaddr(m_axil_awaddr),
-    .m_axil_awvalid(m_axil_awvalid),
-    .m_axil_awready(m_axil_awready),
-    .m_axil_wdata(m_axil_wdata),
-    .m_axil_wstrb(m_axil_wstrb),
-    .m_axil_wvalid(m_axil_wvalid),
-    .m_axil_wready(m_axil_wready),
-    .m_axil_bresp(m_axil_bresp),
-    .m_axil_bvalid(m_axil_bvalid),
-    .m_axil_bready(m_axil_bready),
-    .m_axil_araddr(m_axil_araddr),
-    .m_axil_arvalid(m_axil_arvalid),
-    .m_axil_arready(m_axil_arready),
-    .m_axil_rdata(m_axil_rdata),
-    .m_axil_rresp(m_axil_rresp),
-    .m_axil_rvalid(m_axil_rvalid),
-    .m_axil_rready(m_axil_rready),
-    .dbg_status(dbg_status),
-    .dbg_last_seq(dbg_last_seq),
-    .dbg_last_cmd(),
-    .dbg_ping_count(),
-    .dbg_play_count(dbg_play_count),
-    .dbg_trigger_count(dbg_trigger_count),
-    .dbg_mmio_write_count(),
-    .dbg_error_count(),
-    .dbg_scratch(),
-    .dbg_state()
+    .rvresp_word_count(rvresp_word_count)
   );
 
   always @(posedge clk) begin
@@ -222,32 +151,15 @@ module tb_pl_riscv_control_v1;
       end
       if (rvresp_tvalid && rvresp_tready && rvresp_tlast)
         response_packet_count <= response_packet_count + 1;
-      if (rfctrl2_sync_epoch_pulse) begin
-        rfctrl2_sync_seen <= 1'b1;
-      end
       if (rfdc_apply_start) begin
         rfdc_apply_start_seen <= 1'b1;
-      end
-      if (m_axil_awvalid && m_axil_wvalid) begin
-        mmio_write_seen <= 1'b1;
-        mmio_write_addr <= m_axil_awaddr;
-        mmio_write_data <= m_axil_wdata;
-        mmio_write_events <= mmio_write_events + 32'd1;
-        m_axil_bvalid <= 1'b1;
-      end else if (m_axil_bready && m_axil_bvalid) begin
-        m_axil_bvalid <= 1'b0;
-      end
-      if (m_axil_arvalid) begin
-        mmio_read_seen <= 1'b1;
-        mmio_read_addr <= m_axil_araddr;
-        m_axil_rdata <= 32'hA5A500F0;
-        m_axil_rvalid <= 1'b1;
-      end else if (m_axil_rready && m_axil_rvalid) begin
-        m_axil_rvalid <= 1'b0;
       end
     end
   end
 
+  // One framed request beat.  count[28:0] is the request length in 32-bit
+  // words; the upper bits are ignored so the request words below can keep the
+  // 0xA000_00nn annotation that marks them as RFCTRL2 frames.
   task send_rv_beat(
     input [63:0] word,
     input first,
@@ -260,14 +172,12 @@ module tb_pl_riscv_control_v1;
       rvctrl_tfirst = first;
       rvctrl_tlast = last;
       rvctrl_word_count = {3'd0, count[28:0]};
-      rvctrl_protocol = count[29] ? 2'd2 : (count[31] ? 2'd1 : 2'd0);
       rvctrl_tvalid = 1'b1;
       @(negedge clk);
       rvctrl_tvalid = 1'b0;
       rvctrl_tfirst = 1'b0;
       rvctrl_tlast = 1'b0;
       rvctrl_word_count = 32'd0;
-      rvctrl_protocol = 2'd0;
       rvctrl_tdata = 64'd0;
     end
   endtask
@@ -278,19 +188,6 @@ module tb_pl_riscv_control_v1;
         $display("FAIL: %s", message);
         $finish;
       end
-    end
-  endtask
-
-  // Assert the actual serialized words, not just a software-generated
-  // payload: a 31-bit sync field used to shift version 3 down to version 1.
-  task check_status_identity(input [3:0] expected_flags);
-    begin
-      check_condition(resp_words[12][63:32] === 32'd3,
-                      "HELLO/STATUS trigger path version must occupy bits 63:32");
-      check_condition(resp_words[12][31:0] === {28'd0, expected_flags},
-                      "HELLO/STATUS sync flags must not overlap the identity word");
-      check_condition(resp_words[16] === 64'h89ABCDEF00010000,
-                      "HELLO/STATUS source commit and build profile mismatch");
     end
   endtask
 
@@ -306,26 +203,20 @@ module tb_pl_riscv_control_v1;
     end
   endtask
 
-  // These opcodes belonged to the removed RFCTRL2 playback control plane.
-  // A complete packet must receive an explicit unsupported response and must
-  // not alter the legacy instruction stream or trigger counters.
-  task check_removed_rf2_playback_opcode(input [31:0] opcode, input [31:0] seq);
+  // A complete, well-formed request with an opcode this board does not
+  // implement must be answered with UNSUPPORTED and nothing else.
+  task check_unsupported_opcode(input [31:0] opcode, input [31:0] seq);
     begin
       resp_count = 6'd0;
       send_rv_beat({opcode, 32'h00000003}, 1'b1, 1'b0, 32'hA0000006);
       send_rv_beat({32'd8, seq}, 1'b0, 1'b0, 32'hA0000006);
       send_rv_beat(64'h0000000000000000, 1'b0, 1'b1, 32'hA0000006);
       wait_for_response_count(3);
-      check_condition(resp_count == 6'd3, "removed RFCTRL2 playback opcode must receive a response");
-      check_condition(resp_words[0] == 64'h0032505345524652, "removed RFCTRL2 response magic mismatch");
+      check_condition(resp_count == 6'd3, "unsupported opcode must receive a response");
+      check_condition(resp_words[0] == 64'h0032505345524652, "unsupported response magic mismatch");
       check_condition(resp_words[1] == {opcode, 16'h0002, 16'h0003},
-                      "removed RFCTRL2 playback opcode must report unsupported");
-      check_condition(resp_words[2] == {32'd0, seq},
-                      "removed RFCTRL2 playback response sequence mismatch");
-      check_condition(dbg_play_count == 32'd0,
-                      "removed RFCTRL2 playback opcode must not increment play count");
-      check_condition(dbg_trigger_count == 32'd0,
-                      "removed RFCTRL2 playback opcode must not increment trigger count");
+                      "unsupported opcode must report UNSUPPORTED");
+      check_condition(resp_words[2] == {32'd0, seq}, "unsupported response sequence mismatch");
     end
   endtask
 
@@ -334,86 +225,26 @@ module tb_pl_riscv_control_v1;
     rst_n = 1'b1;
     repeat (2) @(negedge clk);
 
-    // RVCTRL0/1 playback commands are retired with the instruction executor.
-    // Verify that both protocol generations are inert instead of recreating a
-    // second playback control plane beside WAVECTR0.
-    send_rv_beat(64'h0000005500000002, 1'b1, 1'b0, 32'd4);
-    send_rv_beat(64'h0000000100001000, 1'b0, 1'b1, 32'd4);
-    repeat (8) @(negedge clk);
-    check_condition(dbg_play_count == 32'd0, "legacy RVCTRL0 PLAY must be inert");
-    check_condition(dbg_trigger_count == 32'd0, "legacy RVCTRL0 PLAY must not trigger");
+    // Playback is controlled only through WAVECTR0, and the multi-board SYNC,
+    // START_AT and diagnostic-snapshot operations do not exist on this board.
+    check_unsupported_opcode(32'h00000006, 32'h00000088); // ARM
+    check_unsupported_opcode(32'h00000007, 32'h00000089); // SYNC_EPOCH
+    check_unsupported_opcode(32'h00000008, 32'h0000008A); // START_AT
+    check_unsupported_opcode(32'h00000009, 32'h0000008B); // TRIGGER
+    check_unsupported_opcode(32'h0000000A, 32'h0000008C); // ABORT_MUTE
+    check_unsupported_opcode(32'h0000000F, 32'h0000008D); // SET_SYNC_ROLE
+    check_unsupported_opcode(32'h00000010, 32'h0000008E); // EMIT_TRIGGER
+    check_unsupported_opcode(32'h00000012, 32'h0000008F); // DIAG_SNAPSHOT
+    check_unsupported_opcode(32'h00000013, 32'h00000090); // DIAG_CONTROL
+    check_condition(!rfdc_apply_start_seen, "unsupported opcodes must not start an RFDC apply");
 
+    // A request carrying another protocol version is rejected as BAD_VERSION.
     resp_count = 6'd0;
-    send_rv_beat(64'h0000000600000001, 1'b1, 1'b0, 32'h80000006);
-    send_rv_beat(64'h0000000800000056, 1'b0, 1'b0, 32'h80000006);
-    send_rv_beat(64'd0, 1'b0, 1'b1, 32'h80000006);
+    send_rv_beat(64'h0000000200000002, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h0000000000000077, 1'b0, 1'b1, 32'hA0000004);
     wait_for_response_count(3);
-    check_condition(resp_words[1] == 64'h0000000600020001,
-                    "legacy RVCTRL1 PLAY must report unsupported");
-    check_condition(dbg_play_count == 32'd0, "legacy RVCTRL1 PLAY must be inert");
-
-    resp_count = 6'd0;
-    send_rv_beat(64'h0000000700000001, 1'b1, 1'b0, 32'h80000006);
-    send_rv_beat(64'h0000000800000057, 1'b0, 1'b0, 32'h80000006);
-    send_rv_beat(64'd0, 1'b0, 1'b1, 32'h80000006);
-    wait_for_response_count(3);
-    check_condition(resp_words[1] == 64'h0000000700020001,
-                    "legacy RVCTRL1 TRIGGER must report unsupported");
-    check_condition(dbg_trigger_count == 32'd0, "legacy RVCTRL1 TRIGGER must be inert");
-
-    // RVCTRL1 MMIO_WRITE32: header0, header1, payload(addr,value).
-    send_rv_beat(64'h0000000300000001, 1'b1, 1'b0, 32'h80000006);
-    send_rv_beat(64'h0000000800000077, 1'b0, 1'b0, 32'h80000006);
-    send_rv_beat(64'hCAFE123400000120, 1'b0, 1'b1, 32'h80000006);
-    repeat (12) @(negedge clk);
-    check_condition(mmio_write_seen == 1'b1, "RVCTRL1 MMIO_WRITE32 should create an AXI-Lite write");
-    check_condition(mmio_write_addr == 18'h00120, "RVCTRL1 MMIO_WRITE32 address mismatch");
-    check_condition(mmio_write_data == 32'hCAFE1234, "RVCTRL1 MMIO_WRITE32 data mismatch");
-    check_condition(dbg_status == 32'h10000003, "RVCTRL1 MMIO_WRITE32 status mismatch");
-
-    mmio_read_seen = 1'b0;
-    resp_count = 6'd0;
-    send_rv_beat(64'h0000000200000001, 1'b1, 1'b0, 32'h80000005);
-    send_rv_beat(64'h0000000400000078, 1'b0, 1'b0, 32'h80000005);
-    send_rv_beat(64'h0000000000000124, 1'b0, 1'b1, 32'h80000005);
-    wait_for_response_count(4);
-    check_condition(mmio_read_seen == 1'b1, "RVCTRL1 MMIO_READ32 should create an AXI-Lite read");
-    check_condition(mmio_read_addr == 18'h00124, "RVCTRL1 MMIO_READ32 address mismatch");
-    check_condition(dbg_status == 32'h10000002, "RVCTRL1 MMIO_READ32 status mismatch");
-    check_condition(resp_count == 6'd4, "RVCTRL1 MMIO_READ32 should emit a 4-word RVRESP1 packet");
-    check_condition(resp_words[0] == 64'h0031505345525652, "RVRESP1 magic mismatch");
-    check_condition(resp_words[1] == 64'h0000000200000001, "RVRESP1 MMIO_READ32 hdr0 mismatch");
-    check_condition(resp_words[2] == 64'h0000000800000078, "RVRESP1 MMIO_READ32 hdr1 mismatch");
-    check_condition(resp_words[3] == 64'hA5A500F000000124, "RVRESP1 MMIO_READ32 payload mismatch");
-
-    mmio_write_seen = 1'b0;
-    send_rv_beat(64'h0000000400000001, 1'b1, 1'b0, 32'h80000007);
-    send_rv_beat(64'h0000000C00000079, 1'b0, 1'b0, 32'h80000007);
-    send_rv_beat(64'h000000FF00000128, 1'b0, 1'b0, 32'h80000007);
-    send_rv_beat(64'h0000000000000055, 1'b0, 1'b1, 32'h80000007);
-    repeat (12) @(negedge clk);
-    check_condition(mmio_write_seen == 1'b1, "RVCTRL1 MMIO_RMW32 should create a write after read");
-    check_condition(mmio_write_addr == 18'h00128, "RVCTRL1 MMIO_RMW32 write address mismatch");
-    check_condition(mmio_write_data == 32'hA5A50055, "RVCTRL1 MMIO_RMW32 write data mismatch");
-
-    mmio_write_events = 32'd0;
-    send_rv_beat(64'h0000000500000001, 1'b1, 1'b0, 32'h80000009);
-    send_rv_beat(64'h000000140000007A, 1'b0, 1'b0, 32'h80000009);
-    send_rv_beat(64'h0000013000000002, 1'b0, 1'b0, 32'h80000009);
-    send_rv_beat(64'h0000014000000001, 1'b0, 1'b0, 32'h80000009);
-    send_rv_beat(64'h0000000000000002, 1'b0, 1'b1, 32'h80000009);
-    repeat (24) @(negedge clk);
-    check_condition(mmio_write_events == 32'd2, "RVCTRL1 MMIO_BATCH should create two writes");
-
-    // RFCTRL2 playback opcodes are intentionally removed from the single-board
-    // protocol.  Exercise the full packet path to prove they are rejected
-    // without reopening the deleted ARM/START/TRIGGER/ABORT control plane.
-    check_removed_rf2_playback_opcode(32'h00000006, 32'h00000088); // ARM
-    check_removed_rf2_playback_opcode(32'h00000008, 32'h00000089); // START_AT
-    check_removed_rf2_playback_opcode(32'h00000009, 32'h0000008A); // TRIGGER
-    check_removed_rf2_playback_opcode(32'h0000000A, 32'h0000008B); // ABORT_MUTE
-    check_removed_rf2_playback_opcode(32'h0000000F, 32'h0000008C); // SET_SYNC_ROLE
-    check_removed_rf2_playback_opcode(32'h00000010, 32'h0000008D); // EMIT_TRIGGER
+    check_condition(resp_count == 6'd3, "bad-version request must receive a response");
+    check_condition(resp_words[1] == 64'h0000000200010003, "bad-version status mismatch");
 
     resp_count = 6'd0;
     send_rv_beat(64'h0000000200000003, 1'b1, 1'b0, 32'hA0000004);
@@ -423,34 +254,30 @@ module tb_pl_riscv_control_v1;
     check_condition(resp_words[0] == 64'h0032505345524652, "RFRESP2 STATUS magic mismatch");
     check_condition(resp_words[1] == 64'h0000000200000003, "RFRESP2 STATUS header mismatch");
     check_condition(resp_words[2] == 64'h000000800000008A, "RFRESP2 STATUS sequence mismatch");
-    check_status_identity(sync_flags);
+    // state flags: MTS required | NCO sync | MTS ready | RFDC ready; capabilities 0x005F0000.
+    check_condition(resp_words[3] == 64'h000001A1005F0000, "RFRESP2 STATUS flags/capabilities mismatch");
+    check_condition(resp_words[7] == 64'h0000000200000003, "RFRESP2 STATUS channel/fifo-valid masks mismatch");
+    check_condition(resp_words[8] == 64'h000000000000000F, "RFRESP2 STATUS fifo-ready mask mismatch");
+    check_condition(resp_words[9] == 64'd0, "RFRESP2 STATUS reserved word 9 must be zero");
+    check_condition(resp_words[10] == 64'h0000000000000001, "RFRESP2 STATUS prefill flag mismatch");
+    check_condition(resp_words[11] == 64'h00000007000000F5, "RFRESP2 STATUS MTS/NCO sync mismatch");
+    // The trigger-path version occupies bits 63:32 of this word.
+    check_condition(resp_words[12] == 64'h0000000300000000, "RFRESP2 STATUS trigger path version mismatch");
+    check_condition(resp_words[13] == 64'd0 && resp_words[14] == 64'd0 && resp_words[15] == 64'd0,
+                    "RFRESP2 STATUS reserved words 13..15 must be zero");
+    check_condition(resp_words[16] == 64'h89ABCDEF00010000,
+                    "RFRESP2 STATUS source commit and build profile mismatch");
     check_condition(resp_words[17] == 64'h0000000004D2890A, "RFRESP2 STATUS TDC fields mismatch");
-    check_condition(resp_words[7] == 64'h0000000200000003, "RFRESP2 STATUS playback config/fifo-valid debug mismatch");
-    check_condition(resp_words[8] == 64'h000000050000000F, "RFRESP2 STATUS executor/fifo-ready debug mismatch");
-    check_condition(resp_words[9] == 64'h0000001200000034, "RFRESP2 STATUS counters debug mismatch");
-    check_condition(resp_words[10] == 64'h0000000300000001, "RFRESP2 STATUS prefill/active/pending debug mismatch");
-    check_condition(resp_words[11] == 64'h00000007000000F5, "RFRESP2 STATUS MTS/NCO sync debug mismatch");
+    check_condition(resp_words[18] == 64'd0, "RFRESP2 STATUS reserved word 18 must be zero");
 
-    // Both operations share the status serializer. Cover both roles and
-    // every combination of bypass/ready/seen without relaxing host checks.
-    for (sync_case = 0; sync_case < 16; sync_case = sync_case + 1) begin
-      sync_flags = sync_case[3:0];
-      resp_count = 0;
-      send_rv_beat(64'h0000000100000003, 1'b1, 1'b0, 32'hA0000004);
-      send_rv_beat(64'h00000000000000B0 + sync_case, 1'b0, 1'b1, 32'hA0000004);
-      wait_for_response_count(19);
-      check_condition(resp_count == 19, "RFCTRL2 HELLO response length mismatch");
-      check_condition(resp_words[1] == 64'h0000000100000003, "RFCTRL2 HELLO header mismatch");
-      check_status_identity(sync_flags);
-      resp_count = 0;
-      send_rv_beat(64'h0000000200000003, 1'b1, 1'b0, 32'hA0000004);
-      send_rv_beat(64'h00000000000000C0 + sync_case, 1'b0, 1'b1, 32'hA0000004);
-      wait_for_response_count(19);
-      check_condition(resp_count == 19, "RFCTRL2 STATUS response length mismatch");
-      check_condition(resp_words[1] == 64'h0000000200000003, "RFCTRL2 STATUS header mismatch");
-      check_status_identity(sync_flags);
-    end
-    sync_flags = 4'b1011;
+    // HELLO shares the status serializer.
+    resp_count = 0;
+    send_rv_beat(64'h0000000100000003, 1'b1, 1'b0, 32'hA0000004);
+    send_rv_beat(64'h00000000000000B0, 1'b0, 1'b1, 32'hA0000004);
+    wait_for_response_count(19);
+    check_condition(resp_count == 19, "RFCTRL2 HELLO response length mismatch");
+    check_condition(resp_words[1] == 64'h0000000100000003, "RFCTRL2 HELLO header mismatch");
+    check_condition(resp_words[16] == 64'h89ABCDEF00010000, "RFCTRL2 HELLO identity mismatch");
 
     resp_count = 0;
     send_rv_beat(64'h0000001100000003, 1'b1, 1'b0, 32'hA0000008);
@@ -558,38 +385,38 @@ module tb_pl_riscv_control_v1;
     check_condition(!rfdc_apply_start_seen, "RFDC_APPLY must reject a non-zero final reserved word");
     check_condition(resp_words[1] == 64'h0000000300030003, "invalid RFDC_APPLY status mismatch");
 
+    // The receive counters must accept the full 64-word request and drop an
+    // oversized one without wrapping the write index.  Both carry opcode
+    // 0x1234, so only the request that is processed is answered.
     resp_count = 6'd0;
-    send_rv_beat(64'h0000000700000003, 1'b1, 1'b0, 32'hA0000006);
-    send_rv_beat(64'h0000000800000089, 1'b0, 1'b0, 32'hA0000006);
-    send_rv_beat(64'h1122334455667788, 1'b0, 1'b1, 32'hA0000006);
-    wait_for_response_count(4);
-    check_condition(rfctrl2_sync_seen == 1'b1, "RFCTRL2 SYNC_EPOCH must emit a sync pulse");
-    check_condition(rfctrl2_epoch == 64'h1122334455667788, "RFCTRL2 SYNC_EPOCH payload mismatch");
-
-    // The narrowed receive counters must still accept the full 64-word
-    // payload and reject an oversized packet without wrapping the write index.
     for (packet_beat = 0; packet_beat < 32; packet_beat = packet_beat + 1) begin
       send_rv_beat(
-          packet_beat == 0 ? 64'h0000123400000001 : {32'hA5000000 + packet_beat, 32'h5A000000 + packet_beat},
+          packet_beat == 0 ? 64'h0000123400000003 :
+          packet_beat == 1 ? 64'h000000F0000000D1 :
+                             {32'hA5000000 + packet_beat, 32'h5A000000 + packet_beat},
           packet_beat == 0,
           packet_beat == 31,
           32'd64
       );
     end
-    repeat (4) @(negedge clk);
-    check_condition(dbg_play_count == 32'd0, "64-word boundary packet must not recreate a retired playback command");
-    check_condition(dut.dbg_ping_count == 32'd1, "64-word boundary packet must be processed");
+    wait_for_response_count(3);
+    check_condition(resp_count == 6'd3, "64-word boundary request must be processed");
+    check_condition(resp_words[1] == 64'h0000123400020003, "64-word boundary request status mismatch");
+    check_condition(resp_words[2] == 64'h00000000000000D1, "64-word boundary request sequence mismatch");
 
+    resp_count = 6'd0;
     for (packet_beat = 0; packet_beat < 33; packet_beat = packet_beat + 1) begin
       send_rv_beat(
-          packet_beat == 0 ? 64'h0000567800000001 : {32'hC3000000 + packet_beat, 32'h3C000000 + packet_beat},
+          packet_beat == 0 ? 64'h0000123400000003 :
+          packet_beat == 1 ? 64'h000000F4000000D2 :
+                             {32'hC3000000 + packet_beat, 32'h3C000000 + packet_beat},
           packet_beat == 0,
           packet_beat == 32,
           32'd65
       );
     end
-    repeat (4) @(negedge clk);
-    check_condition(dut.dbg_ping_count == 32'd1, "65-word packet must be dropped without index wrap");
+    repeat (16) @(negedge clk);
+    check_condition(resp_count == 6'd0, "65-word request must be dropped without index wrap");
 
     // Hold the first response under backpressure and issue a second STATUS.
     // The second response must be retained in the response FIFO rather than
@@ -610,7 +437,7 @@ module tb_pl_riscv_control_v1;
     check_condition(response_packet_count == 2,
                     "both queued STATUS responses must be transmitted");
 
-    $display("PASS: PL control shim rejects removed RFCTRL2 playback commands and preserves RFDC_APPLY/SYNC_EPOCH");
+    $display("PASS: RFCTRL2 control decodes STATUS/TDC/RFDC_APPLY and rejects unsupported operations");
     $finish;
   end
 endmodule

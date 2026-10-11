@@ -10,7 +10,7 @@ from __future__ import annotations
 import socket
 import struct
 import operator
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from .errors import ParameterRangeError, ProtocolError, ProtocolVersionError
 
@@ -19,9 +19,6 @@ UDP_RFRESP2_MAGIC = 0x0032505345524652
 RFCTRL2_VERSION = 3
 RF2_OP_HELLO = 0x01
 RF2_OP_STATUS = 0x02
-RF2_OP_SYNC_EPOCH = 0x07
-RF2_OP_START_AT = 0x08
-
 RF2_OP_RFDC_APPLY = 0x03
 # RFCTRL2 keeps the board-wide RFDC/network control plane. Playback has its own
 # deliberately small wire contract below; no ARM/TRIGGER/ABORT_MUTE aliases are
@@ -31,8 +28,6 @@ RF2_OP_NETWORK_GET = 0x0C
 RF2_OP_NETWORK_APPLY = 0x0D
 RF2_OP_NETWORK_RESTART = 0x0E
 RF2_OP_TDC_REG = 0x11
-RF2_OP_DIAG_SNAPSHOT = 0x12
-RF2_OP_DIAG_CONTROL = 0x13
 
 # Unified single-board waveform control protocol.
 WAVE_CTRL_MAGIC = 0x5741564543545230  # ASCII "WAVECTR0"
@@ -119,16 +114,12 @@ RF2_CAP_RFDC_GET_CONFIG = 0x00020000
 RF2_CAP_NETWORK_CONFIG = 0x00040000
 RF2_CAP_DAC_MTS = 0x00080000
 RF2_CAP_NCO_SYNC = 0x00100000
-RF2_CAP_SYNC_IO = 0x00200000
 RF2_CAP_TRIGGER_IO = 0x00400000
-RF2_CAP_DIAGNOSTICS = 0x00800000
 
 RF2_BUILD_PROFILE_UNKNOWN = 0
 RF2_BUILD_PROFILE_NORMAL = 1
-RF2_BUILD_PROFILE_BANDWIDTH = 3
 RF2_BUILD_PROFILE_NAMES = {
     RF2_BUILD_PROFILE_NORMAL: "custom_xczu47dr",
-    RF2_BUILD_PROFILE_BANDWIDTH: "custom_xczu47dr_bw",
 }
 RF2_TRIGGER_PATH_VERSION = 3
 # The source commit is populated by the Vivado project script.  A driver can
@@ -145,7 +136,6 @@ RF2_STATUS_DAC_MTS_FAILED = 0x00000040
 RF2_STATUS_NCO_SYNC_READY = 0x00000080
 RF2_STATUS_DAC_MTS_REQUIRED = 0x00000100
 RF2_NET_STATUS_HMC_DONE = 0x00000020
-RF2_NET_STATUS_SYNC_DONE = 0x00000040
 
 RF2_STATUS_OK = 0x0000
 RF2_STATUS_BAD_VERSION = 0x0001
@@ -170,62 +160,19 @@ RFDC_NCO_MAX_HZ = 3_200_000_000
 NETWORK_RESPONSE_BYTES = 64
 NETWORK_EXT_RESPONSE_BYTES = 80
 
-UDP_WAVE_DDR_MAGIC = 0x5741564544445230
-UDP_WAVE_BULK_MAGIC = 0x5741564553545230
-UDP_WAVE_INSTR_MAGIC = 0x57415645494E5330
-WAVEDDR0_MAGIC = UDP_WAVE_DDR_MAGIC
-WAVESTR0_MAGIC = UDP_WAVE_BULK_MAGIC
-WAVEINS0_MAGIC = UDP_WAVE_INSTR_MAGIC
 BEAT_BYTES = 32
-DDR_BASE = 0
-DDR_TILE_BYTES = 4096
-DDR_TILE_CHANNELS = 8
-DDR_SUPERBLOCK_BYTES = DDR_TILE_BYTES * DDR_TILE_CHANNELS
 DDR_INTERLEAVED_LANE_BYTES = 8
-DDR_INTERLEAVED_BEAT_BYTES = DDR_INTERLEAVED_LANE_BYTES * DDR_TILE_CHANNELS
-DDR_INTERLEAVED_CHANNELS = DDR_TILE_CHANNELS
+DDR_INTERLEAVED_CHANNELS = 8
+DDR_INTERLEAVED_BEAT_BYTES = DDR_INTERLEAVED_LANE_BYTES * DDR_INTERLEAVED_CHANNELS
 DDR_PHYS_BYTES = 8 * 1024 * 1024 * 1024
 DDR_RESERVED_TOP_BYTES = 1 * 1024 * 1024
 DDR_USABLE_WAVEFORM_BYTES = DDR_PHYS_BYTES - DDR_RESERVED_TOP_BYTES
 DDR_MAX_BYTES_PER_CHANNEL = (DDR_USABLE_WAVEFORM_BYTES // DDR_INTERLEAVED_CHANNELS) & ~(BEAT_BYTES - 1)
 DDR_MAX_INTERLEAVED_BYTES = DDR_MAX_BYTES_PER_CHANNEL * DDR_INTERLEAVED_CHANNELS
-FIXED_DATA_BYTES = DDR_TILE_BYTES
-PLAY_FLAG_LOOP = 0x1
-PLAY_FLAG_TILED = 0x2
-PLAY_FLAG_INTERLEAVED = 0x4
-REPEAT_FLAG_DEBUG_ALTERNATE = 0x1
-CMD_DELAY = 0x1
-CMD_PLAY = 0x2
-CMD_END = 0x3
-CMD_REPEAT = 0x4
 UDP_STANDARD_MTU_BYTES = 1500
 UDP_IPV4_HEADER_BYTES = 20
 UDP_HEADER_BYTES = 8
 UDP_MAX_PAYLOAD_BYTES = UDP_STANDARD_MTU_BYTES - UDP_IPV4_HEADER_BYTES - UDP_HEADER_BYTES
-UDP_BULK_HEADER_BYTES = 24
-UDP_BULK_MAX_BEATS = (UDP_MAX_PAYLOAD_BYTES - UDP_BULK_HEADER_BYTES) // DDR_INTERLEAVED_BEAT_BYTES
-UDP_BULK_SAFE_MAX_BEATS = 4
-
-CHANNEL_ROLES = {
-    1: "xy", 2: "xy", 3: "xy", 4: "xy",
-    5: "z", 6: "z", 7: "readout", 8: "readout",
-}
-
-
-def validate_udp_bulk_beats(beats_per_datagram: int) -> int:
-    beats = int(beats_per_datagram)
-    if beats <= 0:
-        raise ParameterRangeError("beats_per_datagram must be positive")
-    if beats > UDP_BULK_SAFE_MAX_BEATS:
-        raise ParameterRangeError(
-            f"beats_per_datagram={beats} exceeds the PL UDP bulk parser limit of {UDP_BULK_SAFE_MAX_BEATS}"
-        )
-    payload_bytes = UDP_BULK_HEADER_BYTES + beats * DDR_INTERLEAVED_BEAT_BYTES
-    if payload_bytes > UDP_MAX_PAYLOAD_BYTES:
-        raise ParameterRangeError(
-            f"beats_per_datagram={beats} produces a {payload_bytes}-byte UDP payload; maximum is {UDP_MAX_PAYLOAD_BYTES}"
-        )
-    return beats
 
 
 def pack_rfctrl2_packet(opcode: int, payload: bytes = b"", seq: int = 1, flags: int = 0) -> bytes:
@@ -242,16 +189,6 @@ def pack_rfctrl2_hello(seq: int = 1) -> bytes:
 
 def pack_rfctrl2_status(seq: int = 1) -> bytes:
     return pack_rfctrl2_packet(RF2_OP_STATUS, seq=seq)
-
-
-def pack_rfctrl2_diag_snapshot(seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_DIAG_SNAPSHOT, seq=seq)
-
-
-def pack_rfctrl2_diag_control(events: int = 0, counters: bool = False, seq: int = 1) -> bytes:
-    """Clear sticky diagnostic events and/or counters (W1C semantics)."""
-    flags = 1 if counters else 0
-    return pack_rfctrl2_packet(RF2_OP_DIAG_CONTROL, struct.pack("<II", int(events) & 0xFFFFFFFF, flags), seq=seq)
 
 
 def crc32(payload: bytes) -> int:
@@ -478,14 +415,6 @@ def parse_wave_response(packet: bytes, *, validate_version: bool = True) -> dict
         })
     return result
 
-def pack_rfctrl2_sync_epoch(epoch: int, seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_SYNC_EPOCH, struct.pack("<Q", int(epoch) & 0xFFFFFFFFFFFFFFFF), seq=seq)
-
-
-def pack_rfctrl2_start_at(start_tick: int, seq: int = 1) -> bytes:
-    return pack_rfctrl2_packet(RF2_OP_START_AT, struct.pack("<Q", int(start_tick) & 0xFFFFFFFFFFFFFFFF), seq=seq)
-
-
 def pack_rfctrl2_tdc_register(address: int, *, write: bool = False, data: int = 0, seq: int = 1) -> bytes:
     """Access an aligned 32-bit TDC register; addresses are byte offsets."""
     try:
@@ -651,20 +580,14 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         "last_revision": 0, "last_error": 0, "last_error_stage": 0,
         "last_error_addr": 0, "play_config_channel_mask": 0,
         "play_fifo_valid_mask": 0, "play_fifo_ready_mask": 0,
-        "play_executor_state": 0, "play_ddr_read_counter": 0,
-        "play_bad_instr_count": 0, "play_prefill_ready": False,
-        "play_active_valid": False, "play_pending_valid": False,
+        "play_prefill_ready": False,
         "dac_mts_required": False, "dac_mts_ready": False,
         "dac_mts_failed": False, "dac_mts_tile_mask": 0, "dac_mts_error": 0,
         "nco_sync_ready": False, "nco_sync_epoch": 0,
-        "sync_status": 0,
-        "trigger_input_count": 0, "trigger_accepted_count": 0,
-        "trigger_output_count": 0,
         "ext_trigger_phase_slot": 0, "ext_trigger_phase_valid": False,
         "ext_trigger_phase_overflow": False,
         "ext_trigger_phase_metastable": False,
         "ext_trigger_tap_index": 0, "ext_trigger_phase_ps_x10": 0,
-        "playback_admitted_count": 0, "playback_skipped_count": 0,
         "build_profile_id": RF2_BUILD_PROFILE_UNKNOWN, "build_profile": "",
         "source_commit_id": RF2_SOURCE_COMMIT_UNKNOWN,
         "trigger_path_version": 0,
@@ -676,16 +599,11 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
             result["last_error_addr"], _reserved,
         ) = struct.unpack_from("<IIIIIIII", payload)
     if len(payload) >= 64:
-        play_config, play_ready, play_counters, play_flags = struct.unpack_from("<QQQQ", payload, 32)
+        play_config, play_ready, _reserved, play_flags = struct.unpack_from("<QQQQ", payload, 32)
         result["play_config_channel_mask"] = play_config & 0xFF
         result["play_fifo_valid_mask"] = (play_config >> 32) & 0xFF
         result["play_fifo_ready_mask"] = play_ready & 0xFF
-        result["play_executor_state"] = (play_ready >> 32) & 0xFF
-        result["play_ddr_read_counter"] = play_counters & 0xFFFFFFFF
-        result["play_bad_instr_count"] = (play_counters >> 32) & 0xFFFFFFFF
         result["play_prefill_ready"] = bool(play_flags & 1)
-        result["play_pending_valid"] = bool((play_flags >> 32) & 1)
-        result["play_active_valid"] = bool((play_flags >> 33) & 1)
     if len(payload) >= 72:
         mts_flags, result["nco_sync_epoch"] = struct.unpack_from("<II", payload, 64)
         result["dac_mts_ready"] = bool(mts_flags & 1)
@@ -694,16 +612,9 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["dac_mts_tile_mask"] = (mts_flags >> 4) & 0xF
         result["dac_mts_error"] = (mts_flags >> 16) & 0xFFFF
     if len(payload) >= 80:
-        result["sync_status"] = struct.unpack_from("<I", payload, 72)[0]
-        # The identity extension shares this word with the legacy sync flags:
-        # upper 32 bits carry the trigger path version.
-        result["trigger_path_version"] = (struct.unpack_from("<Q", payload, 72)[0] >> 32) & 0xFFFFFFFF
-    if len(payload) >= 88:
-        result["trigger_input_count"], result["trigger_accepted_count"] = struct.unpack_from("<II", payload, 80)
-    if len(payload) >= 96:
-        result["trigger_output_count"] = struct.unpack_from("<I", payload, 88)[0]
-    # STATUS extensions are appended after the legacy 96-byte payload.  A
-    # short response therefore remains fully usable with default values.
+        # Payload bytes 72..75 are reserved; 76..79 carry the trigger path version.
+        result["trigger_path_version"] = struct.unpack_from("<I", payload, 76)[0]
+    # Payload bytes 80..103 are reserved.
     if len(payload) >= 112:
         identity_word = struct.unpack_from("<Q", payload, 104)[0]
         result["source_commit_id"] = (identity_word >> 32) & 0xFFFFFFFF
@@ -717,8 +628,6 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
         result["ext_trigger_phase_metastable"] = bool((phase_word >> 5) & 1)
         result["ext_trigger_tap_index"] = (phase_word >> 8) & 0xFF
         result["ext_trigger_phase_ps_x10"] = (phase_word >> 16) & 0xFFFF
-    if len(payload) >= 128:
-        result["playback_admitted_count"], result["playback_skipped_count"] = struct.unpack_from("<II", payload, 120)
     result["rfdc_ready"] = bool(result["state_flags"] & RF2_STATUS_RFDC_READY)
     result["rfdc_busy"] = bool(result["state_flags"] & RF2_STATUS_RFDC_BUSY)
     result["armed"] = bool(result["state_flags"] & RF2_STATUS_ARMED)
@@ -728,74 +637,6 @@ def parse_rfctrl2_status_payload(response: Mapping) -> dict:
     result["dac_mts_failed"] = result["dac_mts_failed"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_FAILED)
     result["nco_sync_ready"] = bool(result["state_flags"] & RF2_STATUS_NCO_SYNC_READY)
     result["dac_mts_required"] = result["dac_mts_required"] or bool(result["state_flags"] & RF2_STATUS_DAC_MTS_REQUIRED)
-    return result
-
-
-def parse_rfctrl2_diagnostics_payload(response: Mapping) -> dict:
-    """Decode the fixed v3 diagnostic snapshot payload.
-
-    The first eight words are intentionally stable; newer firmware may append
-    more words and older snapshots remain readable through the defaults.
-    """
-    payload = bytes(response.get("payload", b""))
-    result = dict(response)
-    result.update({
-        "generation": 0, "trigger_input_count": 0, "trigger_capture_tick": 0,
-        "trigger_accepted_count": 0, "trigger_skipped_count": 0,
-        "trigger_rejected_count": 0, "trigger_launch_tick": 0,
-        "playback_start_tick": 0, "first_valid_tick": 0,
-        "trigger_to_launch_last": 0, "launch_to_first_valid_last": 0,
-        "replay_ready": False, "replay_active": False, "fifo_level": tuple(),
-        "prepared_dac": False, "output_permitted_dac": False,
-        "underflow_mask": 0, "mute": False, "abort": False,
-        "rfdc_status": 0, "rfdc_failure_stage": 0, "rfdc_failure_address": 0,
-        "rfdc_axi_response": 0, "dma_chunk_beats": 0,
-        "dma_outstanding_beats": 0, "refill_start_tick": 0, "refill_done_tick": 0,
-        "dac_direct_input_count": 0, "dac_direct_accept_count": 0,
-        "dac_direct_trigger_pulse": False, "dac_trigger_launch": False,
-    })
-    if len(payload) >= 8:
-        result["generation"] = struct.unpack_from("<Q", payload, 0)[0]
-    fields = ["trigger_input_count", "trigger_capture_tick", "trigger_accepted_count",
-              "trigger_skipped_count", "trigger_rejected_count", "trigger_launch_tick",
-              "playback_start_tick", "first_valid_tick"]
-    for i, name in enumerate(fields, start=1):
-        if len(payload) >= (i + 1) * 8:
-            result[name] = struct.unpack_from("<Q", payload, i * 8)[0]
-    if len(payload) >= 96:
-        word = struct.unpack_from("<Q", payload, 88)[0]
-        result["replay_ready"] = bool(word & 1)
-        result["replay_active"] = bool(word & 2)
-        result["dac_direct_trigger_pulse"] = bool((word >> 2) & 1)
-        result["dac_trigger_launch"] = bool((word >> 3) & 1)
-        result["prepared_dac"] = bool((word >> 4) & 1)
-        result["output_permitted_dac"] = bool((word >> 5) & 1)
-        result["underflow_mask"] = (word >> 8) & 0xFF
-        result["mute"] = bool((word >> 6) & 1)
-        result["abort"] = bool((word >> 7) & 1)
-    if len(payload) >= 104:
-        result["trigger_to_launch_last"] = struct.unpack_from("<Q", payload, 72)[0]
-        result["launch_to_first_valid_last"] = struct.unpack_from("<Q", payload, 80)[0]
-    if len(payload) >= 104:
-        status_word = struct.unpack_from("<Q", payload, 96)[0]
-        result["rfdc_failure_stage"] = status_word & 0xFFFF
-        result["rfdc_status"] = (status_word >> 16) & 0xFFFF
-    if len(payload) >= 112:
-        failure_word = struct.unpack_from("<Q", payload, 104)[0]
-        result["rfdc_failure_address"] = failure_word & 0x3FFFF
-        result["rfdc_axi_response"] = (failure_word >> 18) & 0x3
-    if len(payload) >= 120:
-        direct_word = struct.unpack_from("<Q", payload, 112)[0]
-        result["dac_direct_input_count"] = direct_word & 0xFFFFFFFF
-        result["dac_direct_accept_count"] = (direct_word >> 32) & 0xFFFFFFFF
-    if len(payload) >= 128:
-        result["dma_chunk_beats"] = struct.unpack_from("<Q", payload, 120)[0] & 0xFFFFFFFF
-    if len(payload) >= 136:
-        result["dma_outstanding_beats"] = struct.unpack_from("<Q", payload, 128)[0] & 0xFFFFFFFF
-    if len(payload) >= 144:
-        event_word = struct.unpack_from("<Q", payload, 136)[0]
-        result["dac_direct_trigger_pulse"] = result["dac_direct_trigger_pulse"] or bool((event_word >> 32) & 1)
-        result["dac_trigger_launch"] = result["dac_trigger_launch"] or bool((event_word >> 33) & 1)
     return result
 
 
@@ -831,7 +672,7 @@ def parse_rfctrl2_rfdc_config_response(response: Mapping) -> dict:
 
 
 def parse_rfctrl2_network_response(response: Mapping) -> dict:
-    """Decode the optional network discovery response used by the web console."""
+    """Decode a NETWORK_GET / NETWORK_APPLY / NETWORK_RESTART response."""
     payload = bytes(response.get("payload", b""))
     result = dict(response)
     result.update({"device_uid": "", "current_ip": "", "current_mac": "",
@@ -841,7 +682,7 @@ def parse_rfctrl2_network_response(response: Mapping) -> dict:
                    "build_profile_id": RF2_BUILD_PROFILE_UNKNOWN, "build_profile": "",
                    "playback_state": 0, "playback_armed": False, "playback_prepared": False,
                    "playback_running": False, "rfdc_config_valid_mask": 0,
-                   "hmc_done": False, "sync_done": False})
+                   "hmc_done": False})
     if not payload and int(result.get("status", RF2_STATUS_BAD_REQUEST)) != RF2_STATUS_OK:
         return result
     if len(payload) not in {NETWORK_RESPONSE_BYTES, NETWORK_EXT_RESPONSE_BYTES}:
@@ -870,7 +711,6 @@ def parse_rfctrl2_network_response(response: Mapping) -> dict:
     result["playback_prepared"] = bool(result["playback_state"] & RF2_STATUS_PREPARED)
     result["playback_running"] = bool(result["playback_state"] & RF2_STATUS_RUNNING)
     result["hmc_done"] = bool(result["status_flags"] & RF2_NET_STATUS_HMC_DONE)
-    result["sync_done"] = bool(result["status_flags"] & RF2_NET_STATUS_SYNC_DONE)
     return result
 
 
@@ -888,6 +728,6 @@ def require_beat_aligned(value: int, name: str = "value") -> int:
     return value
 
 
-__all__ = [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "PLAY_", "REPEAT_", "CMD_", "CHANNEL_", "WAVE", "pack_", "parse_", "align_", "require_", "normalize_", "validate_"))] + [
-    "BEAT_BYTES", "FIXED_DATA_BYTES", "CHANNEL_ROLES", "DDR_BASE", "DDR_TILE_BYTES", "DDR_TILE_CHANNELS", "crc32",
+__all__ = [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "WAVE", "pack_", "parse_", "align_", "require_", "normalize_"))] + [
+    "BEAT_BYTES", "crc32",
 ]

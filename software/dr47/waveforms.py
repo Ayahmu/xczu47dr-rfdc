@@ -3,44 +3,23 @@
 from __future__ import annotations
 
 import math
-import struct
-from typing import Any, Literal, Mapping
+from typing import Literal, Mapping
 
 import numpy as np
 
 from .errors import ParameterRangeError, WaveformFormatError
 from .protocol import (
-    BEAT_BYTES,
-    CHANNEL_ROLES,
-    DDR_BASE,
     DDR_INTERLEAVED_BEAT_BYTES,
     DDR_INTERLEAVED_CHANNELS,
     DDR_INTERLEAVED_LANE_BYTES,
-    DDR_MAX_BYTES_PER_CHANNEL,
-    DDR_SUPERBLOCK_BYTES,
-    DDR_TILE_BYTES,
-    DDR_TILE_CHANNELS,
-    UDP_WAVE_BULK_MAGIC,
     align_bytes_to_beat,
-    require_beat_aligned,
-    validate_udp_bulk_beats,
 )
 
-DEFAULT_DDR_LAYOUT = "interleaved_512b"
-DDR_LAYOUT_CONTIGUOUS = "contiguous"
-DDR_LAYOUT_TILED = "tiled"
-DDR_LAYOUT_INTERLEAVED_512B = DEFAULT_DDR_LAYOUT
 DAC_TILE_FS = 6.4e9
 DAC_INTERP = 16
 DAC_IQ_SAMPLE_RATE_HZ = DAC_TILE_FS / DAC_INTERP
-DAC_FABRIC_HZ = DAC_IQ_SAMPLE_RATE_HZ / 8
 DEFAULT_WAVEFORM_SAMPLE_RATE_HZ = DAC_IQ_SAMPLE_RATE_HZ
-DEFAULT_AXIS_HZ = DAC_FABRIC_HZ
-RFDC_INTERPOLATION = DAC_INTERP
-BEAT_SAMPLES = BEAT_BYTES // 2
-NUM_SAMPLES = 4096 // 2
 INT16_PER_DACWORD = 16
-INT16_PER_BEAT = INT16_PER_DACWORD
 # Largest I/Q sample magnitude the waveform helpers emit (symmetric int16).
 _INT16_FULL_SCALE = 32767.0
 
@@ -213,7 +192,7 @@ def place_interleaved_iq_in_record(
     record_duration_s: float,
     sample_rate_hz: float,
 ) -> np.ndarray:
-    """Place an active IQ waveform in an aligned, zero-filled web record."""
+    """Place an active IQ waveform in an aligned, zero-filled record."""
 
     active = np.asarray(active_wave, dtype=np.int16).reshape(-1)
     if active.size % 2:
@@ -229,10 +208,6 @@ def place_interleaved_iq_in_record(
     record = np.zeros(record_count, dtype=np.int16)
     record[start:end] = active
     return record
-
-
-def waveform_bytes(wave: np.ndarray | list) -> bytes:
-    return np.ascontiguousarray(wave, dtype="<i2").tobytes()
 
 
 def _normalize_int16(samples: np.ndarray | list, sample_count: int | None = None) -> np.ndarray:
@@ -294,50 +269,6 @@ def ezq_wave_to_interleaved_int16(
             raise
         raise WaveformFormatError(f"cannot convert {wave_format} waveform: {exc}") from exc
     raise WaveformFormatError(f"unsupported waveform format: {wave_format}")
-
-
-def ezq_wave_to_packed_int32(
-    wave: np.ndarray | list,
-    wave_format: Literal["iq_matrix", "packed_iq", "interleaved_iq", "z", "real"] = "packed_iq",
-) -> np.ndarray:
-    if wave_format in {"packed_iq", "packed"}:
-        return np.ascontiguousarray(np.asarray(wave), dtype="<i4").reshape(-1)
-    interleaved = ezq_wave_to_interleaved_int16(wave, wave_format=wave_format)
-    i_data = interleaved[0::2].astype(np.int32)
-    q_data = interleaved[1::2].astype(np.int32)
-    return ((q_data & 0xFFFF) << 16) | (i_data & 0xFFFF)
-
-
-def waveform_length_bytes(samples: np.ndarray | list) -> int:
-    return align_bytes_to_beat(np.asarray(samples).size * 2)
-
-
-def tiled_ddr_addr(channel: int, byte_offset: int, base_addr: int = DDR_BASE) -> int:
-    channel_index = int(channel) - 1
-    if not 0 <= channel_index < DDR_TILE_CHANNELS:
-        raise ParameterRangeError("channel must be in 1..8")
-    require_beat_aligned(base_addr, "base_addr")
-    require_beat_aligned(byte_offset, "byte_offset")
-    tile_index, intra = divmod(int(byte_offset), DDR_TILE_BYTES)
-    return int(base_addr) + tile_index * DDR_SUPERBLOCK_BYTES + channel_index * DDR_TILE_BYTES + intra
-
-
-def tiled_channel_base_addr(channel: int, base_addr: int = DDR_BASE) -> int:
-    return tiled_ddr_addr(channel, 0, base_addr)
-
-
-def interleaved_ddr_addr(channel: int, byte_offset: int, base_addr: int = DDR_BASE) -> int:
-    channel_index = int(channel) - 1
-    if not 0 <= channel_index < DDR_INTERLEAVED_CHANNELS:
-        raise ParameterRangeError("channel must be in 1..8")
-    if int(byte_offset) < 0 or int(byte_offset) % DDR_INTERLEAVED_LANE_BYTES:
-        raise ParameterRangeError("byte_offset must be non-negative and 8B aligned")
-    require_beat_aligned(base_addr, "base_addr")
-    return int(base_addr) + (int(byte_offset) // DDR_INTERLEAVED_LANE_BYTES) * DDR_INTERLEAVED_BEAT_BYTES + channel_index * DDR_INTERLEAVED_LANE_BYTES
-
-
-def interleaved_channel_lane_addr(channel: int, base_addr: int = DDR_BASE) -> int:
-    return interleaved_ddr_addr(channel, 0, base_addr)
 
 
 _LANE_SAMPLES = DDR_INTERLEAVED_LANE_BYTES // 2      # int16 values of one channel in one DDR word
@@ -414,24 +345,6 @@ def pack_interleaved_512b_waveforms(channel_waves: Mapping[int, np.ndarray | lis
     """:func:`pack_interleaved_512b_image` with the image as ``bytes``."""
     image, samples = pack_interleaved_512b_image(channel_waves)
     return image.tobytes(), samples
-
-
-def iter_max_length_udp_batches(
-    bytes_per_channel: int,
-    base_addr: int = DDR_BASE,
-    beats_per_datagram: int = 4,
-    **_: Any,
-):
-    """Yield deterministic zero-filled bulk packets for max-length testing."""
-    per_channel = require_beat_aligned(bytes_per_channel, "bytes_per_channel")
-    if per_channel <= 0 or per_channel > DDR_MAX_BYTES_PER_CHANNEL:
-        raise ParameterRangeError(f"bytes_per_channel must be in [32, {DDR_MAX_BYTES_PER_CHANNEL}], got {per_channel}")
-    beats = validate_udp_bulk_beats(beats_per_datagram)
-    total_bytes = per_channel * DDR_INTERLEAVED_CHANNELS
-    chunk = beats * DDR_INTERLEAVED_BEAT_BYTES
-    for offset in range(0, total_bytes, chunk):
-        payload = bytes(min(chunk, total_bytes - offset))
-        yield struct.pack("<QQQ", UDP_WAVE_BULK_MAGIC, int(base_addr) + offset, len(payload) // 8) + payload
 
 
 __all__ = [name for name in globals() if not name.startswith("_")]

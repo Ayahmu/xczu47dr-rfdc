@@ -18,7 +18,7 @@ module tb_ethernet_adapter_100g_rx;
   wire udp_tx_tready;
 
   ethernet_adapter_100g dut (
-    .clk(clk), .rst(rst), .user_rx_reset_0(rst), .user_tx_reset_0(rst),
+    .clk(clk), .user_rx_reset_0(rst), .user_tx_reset_0(rst),
     .rx_axis_tvalid_0(rx_tvalid), .rx_axis_tdata_0(rx_tdata), .rx_axis_tuser_0(rx_tuser),
     .rx_axis_tkeep_0(rx_tkeep), .rx_axis_tlast_0(rx_tlast),
     .tx_axis_tready_0(1'b1), .tx_axis_tvalid_0(tx_tvalid), .tx_axis_tdata_0(tx_tdata),

@@ -54,14 +54,6 @@ class DeviceNotReadyError(DeviceStatusError):
     """The board is online but its RFDC/playback path is not ready."""
 
 
-class SynchronizationError(DriverError):
-    """The board synchronization role or synchronization state is invalid."""
-
-
-class SyncRequiredError(SynchronizationError):
-    """An external Trigger path was used before external SYNC completed."""
-
-
 class ParameterRangeError(DriverError, ValueError):
     """A user parameter is outside the hardware-supported range."""
 
@@ -80,14 +72,6 @@ class UnsupportedCapabilityError(DriverError, NotImplementedError):
         super().__init__(f"{self.operation}{details} is not supported by this board{advertised}")
 
 
-class UnsupportedParameterError(UnsupportedCapabilityError):
-    """A requested parameter has no safe physical mapping."""
-
-
-class UnsupportedSequenceError(DriverError, ValueError):
-    """An ez-Q sequence uses an instruction unsupported by this playback PL."""
-
-
 class WaveformFormatError(ParameterRangeError):
     """Waveform data cannot be converted to the board's IQ layout."""
 
@@ -103,11 +87,7 @@ __all__ = [
     "DeviceStatusError",
     "DeviceBusyError",
     "DeviceNotReadyError",
-    "SynchronizationError",
-    "SyncRequiredError",
     "ParameterRangeError",
     "UnsupportedCapabilityError",
-    "UnsupportedParameterError",
-    "UnsupportedSequenceError",
     "WaveformFormatError",
 ]

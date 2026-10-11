@@ -66,15 +66,7 @@ module icmp
     output wire                     m_ip_payload_axis_tvalid,
     input  wire                     m_ip_payload_axis_tready,
     output wire                     m_ip_payload_axis_tlast,
-    output wire                     m_ip_payload_axis_tuser,
-
-
-    output wire 	                rx_busy,
-    output wire                     tx_busy,
-
-    output wire 	                rx_error_header_early_termination,
-    output wire                     rx_error_payload_early_termination,
-    output wire                     tx_error_payload_early_termination
+    output wire                     m_ip_payload_axis_tuser
     );
 
     localparam ICMP_BYTES             = 8;

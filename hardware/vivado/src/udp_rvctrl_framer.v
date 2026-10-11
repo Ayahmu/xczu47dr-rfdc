@@ -9,8 +9,8 @@
 // board discovery and identity do not work.
 //
 // It recognizes the RFCTRL2 magic, strips it, and re-frames the remaining
-// 64-bit words into the tfirst/tlast/word_count/protocol contract
-// pl_riscv_control_v1 expects.  protocol is always RF2 (2'd2).
+// 64-bit words into the tfirst/tlast/word_count contract
+// pl_riscv_control_v1 expects.
 //
 // Wire format (RFCTRL2, see software/dr47/protocol.py pack_rfctrl2_packet):
 //   word0 = 64'h00324C5254434652 (magic)
@@ -35,11 +35,9 @@ module udp_rvctrl_framer (
     output reg  [63:0]  rvctrl_tdata,
     output reg          rvctrl_tfirst,
     output reg          rvctrl_tlast,
-    output reg  [31:0]  rvctrl_word_count,
-    output reg  [1:0]   rvctrl_protocol
+    output reg  [31:0]  rvctrl_word_count
 );
   localparam [63:0] RFCTRL2_MAGIC = 64'h00324C5254434652;
-  localparam [1:0]  RVCTRL_PROTOCOL_RF2 = 2'd2;
 
   localparam [3:0] ST_IDLE      = 4'd0;
   localparam [3:0] ST_HDR0      = 4'd1;
@@ -59,8 +57,7 @@ module udp_rvctrl_framer (
   reg        more_than_one;
 
   // payload_bytes from the INCOMING hdr1 word (udp_tdata[63:32]), not the
-  // registered hdr1_word — the old framer used udp_tdata here for the same
-  // reason: hdr1_word is still the previous value during ST_HDR1.
+  // registered hdr1_word, which still holds the previous value during ST_HDR1.
   wire [31:0] payload_bytes      = udp_tdata[63:32];
   wire [31:0] rounded_bytes      = payload_bytes + 32'd7;
   wire [31:0] loaded_words       = rounded_bytes >> 3;   // ceil(payload_bytes/8)
@@ -76,7 +73,6 @@ module udp_rvctrl_framer (
       rvctrl_tfirst   <= 1'b0;
       rvctrl_tlast    <= 1'b0;
       rvctrl_word_count <= 32'd0;
-      rvctrl_protocol <= 2'd0;
       hdr0_word       <= 64'd0;
       hdr1_word       <= 64'd0;
       skid_word       <= 64'd0;
@@ -118,7 +114,6 @@ module udp_rvctrl_framer (
             rvctrl_tfirst <= 1'b1;
             rvctrl_tlast  <= 1'b0;
             rvctrl_word_count <= framed_word_count;
-            rvctrl_protocol <= RVCTRL_PROTOCOL_RF2;
             state <= ST_EMIT_HDR1;
           end
         end
@@ -129,7 +124,6 @@ module udp_rvctrl_framer (
           rvctrl_tfirst <= 1'b0;
           rvctrl_tlast  <= !nonzero;
           rvctrl_word_count <= word_count;
-          rvctrl_protocol <= RVCTRL_PROTOCOL_RF2;
           if (!nonzero) begin
             skid_valid <= 1'b0;
             state <= ST_IDLE;
@@ -153,7 +147,6 @@ module udp_rvctrl_framer (
             rvctrl_tfirst <= 1'b0;
             rvctrl_tlast  <= !nonzero || (!more_than_one && !udp_tvalid);
             rvctrl_word_count <= word_count;
-            rvctrl_protocol <= RVCTRL_PROTOCOL_RF2;
             if (udp_tvalid && nonzero) begin
               skid_word <= udp_tdata;
               skid_valid <= 1'b1;
@@ -171,7 +164,6 @@ module udp_rvctrl_framer (
             rvctrl_tfirst <= 1'b0;
             rvctrl_tlast  <= !more_than_one;
             rvctrl_word_count <= word_count;
-            rvctrl_protocol <= RVCTRL_PROTOCOL_RF2;
             if (!more_than_one) begin
               payload_words_left <= 32'd0;
               nonzero <= 1'b0;

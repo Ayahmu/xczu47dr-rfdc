@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -102,12 +103,11 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
             encoding="utf-8", errors="ignore"
         )
-        # The waveform target is single-board only.  The retired sync-trigger
-        # instance must not remain as an alternate playback admission path.
-        self.assertIn("assign sync_link_ready = 1'b0;", top)
-        self.assertIn("assign trigger_link_out = 1'b0;", top)
-        self.assertNotIn("sync_trigger_link_i", top)
-        self.assertNotIn("dac_trigger_emitter_i", top)
+        # The waveform target is single-board only: neither the sync-trigger
+        # instance nor the nets and parameters that stood in for it remain.
+        for retired in ("sync_trigger_link_i", "dac_trigger_emitter_i", "sync_link_ready",
+                        "trigger_link_out", "IS_MASTER", "XS20_TRIG_OUT", "TRIG_EMIT_DAC"):
+            self.assertNotIn(retired, top)
 
     def test_waveform_playback_wires_have_explicit_widths(self):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
@@ -141,6 +141,9 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         # must be deleted rather than filtered out by the project script.
         for retired in (
             "udp_waveform_ddr_writer.v",
+            "tdc_trigger_request_mux.v",
+            "axi_fifo_interface.v",
+            "cfg_cdc_fifo_xpm.v",
             "udp64_to_axis128_instr.v",
             "sync_trigger_link.v",
             "dac_trigger_emitter.v",
@@ -160,6 +163,41 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertNotIn("module replay_cache_ram", top)
         self.assertNotIn("replay_cache_ready_dac", top)
 
+    def test_every_rtl_source_is_reachable_from_the_top_module(self):
+        # Every file under src/ enters the Vivado source set, so a module that
+        # nothing instantiates is dead weight that still gets compiled.
+        src = REPO_ROOT / "hardware" / "vivado" / "src"
+        text = {path: path.read_text(encoding="utf-8", errors="ignore")
+                for path in sorted(src.rglob("*")) if path.suffix in (".v", ".sv", ".vhd")}
+        defined = {}
+        for path, body in text.items():
+            for name in re.findall(r"^\s*(?:module|entity)\s+(\w+)", body, re.M | re.I):
+                defined[name] = path
+        code = {path: re.sub(r"//[^\n]*|--[^\n]*", "", body) for path, body in text.items()}
+        reachable, pending = set(), ["TopCustomXczu47dr"]
+        while pending:
+            module = pending.pop()
+            if module in reachable or module not in defined:
+                continue
+            reachable.add(module)
+            body = code[defined[module]]
+            pending.extend(name for name in defined
+                           if name != module and re.search(rf"\b{name}\b", body))
+        unreachable = sorted(f"{name} ({path.relative_to(src)})"
+                             for name, path in defined.items() if name not in reachable)
+        self.assertEqual(unreachable, [])
+
+    def test_build_creates_only_ip_the_design_instantiates(self):
+        create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
+        self.assertNotIn("clk_gen_200mhz", create_project)
+        self.assertNotIn("fifo64", create_project)
+        self.assertFalse((SCRIPTS / "clk_gen_200mhz.tcl").exists())
+        self.assertFalse((REPO_ROOT / "hardware" / "vivado" / "ip").exists())
+        design = (REPO_ROOT / "hardware" / "vivado" / "bd" / "design_1.tcl").read_text(
+            encoding="utf-8", errors="ignore")
+        for retired in ("M_AXI_DMA", "M_AXI_INST", "zynq_ultra_ps_e_0/S_AXI_HP0_FPD"):
+            self.assertNotIn(retired, design)
+
     def test_waveform_target_has_no_retired_sync_or_role_generics(self):
         target_config = (SCRIPTS / "target_config.tcl").read_text(encoding="utf-8", errors="ignore")
         create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
@@ -178,11 +216,16 @@ class VivadoBuildOptionsTests(unittest.TestCase):
             encoding="utf-8", errors="ignore"
         )
 
-        # WAVECTR0 owns playback admission.  The PL command shim may retain
-        # RFDC/MTS/TDC diagnostics, but must not decode or emit the retired
-        # RFCTRL2 ARM/START/TRIGGER/ABORT or synchronization-role commands.
+        # WAVECTR0 owns playback admission.  The PL command processor serves
+        # RFDC/network/TDC operations only: no RFCTRL2 playback, multi-board
+        # SYNC or diagnostic-snapshot command, no RVCTRL0/1 generation and no
+        # raw MMIO master.
         for retired in (
             "RF2_OP_ARM",
+            "RF2_OP_SYNC_EPOCH",
+            "RF2_OP_DIAG_SNAPSHOT",
+            "RV1_OP_",
+            "m_axil_",
             "RF2_OP_START_AT",
             "RF2_OP_TRIGGER",
             "RF2_OP_ABORT_MUTE",
@@ -195,8 +238,6 @@ class VivadoBuildOptionsTests(unittest.TestCase):
             "rfctrl2_emit_trigger_pulse",
         ):
             self.assertNotIn(retired, control)
-        # Epoch remains an independent RFDC/MTS diagnostic command.
-        self.assertIn("RF2_OP_SYNC_EPOCH", control)
 
     def test_top_has_no_retired_playback_control_connection(self):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(

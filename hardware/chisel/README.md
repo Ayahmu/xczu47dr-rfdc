@@ -1,6 +1,6 @@
  # Chisel 硬件生成器
 
- Chisel 源码用于生成可综合 Verilog 和 RFDC Vivado 配置 Tcl。Vivado 顶层和 UDP
+ Chisel 源码用于生成可综合 Verilog 以及 RFDC、DDR4 的 Vivado 配置 Tcl。Vivado 顶层和 UDP
  协议代码不在这里维护，统一位于 hardware/vivado/。
 
  ## 环境
@@ -12,12 +12,10 @@
  ## 常用命令
 
  ~~~bash
- ./build.sh all       # 生成全部模块和 RFDC 配置
- ./build.sh rfdc      # 只生成 RFDC 配置 Tcl
- ./build.sh led
- ./build.sh gpio
- ./build.sh reset
- ./build.sh glue
+ ./build.sh all       # 生成全部模块和配置
+ ./build.sh reset     # 只生成复位同步模块
+ ./build.sh rfdc      # 只生成 RFDC 配置 Tcl 和封装
+ ./build.sh ddr       # 只生成 DDR4 配置 Tcl 和封装
  ./build.sh clean
  ~~~
 
@@ -25,7 +23,5 @@
 
  ## 模块目录
 
- common/ 是 AXI、连接、FIFO、存储和数学工具；led/、gpio/、reset/、glue/
- 是基础外设；rfdc/ 生成定制 XCZU47DR 的 RFDC 参数；axidma/ 和 memory/
- 保留给对应实验模块。公共模块的接口和测试代码直接看各自 src/、tb/ 文件，
- 不再维护重复的子目录说明文档。
+ reset/ 生成各时钟域的复位同步模块 `ChiselProcSysReset`；rfdc/ 和 ddr/ 生成定制
+ XCZU47DR 的 RFDC、DDR4 IP 参数 Tcl 及其 Verilog 封装。

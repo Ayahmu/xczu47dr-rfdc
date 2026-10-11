@@ -39,28 +39,10 @@ print_info "Required Mill version: ${REQUIRED_VERSION}"
 mkdir -p "${OUTPUT_DIR}"
 
 case "$1" in
-    led)
-        print_info "Generating LED module..."
-        mill led.run
-        print_info "LED Verilog generated in ${OUTPUT_DIR}"
-        ;;
-
-    gpio)
-        print_info "Generating GPIO module..."
-        mill gpio.run
-        print_info "GPIO Verilog generated in ${OUTPUT_DIR}"
-        ;;
-
     reset)
         print_info "Generating reset module..."
         mill reset.run
         print_info "Reset Verilog generated in ${OUTPUT_DIR}"
-        ;;
-
-    glue)
-        print_info "Generating glue modules..."
-        mill glue.run
-        print_info "Glue Verilog generated in ${OUTPUT_DIR}"
         ;;
 
     rfdc)
@@ -77,14 +59,8 @@ case "$1" in
 
     all)
         print_info "Generating all modules..."
-        print_info "Building LED module..."
-        mill led.run
-        print_info "Building GPIO module..."
-        mill gpio.run
         print_info "Building reset module..."
         mill reset.run
-        print_info "Building glue modules..."
-        mill glue.run
         print_info "Building RFDC Vivado configuration..."
         mill rfdc.run
         print_info "Building DDR4 Vivado configuration..."
@@ -95,18 +71,15 @@ case "$1" in
     clean)
         print_warn "Cleaning build artifacts..."
         rm -rf out/
-        rm -rf "${OUTPUT_DIR}"/*.v "${OUTPUT_DIR}"/*.sv "${OUTPUT_DIR}"/*.tcl
+        rm -rf "${OUTPUT_DIR}"
         print_info "Clean complete"
         ;;
 
     *)
-        echo "Usage: $0 {led|gpio|reset|glue|rfdc|ddr|all|clean}"
+        echo "Usage: $0 {reset|rfdc|ddr|all|clean}"
         echo ""
         echo "Commands:"
-        echo "  led    - Generate LED module Verilog"
-        echo "  gpio   - Generate GPIO module Verilog"
         echo "  reset  - Generate reset module Verilog"
-        echo "  glue   - Generate glue module Verilog"
         echo "  rfdc   - Generate RFDC Vivado configuration Tcl"
         echo "  ddr    - Generate DDR4 Vivado configuration Tcl"
         echo "  all    - Generate all modules and Vivado configurations"

@@ -33,14 +33,13 @@
  ~~~
 
  固件固定使用 XS17 外部 250 MHz 参考；HMC7044 内部 R1=25 后 PLL1 PFD 仍为 10 MHz。
- 播放链路是单板模式，XS20 不参与播放控制。
+ 固件只负责上电时的 RFDC 启动、DAC MTS 和 NCO 对齐；之后的配置、上传和播放都由 PL 完成。
  启动日志通过
  115200 波特率串口查看；串口是诊断手段，不是运行时 RFDC 配置确认手段。
 
  ## 启动检查
 
- 应看到 HMC7044 配置完成、RFDC PLL 就绪、DAC MTS 完成和 NCO SYSREF 就绪。固件只
- 等待 HMC7044 PL 时序器，不等待 XS20；双板同步由主机驱动在板卡启动后完成。
+ 应看到 HMC7044 配置完成、RFDC PLL 就绪、DAC MTS 完成和 NCO SYSREF 就绪。
 
  ~~~bash
  screen /dev/ttyUSB0 115200

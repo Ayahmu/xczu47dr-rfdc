@@ -104,8 +104,6 @@ module rfdc_nco_rts_bridge #(
   reg [3:0] dst_state;
   reg [1:0] settle_count;
   reg [31:0] timeout_count;
-  reg [7:0] dst_channel_mask;
-  reg [3:0] dst_tile_mask;
   reg [3:0] dst_request_mask;
   reg [3:0] busy_seen;
   wire [3:0] tile_load_busy = {
@@ -128,8 +126,6 @@ module rfdc_nco_rts_bridge #(
       dst_state <= D_IDLE;
       settle_count <= 2'd0;
       timeout_count <= 32'd0;
-      dst_channel_mask <= 8'd0;
-      dst_tile_mask <= 4'd0;
       dst_request_mask <= 4'd0;
       busy_seen <= 4'd0;
       dac_nco_freq <= 384'd0;
@@ -159,11 +155,6 @@ module rfdc_nco_rts_bridge #(
           if (settle_count != 0) begin
             settle_count <= settle_count - 1'b1;
           end else begin
-            dst_channel_mask <= src_mask_hold;
-            dst_tile_mask <= {
-                |src_mask_hold[7:6], |src_mask_hold[5:4],
-                |src_mask_hold[3:2], |src_mask_hold[1:0]
-            };
             // Tile 0 owns the global SYSREF gate, so it participates even
             // when the request only changes channels in Tiles 1-3.
             dst_request_mask <= {

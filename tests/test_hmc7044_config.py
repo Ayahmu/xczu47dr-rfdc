@@ -25,11 +25,14 @@ def _reg12(registers: dict[int, int], low_addr: int, high_addr: int) -> int:
 
 
 class Hmc7044ConfigTests(unittest.TestCase):
-    def test_targets_use_the_external_250mhz_xs17_profile(self):
-        top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
+    def test_targets_use_the_external_xs17_profile_only(self):
+        vhdl = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
         target_config = TARGET_CONFIG.read_text(encoding="utf-8", errors="ignore")
 
-        self.assertRegex(top, r"hmc_use_external_250mhz\s*=\s*1'b1")
+        # XS17/CLKIN1 is the only reference and there is one board role, so the
+        # sequencer has no reference-select or master/slave input left.
+        self.assertNotIn("USE_EXTERNAL_250MHZ", vhdl)
+        self.assertNotIn("IS_MASTER", vhdl)
         self.assertIn("clock_policy external_250mhz_xs17", target_config)
 
     def test_firmware_clock_constants_match_250mhz_profile(self):
@@ -84,14 +87,9 @@ class Hmc7044ConfigTests(unittest.TestCase):
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
         self.assertRegex(
             text,
-            r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then\s*'
             r'config_reg\s*<=\s*x"0021"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
         )
-        self.assertRegex(
-            text,
-            r'if\s+USE_EXTERNAL_250MHZ\s*=\s*\'1\'\s+then[\s\S]*?'
-            r'config_reg\s*<=\s*x"0026"\s*&\s*x"0A"',
-        )
+        self.assertRegex(text, r'config_reg\s*<=\s*x"0026"\s*&\s*x"0A"')
 
         # R1 = REFERENCE_MHZ/10; with the 250 MHz default, R1=25 and N1=10 keep
         # the PLL1 PFD at 10 MHz and the VCXO at 100 MHz.
@@ -124,18 +122,17 @@ class Hmc7044ConfigTests(unittest.TestCase):
         rfctrl2 = RFCTRL2_RTL.read_text(encoding="utf-8", errors="ignore")
         driver = DRIVER_PROTOCOL.read_text(encoding="utf-8", errors="ignore")
 
-        # RFDC MTS/NCO alignment is still a board-local diagnostic/configuration
-        # responsibility.  It must not be confused with the retired two-board
-        # playback admission path.
+        # RFDC MTS/NCO alignment is a board-local startup responsibility.  The
+        # runtime re-alignment that followed a multi-board SYNC event is gone
+        # together with that event.
         self.assertIn("XRFdc_MultiConverter_Sync", firmware)
         self.assertIn("SysRef_Enable = 1", firmware)
         self.assertIn("Align_DAC_NCO_To_SYSREF", firmware)
         self.assertIn("FW_STATUS_NCO_SYNC_READY", firmware)
         self.assertIn("Publish_DAC_NCO_Sync_Ready", firmware)
-        self.assertIn("SYNC_EVENT_EPOCH_MASK", firmware)
-        self.assertIn("HMC7044_SYNC_SETTLE_US", firmware)
-        self.assertIn("Reinitialize_RFDC_For_Sync", firmware)
-        self.assertIn("Read_Sync_Event_Epoch", firmware)
+        for retired in ("SYNC_EVENT_EPOCH_MASK", "HMC7044_SYNC_SETTLE_US",
+                        "Reinitialize_RFDC_For_Sync", "Read_Sync_Event_Epoch"):
+            self.assertNotIn(retired, firmware)
         self.assertIn("dac_mts", rfctrl2.lower())
         self.assertIn("dac_mts", driver.lower())
         self.assertIn("RF2_NET_STATUS_HMC_DONE", driver)
@@ -143,19 +140,19 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertNotIn("sync_trigger_link_i", top)
         self.assertNotIn("dac_trigger_emitter_i", top)
 
-    def test_physical_clock_domain_is_local_and_legacy_sync_link_is_not_instantiated(self):
+    def test_unused_hmc_pl_clk_and_sync_pins_are_not_part_of_the_design(self):
+        # HMC7044 PL_CLK, XS20 (TRIG_3) and the X3 EXT_TRIGGER pair only fed the
+        # multi-board SYNC link.  Nothing consumes them, so they are neither
+        # ports nor constrained pins or clocks.
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
-        self.assertIn("IBUFDS", top)
-        self.assertIn("wire hmc_pl_clk", top)
-        self.assertIn("BUFG hmc_pl_clk_bufg_i", top)
-        self.assertNotIn("sync_trigger_link_i", top)
-        self.assertNotIn("trigger_in_pl_sync", top)
-
-    def test_hmc_pl_clk_constraint_matches_96mhz_output(self):
         xdc = (REPO_ROOT / "hardware" / "vivado" / "xdc" / "custom_xczu47dr_minimal.xdc").read_text(
             encoding="utf-8", errors="ignore"
         )
-        self.assertIn("create_clock -name PL_CLK_P_0 -period 10.416667", xdc)
+        for retired in ("hmc_pl_clk", "PL_CLK_P_0", "TRIG_3", "EXT_TRIGGER_P", "sync_trigger_link_i"):
+            self.assertNotIn(retired, top)
+        for retired in ("PL_CLK_P_0", "TRIG_3", "EXT_TRIGGER_P"):
+            self.assertNotIn(retired, xdc)
+        self.assertIn("assign H7044_SYNC_0 = 1'b0;", top)
 
     def test_dac_refclk_registers_generate_exact_128_mhz_with_supported_divider(self):
         regs = _hmc7044_registers()

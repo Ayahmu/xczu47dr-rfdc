@@ -34,7 +34,7 @@ module waveform_playback_path #(
     input wire [7:0] descriptor_channel_mask,
     input wire [31:0] descriptor_loop_count,
     input wire [31:0] descriptor_generation,
-    input wire [15:0] fifo_level_beats, input wire [15:0] fifo_free_beats,
+    input wire [15:0] fifo_free_beats,
     output wire command_ready_ddr,
     output wire [2047:0] fifo_write_data, output wire fifo_write_valid,
     input wire [7:0] fifo_write_ready,
@@ -317,12 +317,8 @@ module waveform_playback_path #(
   wire [175:0] descriptor_rd_data;
   wire descriptor_wr_ready, descriptor_rd_valid;
   reg descriptor_rd_ready;
-  reg [63:0] base_dac;
   reg [31:0] total_beats_dac, descriptor_loop_count_dac, generation_dac;
   reg [7:0] mask_dac;
-  reg descriptor_loaded_dac;
-  reg commit_pending_dac;
-  wire controller_commit_dac = descriptor_loaded_dac && commit_pending_dac;
   waveform_descriptor_cdc #(.WIDTH(176), .DEPTH(16)) u_descriptor_cdc (
     .wr_clk(ddr_clk), .wr_rst_n(ddr_rst_n), .wr_data(descriptor_wr_data),
     .wr_valid(descriptor_pending), .wr_ready(descriptor_wr_ready),
@@ -371,30 +367,18 @@ module waveform_playback_path #(
   always @(posedge dac_clk or negedge dac_rst_n) begin
     if (!dac_rst_n) begin
       descriptor_rd_ready <= 1'b1;
-      base_dac <= 0; total_beats_dac <= 0; descriptor_loop_count_dac <= 0;
+      total_beats_dac <= 0; descriptor_loop_count_dac <= 0;
       generation_dac <= 0; mask_dac <= 0;
-      descriptor_loaded_dac <= 1'b0;
-      commit_pending_dac <= 1'b0;
     end else begin
       descriptor_rd_ready <= 1'b1;
-      if (commit_dac) begin
-        descriptor_loaded_dac <= 1'b0;
-        commit_pending_dac <= 1'b1;
-      end
       if (descriptor_rd_valid) begin
-        base_dac <= descriptor_rd_data[63:0];
         total_beats_dac <= descriptor_rd_data[95:64];
         mask_dac <= descriptor_rd_data[111:104];
         descriptor_loop_count_dac <= descriptor_rd_data[143:112];
         generation_dac <= descriptor_rd_data[175:144];
-        descriptor_loaded_dac <= 1'b1;
       end
-      if (controller_commit_dac)
-        commit_pending_dac <= 1'b0;
       if (abort_dac) begin
         total_beats_dac <= 0; mask_dac <= 0; descriptor_loop_count_dac <= 0;
-        descriptor_loaded_dac <= 1'b0;
-        commit_pending_dac <= 1'b0;
       end
     end
   end

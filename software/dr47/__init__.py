@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, RfdcChannelReadback, DiagnosticsSnapshot
+from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, RfdcChannelReadback
 from .device import (
     Dr47Device,
     GHZ_TO_HZ,
@@ -35,14 +33,13 @@ from .waveforms import *  # noqa: F401,F403
 from ._version import __version__
 
 __all__ = [
-    "Dr47Device", "connect", "SimulatedDr47Device", "MagicMock",
-    "DeviceCapabilities", "DeviceStatus", "PlaybackState", "RfdcChannelReadback", "DiagnosticsSnapshot",
+    "Dr47Device", "connect", "SimulatedDr47Device",
+    "DeviceCapabilities", "DeviceStatus", "PlaybackState", "RfdcChannelReadback",
     "UdpTransport", "rfdc_nco_plan_for_target",
     "DiscoveredBoard", "ProvisionedBoard", "DiscoveryError", "ProvisionError",
     "discover_boards", "provision_board", "connect_discovered", "parse_ip_pool", "prepare_interface",
     "ghz_to_hz", "hz_to_ghz", "GHZ_TO_HZ", "RFDC_NCO_MIN_GHZ", "RFDC_NCO_MAX_GHZ",
     "__version__",
 ]
-__all__ += [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "PLAY_", "CHANNEL_", "pack_", "parse_", "align_", "require_", "normalize_", "validate_", "ezq_", "iter_", "waveform_"))]
-__all__ += [name for name in ("WAVEDDR0_MAGIC", "WAVESTR0_MAGIC", "WAVEINS0_MAGIC") if name in globals()]
+__all__ += [name for name in globals() if name.startswith(("RF", "UDP_", "DDR_", "pack_", "parse_", "align_", "require_", "normalize_", "ezq_"))]
 __all__ += [name for name in _error_exports if name not in __all__]

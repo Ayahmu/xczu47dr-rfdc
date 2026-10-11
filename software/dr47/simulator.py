@@ -1,4 +1,4 @@
-"""In-memory board simulator used by tests and the web console simulation mode."""
+"""In-memory board simulator with the same public API as the hardware driver."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, DiagnosticsSnapshot
+from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState
 from .device import Dr47Device
 from .errors import ParameterRangeError
 from .protocol import _FIXED_DAC_OUTPUT_CURRENT_MA, pack_wave_begin, pack_wave_data
@@ -21,9 +21,9 @@ from .protocol import (
     RF2_OP_RFDC_APPLY,
     RF2_OP_RFDC_GET_CONFIG,
     RF2_OP_STATUS,
-    RF2_OP_DIAG_SNAPSHOT,
-    RF2_OP_DIAG_CONTROL,
-    RF2_CAP_DIAGNOSTICS,
+    RF2_STATUS_ARMED,
+    RF2_STATUS_PREPARED,
+    RF2_STATUS_RUNNING,
     RF2_STATUS_DAC_MTS_READY,
     RF2_STATUS_DAC_MTS_REQUIRED,
     RF2_STATUS_NCO_SYNC_READY,
@@ -40,7 +40,7 @@ from .protocol import (
     WAVE_STATUS_OFFSET, WAVE_STATUS_CRC, WAVEFORM_STATE_ID, WAVEFORM_STATE_UPLOAD,
     WAVEFORM_STATE_READY, WAVEFORM_STATE_PREFETCH, WAVEFORM_STATE_WAIT_TRIGGER,
     WAVEFORM_STATE_PLAYING, WAVEFORM_STATE_DONE, WAVEFORM_STATE_ERROR,
-    WAVE_ERROR_NONE, WAVE_ERROR_UNDERFLOW, crc32,
+    WAVE_ERROR_NONE, crc32,
 )
 class SimulatedDr47Device(Dr47Device):
     """A deterministic simulator with the same public API as ``Dr47Device``."""
@@ -50,17 +50,12 @@ class SimulatedDr47Device(Dr47Device):
         super().__init__(*args, **kwargs)
         self.device_uid = str(device_uid)
         self.waveforms: dict[int, np.ndarray] = {}
-        self.sequences: dict[int, Any] = {}
         self.playback_armed = False
         self.playback_prepared = False
         self.playback_running = False
         self._sim_revision = 0
         self._sim_valid_mask = 0
         self._sim_last_response: dict[str, Any] = {}
-        self._trigger_input_count = 0
-        self._trigger_accepted_count = 0
-        self._trigger_output_count = 0
-        self._diag_generation = 0
         self._wave_state = WAVEFORM_STATE_ID
         self._wave_session = 0
         self._wave_descriptor = 0
@@ -93,7 +88,7 @@ class SimulatedDr47Device(Dr47Device):
     def _make_status_payload(self) -> bytes:
         capabilities = (RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
                         RF2_CAP_DAC_MTS | RF2_CAP_NCO_SYNC |
-                        RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS)
+                        RF2_CAP_TRIGGER_IO)
         state_flags = RF2_STATUS_RFDC_READY | RF2_STATUS_DAC_MTS_READY | RF2_STATUS_DAC_MTS_REQUIRED | RF2_STATUS_NCO_SYNC_READY
         if self.playback_armed:
             state_flags |= RF2_STATUS_ARMED | RF2_STATUS_PREPARED
@@ -107,10 +102,8 @@ class SimulatedDr47Device(Dr47Device):
             self._sim_valid_mask & 0xFF, 0,
             1, 0,
         )
-        return base + struct.pack(
-            "<QIIII", 0, self._trigger_input_count,
-            self._trigger_accepted_count, self._trigger_output_count, 0,
-        )
+        # 128-byte payload: reserved words, then the trigger-path version.
+        return base + struct.pack("<II", 0, 3) + bytes(48)
 
     def _response(self, opcode: int, payload: bytes = b"", seq: int = 1, status: int = RF2_STATUS_OK) -> dict[str, Any]:
         return {
@@ -134,15 +127,12 @@ class SimulatedDr47Device(Dr47Device):
             trigger_path_version=3,
             capability_bits=(RF2_CAP_PL_RFDC_CONFIG | RF2_CAP_RFDC_GET_CONFIG |
                               RF2_CAP_DAC_MTS | RF2_CAP_NCO_SYNC |
-                              RF2_CAP_TRIGGER_IO | RF2_CAP_DIAGNOSTICS),
+                              RF2_CAP_TRIGGER_IO),
             state_flags=RF2_STATUS_RFDC_READY | RF2_STATUS_DAC_MTS_READY | RF2_STATUS_DAC_MTS_REQUIRED | RF2_STATUS_NCO_SYNC_READY,
             rfdc_ready=True,
             dac_mts_required=True,
             dac_mts_ready=True,
             nco_sync_ready=True,
-            trigger_input_count=self._trigger_input_count,
-            trigger_accepted_count=self._trigger_accepted_count,
-            trigger_output_count=self._trigger_output_count,
             config_valid_mask=self._sim_valid_mask,
             raw={"device_uid": self.device_uid},
         )
@@ -165,9 +155,6 @@ class SimulatedDr47Device(Dr47Device):
                "playback_armed": self.playback_armed,
                "playback_prepared": self.playback_prepared,
                "playback_running": self.playback_running,
-               "trigger_input_count": self._trigger_input_count,
-               "trigger_accepted_count": self._trigger_accepted_count,
-               "trigger_output_count": self._trigger_output_count,
                "raw": {"device_uid": self.device_uid, "config_valid_mask": self._sim_valid_mask}},
         )
         self._status = DeviceStatus(self.connected, self.ip, self.port, state, self._capabilities, "simulation mode")
@@ -178,25 +165,6 @@ class SimulatedDr47Device(Dr47Device):
 
     def rfctrl2_status(self, seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         return self._response(RF2_OP_STATUS, self._make_status_payload(), seq or 1)
-
-    def read_diagnostics(self) -> DiagnosticsSnapshot:
-        self._diag_generation = (self._diag_generation + 1) & 0xFFFFFFFFFFFFFFFF
-        return DiagnosticsSnapshot(
-            generation=self._diag_generation,
-            trigger_input_count=self._trigger_input_count,
-            trigger_accepted_count=self._trigger_accepted_count,
-            replay_ready=self.playback_prepared,
-            replay_active=self.playback_running,
-            raw={"device_uid": self.device_uid},
-        )
-
-    def clear_diagnostics(self, events: int = 0xFFFFFFFF, counters: bool = True):
-        if counters:
-            self._trigger_input_count = 0
-            self._trigger_accepted_count = 0
-            self._trigger_output_count = 0
-        self._diag_generation = 0
-        return self._response(RF2_OP_DIAG_CONTROL, self._make_status_payload(), seq=1)
 
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
                            revision: int, channel_mask: int = 0xFF,
@@ -252,7 +220,9 @@ class SimulatedDr47Device(Dr47Device):
             return self._wave_response(WAVE_OP_BEGIN, status=WAVE_STATUS_BAD_REQUEST)
         self._bulk_mode = bulk
         self._bulk_chunks = {}
-        self._bulk_counters = dict.fromkeys(self._bulk_counters, 0)
+        # The writer counts per session; the link counters run from power-up.
+        for counter in ("frames_ok", "frames_rejected", "frames_duplicate", "frames_stale"):
+            self._bulk_counters[counter] = 0
         self._bulk_overrun = False
         self._wave_session = int(session) & 0xFFFFFFFF
         self._wave_total_bytes = int(total_bytes)

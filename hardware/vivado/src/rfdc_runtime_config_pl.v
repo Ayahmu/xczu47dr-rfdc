@@ -24,7 +24,6 @@ module rfdc_runtime_config_pl #(
 
     output reg           busy,
     output reg           done,
-    output reg           force_mute_pulse,
     output reg  [15:0]   status,
     output reg  [31:0]   revision,
     output reg  [7:0]    applied_mask,
@@ -224,11 +223,8 @@ module rfdc_runtime_config_pl #(
   reg [31:0] vop_current_scaled;
   reg [5:0] vop_opt_index;
   reg [31:0] delay_count;
-  reg [47:0] readback_nco_word;
-  reg [17:0] readback_phase_word;
   reg [15:0] readback_cfg0;
   reg [15:0] readback_cfg2;
-  reg [15:0] readback_cfg3;
   reg [31:0] cached_sequence;
   reg [31:0] cached_revision;
   reg cached_response_valid;
@@ -244,7 +240,6 @@ module rfdc_runtime_config_pl #(
   reg [31:0] ready_probe_count;
   reg [1:0] ready_probe_tile;
   reg [3:0] ready_probe_mask;
-  reg [7:0] staged_mask;
   reg [511:0] staged_actual_nco_hz;
   reg [15:0] staged_actual_nyquist_zone;
   reg [255:0] staged_actual_phase_mdeg;
@@ -407,14 +402,14 @@ module rfdc_runtime_config_pl #(
       error_mask <= request_mask & ~applied_mask;
       channel_status[channel_index*32 +: 32] <= (axi_error == 3'd3) ? ST_AXI_TIMEOUT : ST_AXI_ERROR;
       status <= (applied_mask != 0) ? ST_PARTIAL : ((axi_error == 3'd3) ? ST_AXI_TIMEOUT : ST_AXI_ERROR);
-      force_mute_pulse <= 1'b1;
+     
       state <= S_FINISH;
     end
   endtask
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      busy <= 1'b0; done <= 1'b0; force_mute_pulse <= 1'b0; status <= ST_OK;
+      busy <= 1'b0; done <= 1'b0; status <= ST_OK;
       revision <= 32'd0; applied_mask <= 8'd0; error_mask <= 8'd0; config_valid_mask <= 8'd0;
       failure_stage <= 32'd0; failure_address <= 18'd0; failure_axi_response <= 2'd0;
       rfdc_ready <= 1'b0; actual_nco_hz <= 512'd0; actual_nyquist_zone <= 16'd0;
@@ -431,8 +426,8 @@ module rfdc_runtime_config_pl #(
       expected_cfg0 <= 16'd0; expected_cfg2 <= 16'd0; expected_cfg3 <= 16'd0;
       ramp_current_ua <= 32'd0; ramp_next_ua <= 32'd0; vop_code <= 16'd0; vop_opt_index <= 6'd0;
       vop_current_scaled <= 32'd0;
-      delay_count <= 32'd0; readback_nco_word <= 48'd0; readback_phase_word <= 18'd0;
-      readback_cfg0 <= 16'd0; readback_cfg2 <= 16'd0; readback_cfg3 <= 16'd0;
+      delay_count <= 32'd0;
+      readback_cfg0 <= 16'd0; readback_cfg2 <= 16'd0;
       cached_sequence <= 32'd0; cached_revision <= 32'd0; cached_response_valid <= 1'b0;
       vop_write_performed <= 1'b0;
       calc_dividend <= 66'd0; calc_quotient <= 66'd0; calc_remainder <= 20'd0;
@@ -440,7 +435,7 @@ module rfdc_runtime_config_pl #(
       ramp_up <= 1'b0; vop_readback_only <= 1'b0;
       ready_probe_count <= READY_PROBE_INTERVAL_CYCLES - 1;
       ready_probe_tile <= 2'd0; ready_probe_mask <= 4'd0;
-      staged_mask <= 8'd0; staged_actual_nco_hz <= 512'd0;
+      staged_actual_nco_hz <= 512'd0;
       staged_actual_nyquist_zone <= 16'd0; staged_actual_phase_mdeg <= 256'd0;
       staged_actual_current_ua <= 256'd0; staged_actual_nco_word <= 512'd0;
       staged_actual_phase_word <= 256'd0; staged_actual_vop_code <= 256'd0;
@@ -448,7 +443,7 @@ module rfdc_runtime_config_pl #(
       axi_write_data <= 32'd0; axi_write_strobe <= 4'b0011;
     end else begin
       done <= 1'b0;
-      force_mute_pulse <= 1'b0;
+     
       axi_start <= 1'b0;
       nco_commit_start <= 1'b0;
 
@@ -464,7 +459,7 @@ module rfdc_runtime_config_pl #(
               revision <= cmd_revision; done <= 1'b1; cached_response_valid <= 1'b0;
             end else if (playback_armed || playback_running) begin
               status <= ST_UNSAFE_STATE; error_mask <= cmd_channel_mask; failure_stage <= STAGE_VALIDATE;
-              revision <= cmd_revision; force_mute_pulse <= 1'b1; done <= 1'b1; cached_response_valid <= 1'b0;
+              revision <= cmd_revision; done <= 1'b1; cached_response_valid <= 1'b0;
             end else begin
               // Capture the request and validation result before entering the
               // transaction. Keeping validation out of the later state
@@ -499,14 +494,13 @@ module rfdc_runtime_config_pl #(
             done <= 1'b1;
             busy <= 1'b0;
             cached_response_valid <= 1'b0;
-            force_mute_pulse <= 1'b1;
+           
             state <= S_IDLE;
           end else begin
             applied_mask <= 8'd0; error_mask <= 8'd0; failure_stage <= 32'd0;
             failure_address <= 18'd0; failure_axi_response <= 2'd0;
             config_valid_mask <= config_valid_mask & ~request_mask;
             channel_status <= 256'd0; channel_index <= 3'd0;
-            staged_mask <= 8'd0;
             staged_actual_nco_hz <= actual_nco_hz;
             staged_actual_nyquist_zone <= actual_nyquist_zone;
             staged_actual_phase_mdeg <= actual_phase_mdeg;
@@ -527,7 +521,7 @@ module rfdc_runtime_config_pl #(
                 actual_phase_word[96 +: 18], actual_phase_word[64 +: 18],
                 actual_phase_word[32 +: 18], actual_phase_word[0 +: 18]
             };
-            force_mute_pulse <= 1'b1;
+           
             state <= S_SELECT;
           end
         end
@@ -645,7 +639,7 @@ module rfdc_runtime_config_pl #(
             error_mask <= request_mask & ~applied_mask; failure_stage <= STAGE_READY;
             failure_address <= axi_address;
             ready_probe_mask[channel_index[2:1]] <= 1'b0;
-            rfdc_ready <= 1'b0; force_mute_pulse <= 1'b1; state <= S_FINISH;
+            rfdc_ready <= 1'b0; state <= S_FINISH;
           end else begin
             ready_probe_mask[channel_index[2:1]] <= 1'b1;
             if ((ready_probe_mask | (4'b0001 << channel_index[2:1])) == 4'hF)
@@ -810,29 +804,28 @@ module rfdc_runtime_config_pl #(
           else begin readback_cfg0 <= axi_read_data[15:0]; state <= S_RB_CFG2_READ; end
         end
         S_RB_NCO_LO_READ: begin launch_read(block_base + OFF_NCO_LOWER); state <= S_RB_NCO_LO_WAIT; end
-        S_RB_NCO_LO_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_nco_word[15:0] <= axi_read_data[15:0]; state <= S_RB_NCO_MI_READ; end end
+        S_RB_NCO_LO_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else state <= S_RB_NCO_MI_READ; end
         S_RB_NCO_MI_READ: begin launch_read(block_base + OFF_NCO_MIDDLE); state <= S_RB_NCO_MI_WAIT; end
-        S_RB_NCO_MI_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_nco_word[31:16] <= axi_read_data[15:0]; state <= S_RB_NCO_HI_READ; end end
+        S_RB_NCO_MI_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else state <= S_RB_NCO_HI_READ; end
         S_RB_NCO_HI_READ: begin launch_read(block_base + OFF_NCO_UPPER); state <= S_RB_NCO_HI_WAIT; end
-        S_RB_NCO_HI_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_nco_word[47:32] <= axi_read_data[15:0]; state <= S_RB_PHASE_LO_READ; end end
+        S_RB_NCO_HI_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else state <= S_RB_PHASE_LO_READ; end
         S_RB_PHASE_LO_READ: begin launch_read(block_base + OFF_PHASE_LOWER); state <= S_RB_PHASE_LO_WAIT; end
-        S_RB_PHASE_LO_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_phase_word[15:0] <= axi_read_data[15:0]; state <= S_RB_PHASE_HI_READ; end end
+        S_RB_PHASE_LO_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else state <= S_RB_PHASE_HI_READ; end
         S_RB_PHASE_HI_READ: begin launch_read(block_base + OFF_PHASE_UPPER); state <= S_RB_PHASE_HI_WAIT; end
-        S_RB_PHASE_HI_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_phase_word[17:16] <= axi_read_data[1:0]; state <= S_RB_CFG2_READ; end end
+        S_RB_PHASE_HI_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else state <= S_RB_CFG2_READ; end
         S_RB_CFG2_READ: begin launch_read(block_base + OFF_CFG2); state <= S_RB_CFG2_WAIT; end
         S_RB_CFG2_WAIT: if (axi_done) begin if (axi_error != 0) fail_transaction(STAGE_READBACK); else begin readback_cfg2 <= axi_read_data[15:0]; state <= S_RB_CFG3_READ; end end
         S_RB_CFG3_READ: begin launch_read(block_base + OFF_CFG3); state <= S_RB_CFG3_WAIT; end
         S_RB_CFG3_WAIT: if (axi_done) begin
           if (axi_error != 0) fail_transaction(STAGE_READBACK);
           else begin
-            readback_cfg3 <= axi_read_data[15:0];
             if ((((readback_cfg0 & NYQUIST_MASK) != ((selected_zone == 2) ? NYQUIST_MASK : 16'd0))) ||
                 (vop_write_performed &&
                  (((readback_cfg2 & CFG2_VOP_MASK) != (expected_cfg2 & CFG2_VOP_MASK)) ||
                   ((axi_read_data[15:0] & CFG3_VOP_MASK) != (expected_cfg3 & CFG3_VOP_MASK))))) begin
               status <= (applied_mask != 0) ? ST_PARTIAL : ST_READBACK;
               error_mask <= request_mask & ~applied_mask; failure_stage <= STAGE_READBACK;
-              failure_address <= axi_address; force_mute_pulse <= 1'b1; state <= S_FINISH;
+              failure_address <= axi_address; state <= S_FINISH;
             end else begin
               // Pipeline the VOP-to-current conversion. This value is only
               // reported in RFRESP2, but the multiply/add path otherwise
@@ -844,7 +837,6 @@ module rfdc_runtime_config_pl #(
         end
 
         S_CHANNEL_DONE: begin
-          staged_mask[channel_index] <= 1'b1;
           staged_actual_nco_word[channel_index*64 +: 64] <= {16'd0, expected_nco_word};
           staged_actual_nco_hz[channel_index*64 +: 64] <= selected_nco_hz;
           staged_actual_nyquist_zone[channel_index*2 +: 2] <= (readback_cfg0 & NYQUIST_MASK) ? 2'd2 : 2'd1;
@@ -872,7 +864,7 @@ module rfdc_runtime_config_pl #(
               failure_stage <= STAGE_UPDATE;
               failure_address <= 18'd0;
               failure_axi_response <= nco_commit_error;
-              force_mute_pulse <= 1'b1;
+             
             end else begin
               applied_mask <= request_mask;
               config_valid_mask <= config_valid_mask | request_mask;
@@ -921,23 +913,22 @@ module rfdc_axil_transaction #(
     input wire [31:0] m_rdata, input wire [1:0] m_rresp, input wire m_rvalid, output reg m_rready
 );
   reg [31:0] timeout_count;
-  reg aw_done, w_done;
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      busy<=0; done<=0; error<=0; response<=0; read_data<=0; timeout_count<=0; aw_done<=0; w_done<=0;
+      busy<=0; done<=0; error<=0; response<=0; read_data<=0; timeout_count<=0;
       m_awaddr<=0; m_awvalid<=0; m_wdata<=0; m_wstrb<=0; m_wvalid<=0; m_bready<=0;
       m_araddr<=0; m_arvalid<=0; m_rready<=0;
     end else begin
       done <= 1'b0;
       if (start && !busy) begin
-        busy<=1; error<=0; response<=0; timeout_count<=0; aw_done<=0; w_done<=0;
+        busy<=1; error<=0; response<=0; timeout_count<=0;
         if (write_not_read) begin
           m_awaddr<=address; m_awvalid<=1; m_wdata<=write_data; m_wstrb<=write_strobe; m_wvalid<=1; m_bready<=1;
         end else begin m_araddr<=address; m_arvalid<=1; m_rready<=1; end
       end else if (busy) begin
         timeout_count <= timeout_count + 1;
-        if (m_awvalid && m_awready) begin m_awvalid<=0; aw_done<=1; end
-        if (m_wvalid && m_wready) begin m_wvalid<=0; w_done<=1; end
+        if (m_awvalid && m_awready) m_awvalid<=0;
+        if (m_wvalid && m_wready) m_wvalid<=0;
         if (m_arvalid && m_arready) m_arvalid<=0;
         if (m_bvalid && m_bready) begin
           response<=m_bresp; error<=(m_bresp==0)?0:1; m_bready<=0; busy<=0; done<=1;

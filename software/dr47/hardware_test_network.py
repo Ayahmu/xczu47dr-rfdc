@@ -55,7 +55,7 @@ def _select_board(
     assignment: BoardNetworkAssignment,
     used_boards: set[tuple[str, str]],
 ) -> DiscoveredBoard:
-    """Select one discovered board by stable identity, never by sync role."""
+    """Select one discovered board by its stable identity (UID and/or MAC)."""
     expected_uid = assignment.device_uid.strip().lower()
     expected_mac = assignment.match_mac.strip().lower()
     candidates = [

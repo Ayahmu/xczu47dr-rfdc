@@ -787,13 +787,7 @@ inst_icmp
     .m_ip_payload_axis_tvalid (icmp_tx_ip_payload_axis_tvalid),
     .m_ip_payload_axis_tready (icmp_tx_ip_payload_axis_tready),
     .m_ip_payload_axis_tlast  (icmp_tx_ip_payload_axis_tlast),
-    .m_ip_payload_axis_tuser  (icmp_tx_ip_payload_axis_tuser),
-
-    .rx_busy(),
-    .tx_busy(),
-    .rx_error_header_early_termination(),
-    .rx_error_payload_early_termination(),
-    .tx_error_payload_early_termination()
+    .m_ip_payload_axis_tuser  (icmp_tx_ip_payload_axis_tuser)
 );
 
 endmodule

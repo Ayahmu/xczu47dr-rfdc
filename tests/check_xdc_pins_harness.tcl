@@ -19,7 +19,7 @@ set mode [lindex $argv 1]
 
 # The clocks the real routed design has, taken from the routed timing summary.
 set LIVE_CLOCKS {
-  PL_CLK_P_0 RFADC0_CLK RFADC1_CLK RFADC2_CLK RFADC3_CLK
+  RFADC0_CLK RFADC1_CLK RFADC2_CLK RFADC3_CLK
   RFDAC0_CLK RFDAC1_CLK RFDAC2_CLK RFDAC3_CLK
   c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 clk_pl_0 dna_clk
 }

@@ -10,7 +10,7 @@ module tb_rfdc_runtime_config_pl;
   reg [15:0] zones=0;
   reg [255:0] phases=0, currents=0;
   reg armed=0, running=0;
-  wire busy, done, mute;
+  wire busy, done;
   wire [15:0] status;
   wire [31:0] result_revision;
   wire [7:0] applied_mask, error_mask, valid_mask;
@@ -54,7 +54,7 @@ module tb_rfdc_runtime_config_pl;
     .clk(clk), .rst_n(rst_n), .start(start), .cmd_sequence(seq_num), .cmd_revision(revision),
     .cmd_channel_mask(mask), .cmd_nco_hz(nco_hz), .cmd_nyquist_zone(zones),
     .cmd_phase_mdeg(phases), .cmd_current_ua(currents), .playback_armed(armed),
-    .playback_running(running), .busy(busy), .done(done), .force_mute_pulse(mute),
+    .playback_running(running), .busy(busy), .done(done),
     .status(status), .revision(result_revision), .applied_mask(applied_mask), .error_mask(error_mask),
     .config_valid_mask(valid_mask), .failure_stage(failure_stage), .failure_address(failure_address),
     .failure_axi_response(failure_response), .rfdc_ready(ready), .actual_nco_hz(actual_nco_hz),

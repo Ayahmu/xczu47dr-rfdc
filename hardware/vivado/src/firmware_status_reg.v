@@ -1,4 +1,18 @@
-module AXIGPIOBlackBox (
+`timescale 1ns / 1ps
+
+// Firmware status register (AXI4-Lite slave on the PS M_AXI_GPIO port).
+//
+// The PS firmware has one thing to tell the PL: the result of its RFDC
+// startup (DAC MTS required/ready/failed, tile mask, error code, NCO SYSREF
+// alignment done).  It writes that as one status word, and reads the same
+// address to learn whether the PL has finished programming the HMC7044.
+//
+//   0x008  write  status word, byte strobes honoured
+//          read   {hmc_done, status[30:0]}
+//
+// Every other address reads as zero and ignores writes; both still complete
+// with OKAY so a stray access cannot hang the PS bus.
+module firmware_status_reg (
     input  wire        s_axi_aclk,
     input  wire        s_axi_aresetn,
 
@@ -24,16 +38,16 @@ module AXIGPIOBlackBox (
     output reg         s_axi_rvalid,
     input  wire        s_axi_rready,
 
-    output wire [1:0]  gpio_io_o,
-    output wire [31:0] gpio2_io_o
+    // HMC7044 configuration finished (same clock domain); read back in bit 31.
+    input  wire        hmc_done,
+    output wire [31:0] status
 );
 
-  localparam ADDR_GPIO_DATA  = 9'h000;
-  localparam ADDR_GPIO2_DATA = 9'h008;
+  localparam ADDR_STATUS = 9'h008;
 
-  reg [1:0]  gpio_reg;
-  reg [31:0] gpio2_reg;
+  reg [31:0] status_reg;
 
+  // AW and W are accepted independently and held until both have arrived.
   reg [8:0]  awaddr_reg;
   reg        awaddr_valid;
   reg [31:0] wdata_reg;
@@ -57,13 +71,11 @@ module AXIGPIOBlackBox (
   assign s_axi_arready = !s_axi_rvalid;
   assign s_axi_rresp = 2'b00;
 
-  assign gpio_io_o = gpio_reg;
-  assign gpio2_io_o = gpio2_reg;
+  assign status = status_reg;
 
   always @(posedge s_axi_aclk) begin
     if (!s_axi_aresetn) begin
-      gpio_reg <= 2'b00;
-      gpio2_reg <= 32'h00000000;
+      status_reg <= 32'h00000000;
       awaddr_reg <= 9'h000;
       awaddr_valid <= 1'b0;
       wdata_reg <= 32'h00000000;
@@ -85,19 +97,12 @@ module AXIGPIOBlackBox (
       end
 
       if (write_fire) begin
-        case (write_addr)
-          ADDR_GPIO_DATA: begin
-            if (write_strb[0]) begin
-              gpio_reg <= write_data[1:0];
-            end
-          end
-          ADDR_GPIO2_DATA: begin
-            if (write_strb[0]) gpio2_reg[7:0] <= write_data[7:0];
-            if (write_strb[1]) gpio2_reg[15:8] <= write_data[15:8];
-            if (write_strb[2]) gpio2_reg[23:16] <= write_data[23:16];
-            if (write_strb[3]) gpio2_reg[31:24] <= write_data[31:24];
-          end
-        endcase
+        if (write_addr == ADDR_STATUS) begin
+          if (write_strb[0]) status_reg[7:0] <= write_data[7:0];
+          if (write_strb[1]) status_reg[15:8] <= write_data[15:8];
+          if (write_strb[2]) status_reg[23:16] <= write_data[23:16];
+          if (write_strb[3]) status_reg[31:24] <= write_data[31:24];
+        end
         awaddr_valid <= 1'b0;
         wdata_valid <= 1'b0;
         s_axi_bvalid <= 1'b1;
@@ -106,11 +111,7 @@ module AXIGPIOBlackBox (
       end
 
       if (read_fire) begin
-        case (s_axi_araddr)
-          ADDR_GPIO_DATA: s_axi_rdata <= {30'h0, gpio_reg};
-          ADDR_GPIO2_DATA: s_axi_rdata <= gpio2_reg;
-          default: s_axi_rdata <= 32'h00000000;
-        endcase
+        s_axi_rdata <= (s_axi_araddr == ADDR_STATUS) ? {hmc_done, status_reg[30:0]} : 32'h00000000;
         s_axi_rvalid <= 1'b1;
       end else if (s_axi_rvalid && s_axi_rready) begin
         s_axi_rvalid <= 1'b0;

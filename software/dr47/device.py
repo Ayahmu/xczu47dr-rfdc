@@ -16,7 +16,6 @@ from typing import Any
 import numpy as np
 
 from .capabilities import DeviceCapabilities, DeviceStatus, PlaybackState, RfdcChannelReadback
-from .capabilities import DiagnosticsSnapshot
 from .errors import (
     ConnectionError,
     ConnectionStateError,
@@ -27,15 +26,11 @@ from .errors import (
     ProtocolVersionError,
     ProtocolError,
     UnsupportedCapabilityError,
-    UnsupportedParameterError,
     TransportTimeout,
 )
 from .protocol import *  # noqa: F401,F403 - protocol constants are part of the public API
 from .protocol import _wave_uint, WAVE_DAC_FRAME_BYTES
 from .protocol import (
-    RF2_CAP_DAC_MTS,
-    RF2_CAP_NCO_SYNC,
-    RF2_CAP_PL_RFDC_CONFIG,
     RF2_STATUS_BAD_VERSION,
     RF2_STATUS_BUSY,
     RF2_STATUS_OK,
@@ -52,24 +47,15 @@ from .protocol import (
     parse_rfctrl2_network_response,
     parse_rfctrl2_rfdc_config_response,
     parse_rfctrl2_status_payload,
-    parse_rfresp2_packet,
     pack_wave_begin, pack_wave_data, pack_wave_commit, pack_wave_play,
     pack_wave_pause, pack_wave_stop, pack_wave_abort, pack_wave_status,
     pack_wave_bulk_status, pack_wave_bulk_chunk_reset,
-    parse_wave_response, WAVE_OP_BEGIN, WAVE_OP_DATA, WAVE_OP_COMMIT,
+    WAVE_OP_BEGIN, WAVE_OP_DATA, WAVE_OP_COMMIT,
     WAVE_OP_PLAY, WAVE_OP_PAUSE, WAVE_OP_STOP, WAVE_OP_ABORT, WAVE_OP_STATUS,
-    WAVEFORM_STATE_NAMES, WAVEFORM_STATE_ID, WAVEFORM_STATE_UPLOAD,
-    WAVEFORM_STATE_READY, WAVEFORM_STATE_PREFETCH, WAVEFORM_STATE_WAIT_TRIGGER,
-    WAVEFORM_STATE_PLAYING, WAVEFORM_STATE_DRAINING, WAVEFORM_STATE_DONE,
-    WAVEFORM_STATE_ERROR, WAVE_STATUS_OK,
+    WAVE_STATUS_OK,
 )
 from .transport import UdpTransport
-from .waveforms import (
-    DEFAULT_DDR_LAYOUT,
-    DDR_LAYOUT_INTERLEAVED_512B,
-    ezq_wave_to_interleaved_int16,
-    LaneImage,
-)
+from .waveforms import ezq_wave_to_interleaved_int16, LaneImage
 
 
 GHZ_TO_HZ = 1_000_000_000.0
@@ -261,17 +247,12 @@ class Dr47Device:
             dac_mts_error=int(decoded.get("dac_mts_error", 0)) & 0xFFFF,
             nco_sync_ready=bool(decoded.get("nco_sync_ready")),
             nco_sync_epoch=int(decoded.get("nco_sync_epoch", 0)) & 0xFFFFFFFF,
-            trigger_input_count=int(decoded.get("trigger_input_count", 0)) & 0xFFFFFFFF,
-            trigger_accepted_count=int(decoded.get("trigger_accepted_count", 0)) & 0xFFFFFFFF,
-            trigger_output_count=int(decoded.get("trigger_output_count", 0)) & 0xFFFFFFFF,
             ext_trigger_phase_slot=int(decoded.get("ext_trigger_phase_slot", 0)) & 0x7,
             ext_trigger_phase_valid=bool(decoded.get("ext_trigger_phase_valid", False)),
             ext_trigger_phase_overflow=bool(decoded.get("ext_trigger_phase_overflow", False)),
             ext_trigger_phase_metastable=bool(decoded.get("ext_trigger_phase_metastable", False)),
             ext_trigger_tap_index=int(decoded.get("ext_trigger_tap_index", 0)) & 0xFF,
             ext_trigger_phase_ps_x10=int(decoded.get("ext_trigger_phase_ps_x10", 0)) & 0xFFFF,
-            playback_admitted_count=int(decoded.get("playback_admitted_count", 0)) & 0xFFFFFFFF,
-            playback_skipped_count=int(decoded.get("playback_skipped_count", 0)) & 0xFFFFFFFF,
             config_valid_mask=int(decoded.get("config_valid_mask", 0)) & 0xFF,
             playback_state=state,
             playback_armed=bool(decoded.get("armed")),
@@ -376,7 +357,7 @@ class Dr47Device:
         if not self.connected:
             raise ConnectionStateError("Dr47Device.connect() must be called before this operation")
 
-    # Low-level RFCTRL2 methods are used by the web backend and protocol tools.
+    # Low-level RFCTRL2 methods for protocol tools.
     def rfctrl2_hello(self, seq: int | None = None, wait_response: bool = True):
         sequence = self._next_sequence() if seq is None else int(seq)
         return self._request(pack_rfctrl2_hello(sequence), RF2_OP_HELLO, sequence, wait_response=wait_response)
@@ -384,23 +365,6 @@ class Dr47Device:
     def rfctrl2_status(self, seq: int | None = None, wait_response: bool = True, retries: int | None = None):
         sequence = self._next_sequence() if seq is None else int(seq)
         response = self._request(pack_rfctrl2_status(sequence), RF2_OP_STATUS, sequence, wait_response=wait_response, retries=retries)
-        return response
-
-    def read_diagnostics(self) -> DiagnosticsSnapshot:
-        """Read the hardware-latched RFCTRL2 diagnostic snapshot."""
-        self._require_connected()
-        seq = self._next_sequence()
-        response = self._request(pack_rfctrl2_diag_snapshot(seq), RF2_OP_DIAG_SNAPSHOT, seq, retries=self.retries)
-        self._check_response(response, "DIAG_SNAPSHOT")
-        decoded = parse_rfctrl2_diagnostics_payload(response)
-        return DiagnosticsSnapshot(**{k: v for k, v in decoded.items() if k in DiagnosticsSnapshot.__dataclass_fields__})
-
-    def clear_diagnostics(self, events: int = 0xFFFFFFFF, counters: bool = True):
-        """Clear sticky diagnostic events (W1C) and optionally counters."""
-        self._require_connected()
-        seq = self._next_sequence()
-        response = self._request(pack_rfctrl2_diag_control(events, counters, seq), RF2_OP_DIAG_CONTROL, seq, retries=0)
-        self._check_response(response, "DIAG_CONTROL")
         return response
 
     def rfctrl2_rfdc_apply(self, per_channel_nco_hz, per_channel_nyquist_zone, per_channel_phase_deg,
@@ -727,7 +691,6 @@ class Dr47Device:
     def upload_waveforms(
         self,
         channel_waves: Mapping[int, np.ndarray | list],
-        channel_sequences=None,
         *,
         wave_formats: Mapping[int, str] | None = None,
         channel_mask: int | None = None,
@@ -735,13 +698,12 @@ class Dr47Device:
         progress_callback: Callable[[int, int], object] | None = None,
         transport: str = "auto",
         bulk_threshold_bytes: int = WAVE_BULK_AUTO_THRESHOLD_BYTES,
-        **_kwargs: Any,
     ) -> dict[str, Any]:
         """Upload one uniform eight-lane image and COMMIT it.
 
-        The new wire contract has no instruction stream: channel data is packed
-        once in interleaved 512-bit beats, then BEGIN/DATA/COMMIT creates the
-        descriptor and starts hardware prefetch automatically.
+        Channel data is packed once in interleaved 512-bit beats, then
+        BEGIN/DATA/COMMIT creates the descriptor and starts hardware prefetch
+        automatically.
 
         ``transport`` selects how the image travels: ``"packet"`` sends
         acknowledged 1024-byte DATA packets, ``"bulk"`` uses the 512-bit bulk
@@ -753,8 +715,6 @@ class Dr47Device:
             raise ParameterRangeError("transport must be 'auto', 'bulk' or 'packet'")
         if not channel_waves:
             raise ParameterRangeError("channel_waves must not be empty")
-        if channel_sequences:
-            raise UnsupportedParameterError("channel_sequences", "instruction playback was removed")
         normalized: dict[int, np.ndarray] = {}
         for channel, wave in channel_waves.items():
             physical = int(channel)
@@ -896,7 +856,12 @@ class Dr47Device:
             loop_count=loop_count, layout=WAVE_LAYOUT_INTERLEAVED_512B_BULK), "BEGIN")
         self._bulk_supported = True
         # The board answers this only once the session is armed.
-        self._check_wave_response(self.bulk_status(session=session), "BULK_STATUS")
+        armed = self._check_wave_response(self.bulk_status(session=session), "BULK_STATUS")
+
+        def link_count(name: str) -> int:
+            """What this upload added to a link counter; they run from power-up and wrap at 2**32."""
+            return (int(status[name]) - int(armed[name])) & 0xFFFF_FFFF
+
         frames = self._bulk_send(view, 0, total, session=session, epoch=0, payload_bytes=payload)
         epochs: dict[int, int] = {}
         resent: list[int] = []
@@ -916,8 +881,8 @@ class Dr47Device:
                 raise DeviceStatusError(
                     "BULK_UPLOAD", WAVE_STATUS_INCOMPLETE,
                     f"bulk chunk {chunk} is still incomplete after {max_resends_per_chunk} resends "
-                    f"(link saw {status['bulk_rx_frames']} datagrams, dropped "
-                    f"{status['bulk_rx_dropped_full']} full / {status['bulk_rx_dropped_bad']} bad, "
+                    f"(link saw {link_count('bulk_rx_frames')} datagrams, dropped "
+                    f"{link_count('bulk_rx_dropped_full')} full / {link_count('bulk_rx_dropped_bad')} bad, "
                     f"writer rejected {status['bulk_frames_rejected']})")
             epochs[chunk] = epoch
             self._check_wave_response(self.bulk_chunk_reset(session=session, chunk=chunk, epoch=epoch),
@@ -929,8 +894,8 @@ class Dr47Device:
         committed = self._check_wave_response(self.commit_waveform(session=session), "COMMIT")
         return {
             "transport": "bulk", "frames": frames, "payload_bytes": payload, "resent_chunks": resent,
-            "packet_count": frames, "rx_dropped_full": int(status["bulk_rx_dropped_full"]),
-            "rx_dropped_bad": int(status["bulk_rx_dropped_bad"]),
+            "packet_count": frames, "rx_dropped_full": link_count("bulk_rx_dropped_full"),
+            "rx_dropped_bad": link_count("bulk_rx_dropped_bad"),
             "state": committed.get("state"), "descriptor": committed.get("descriptor"),
         }
 
@@ -1019,16 +984,6 @@ class Dr47Device:
             "state": committed.get("state"),
             "descriptor": committed.get("descriptor"),
         }
-
-    def upload_and_commit(self, image: bytes, *, session: int, channel_mask: int,
-                          total_beats: int, loop_count: int = 1, packet_bytes: int = 1024):
-        raw = bytes(image)
-        self.begin_waveform(session=session, total_bytes=len(raw), channel_mask=channel_mask,
-                            total_beats=total_beats, loop_count=loop_count)
-        for packet_seq, offset in enumerate(range(0, len(raw), int(packet_bytes))):
-            chunk = raw[offset:offset + int(packet_bytes)]
-            self.data_waveform(session=session, packet_seq=packet_seq, byte_offset=offset, payload=chunk)
-        return self.commit_waveform(session=session)
 
     def commit(self) -> int:
         if self.batch_mode:

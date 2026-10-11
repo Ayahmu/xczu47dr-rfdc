@@ -21,8 +21,8 @@
 // the count nor the reader's `reserved`.  The DDR reader therefore holds each
 // written frame's credit for its CREDIT_LATENCY, which must cover this pipeline
 // plus the XPM count register and Top.v's timing register.
-// fifo_ready_path/fifo_valid_lane/min_level/min_free
-// stay combinational for the per-cycle frame handshake and status.
+// fifo_ready_path/fifo_valid_lane stay combinational for the per-cycle frame
+// handshake.
 module waveform_fifo_mask_adapter #(
     parameter integer FIFO_DEPTH = 1024
 ) (
@@ -34,19 +34,13 @@ module waveform_fifo_mask_adapter #(
     input  wire [255:0] fifo_wr_counts,
     output reg  [7:0]   fifo_ready_path,
     output reg  [7:0]   fifo_valid_lane,
-    output reg  [15:0]  min_level,
-    output reg  [15:0]  min_free,
     output wire [15:0]  reader_credit
 );
   localparam integer COUNT_W = (FIFO_DEPTH < 1) ? 1 : $clog2(FIFO_DEPTH + 1);
   localparam [COUNT_W-1:0] FIFO_DEPTH_VALUE = FIFO_DEPTH;
 
   integer ch;
-  reg have_active;
   reg [COUNT_W-1:0] level_value;
-  reg [COUNT_W-1:0] level_min_value;
-  reg [COUNT_W-1:0] level_max_value;
-  reg [COUNT_W-1:0] free_min_value;
 
   // Per-lane masked, saturated level presented to the credit pipeline: a
   // disabled lane contributes 0 so it never becomes the max (and thus never
@@ -57,10 +51,6 @@ module waveform_fifo_mask_adapter #(
   always @* begin
     fifo_ready_path = 8'h00;
     fifo_valid_lane = 8'h00;
-    have_active = 1'b0;
-    level_min_value = FIFO_DEPTH_VALUE;
-    level_max_value = {COUNT_W{1'b0}};
-    free_min_value = FIFO_DEPTH_VALUE;
     have_active_c = 1'b0;
 
     for (ch = 0; ch < 8; ch = ch + 1) begin
@@ -78,24 +68,8 @@ module waveform_fifo_mask_adapter #(
       // Masked level for the credit pipeline (0 for disabled lanes).
       masked_level_c[ch] = channel_mask[ch] ? level_value : {COUNT_W{1'b0}};
 
-      if (channel_mask[ch]) begin
-        if (!have_active || level_value < level_min_value)
-          level_min_value = level_value;
-        if (!have_active || level_value > level_max_value)
-          level_max_value = level_value;
-        have_active = 1'b1;
+      if (channel_mask[ch])
         have_active_c = 1'b1;
-      end
-    end
-
-    // Combinational status outputs (not on the 300 MHz AR-reservation path).
-    if (!have_active) begin
-      min_level = 16'd0;
-      min_free = 16'd0;
-    end else begin
-      free_min_value = FIFO_DEPTH_VALUE - level_max_value;
-      min_level = {{(16-COUNT_W){1'b0}}, level_min_value};
-      min_free = {{(16-COUNT_W){1'b0}}, free_min_value};
     end
   end
 

@@ -25,7 +25,7 @@ module tb_waveform_loop_and_stop;
   reg [7:0] descriptor_channel_mask=8'h01;
   reg [31:0] descriptor_loop_count=1;
   reg [31:0] descriptor_generation=1;
-  reg [15:0] fifo_level_beats=0, fifo_free_beats=1024;
+  reg [15:0] fifo_free_beats=1024;
   wire command_ready_ddr;
   wire [2047:0] fifo_write_data; wire fifo_write_valid; reg [7:0] fifo_write_ready;
   wire fifo_write_last, fifo_clear_ddr;
@@ -96,7 +96,6 @@ module tb_waveform_loop_and_stop;
   reg [15:0] free_pipe [0:CREDIT_LAG-1];
   integer full_stalls=0;
   always @* begin
-    fifo_level_beats = wr - rd;
     fifo_free_beats = free_pipe[CREDIT_LAG-1];
     fifo_write_ready = (wr - rd < 1024) ? 8'hff : 8'h00;
   end

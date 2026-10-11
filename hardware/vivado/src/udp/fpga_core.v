@@ -31,7 +31,6 @@ THE SOFTWARE.
 module fpga_core #
 (
     parameter DATA_WIDTH = 64,
-    parameter PAYLOAD_LEN = 8192,
     parameter KEEP_WIDTH = DATA_WIDTH/8
 )
 ( 
@@ -41,29 +40,19 @@ module fpga_core #
     input  wire [31:0] network_local_ip,
     input  wire [31:0] network_gateway_ip,
     input  wire [31:0] network_subnet_mask,
-    input  wire [15:0] network_udp_port,
     input  wire        network_clear_arp_cache,
     input  wire        network_restart_pulse,
-
-    input  wire        fifo64_wr,
-    input  wire[63:0]  fifo64_din,
-    output wire        fifo64_af,
 
     input  wire        resp64_tvalid,
     input  wire[63:0]  resp64_tdata,
     input  wire        resp64_tlast,
     input  wire[15:0]  resp64_word_count,
     output wire        resp64_tready,
-    output wire[7:0]   control_tx_debug,
     
     output wire        rcv_vld,
     output wire[63:0]  rcv_dat,
     output wire        rcv_last,
-     
-    input  wire        loop_en, 
-    input  wire[23:0]  gap_num_vio,
-    
-    
+
     /*
       * Ethernet: QSFP28 (100G CMAC)
      */
@@ -504,41 +493,8 @@ assign tx_udp_ip_source_ip = local_ip;
 assign tx_udp_checksum = 0;
 
 
-// Loop back UDP
-wire match_cond = rx_udp_dest_port == network_udp_port;
-wire no_match = ~match_cond;
-
-reg match_cond_reg = 0;
-reg no_match_reg = 0;
-
-always @(posedge clk) begin
-    if (udp_logic_rst) begin
-        match_cond_reg <= 0;
-        no_match_reg <= 0;
-    end else begin
-        if (rx_udp_payload_axis_tvalid) begin
-            if ((~match_cond_reg & ~no_match_reg) |
-                (rx_udp_payload_axis_tvalid & rx_udp_payload_axis_tready & rx_udp_payload_axis_tlast)) begin
-                match_cond_reg <= match_cond;
-                no_match_reg <= no_match;
-            end
-        end else begin
-            match_cond_reg <= 0;
-            no_match_reg <= 0;
-        end
-    end
-end
-
-reg tx_udp_hdr_vld = 0;
-reg [15:0] tx_udp_length_reg = PAYLOAD_LEN + 8'd8;
-localparam [1:0]
-    STATE_IDLE = 2'd0,
-    STATE_CHECK_HDRDY = 2'd1,
-    STATE_PAYLOAD = 2'd2,
-    STATE_GAP = 2'd3;
-reg [1:0] state_reg = STATE_IDLE;
-
-wire        response_tx_active;
+// The only UDP traffic this board transmits is control-plane responses, sent
+// back to the requester recorded by rfctrl2_udp_response_tx.
 wire        response_tx_header_valid;
 wire [31:0] response_tx_dest_ip;
 wire [15:0] response_tx_source_port;
@@ -547,8 +503,6 @@ wire [15:0] response_tx_length;
 wire [63:0] response_tx_payload_data;
 wire        response_tx_payload_valid;
 wire        response_tx_payload_last;
-wire        response_request_inflight;
-wire [1:0]  response_tx_state;
 
 rfctrl2_udp_response_tx response_tx_inst (
     .clk(clk),
@@ -563,7 +517,6 @@ rfctrl2_udp_response_tx response_tx_inst (
     .rx_dest_port(rx_udp_dest_port),
     .rx_payload_fire(rx_udp_payload_axis_tvalid && rx_udp_payload_axis_tready),
     .rx_payload_data(rx_udp_payload_axis_tdata),
-    .tx_path_enable(!loop_en && state_reg == STATE_IDLE),
     .tx_header_ready(tx_udp_hdr_ready),
     .tx_payload_ready(tx_udp_payload_axis_tready),
     .response_valid(resp64_tvalid),
@@ -571,7 +524,6 @@ rfctrl2_udp_response_tx response_tx_inst (
     .response_last(resp64_tlast),
     .response_word_count(resp64_word_count),
     .response_ready(resp64_tready),
-    .tx_active(response_tx_active),
     .tx_header_valid(response_tx_header_valid),
     .tx_dest_ip(response_tx_dest_ip),
     .tx_source_port(response_tx_source_port),
@@ -579,261 +531,33 @@ rfctrl2_udp_response_tx response_tx_inst (
     .tx_length(response_tx_length),
     .tx_payload_data(response_tx_payload_data),
     .tx_payload_valid(response_tx_payload_valid),
-    .tx_payload_last(response_tx_payload_last),
-    .request_inflight(response_request_inflight),
-    .dbg_state(response_tx_state)
+    .tx_payload_last(response_tx_payload_last)
 );
 
-assign control_tx_debug = {
-    response_request_inflight,
-    response_tx_active,
-    response_tx_header_valid,
-    tx_udp_hdr_ready,
-    response_tx_payload_valid,
-    tx_udp_payload_axis_tready,
-    response_tx_state
-};
+assign tx_udp_hdr_valid   = response_tx_header_valid;
+assign tx_udp_ip_dest_ip  = response_tx_dest_ip;
+assign tx_udp_source_port = response_tx_source_port;
+assign tx_udp_dest_port   = response_tx_dest_port;
+assign tx_udp_length      = response_tx_length;
 
-//wire [15:0]  PAYLOAD_LEN;
-//vio_1 vio_1i (
-//  .clk(clk),                // input wire clk
-//  .probe_out0(PAYLOAD_LEN)  // output wire [15 : 0] probe_out0
-//);
+assign tx_udp_payload_axis_tdata  = response_tx_payload_data;
+assign tx_udp_payload_axis_tkeep  = 8'hff;
+assign tx_udp_payload_axis_tvalid = response_tx_payload_valid;
+assign tx_udp_payload_axis_tlast  = response_tx_payload_last;
+assign tx_udp_payload_axis_tuser  = 1'b0;
 
-assign tx_udp_hdr_valid   = (loop_en) ? rx_udp_hdr_valid & match_cond :
-                            (response_tx_active ? response_tx_header_valid : tx_udp_hdr_vld);
-assign rx_udp_hdr_ready   = (loop_en) ? (tx_udp_hdr_ready & match_cond) | no_match : 1'b1;//tx_eth_hdr_ready
-assign tx_udp_ip_dest_ip  = (loop_en) ? rx_udp_ip_source_ip :
-                            (response_tx_active ? response_tx_dest_ip : {8'd192, 8'd168, 8'd1, 8'd3});
-assign tx_udp_source_port = (loop_en) ? rx_udp_dest_port :
-                            (response_tx_active ? response_tx_source_port : network_udp_port);
-assign tx_udp_dest_port   = (loop_en) ? rx_udp_source_port :
-                            (response_tx_active ? response_tx_dest_port : network_udp_port);
-assign tx_udp_length      = (loop_en) ? rx_udp_length :
-                            (response_tx_active ? response_tx_length : tx_udp_length_reg);//16'd1032
- 
+// Received UDP payload is never backpressured: the parsers behind rcv_* take
+// one word per cycle.
+assign rx_udp_hdr_ready           = 1'b1;
+assign rx_udp_payload_axis_tready = 1'b1;
 
-wire [63:0] rx_fifo_udp_payload_axis_tdata;
-wire [7:0]  rx_fifo_udp_payload_axis_tkeep;
-wire        rx_fifo_udp_payload_axis_tvalid;
-wire        rx_fifo_udp_payload_axis_tready;
-wire        rx_fifo_udp_payload_axis_tlast;
-wire        rx_fifo_udp_payload_axis_tuser;
-
-wire [63:0] tx_fifo_udp_payload_axis_tdata;
-wire [7:0]  tx_fifo_udp_payload_axis_tkeep;
-wire        tx_fifo_udp_payload_axis_tvalid;
-wire        tx_fifo_udp_payload_axis_tready;
-wire        tx_fifo_udp_payload_axis_tlast;
-wire        tx_fifo_udp_payload_axis_tuser;
-
- ///�ϴ���������
-wire        fifo64_rd_en,fifo64_empty,fifo64_valid;
-wire [63:0] fifo64_dout;
-wire [11:0] fifo64_data_count;
-reg         tx_udp_axis_tlast=0;
-reg         tx_udp_axis_tvld;
-
-reg [15:0] fifo_rd_cnt = 0;
-
-// �����·������ݣ�udp�������Ϊfifoд���ź�
-assign rx_fifo_udp_payload_axis_tdata  = rx_udp_payload_axis_tdata;
-assign rx_fifo_udp_payload_axis_tkeep  = rx_udp_payload_axis_tkeep;
-assign rx_fifo_udp_payload_axis_tvalid = rx_udp_payload_axis_tvalid & match_cond_reg;
-assign rx_fifo_udp_payload_axis_tlast  = rx_udp_payload_axis_tlast;
-assign rx_fifo_udp_payload_axis_tuser  = rx_udp_payload_axis_tuser;
-assign rx_udp_payload_axis_tready      = (loop_en) ?  (rx_fifo_udp_payload_axis_tready & match_cond_reg) | no_match_reg : 1'b1; 
-
-//��fifo�����Ϊ���͸�udp����(�ϴ������������ź�
-assign tx_udp_payload_axis_tdata       = (loop_en) ? tx_fifo_udp_payload_axis_tdata :
-                                                (response_tx_active ? response_tx_payload_data : fifo64_dout);
-assign tx_udp_payload_axis_tkeep       = (loop_en) ?  tx_fifo_udp_payload_axis_tkeep : 8'hff;
-assign tx_udp_payload_axis_tvalid      = (loop_en) ? tx_fifo_udp_payload_axis_tvalid :
-                                                (response_tx_active ? response_tx_payload_valid : tx_udp_axis_tvld);
-assign tx_udp_payload_axis_tlast       = (loop_en) ? tx_fifo_udp_payload_axis_tlast :
-                                                (response_tx_active ? response_tx_payload_last : tx_udp_axis_tlast);
-assign tx_udp_payload_axis_tuser       = (loop_en) ?  tx_fifo_udp_payload_axis_tuser :  1'b0;
-assign tx_fifo_udp_payload_axis_tready = tx_udp_payload_axis_tready;  
-
-
-fifo64 fifo64_i (
-  .clk(clk),                  // input wire clk
-  .srst(udp_logic_rst),       // input wire srst
-  
-  .din        (fifo64_din),                  // input wire [63 : 0] din
-  .wr_en      (fifo64_wr),              // input wire wr_en
-  .almost_full(fifo64_af),  // output wire almost_full
-  .full       ( ),                // output wire full
-  
-  .rd_en      (fifo64_rd_en),              // input wire rd_en
-  .dout       (fifo64_dout),                // output wire [63 : 0] dout
-  .empty      (fifo64_empty),              // output wire empty
-  .valid      (fifo64_valid),              // output wire valid
-  .data_count (fifo64_data_count)  
-);
-
-////////////// ��fifo���ݷ��͵�M_AXI�ӿ�
-
-reg [11:0] fifo64_data_count2=0; 
-
-assign fifo64_rd_en = !loop_en && !response_tx_active && tx_udp_payload_axis_tready & tx_udp_axis_tvld;
-
-always @(posedge clk) begin
-    if (udp_logic_rst)                                        fifo64_data_count2 <= 12'd0;
-    else if(fifo64_wr & ~fifo64_rd_en & ~&fifo64_data_count2) fifo64_data_count2 <= fifo64_data_count2 + 1'd1; // !=ȫ1
-    else if(~fifo64_wr & fifo64_rd_en & ~|fifo64_data_count2) fifo64_data_count2 <= fifo64_data_count2 - 1'd1; //��=0
-end
-
-reg [23:0] gap_cnt; 
-always @(posedge clk) begin
-    if (udp_logic_rst) begin
-        state_reg          <= STATE_IDLE; 
-        tx_udp_hdr_vld     <= 1'b0;
-        fifo_rd_cnt        <= 'd0;
-        tx_udp_axis_tlast  <= 1'b0; 
-        tx_udp_axis_tvld   <= 1'b0; 
-        tx_udp_length_reg  <= PAYLOAD_LEN + 8'd8;
-        gap_cnt  <=   0; 
-    end else begin       
-       case (state_reg)
-          STATE_IDLE  : begin
-                      if(!response_tx_active && !resp64_tvalid && fifo64_data_count>=(PAYLOAD_LEN>>3)) begin //����������4KB  ��fifo�Դ���fifo64_data_count��д��ʱ������ֵ -> 0
-                           tx_udp_length_reg <= PAYLOAD_LEN + 8'd8;
-                           tx_udp_hdr_vld <= 1'b1;
-                           state_reg      <= STATE_CHECK_HDRDY; 
-                      end
-                      fifo_rd_cnt        <= 'd0;
-                      tx_udp_axis_tlast  <= 1'b0; 
-                      gap_cnt            <=   0; 
-                   end
-          STATE_CHECK_HDRDY: begin
-                      if(tx_udp_hdr_ready & tx_udp_hdr_vld) begin
-                           state_reg      <= STATE_PAYLOAD; 
-                           tx_udp_hdr_vld <= 1'b0;
-                      end     
-                   end
-          STATE_PAYLOAD  : begin 
-                      if(tx_udp_payload_axis_tready & ~tx_udp_axis_tlast) begin
-                            tx_udp_axis_tvld        <= 1'b1;  
-                            if(fifo_rd_cnt == ((PAYLOAD_LEN>>3)-1)) begin
-                                tx_udp_axis_tlast     <= 1'b1;    
-                                fifo_rd_cnt     <= 0;     
-                            end else begin
-                                fifo_rd_cnt     <= fifo_rd_cnt + 1'b1;             
-                                tx_udp_axis_tlast     <= 1'b0;
-                            end     
-                       end else if(tx_udp_axis_tlast == 1) begin
-                            tx_udp_axis_tvld  <= 1'b0;   
-                            tx_udp_axis_tlast <= 1'b0;     
-                            state_reg         <= STATE_GAP;  
-                       end  
-            end  
-
-          STATE_GAP  : begin  
-                          if(gap_cnt>gap_num_vio) begin
-                              state_reg <= STATE_IDLE;
-                          end else begin
-                              gap_cnt   <= gap_cnt + 1'b1;
-                          end
-                   end 
-           default: begin
-                        state_reg          <= STATE_IDLE; 
-                        tx_udp_hdr_vld     <= 1'b0;
-                        fifo_rd_cnt        <= 'd0;
-                        tx_udp_axis_tlast  <= 1'b0;     
-                        tx_udp_axis_tvld   <= 1'b0;        
-                   end
-       endcase
-                    
-    end
-end
- 
- // udp_complete_64/udp_ip_rx_64 already gates the UDP stream to frames
- // accepted by the configured local IP. Repeating the dynamic IP compare
- // here puts network identity changes on the 300 MHz waveform-write path.
- // Keep this interface as the accepted UDP payload handshake only.
- assign rcv_vld = rx_udp_payload_axis_tvalid & rx_udp_payload_axis_tready;
- assign rcv_dat = rx_udp_payload_axis_tdata;
- assign rcv_last = rx_udp_payload_axis_tvalid & rx_udp_payload_axis_tready & rx_udp_payload_axis_tlast;
- 
- /////////////////// dbg
- 
-//wire snd_err;
-//cnt_err_detect  #(  .data_width  (32) )  
-//snd_err_detect_i
-//  ( .  clk        (clk),//       : IN std_logic;   
-//    .  rst        (rst),//       : in  std_logic;  
-//    .  delta_in   (2),//       : IN  std_logic_vector(data_width-1 downto 0);
-//    .  data_vld   (tx_udp_payload_axis_tvalid & tx_fifo_udp_payload_axis_tready ),//       : IN std_logic;
-//    .  data_in    (tx_udp_payload_axis_tdata[31:0]),//       : IN  std_logic_vector(data_width-1 downto 0);               
-//    .  err        (snd_err) //       : OUT std_logic 
-// );  
-
-//wire rcv_err1,rcv_err2;
-//cnt_err_detect  #(  .data_width  (32) )  
-//cnt_err_detect_i1
-//  ( .  clk        (clk),//       : IN std_logic;   
-//    .  rst        (rst),//       : in  std_logic;  
-//    .  delta_in   (2),//       : IN  std_logic_vector(data_width-1 downto 0);
-//    .  data_vld   (rx_udp_payload_axis_tvalid & rx_udp_payload_axis_tready ),//       : IN std_logic;
-//    .  data_in    (rx_udp_payload_axis_tdata[31:0]),//       : IN  std_logic_vector(data_width-1 downto 0);               
-//    .  err        (rcv_err1) //       : OUT std_logic 
-// );   
- 
-//cnt_err_detect  #(  .data_width  (32) )  
-//cnt_err_detect_i2
-//  ( .  clk        (clk),//       : IN std_logic;   
-//    .  rst        (rst),//       : in  std_logic;  
-//    .  delta_in   (2),//       : IN  std_logic_vector(data_width-1 downto 0);
-//    .  data_vld   (rx_udp_payload_axis_tvalid & rx_udp_payload_axis_tready ),//       : IN std_logic;
-//    .  data_in    (rx_udp_payload_axis_tdata[63:32]),//       : IN  std_logic_vector(data_width-1 downto 0);               
-//    .  err        (rcv_err2) //       : OUT std_logic 
-// );    
-  
-// Debug-only ILA from the reference design is intentionally omitted here.
-
- 
-axis_fifo #(
-    .DEPTH(9216),
-    .DATA_WIDTH(64),
-    .KEEP_ENABLE(1),
-    .KEEP_WIDTH(8),
-    .ID_ENABLE(0),
-    .DEST_ENABLE(0),
-    .USER_ENABLE(1),
-    .USER_WIDTH(1),
-    .FRAME_FIFO(0)
-)
-udp_payload_fifo (
-    .clk(clk),
-    .rst(udp_logic_rst),
-
-    // AXI input
-    .s_axis_tdata(rx_fifo_udp_payload_axis_tdata),
-    .s_axis_tkeep(rx_fifo_udp_payload_axis_tkeep),
-    .s_axis_tvalid(rx_fifo_udp_payload_axis_tvalid),
-    .s_axis_tready(rx_fifo_udp_payload_axis_tready),
-    .s_axis_tlast(rx_fifo_udp_payload_axis_tlast),
-    .s_axis_tid(0),
-    .s_axis_tdest(0),
-    .s_axis_tuser(rx_fifo_udp_payload_axis_tuser),
-
-    // AXI output
-    .m_axis_tdata(tx_fifo_udp_payload_axis_tdata),
-    .m_axis_tkeep(tx_fifo_udp_payload_axis_tkeep),
-    .m_axis_tvalid(tx_fifo_udp_payload_axis_tvalid),
-    .m_axis_tready(tx_fifo_udp_payload_axis_tready),
-    .m_axis_tlast(tx_fifo_udp_payload_axis_tlast),
-    .m_axis_tid(),
-    .m_axis_tdest(),
-    .m_axis_tuser(tx_fifo_udp_payload_axis_tuser),
-
-    // Status
-    .status_overflow(),
-    .status_bad_frame(),
-    .status_good_frame()
-);
-
+// udp_complete_64/udp_ip_rx_64 already gates the UDP stream to frames
+// accepted by the configured local IP. Repeating the dynamic IP compare
+// here puts network identity changes on the 300 MHz waveform-write path.
+// Keep this interface as the accepted UDP payload handshake only.
+assign rcv_vld  = rx_udp_payload_axis_tvalid;
+assign rcv_dat  = rx_udp_payload_axis_tdata;
+assign rcv_last = rx_udp_payload_axis_tvalid & rx_udp_payload_axis_tlast;
 
 endmodule
 

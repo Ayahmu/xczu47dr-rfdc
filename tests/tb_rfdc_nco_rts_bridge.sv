@@ -115,7 +115,7 @@ module tb_rfdc_nco_rts_bridge;
     check(src_done && src_error == 0 && src_epoch == 2, "sparse-channel RTS request failed");
     check(update_enable[0 +: 6] == 6'h00 && update_enable[6 +: 6] == 6'h00,
           "update enables must return idle after acknowledgement");
-    check(dut.dst_channel_mask == 8'h81, "disabled channels were not preserved in destination mask");
+    check(dut.dst_request_mask == 4'b1001, "sparse request must update exactly Tiles 3 and 0");
 
     src_mask=8'h80;
     @(negedge src_clk); src_start=1; @(negedge src_clk); src_start=0;
@@ -123,8 +123,8 @@ module tb_rfdc_nco_rts_bridge;
     while (!src_done && timeout < 300) begin @(negedge src_clk); timeout=timeout+1; end
     check(src_done && src_error == 0 && src_epoch == 3,
           "Tile 3-only RTS request did not complete through the Tile 0 SYSREF gate");
-    check(dut.dst_channel_mask == 8'h80,
-          "Tile 3-only RTS request changed the enabled-channel mask");
+    check(dut.dst_request_mask == 4'b1001,
+          "Tile 3-only RTS request must still include the Tile 0 SYSREF gate");
 
     respond_to_requests=0;
     @(negedge src_clk); src_start=1; @(negedge src_clk); src_start=0;

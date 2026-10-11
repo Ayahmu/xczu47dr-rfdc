@@ -6,7 +6,7 @@
 ## 构建目标
 
 只有一个产品目标 `custom_xczu47dr_waveform`：单板波形播放，100G QSFP28 网口，
-XS18 为 Trigger 输出，XS19 为 Trigger 输入。XS17 外部参考可选 250 MHz（默认）或
+XS18 为首样点标记输出，XS19 为外部 Trigger 输入。XS17 外部参考可选 250 MHz（默认）或
 10 MHz，由构建参数 `REFERENCE_MHZ` 决定 HMC7044 的 R1 分频，其余时钟完全相同。
 
 ## 构建
@@ -26,7 +26,7 @@ make firmware                 # 用当前 XSA 重建固件 ELF
 ## 子目录
 
 - `vivado/`：顶层 RTL、UDP/RFCTRL2、波形上传与回放、约束和 Vivado Tcl。
-- `chisel/`：RFDC、DDR4 等 IP 配置和小模块的 Chisel 生成器。
+- `chisel/`：RFDC、DDR4 的 IP 配置及封装、复位同步模块的 Chisel 生成器。
 
 Vivado 工程、综合实现报告、Chisel `out/` 和 Vitis 工作区都是生成物，不进版本库；
 清理使用 `make clean`。

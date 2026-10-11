@@ -5,8 +5,6 @@ module ethernet_adapter_100g (
     // Ethernet adapter
     //  . Clock and Reset
     input   wire                    clk         ,
-    input   wire                    rst         ,
-
     input	wire 			        user_rx_reset_0 ,
 	input	wire 			        user_tx_reset_0 ,
 

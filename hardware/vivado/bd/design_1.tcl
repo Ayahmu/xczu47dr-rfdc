@@ -147,9 +147,7 @@ set bCheckIPs 1
 if { $bCheckIPs == 1 } {
    set list_check_ips "\
 xilinx.com:ip:zynq_ultra_ps_e:3.5\
-xilinx.com:ip:usp_rf_data_converter:2.6\
 xilinx.com:ip:smartconnect:1.0\
-xilinx.com:ip:ddr4:2.2\
 "
 
    set list_ips_missing ""
@@ -186,15 +184,6 @@ proc create_root_design { parentCell } {
 
   variable script_folder
   variable target
-      set rfdc_generated_config [file normalize "${script_folder}/../../chisel/generated/rfdc_custom_xczu47dr_config.tcl"]
-    if {![file exists $rfdc_generated_config]} {
-      error "Missing generated RFDC configuration: $rfdc_generated_config. Run hardware/chisel/build.sh rfdc or hardware/chisel/build.sh all first."
-    }
-    source $rfdc_generated_config
-  set dac2_axis_freq_hz [::rfdc_custom_xczu47dr::axis_freq_hz]
-  set dac2_refclk_freq_hz [::rfdc_custom_xczu47dr::refclk_freq_hz]
-  set dac2_outclk_freq_hz [::rfdc_custom_xczu47dr::outclk_freq_hz]
-  set dac2_associated_busif [::rfdc_custom_xczu47dr::associated_busif]
   variable design_name
 
   if { $parentCell eq "" } {
@@ -236,16 +225,13 @@ proc create_root_design { parentCell } {
   set_property -dict [ list \
    CONFIG.ADDR_WIDTH {32} \
    CONFIG.DATA_WIDTH {32} \
-   CONFIG.HAS_BURST {0} \
-   CONFIG.HAS_CACHE {0} \
-   CONFIG.HAS_LOCK {0} \
+   CONFIG.HAS_BRESP {1} \
    CONFIG.HAS_PROT {0} \
-   CONFIG.HAS_QOS {0} \
-   CONFIG.HAS_REGION {0} \
-   CONFIG.NUM_READ_OUTSTANDING {8} \
-   CONFIG.NUM_WRITE_OUTSTANDING {8} \
-   CONFIG.PROTOCOL {AXI4} \
-    ] $M_AXI_GPIO
+   CONFIG.HAS_RRESP {1} \
+   CONFIG.HAS_WSTRB {1} \
+   CONFIG.PROTOCOL {AXI4LITE} \
+   CONFIG.READ_WRITE_MODE {READ_WRITE} \
+   ] $M_AXI_GPIO
 
     set M_AXI_RFDC [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_RFDC ]
     set_property -dict [ list \
@@ -279,35 +265,16 @@ proc create_root_design { parentCell } {
 
 
 
-  set M_AXI_DMA [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_DMA ]
-  set_property -dict [ list \
-   CONFIG.ADDR_WIDTH {32} \
-   CONFIG.DATA_WIDTH {32} \
-   CONFIG.HAS_BURST {0} \
-   CONFIG.HAS_CACHE {0} \
-   CONFIG.HAS_LOCK {0} \
-   CONFIG.HAS_QOS {0} \
-   CONFIG.HAS_REGION {0} \
-   CONFIG.NUM_READ_OUTSTANDING {8} \
-   CONFIG.NUM_WRITE_OUTSTANDING {8} \
-   CONFIG.PROTOCOL {AXI4LITE} \
-   ] $M_AXI_DMA
 
 
 
 
-  set M_AXI_INST [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 M_AXI_INST ]
-  set_property -dict [ list \
-   CONFIG.ADDR_WIDTH {32} \
-   CONFIG.DATA_WIDTH {32} \
-   CONFIG.PROTOCOL {AXI4} \
-   ] $M_AXI_INST
 
 
   # Create ports
   set pl_clk [ create_bd_port -dir O -type clk pl_clk ]
   set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M_AXI_GPIO:M_AXI_DMA:M_AXI_INST:M_AXI_RFDC} \
+   CONFIG.ASSOCIATED_BUSIF {M_AXI_GPIO:M_AXI_RFDC} \
    CONFIG.ASSOCIATED_RESET {pl_aresetn} \
  ] $pl_clk
   set pl_aresetn [ create_bd_port -dir I -from 0 -to 0 -type rst pl_aresetn ]
@@ -643,8 +610,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
     CONFIG.PSU__USE__M_AXI_GP0 {1} \
     CONFIG.PSU__USE__M_AXI_GP1 {1} \
     CONFIG.PSU__USE__M_AXI_GP2 {0} \
-    CONFIG.PSU__USE__S_AXI_GP2 {1} \
-    CONFIG.PSU__USE__S_AXI_GP3 {1} \
+    CONFIG.PSU__USE__S_AXI_GP2 {0} \
+    CONFIG.PSU__USE__S_AXI_GP3 {0} \
   ] $zynq_ultra_ps_e_0
 
 
@@ -717,7 +684,6 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
       CONFIG.PSU__DDRC__COMPONENTS {Components} \
       CONFIG.PSU__DDRC__DDR4_ADDR_MAPPING {1} \
     ] $zynq_ultra_ps_e_0
-    set_property CONFIG.PSU__USE__S_AXI_GP3 {0} $zynq_ultra_ps_e_0
 
 
 
@@ -725,27 +691,14 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   # Create instance: smartconnect_0, and set properties
   set smartconnect_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0 ]
   set_property -dict [list \
-    CONFIG.NUM_MI {5} \
+    CONFIG.NUM_MI {2} \
     CONFIG.NUM_SI {1} \
   ] $smartconnect_0
 
 
-  # Create instance: ddr4_0, and set properties
-
-
-  # Create instance: smartconnect_2, and set properties
-
-  # Create simple Chisel glue module instances.
-
-
-    # DAC axis clock is generated outside the block design for the custom target.
-
   # Create interface connections
   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_ports M_AXI_GPIO] [get_bd_intf_pins smartconnect_0/M00_AXI]
-  connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins smartconnect_0/M01_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HP0_FPD]
-    connect_bd_intf_net -intf_net smartconnect_0_M02_AXI [get_bd_intf_ports M_AXI_RFDC] [get_bd_intf_pins smartconnect_0/M02_AXI]
-  connect_bd_intf_net -intf_net smartconnect_0_M03_AXI [get_bd_intf_ports M_AXI_DMA] [get_bd_intf_pins smartconnect_0/M03_AXI]
-  connect_bd_intf_net -intf_net smartconnect_0_M04_AXI [get_bd_intf_ports M_AXI_INST] [get_bd_intf_pins smartconnect_0/M04_AXI]
+  connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_ports M_AXI_RFDC] [get_bd_intf_pins smartconnect_0/M01_AXI]
   connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM0_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM0_FPD] [get_bd_intf_pins smartconnect_0/S00_AXI]
     connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM1_FPD [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM1_FPD] [get_bd_intf_ports M_AXI_PS_DDR]
 
@@ -760,25 +713,15 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   [get_bd_pins smartconnect_0/aresetn]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0  [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
   [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk] \
-  [get_bd_pins zynq_ultra_ps_e_0/saxihp0_fpd_aclk] \
   [get_bd_pins smartconnect_0/aclk] \
   [get_bd_ports pl_clk]
   connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0  [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0] \
   [get_bd_ports pl_resetn0]
 
   # Create address segments
-  assign_bd_address -offset 0xA0000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_DMA/Reg] -force
   assign_bd_address -offset 0xA0010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_GPIO/Reg] -force
-  assign_bd_address -offset 0xA0020000 -range 0x00008000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_INST/Reg] -force
     assign_bd_address -offset 0x004800000000 -range 0x000200000000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_PS_DDR/Reg] -force
     assign_bd_address -offset 0xA0040000 -range 0x00040000 -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs M_AXI_RFDC/Reg] -force
-
-  # Exclude Address Segments
-  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP2/HP0_DDR_HIGH]
-  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP2/HP0_DDR_LOW]
-  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP2/HP0_LPS_OCM]
-  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP2/HP0_QSPI]
-
 
   # Restore current instance
   current_bd_instance $oldCurInst

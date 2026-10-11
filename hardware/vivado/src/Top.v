@@ -1,12 +1,4 @@
 module Top #(
-    parameter integer IS_MASTER = 1,
-    // 1 = XS20/TRIG_3 mirrors the XS18 Trigger output instead of carrying SYNC.
-    // Bench-measurement builds only; see the assign near sync_xs20_out.
-    parameter integer XS20_TRIG_OUT = 0,
-    // 1 = take the XS18/XS20 pulse from the dac_axis_clk emitter instead of
-    // hmc_pl_clk.  That emitter is retired (trigger_emit_dac_pulse is tied
-    // low), so the waveform target always builds with 0.
-    parameter integer TRIG_EMIT_DAC = 0,
     // External XS17 reference frequency in MHz (250 or 10).  Selects the HMC7044
     // R1 divider so PLL1 always closes on a 10 MHz PFD.
     parameter integer REFERENCE_MHZ = 250
@@ -19,15 +11,9 @@ module Top #(
     output H7044_SCLK_0,
     output H7044_SDATA_0,
 
-    // PL_CLK and PL_SYSREF from HMC7044 (differential LVDS, 100 MHz)
-    input  PL_CLK_P_0,
-    input  PL_CLK_N_0,
+    // PL_SYSREF from HMC7044 (differential LVDS)
     input  PL_SYSREF_P_0,
     input  PL_SYSREF_N_0,
-
-    // X3 differential external-sync output after the on-board NB6N11 buffer.
-    input  EXT_TRIGGER_P,
-    input  EXT_TRIGGER_N,
 
     // 100G QSFP28 UDP link (CMAC CAUI-4, RS-FEC) on BANK 128.
     input  qsfp_refclk_p,
@@ -61,11 +47,6 @@ module Top #(
     output vout32_v_p,
     output TRIG_1,
     input  TRIG_2,
-    inout  TRIG_3,
-
-    // Legacy Type-C synchronization is deliberately not part of this board
-    // interface. XS20/TRIG_3 is the sole external SYNC connection.
-    input  dac_trigger_start,
 
     input           c0_sys_clk_n,
     input           c0_sys_clk_p,
@@ -90,45 +71,14 @@ module Top #(
   wire        pl_aresetn;
   wire        pl_resetn0;
   wire        pl_ps_irq;
-  wire        clk_dac0;
-  wire        clk_dac1;
   wire        clk_dac2;
-  wire        clk_dac3;
   wire        dac_axis_clk;
-  wire        rfdc_irq;
   wire        clk104_aresetn;
   wire        ddr4_ui_clk;
   wire        ddr4_ui_aresetn;
   wire        ddr4_ui_clk_sync_rst;
 
   assign pl_ps_irq = 1'b0;
-
-  // HMC7044 PL_CLK is the common board-event timebase.  Both boards derive
-  // this clock from the same XS17 reference and reseed its divider on XS20
-  // SYNC.  PS pl_clk remains an unrelated AXI/control clock.
-  wire hmc_pl_clk_ibuf;
-  wire hmc_pl_clk;
-  IBUFDS #(
-      .DIFF_TERM("FALSE"),
-      .IBUF_LOW_PWR("FALSE")
-  ) hmc_pl_clk_ibufds_i (
-      .I  (PL_CLK_P_0),
-      .IB (PL_CLK_N_0),
-      .O  (hmc_pl_clk_ibuf)
-  );
-
-  BUFG hmc_pl_clk_bufg_i (
-      .I(hmc_pl_clk_ibuf),
-      .O(hmc_pl_clk)
-  );
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] hmc_pl_reset_sync;
-  always @(posedge hmc_pl_clk or negedge pl_resetn0) begin
-    if (!pl_resetn0)
-      hmc_pl_reset_sync <= 3'b000;
-    else
-      hmc_pl_reset_sync <= {hmc_pl_reset_sync[1:0], 1'b1};
-  end
-  wire hmc_pl_rst_n = hmc_pl_reset_sync[2];
 
   assign dac_axis_clk = clk_dac2;
   ChiselProcSysReset u_pl_reset (
@@ -159,8 +109,7 @@ module Top #(
   wire        hmc7044_set_finish;
   // External XS17 reference profile: XS17 drives CLKIN1.  HMC7044 divides it by
   // REFERENCE_MHZ/10 (250 MHz -> R1=25, 10 MHz -> R1=1) to obtain the 10 MHz
-  // PLL1 PFD; SYNC/Trigger logic is shared across both reference profiles.
-  wire        hmc_use_external_250mhz = 1'b1;
+  // PLL1 PFD.
 
   hmc7044 #(
       .REFERENCE_MHZ(REFERENCE_MHZ)
@@ -170,45 +119,14 @@ module Top #(
       .H7044_SLEN(H7044_SLEN_0),
       .H7044_SCLK(H7044_SCLK_0),
       .H7044_SDATA(H7044_SDATA_0),
-      .SET_FINISH(hmc7044_set_finish),
-      .USE_EXTERNAL_250MHZ(hmc_use_external_250mhz),
-      .IS_MASTER(IS_MASTER ? 1'b1 : 1'b0)
+      .SET_FINISH(hmc7044_set_finish)
   );
 
   assign RESET_H7044_H_0 = 1'b0;
+  // HMC7044 SYNC is not used by the single-board target; hold the pin low.
+  assign H7044_SYNC_0 = 1'b0;
 
-  wire vio_sync_request;
-  wire sync_xs20_in;
-  // In the XS20-as-Trigger-output build the pad is driven by us, so never feed
-  // it back into the SYNC state machine or HMC7044 SYNC.
-  wire sync_xs20_in_gated = XS20_TRIG_OUT ? 1'b0 : sync_xs20_in;
-  wire sync_xs20_out;
-  wire sync_xs20_oe;
-  wire trigger_xs18_out;
-  wire trigger_link_out;
-  wire trigger_event_toggle_hmc;
-  wire trigger_event_external_hmc;
-  wire sync_hmc;
-  wire sync_link_out;
-  wire sync_link_ready;
-  wire role_trigger_raw;
-  wire sync_done_pl;
-  wire sync_seen;
-  wire trigger_in_seen;
-  wire trigger_accepted;
-  wire trigger_output_active;
-  wire [31:0] trigger_input_count;
-  wire [31:0] trigger_accepted_count;
-  wire [31:0] trigger_output_count;
-  wire [31:0] pc_trigger_admitted_count;
-  wire [31:0] pc_trigger_skipped_count;
-  wire [63:0] hmc_event_tick;
-  wire [63:0] sync_event_tick;
-  wire [63:0] trigger_capture_tick;
-  wire [63:0] trigger_launch_tick;
-  wire [31:0] dac_direct_input_count, dac_direct_accept_count;
   wire new_output_first_transfer;
-  wire dac_any_valid_gated;
   wire [31:0] wave_path_current_beat_dac, wave_path_loop_position_dac;
   wire [31:0] wave_path_loop_count_dac, wave_path_generation_dac;
   wire [7:0] wave_path_channel_mask_dac;
@@ -217,224 +135,19 @@ module Top #(
   wire [31:0] wave_path_trigger_dropped_count_dac;
   wire [31:0] wave_path_trigger_fire_count_dac;
   wire new_prefetch_safe_ddr;
-  wire diag_clear_events_pulse, diag_clear_counters_pulse;
-  wire diag_snapshot_request_toggle;
-  reg diag_snapshot_ack_toggle_dac;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_snapshot_req_dac_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_snapshot_ack_ddr_sync;
-  reg diag_snapshot_req_dac_seen;
-  reg diag_snapshot_ack_ddr_seen;
-  wire diag_snapshot_request_dac = diag_snapshot_req_dac_sync[2] != diag_snapshot_req_dac_seen;
-  wire diag_snapshot_ack_toggle = diag_snapshot_ack_ddr_sync[2];
-  reg [63:0] diag_snapshot_capture_tick_dac, diag_snapshot_launch_tick_dac;
-  reg [63:0] diag_snapshot_playback_start_tick_dac, diag_snapshot_first_valid_tick_dac;
-  reg [31:0] diag_snapshot_direct_input_count_dac, diag_snapshot_direct_accept_count_dac;
-  reg diag_snapshot_trigger_pulse_dac, diag_snapshot_trigger_launch_dac;
-  reg diag_snapshot_prepared_dac, diag_snapshot_output_permitted_dac;
-  reg [7:0] diag_snapshot_underflow_mask_dac;
-  reg diag_snapshot_wave_ready_dac, diag_snapshot_wave_active_dac;
-  // The status snapshot is owned by the waveform path.  The former BRAM replay
-  // indicators are retained only as fixed-width diagnostic fields for the
-  // existing control/status serializer; they are not playback state.
-  wire        wave_diag_active_dac = (wave_path_current_beat_dac != 0) ||
-                                     (wave_path_underflow_count_dac != 0);
-  wire [7:0]  wave_diag_underflow_seen =
-      (wave_path_underflow_count_dac != 0) ? 8'hff : 8'h00;
-  reg diag_snapshot_ack_pending_dac;
-  reg [511:0] diag_snapshot_hold_dac;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [511:0] diag_snapshot_hold_meta_ddr;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [511:0] diag_snapshot_hold_sync_ddr;
-  reg [511:0] diag_snapshot_hold_ddr;
-  reg diag_snapshot_hold_valid_ddr;
-  wire [63:0] diag_snapshot_capture_tick_ddr = diag_snapshot_hold_ddr[63:0];
-  wire [63:0] diag_snapshot_launch_tick_ddr = diag_snapshot_hold_ddr[127:64];
-  wire [63:0] diag_snapshot_playback_start_tick_ddr = diag_snapshot_hold_ddr[191:128];
-  wire [63:0] diag_snapshot_first_valid_tick_ddr = diag_snapshot_hold_ddr[255:192];
-  wire [31:0] diag_snapshot_direct_input_count_ddr = diag_snapshot_hold_ddr[287:256];
-  wire [31:0] diag_snapshot_direct_accept_count_ddr = diag_snapshot_hold_ddr[319:288];
-  wire [7:0] diag_snapshot_underflow_mask_ddr = diag_snapshot_hold_ddr[327:320];
-  // Bits 328/329 remain fixed-width diagnostic fields for the serializer:
-  // active means the unified waveform path has advanced, and ready means the
-  // snapshot was published by the new status CDC.
-  wire diag_snapshot_wave_active_ddr = diag_snapshot_hold_ddr[328];
-  wire diag_snapshot_wave_ready_ddr = diag_snapshot_hold_ddr[329];
-  wire diag_snapshot_trigger_pulse_ddr = diag_snapshot_hold_ddr[330];
-  wire diag_snapshot_trigger_launch_ddr = diag_snapshot_hold_ddr[331];
-  wire diag_snapshot_prepared_ddr = diag_snapshot_hold_ddr[332];
-  wire diag_snapshot_output_permitted_ddr = diag_snapshot_hold_ddr[333];
-  reg diag_clear_events_toggle_ddr, diag_clear_counters_toggle_ddr;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_clear_events_dac_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] diag_clear_counters_dac_sync;
-  reg diag_clear_events_dac_seen, diag_clear_counters_dac_seen;
-  wire diag_clear_events_dac = diag_clear_events_dac_sync[2] != diag_clear_events_dac_seen;
-  wire diag_clear_counters_dac = diag_clear_counters_dac_sync[2] != diag_clear_counters_dac_seen;
-  wire [63:0] dac_direct_capture_tick;
-  reg  [63:0] dac_diag_tick;
-  reg  [63:0] dac_diag_launch_tick;
-  reg  [63:0] dac_diag_playback_start_tick;
-  reg  [63:0] dac_diag_first_valid_tick;
-  reg         dac_diag_trigger_pulse_sticky;
-  reg         dac_diag_trigger_launch_sticky;
-  reg         dac_diag_playback_start_sticky;
-  reg         dac_any_valid_diag_prev;
-  wire [63:0] diag_trigger_capture_tick = (dac_direct_input_count != 0) ?
-      dac_direct_capture_tick : trigger_capture_tick;
-  wire [63:0] diag_trigger_launch_tick = (dac_direct_input_count != 0) ?
-      dac_diag_launch_tick : trigger_launch_tick;
-  wire [31:0] gpio_out_reg;
+  wire [31:0] firmware_status_word;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_meta;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
-  wire [5:0] sync_event_epoch;
-  wire sync_align_busy;
-  wire sync_align_failed;
-  wire [5:0] sync_alignment_epoch;
-  // The HMC event domain accepts one external Trigger per DAC PREPARED
-  // interval; declare this before its first use below.
   wire waveform_prepared_dac;
-  wire rfctrl2_sync_epoch_pulse;
-  wire sync_role_master_ddr = IS_MASTER ? 1'b1 : 1'b0;
-  // Declare this before the first port connection that uses it.  Vivado's
-  // Verilog compiler otherwise creates an implicit net at the port
-  // connection and rejects the later explicit declaration.
-  reg sync_bypass_ddr;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_bypass_pl_sync;
-  wire sync_role_master_pl = IS_MASTER ? 1'b1 : 1'b0;
-  wire sync_bypass_pl = sync_bypass_pl_sync[1];
-  wire [5:0] firmware_ack_epoch_pl = gpio_out_reg[30:25];
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] firmware_align_failed_pl_sync;
-  wire firmware_align_failed_pl = firmware_align_failed_pl_sync[1];
 
-  always @(posedge pl_clk or negedge pl_aresetn) begin
-    if (!pl_aresetn)
-      firmware_align_failed_pl_sync <= 2'b00;
-    else
-      firmware_align_failed_pl_sync <= {firmware_align_failed_pl_sync[0], firmware_status_ddr[3]};
-  end
-
-  IOBUF sync_xs20_iobuf (
-      .I  (sync_xs20_out),
-      .T  (~sync_xs20_oe),
-      .O  (sync_xs20_in),
-      .IO (TRIG_3)
-  );
-  // Trigger pulse source for XS18/XS20.  TRIG_EMIT_DAC moves generation into
-  // dac_axis_clk so the outgoing pulse and the RF launch share a clock.  The
-  // emitter itself sits further down with the other DAC-domain trigger logic.
-  wire trigger_emit_dac_pulse;
-  wire [31:0] trigger_emit_dac_count;
-  wire trigger_out_selected = TRIG_EMIT_DAC ? trigger_emit_dac_pulse
-                                            : trigger_link_out;
-  assign trigger_xs18_out = trigger_out_selected;
-  // The single-board waveform contract marks the first actual RFDC data
-  // transfer, not command receipt or a prefetch edge. The legacy HMC emitter
-  // remains available on the sync link only.
+  // XS18 marks the first actual RFDC data transfer of a playback, not command
+  // receipt or a prefetch edge.
   assign TRIG_1 = new_output_first_transfer;
 
-  // VIO is generated only for the master project. It is a local debug source;
-  // physical synchronization is carried only by the XS20 IOBUF.
-`ifdef CUSTOM_XCZU47DR_MASTER
-  vio_0 vio_sync_i (
-      .clk       (pl_clk),
-      .probe_out0(vio_sync_request)
-  );
-`else
-  assign vio_sync_request = 1'b0;
-`endif
-
-  // The single-board waveform target has no master/slave or XS20 playback
-  // scheduler.  Keep the old diagnostic nets at explicit quiescent values so
-  // status/ILA widths remain stable without instantiating the retired trigger
-  // hierarchy or allowing it to affect waveform admission.
-  assign trigger_link_out = 1'b0;
-  assign trigger_event_toggle_hmc = 1'b0;
-  assign trigger_event_external_hmc = 1'b0;
-  assign sync_hmc = 1'b0;
-  assign sync_link_out = 1'b0;
-  assign sync_link_ready = 1'b0;
-  assign role_trigger_raw = 1'b0;
-  assign sync_done_pl = 1'b0;
-  assign sync_seen = 1'b0;
-  assign trigger_in_seen = 1'b0;
-  assign trigger_accepted = 1'b0;
-  assign trigger_output_active = 1'b0;
-  assign trigger_input_count = 32'd0;
-  assign trigger_accepted_count = 32'd0;
-  assign trigger_output_count = 32'd0;
-  assign sync_event_epoch = 6'd0;
-  assign sync_align_busy = 1'b0;
-  assign sync_align_failed = 1'b0;
-  assign sync_alignment_epoch = 6'd0;
-  assign hmc_event_tick = 64'd0;
-  assign sync_event_tick = 64'd0;
-  assign trigger_capture_tick = 64'd0;
-  assign trigger_launch_tick = 64'd0;
-
-  // XS20/TRIG_3 normally carries SYNC: driven on a master, sampled on a slave.
-  // XS20_TRIG_OUT=1 repurposes it as a second Trigger output mirroring XS18, so
-  // one board can loop XS18->XS19 and still hand the scope a time reference.
-  // XS18 and XS20 come from the same register, so residual skew is IO + PCB
-  // only: a constant offset, not jitter.
-  // XS20 is not a playback control input/output for the single-board target.
-  // Leave the pin in input mode and drive the output data low for deterministic
-  // board-level diagnostics.
-  assign sync_xs20_out = 1'b0;
-  assign sync_xs20_oe  = 1'b0;
-
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_seen_ddr_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_ready_ddr_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_align_busy_ddr_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] sync_align_failed_ddr_sync;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [5:0] sync_alignment_epoch_ddr_meta;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [5:0] sync_alignment_epoch_ddr;
-  reg [31:0] trigger_input_count_ddr_meta;
-  reg [31:0] trigger_input_count_ddr;
-  reg [31:0] trigger_accepted_count_ddr_meta;
-  reg [31:0] trigger_accepted_count_ddr;
-  reg [31:0] trigger_output_count_ddr_meta;
-  reg [31:0] trigger_output_count_ddr;
-  reg [31:0] playback_admitted_count_ddr_meta;
-  reg [31:0] playback_admitted_count_ddr;
-  reg [31:0] playback_skipped_count_ddr_meta;
-  reg [31:0] playback_skipped_count_ddr;
   wire hmc_done_ddr = hmc_done_ddr_sync[1];
-  wire sync_seen_ddr = sync_seen_ddr_sync[1];
-  wire sync_link_ready_ddr = sync_ready_ddr_sync[1];
-  wire sync_align_busy_ddr = sync_align_busy_ddr_sync[1];
-  wire sync_align_failed_ddr = sync_align_failed_ddr_sync[1];
   // Synchronized reset release for the DAC AXIS domain.
   wire dac_rst_n;
-  assign H7044_SYNC_0 = sync_hmc;
-
-  // ========== PS 指令 AXIS（128-bit） ==========
-  wire [127:0] ps_instr_tdata;
-  wire         ps_instr_tvalid;
-  wire         ps_instr_tready;
-  wire [127:0] udp_instr_tdata;
-  wire         udp_instr_tvalid;
-  wire         udp_instr_tready;
-  // The retired RVCTRL instruction stream has no producer in the waveform
-  // target; keep zero-valued probes only for the existing diagnostic vector.
-  wire [127:0] rv_instr_tdata = 128'd0;
-  wire         rv_instr_tvalid = 1'b0;
-  wire         rv_instr_tready = 1'b0;
-  wire [127:0] instr_tdata;
-  wire         instr_tvalid;
-  wire         instr_tready;
-  // WAVECTR0 instruction stream is arbitrated ahead of legacy PS/RV paths.
-  wire [127:0] wave_instr_tdata;
-  wire         wave_instr_tvalid;
-  wire         wave_instr_tready;
-
-  // The production waveform path does not consume legacy PLAY/REPEAT/END
-  // instructions. Keep these debug-only streams quiescent instead of
-  // allowing an obsolete producer to influence the DDR reader.
-  assign instr_tdata = 128'd0;
-  assign instr_tvalid = 1'b0;
-  assign instr_tready = 1'b1;
-  assign wave_instr_tready = 1'b1;
-  assign udp_instr_tready = 1'b0;
-  assign ps_instr_tready = 1'b0;
 
   localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
@@ -442,21 +155,16 @@ module Top #(
   wire        udp64_rcv_vld;
   wire [63:0] udp64_rcv_dat;
   wire        udp64_rcv_last;
-  wire        udp64_fifo_af;
-  wire        udp_instr64_tvalid;
-  wire [63:0] udp_instr64_tdata;
   wire        rvctrl64_tvalid;
   wire [63:0] rvctrl64_tdata;
   wire        rvctrl64_tfirst;
   wire        rvctrl64_tlast;
   wire [31:0] rvctrl64_word_count;
-  wire [1:0]  rvctrl64_protocol;
   wire        rvresp64_tvalid;
   wire [63:0] rvresp64_tdata;
   wire        rvresp64_tready;
   wire        rvresp64_tlast;
   wire [15:0] rvresp64_word_count;
-  wire [7:0]  udp_control_tx_debug;
 
   wire [63:0]  M_AXI_WAVE_awaddr;
   wire [1:0]   M_AXI_WAVE_awburst;
@@ -500,9 +208,8 @@ module Top #(
   wire [31:0]  bulk_first_incomplete;
   wire [31:0]  bulk_frames_ok, bulk_frames_rejected, bulk_frames_duplicate, bulk_frames_stale;
 
-  // The WAVECTR0 writer is the sole owner of the waveform DDR write port.
-  // There is deliberately no legacy instruction/data writer or arbitration
-  // mux: descriptor commit is the only way to publish waveform storage.
+  // The WAVECTR0 writer is the sole owner of the waveform DDR write port:
+  // descriptor commit is the only way to publish waveform storage.
   wire [63:0] wave_awaddr_new; wire wave_awvalid_new, wave_awready_new;
   wire [255:0] wave_wdata_new; wire [31:0] wave_wstrb_new;
   wire wave_wvalid_new, wave_wready_new, wave_wlast_new; wire wave_bready_new;
@@ -521,7 +228,6 @@ module Top #(
   wire [31:0] wave_status_current_beat_ddr = wave_status_snapshot_data[31:0];
   wire [31:0] wave_status_loop_position_ddr = wave_status_snapshot_data[63:32];
   wire [31:0] wave_status_loop_count_ddr = wave_status_snapshot_data[95:64];
-  wire [31:0] wave_status_generation_ddr = wave_status_snapshot_data[127:96];
   wire [31:0] wave_status_underflow_count_ddr = wave_status_snapshot_data[159:128];
   wire [31:0] wave_status_trigger_seen_count_ddr = wave_status_snapshot_data[191:160];
   wire [31:0] wave_status_trigger_dropped_count_ddr = wave_status_snapshot_data[223:192];
@@ -548,7 +254,7 @@ module Top #(
   wire [31:0] wave_descriptor_generation = wave_resp_descriptor;
   wire wave_command_ready_ddr;
   wire [3:0] wave_new_state;
-  wire new_reader_busy_ddr, new_reader_done_ddr, new_reader_error_ddr, new_fifo_clear_ddr;
+  wire new_reader_error_ddr, new_fifo_clear_ddr;
 
   wire [295:0] wave_status_source_dac = {
       wave_new_state, wave_path_channel_mask_dac,
@@ -561,7 +267,6 @@ module Top #(
   wire wave_resp_busy;
   wire wave_begin_valid, wave_commit_valid, wave_play_valid, wave_pause_valid;
   wire wave_stop_valid, wave_abort_valid;
-  wire [3:0] wave_parser_state4;
   wire         pc_started;
   wire         pc_source_started;
   wire         waveform_armed_dac;
@@ -607,11 +312,6 @@ module Top #(
     end
   end
 
-  wire         udp_wave_pkt;
-  wire         udp_instr_word;
-  wire         udp_trigger_pulse;
-  wire         rv_trigger_pulse = 1'b0;
-  wire [63:0]  rfctrl2_epoch;
   wire         waveform_start_pending_dac;
   // These source-domain status levels are registered before crossing into the
   // DDR clock domain.  Decoding wave_new_state directly in the synchronizer
@@ -628,49 +328,6 @@ module Top #(
   reg          waveform_pending_ddr;
   reg          pc_started_meta;
   reg          pc_started_ddr;
-
-  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if (!ddr4_ui_aresetn) begin
-      sync_bypass_ddr <= 1'b0;
-    end
-  end
-
-  always @(posedge pl_clk or negedge pl_aresetn) begin
-    if (!pl_aresetn) begin
-      sync_bypass_pl_sync <= 2'b00;
-    end else begin
-      sync_bypass_pl_sync <= {sync_bypass_pl_sync[0], sync_bypass_ddr};
-    end
-  end
-  wire         control_trigger_pulse;
-  wire [31:0]  rv_dbg_status;
-  wire [31:0]  rv_dbg_last_seq;
-  wire [31:0]  rv_dbg_last_cmd;
-  wire [31:0]  rv_dbg_ping_count;
-  wire [31:0]  rv_dbg_play_count;
-  wire [31:0]  rv_dbg_trigger_count;
-  wire [31:0]  rv_dbg_mmio_write_count;
-  wire [31:0]  rv_dbg_error_count;
-  wire [31:0]  rv_dbg_scratch;
-  wire [3:0]   rv_dbg_state;
-  wire [3:0]   udp_wave_state;
-  wire [17:0]  RV_CTRL_AXI_awaddr;
-  wire         RV_CTRL_AXI_awvalid;
-  wire         RV_CTRL_AXI_awready;
-  wire [31:0]  RV_CTRL_AXI_wdata;
-  wire [3:0]   RV_CTRL_AXI_wstrb;
-  wire         RV_CTRL_AXI_wvalid;
-  wire         RV_CTRL_AXI_wready;
-  wire [1:0]   RV_CTRL_AXI_bresp;
-  wire         RV_CTRL_AXI_bvalid;
-  wire         RV_CTRL_AXI_bready;
-  wire [17:0]  RV_CTRL_AXI_araddr;
-  wire         RV_CTRL_AXI_arvalid;
-  wire         RV_CTRL_AXI_arready;
-  wire [31:0]  RV_CTRL_AXI_rdata;
-  wire [1:0]   RV_CTRL_AXI_rresp;
-  wire         RV_CTRL_AXI_rvalid;
-  wire         RV_CTRL_AXI_rready;
   wire         rfdc_apply_start;
   wire [31:0]  rfdc_apply_sequence;
   wire [31:0]  rfdc_apply_revision;
@@ -681,7 +338,6 @@ module Top #(
   wire [255:0] rfdc_apply_current_ua;
   wire         rfdc_apply_busy;
   wire         rfdc_apply_done;
-  wire         rfdc_force_mute_pulse;
   wire [15:0]  rfdc_apply_status;
   wire [31:0]  rfdc_result_revision;
   wire [7:0]   rfdc_result_applied_mask;
@@ -796,23 +452,6 @@ module Top #(
   wire [1:0]   RFDC_CFG_AXI_rresp;
   wire         RFDC_CFG_AXI_rvalid;
   wire         RFDC_CFG_AXI_rready;
-  wire [17:0]  PL_CTRL_AXI_awaddr;
-  wire         PL_CTRL_AXI_awvalid;
-  wire         PL_CTRL_AXI_awready;
-  wire [31:0]  PL_CTRL_AXI_wdata;
-  wire [3:0]   PL_CTRL_AXI_wstrb;
-  wire         PL_CTRL_AXI_wvalid;
-  wire         PL_CTRL_AXI_wready;
-  wire [1:0]   PL_CTRL_AXI_bresp;
-  wire         PL_CTRL_AXI_bvalid;
-  wire         PL_CTRL_AXI_bready;
-  wire [17:0]  PL_CTRL_AXI_araddr;
-  wire         PL_CTRL_AXI_arvalid;
-  wire         PL_CTRL_AXI_arready;
-  wire [31:0]  PL_CTRL_AXI_rdata;
-  wire [1:0]   PL_CTRL_AXI_rresp;
-  wire         PL_CTRL_AXI_rvalid;
-  wire         PL_CTRL_AXI_rready;
   wire [17:0]  RV_AXI_RFDC_awaddr;
   wire         RV_AXI_RFDC_awvalid;
   wire         RV_AXI_RFDC_awready;
@@ -830,15 +469,6 @@ module Top #(
   wire [1:0]   RV_AXI_RFDC_rresp;
   wire         RV_AXI_RFDC_rvalid;
   wire         RV_AXI_RFDC_rready;
-  wire [31:0]  udp_wave_write_count;
-  wire [31:0]  udp_wave_bresp_count;
-  wire [31:0]  udp_wave_drop_count;
-  wire [31:0]  udp_wave_align_error_count;
-  wire [15:0]  udp_wave_fifo_count;
-  wire [31:0]  udp_wave_resync_count;
-  wire [1:0]   udp_wave_last_bresp;
-  wire [63:0]  udp_wave_last_addr;
-  wire [255:0] udp_wave_last_wdata;
 
   assign network_bootstrap_ip = 32'hC0A8FEFE;
   assign network_capabilities = 32'h00040000;
@@ -856,8 +486,7 @@ module Top #(
   // It must not be changed by a stale project define or an ad-hoc build.
   localparam [31:0] RF2_TRIGGER_PATH_VERSION = 32'd3;
   assign network_status_flags = {
-      25'd0,
-      sync_seen_ddr,
+      26'd0,
       hmc_done_ddr,
       waveform_prepared_ddr,
       pc_started_ddr,
@@ -949,15 +578,11 @@ module Top #(
       .network_udp_port(udp_network_port),
       .network_clear_arp_cache(network_clear_arp_cache | network_restart_pulse),
       .network_restart_pulse(network_restart_pulse),
-      .fifo64_wr   (1'b0),
-      .fifo64_din  (64'd0),
-      .fifo64_af   (udp64_fifo_af),
       .resp64_tvalid(udp_resp_tvalid),
       .resp64_tdata (udp_resp_tdata),
       .resp64_tlast (udp_resp_tlast),
       .resp64_word_count(udp_resp_word_count),
       .resp64_tready(udp_resp_tready),
-      .control_tx_debug(udp_control_tx_debug),
       .rcv_vld     (udp64_rcv_vld),
       .rcv_dat     (udp64_rcv_dat),
       .rcv_last    (udp64_rcv_last),
@@ -967,9 +592,7 @@ module Top #(
       .m_bulk_axis_tlast (bulk_axis_tlast),
       .bulk_rx_frames(bulk_rx_frames),
       .bulk_rx_dropped_full(bulk_rx_dropped_full),
-      .bulk_rx_dropped_bad(bulk_rx_dropped_bad),
-      .gap_num_vio (24'd0),
-      .loop_en     (1'b0)
+      .bulk_rx_dropped_bad(bulk_rx_dropped_bad)
   );
 
   // Keep the 300 MHz UDP parser local to its input registers. This preserves
@@ -990,41 +613,20 @@ module Top #(
     end
   end
 
-  // RFCTRL2 control-plane packet framer (restored).  This re-drives the
-  // rvctrl64_* stream into pl_riscv_control_v1 for NETWORK_GET/HELLO/STATUS/
-  // TDC_REG/RFDC_APPLY, which the waveform refactor had left undriven.  It
-  // runs in the same ddr4_ui_clk domain as the parser and the control FSM.
+  // RFCTRL2 control-plane packet framer.  Drives the rvctrl64_* stream into
+  // pl_riscv_control_v1 for NETWORK_GET/HELLO/STATUS/TDC_REG/RFDC_APPLY, in
+  // the same ddr4_ui_clk domain as the parser and the control FSM.
   udp_rvctrl_framer udp_rvctrl_framer_i (
       .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn),
       .udp_tvalid(udp_writer_tvalid), .udp_tdata(udp_writer_tdata), .udp_tlast(udp_writer_tlast),
       .rvctrl_tvalid(rvctrl64_tvalid), .rvctrl_tdata(rvctrl64_tdata),
       .rvctrl_tfirst(rvctrl64_tfirst), .rvctrl_tlast(rvctrl64_tlast),
-      .rvctrl_word_count(rvctrl64_word_count), .rvctrl_protocol(rvctrl64_protocol)
+      .rvctrl_word_count(rvctrl64_word_count)
   );
 
-  // These nets belonged to the retired instruction/data writer.  Explicit
-  // constants keep the diagnostic probes and legacy trigger stretch logic from
-  // seeing undriven X/Z values now that WAVECTR0 is the only playback protocol.
-  assign udp_instr64_tvalid = 1'b0;
-  assign udp_instr64_tdata  = 64'd0;
-  assign udp_trigger_pulse  = 1'b0;
-  assign udp_wave_pkt       = 1'b0;
-  assign udp_instr_word     = 1'b0;
-  assign udp_wave_state     = 4'd0;
-  assign udp_wave_write_count = 32'd0;
-  assign udp_wave_bresp_count = 32'd0;
-  assign udp_wave_drop_count = 32'd0;
-  assign udp_wave_align_error_count = 32'd0;
-  assign udp_wave_fifo_count = 16'd0;
-  assign udp_wave_resync_count = 32'd0;
-  assign udp_wave_last_bresp = 2'd0;
-  assign udp_wave_last_addr = 64'd0;
-  assign udp_wave_last_wdata = 256'd0;
-
-  // WAVECTR0 owns the entire waveform AXI write channel.  Packet classification
-  // remains at the accepted UDP-word boundary so unrelated control packets are
-  // discarded here, but the retired legacy DDR writer and its AXI arbitration
-  // are absent from the production hierarchy.
+  // WAVECTR0 owns the entire waveform AXI write channel.  Packets are
+  // classified by their first accepted UDP word, so control packets of the
+  // other protocol never reach the upload parser.
   reg udp_packet_active;
   reg udp_packet_is_wave;
   wire udp_demux_is_wave = udp_packet_active ? udp_packet_is_wave :
@@ -1084,7 +686,7 @@ module Top #(
       .response_received_bytes(wave_resp_received), .response_first_error_offset(wave_resp_first_error),
       .response_expected_crc(wave_resp_expected_crc), .response_actual_crc(wave_resp_actual_crc),
       .session(wave_resp_session), .descriptor(wave_resp_descriptor), .playback_state(wave_playback_state_ddr),
-      .state(wave_parser_state4),
+      .state(),
       .begin_valid(wave_begin_valid), .commit_valid(wave_commit_valid), .play_valid(wave_play_valid),
       .pause_valid(wave_pause_valid), .stop_valid(wave_stop_valid), .abort_valid(wave_abort_valid),
       .ddr_base_addr(wave_descriptor_base), .total_bytes(wave_descriptor_total_bytes),
@@ -1145,43 +747,12 @@ module Top #(
       .response_data(wave_resp_data), .response_last(wave_resp_last),
       .response_word_count(wave_resp_word_count), .response_ready(wave_resp_ready), .busy(wave_resp_busy));
 
-  // Legacy 64-to-128 instruction adaptation is retired.  Keep the debug
-  // stream quiescent so no stale PLAY/REPEAT/END path can affect hardware.
-  assign udp_instr_tdata  = 128'd0;
-  assign udp_instr_tvalid = 1'b0;
-
   // Signals reported through RFCTRL2 STATUS must be declared before the
   // control module instance; otherwise Verilog implicit nets can hide widths.
-  wire        ch1_arm, ch2_arm, ch3_arm, ch4_arm;
-  wire        ch5_arm, ch6_arm, ch7_arm, ch8_arm;
   wire        dac_in_ch1_tvalid, dac_in_ch2_tvalid, dac_in_ch3_tvalid, dac_in_ch4_tvalid;
   wire        dac_in_ch5_tvalid, dac_in_ch6_tvalid, dac_in_ch7_tvalid, dac_in_ch8_tvalid;
-  wire        dac_direct_trigger_pulse, dac_direct_trigger_edge;
-  wire        dac_direct_trigger_sync, dac_direct_trigger_latched;
-  // TRIG_2 is captured exactly once inside waveform_playback_path.  The
-  // retired top-level RFCTRL2 trigger sampler is intentionally absent here;
-  // status uses the playback path's trigger counters instead of a second CDC.
-  wire        dac_trigger_launch;
   wire        ch1_wave_tready_internal, ch2_wave_tready_internal, ch3_wave_tready_internal, ch4_wave_tready_internal;
   wire        ch5_wave_tready_internal, ch6_wave_tready_internal, ch7_wave_tready_internal, ch8_wave_tready_internal;
-  wire [2:0]  ex_dbg_st;
-  wire [1:0]  ex_dbg_dm_st;
-  wire        ex_dbg_dm_sel_ch1;
-  wire [31:0] ex_dbg_dm_chunk_beats;
-  wire [31:0] ex_dbg_dm_beats_sent;
-  wire [63:0] ex_dbg_ch1_bytes_left;
-  wire [63:0] ex_dbg_ch2_bytes_left;
-  wire [63:0] ex_dbg_ch1_base_addr;
-  wire [63:0] ex_dbg_ch2_base_addr;
-  wire        ex_dbg_ch1_need_hard, ex_dbg_ch2_need_hard;
-  wire        ex_dbg_ch1_need_soft, ex_dbg_ch2_need_soft;
-  wire [127:0] ex_dbg_instr_in_tdata;
-  wire        ex_dbg_instr_in_tvalid, ex_dbg_instr_in_tready;
-  wire [127:0] ex_dbg_main_tdata;
-  wire        ex_dbg_main_tvalid, ex_dbg_main_tready;
-  wire        ex_dbg_prefill_ready, ex_dbg_pending_valid, ex_dbg_active_valid;
-  wire [31:0] ex_dbg_run_delay_cnt;
-  wire [31:0] ex_dbg_bad_instr_count;
   reg [2:0]   ext_trig_slot_ddr;
   reg         ext_trig_valid_ddr;
   reg         ext_trig_overflow_ddr;
@@ -1193,7 +764,6 @@ module Top #(
   wire [31:0] tdc_reg_wdata, tdc_reg_rdata;
 
   pl_riscv_control_v1 #(
-      .ENABLE_UNSAFE_RFDC_MMIO(0),
       .BUILD_PROFILE_ID(RF2_BUILD_PROFILE_ID),
       .TRIGGER_PATH_VERSION(RF2_TRIGGER_PATH_VERSION),
       .SOURCE_COMMIT_ID(RF2_SOURCE_COMMIT_ID)
@@ -1205,9 +775,6 @@ module Top #(
       .rvctrl_tfirst       (rvctrl64_tfirst),
       .rvctrl_tlast        (rvctrl64_tlast),
       .rvctrl_word_count   (rvctrl64_word_count),
-      .rvctrl_protocol     (rvctrl64_protocol),
-      .rfctrl2_sync_epoch_pulse(rfctrl2_sync_epoch_pulse),
-      .rfctrl2_epoch       (rfctrl2_epoch),
       .rfdc_apply_start    (rfdc_apply_start),
       .rfdc_apply_sequence (rfdc_apply_sequence),
       .rfdc_apply_revision (rfdc_apply_revision),
@@ -1237,17 +804,6 @@ module Top #(
       .playback_armed      (waveform_armed_ddr | waveform_pending_ddr),
       .playback_prepared   (waveform_prepared_ddr),
       .playback_running    (pc_started_ddr),
-      .sync_role_master    (sync_role_master_ddr),
-      .sync_bypass         (sync_bypass_ddr),
-      .sync_seen           (sync_seen_ddr),
-      .sync_link_ready     (sync_link_ready_ddr),
-      .sync_align_busy     (sync_align_busy_ddr),
-      .sync_align_failed   (sync_align_failed_ddr),
-      .sync_alignment_epoch(sync_alignment_epoch_ddr),
-      .sync_alignment_error(dac_mts_error),
-      .trigger_input_count (trigger_input_count_ddr),
-      .trigger_accepted_count(trigger_accepted_count_ddr),
-      .trigger_output_count(trigger_output_count_ddr),
       .ext_trigger_phase_slot(ext_trig_slot_ddr),
       .ext_trigger_phase_valid(ext_trig_valid_ddr),
       .ext_trigger_phase_overflow(ext_trig_overflow_ddr),
@@ -1258,8 +814,6 @@ module Top #(
       .tdc_reg_addr(tdc_reg_addr), .tdc_reg_wdata(tdc_reg_wdata),
       .tdc_reg_ready(tdc_reg_ready), .tdc_reg_rdata(tdc_reg_rdata),
       .tdc_reg_error(tdc_reg_error),
-      .playback_admitted_count(playback_admitted_count_ddr),
-      .playback_skipped_count(playback_skipped_count_ddr),
       .rfdc_actual_nco_hz  (rfdc_actual_nco_hz),
       .rfdc_actual_nyquist_zone(rfdc_actual_nyquist_zone),
       .rfdc_actual_phase_mdeg(rfdc_actual_phase_mdeg),
@@ -1291,66 +845,17 @@ module Top #(
       .network_capabilities(network_capabilities),
       .network_status_flags(network_status_flags),
       .network_link_state(network_link_state),
-      .play_config_channel_mask({ch8_arm, ch7_arm, ch6_arm, ch5_arm, ch4_arm, ch3_arm, ch2_arm, ch1_arm}),
+      .play_config_channel_mask(wave_descriptor_channel_mask),
       .play_fifo_valid_mask({dac_in_ch8_tvalid, dac_in_ch7_tvalid, dac_in_ch6_tvalid, dac_in_ch5_tvalid,
                              dac_in_ch4_tvalid, dac_in_ch3_tvalid, dac_in_ch2_tvalid, dac_in_ch1_tvalid}),
       .play_fifo_ready_mask({ch8_wave_tready_internal, ch7_wave_tready_internal, ch6_wave_tready_internal, ch5_wave_tready_internal,
                              ch4_wave_tready_internal, ch3_wave_tready_internal, ch2_wave_tready_internal, ch1_wave_tready_internal}),
-      .play_executor_state({5'd0, ex_dbg_st}),
-      .play_ddr_read_counter(ex_dbg_dm_beats_sent),
-      .play_bad_instr_count(ex_dbg_bad_instr_count),
-      .play_prefill_ready(ex_dbg_prefill_ready),
-      .play_active_valid(ex_dbg_active_valid),
-      .play_pending_valid(ex_dbg_pending_valid),
-      .diag_trigger_capture_tick(diag_snapshot_capture_tick_ddr),
-      .diag_trigger_launch_tick(diag_snapshot_launch_tick_ddr),
-      .diag_playback_start_tick(diag_snapshot_playback_start_tick_ddr),
-      .diag_first_valid_tick(diag_snapshot_first_valid_tick_ddr),
-      .diag_direct_input_count(diag_snapshot_direct_input_count_ddr),
-      .diag_direct_accept_count(diag_snapshot_direct_accept_count_ddr),
-      .diag_trigger_pulse(diag_snapshot_trigger_pulse_ddr),
-      .diag_trigger_launch(diag_snapshot_trigger_launch_ddr),
-      .diag_prepared_dac(diag_snapshot_prepared_ddr),
-      .diag_output_permitted_dac(diag_snapshot_output_permitted_ddr),
-      .diag_underflow_mask(diag_snapshot_underflow_mask_ddr),
-      .diag_replay_ready(diag_snapshot_wave_ready_ddr),
-      .diag_replay_active(diag_snapshot_wave_active_ddr),
-      .diag_snapshot_ack_toggle(diag_snapshot_ack_toggle),
-      .diag_snapshot_request_toggle(diag_snapshot_request_toggle),
-      .diag_clear_events_pulse(diag_clear_events_pulse),
-      .diag_clear_counters_pulse(diag_clear_counters_pulse),
+      .play_prefill_ready(new_prefetch_safe_ddr),
       .rvresp_tdata        (rvresp64_tdata),
       .rvresp_tvalid       (rvresp64_tvalid),
       .rvresp_tready       (rvresp64_tready),
       .rvresp_tlast        (rvresp64_tlast),
-      .rvresp_word_count   (rvresp64_word_count),
-      .m_axil_awaddr       (RV_CTRL_AXI_awaddr),
-      .m_axil_awvalid      (RV_CTRL_AXI_awvalid),
-      .m_axil_awready      (RV_CTRL_AXI_awready),
-      .m_axil_wdata        (RV_CTRL_AXI_wdata),
-      .m_axil_wstrb        (RV_CTRL_AXI_wstrb),
-      .m_axil_wvalid       (RV_CTRL_AXI_wvalid),
-      .m_axil_wready       (RV_CTRL_AXI_wready),
-      .m_axil_bresp        (RV_CTRL_AXI_bresp),
-      .m_axil_bvalid       (RV_CTRL_AXI_bvalid),
-      .m_axil_bready       (RV_CTRL_AXI_bready),
-      .m_axil_araddr       (RV_CTRL_AXI_araddr),
-      .m_axil_arvalid      (RV_CTRL_AXI_arvalid),
-      .m_axil_arready      (RV_CTRL_AXI_arready),
-      .m_axil_rdata        (RV_CTRL_AXI_rdata),
-      .m_axil_rresp        (RV_CTRL_AXI_rresp),
-      .m_axil_rvalid       (RV_CTRL_AXI_rvalid),
-      .m_axil_rready       (RV_CTRL_AXI_rready),
-      .dbg_status          (rv_dbg_status),
-      .dbg_last_seq        (rv_dbg_last_seq),
-      .dbg_last_cmd        (rv_dbg_last_cmd),
-      .dbg_ping_count      (rv_dbg_ping_count),
-      .dbg_play_count      (rv_dbg_play_count),
-      .dbg_trigger_count   (rv_dbg_trigger_count),
-      .dbg_mmio_write_count(rv_dbg_mmio_write_count),
-      .dbg_error_count     (rv_dbg_error_count),
-      .dbg_scratch         (rv_dbg_scratch),
-      .dbg_state           (rv_dbg_state)
+      .rvresp_word_count   (rvresp64_word_count)
   );
 
   rfdc_runtime_config_pl #(
@@ -1365,7 +870,7 @@ module Top #(
       .cmd_phase_mdeg(rfdc_apply_phase_mdeg), .cmd_current_ua(rfdc_apply_current_ua),
       .playback_armed(waveform_armed_ddr | waveform_pending_ddr),
       .playback_running(pc_started_ddr),
-      .busy(rfdc_apply_busy), .done(rfdc_apply_done), .force_mute_pulse(rfdc_force_mute_pulse),
+      .busy(rfdc_apply_busy), .done(rfdc_apply_done),
       .status(rfdc_apply_status), .revision(rfdc_result_revision),
       .applied_mask(rfdc_result_applied_mask), .error_mask(rfdc_result_error_mask),
       .config_valid_mask(rfdc_config_valid_mask), .failure_stage(rfdc_failure_stage),
@@ -1427,45 +932,27 @@ module Top #(
       .O(pl_sysref_dac)
   );
 
-  axilite_arbiter_2to1 #(.ADDR_WIDTH(18)) pl_rfdc_axil_arbiter_i (
-      .clk(ddr4_ui_clk), .rst_n(ddr4_ui_aresetn),
-      .s0_awaddr(RV_CTRL_AXI_awaddr), .s0_awvalid(RV_CTRL_AXI_awvalid), .s0_awready(RV_CTRL_AXI_awready),
-      .s0_wdata(RV_CTRL_AXI_wdata), .s0_wstrb(RV_CTRL_AXI_wstrb), .s0_wvalid(RV_CTRL_AXI_wvalid), .s0_wready(RV_CTRL_AXI_wready),
-      .s0_bresp(RV_CTRL_AXI_bresp), .s0_bvalid(RV_CTRL_AXI_bvalid), .s0_bready(RV_CTRL_AXI_bready),
-      .s0_araddr(RV_CTRL_AXI_araddr), .s0_arvalid(RV_CTRL_AXI_arvalid), .s0_arready(RV_CTRL_AXI_arready),
-      .s0_rdata(RV_CTRL_AXI_rdata), .s0_rresp(RV_CTRL_AXI_rresp), .s0_rvalid(RV_CTRL_AXI_rvalid), .s0_rready(RV_CTRL_AXI_rready),
-      .s1_awaddr(RFDC_CFG_AXI_awaddr), .s1_awvalid(RFDC_CFG_AXI_awvalid), .s1_awready(RFDC_CFG_AXI_awready),
-      .s1_wdata(RFDC_CFG_AXI_wdata), .s1_wstrb(RFDC_CFG_AXI_wstrb), .s1_wvalid(RFDC_CFG_AXI_wvalid), .s1_wready(RFDC_CFG_AXI_wready),
-      .s1_bresp(RFDC_CFG_AXI_bresp), .s1_bvalid(RFDC_CFG_AXI_bvalid), .s1_bready(RFDC_CFG_AXI_bready),
-      .s1_araddr(RFDC_CFG_AXI_araddr), .s1_arvalid(RFDC_CFG_AXI_arvalid), .s1_arready(RFDC_CFG_AXI_arready),
-      .s1_rdata(RFDC_CFG_AXI_rdata), .s1_rresp(RFDC_CFG_AXI_rresp), .s1_rvalid(RFDC_CFG_AXI_rvalid), .s1_rready(RFDC_CFG_AXI_rready),
-      .m_awaddr(PL_CTRL_AXI_awaddr), .m_awvalid(PL_CTRL_AXI_awvalid), .m_awready(PL_CTRL_AXI_awready),
-      .m_wdata(PL_CTRL_AXI_wdata), .m_wstrb(PL_CTRL_AXI_wstrb), .m_wvalid(PL_CTRL_AXI_wvalid), .m_wready(PL_CTRL_AXI_wready),
-      .m_bresp(PL_CTRL_AXI_bresp), .m_bvalid(PL_CTRL_AXI_bvalid), .m_bready(PL_CTRL_AXI_bready),
-      .m_araddr(PL_CTRL_AXI_araddr), .m_arvalid(PL_CTRL_AXI_arvalid), .m_arready(PL_CTRL_AXI_arready),
-      .m_rdata(PL_CTRL_AXI_rdata), .m_rresp(PL_CTRL_AXI_rresp), .m_rvalid(PL_CTRL_AXI_rvalid), .m_rready(PL_CTRL_AXI_rready)
-  );
-
+  // PL RFDC configuration master (ddr4_ui_clk) into the RFDC AXI-Lite clock.
   axilite_cdc_simple rv_rfdc_axil_cdc_i (
       .s_clk      (ddr4_ui_clk),
       .s_rst_n    (ddr4_ui_aresetn),
-      .s_awaddr   (PL_CTRL_AXI_awaddr),
-      .s_awvalid  (PL_CTRL_AXI_awvalid),
-      .s_awready  (PL_CTRL_AXI_awready),
-      .s_wdata    (PL_CTRL_AXI_wdata),
-      .s_wstrb    (PL_CTRL_AXI_wstrb),
-      .s_wvalid   (PL_CTRL_AXI_wvalid),
-      .s_wready   (PL_CTRL_AXI_wready),
-      .s_bresp    (PL_CTRL_AXI_bresp),
-      .s_bvalid   (PL_CTRL_AXI_bvalid),
-      .s_bready   (PL_CTRL_AXI_bready),
-      .s_araddr   (PL_CTRL_AXI_araddr),
-      .s_arvalid  (PL_CTRL_AXI_arvalid),
-      .s_arready  (PL_CTRL_AXI_arready),
-      .s_rdata    (PL_CTRL_AXI_rdata),
-      .s_rresp    (PL_CTRL_AXI_rresp),
-      .s_rvalid   (PL_CTRL_AXI_rvalid),
-      .s_rready   (PL_CTRL_AXI_rready),
+      .s_awaddr   (RFDC_CFG_AXI_awaddr),
+      .s_awvalid  (RFDC_CFG_AXI_awvalid),
+      .s_awready  (RFDC_CFG_AXI_awready),
+      .s_wdata    (RFDC_CFG_AXI_wdata),
+      .s_wstrb    (RFDC_CFG_AXI_wstrb),
+      .s_wvalid   (RFDC_CFG_AXI_wvalid),
+      .s_wready   (RFDC_CFG_AXI_wready),
+      .s_bresp    (RFDC_CFG_AXI_bresp),
+      .s_bvalid   (RFDC_CFG_AXI_bvalid),
+      .s_bready   (RFDC_CFG_AXI_bready),
+      .s_araddr   (RFDC_CFG_AXI_araddr),
+      .s_arvalid  (RFDC_CFG_AXI_arvalid),
+      .s_arready  (RFDC_CFG_AXI_arready),
+      .s_rdata    (RFDC_CFG_AXI_rdata),
+      .s_rresp    (RFDC_CFG_AXI_rresp),
+      .s_rvalid   (RFDC_CFG_AXI_rvalid),
+      .s_rready   (RFDC_CFG_AXI_rready),
       .m_clk      (pl_clk),
       .m_rst_n    (pl_aresetn),
       .m_awaddr   (RV_AXI_RFDC_awaddr),
@@ -1487,44 +974,17 @@ module Top #(
       .m_rready   (RV_AXI_RFDC_rready)
   );
 
-  // The new protocol's PLAY request is not itself a DAC trigger, but it is
-  // retained here only for the legacy diagnostic stretch counter.  No UDP/RV
-  // instruction pulse is allowed to reach the playback trigger path.
-  assign control_trigger_pulse = wave_play_valid;
-
-  // ========== DataMover ==========
-  wire [103:0] dm_cmd_tdata;
-  wire         dm_cmd_tvalid, dm_cmd_tready;
-  wire [511:0] dm_data_tdata;
-  wire         dm_data_tvalid, dm_data_tready, dm_data_tlast;
-  wire         dm_mm2s_err;
-  wire         dm_mm2s_sts_tvalid, dm_mm2s_sts_tlast;
-  wire [7:0]   dm_mm2s_sts_tdata;
-  wire         dm_mm2s_sts_tkeep;
-
-  // ========== executor -> wave FIFO write side (DDR 域) ==========
-  wire [255:0] legacy_ch1_wave_tdata, legacy_ch2_wave_tdata, legacy_ch3_wave_tdata, legacy_ch4_wave_tdata;
-  wire [255:0] legacy_ch5_wave_tdata, legacy_ch6_wave_tdata, legacy_ch7_wave_tdata, legacy_ch8_wave_tdata;
-  wire         legacy_ch1_wave_tvalid, legacy_ch2_wave_tvalid, legacy_ch3_wave_tvalid, legacy_ch4_wave_tvalid;
-  wire         legacy_ch5_wave_tvalid, legacy_ch6_wave_tvalid, legacy_ch7_wave_tvalid, legacy_ch8_wave_tvalid;
+  // ========== reader -> wave FIFO write side (DDR domain) ==========
   wire [255:0] ch1_wave_tdata, ch2_wave_tdata, ch3_wave_tdata, ch4_wave_tdata;
   wire [255:0] ch5_wave_tdata, ch6_wave_tdata, ch7_wave_tdata, ch8_wave_tdata;
   wire         ch1_wave_tvalid, ch2_wave_tvalid, ch3_wave_tvalid, ch4_wave_tvalid;
   wire         ch5_wave_tvalid, ch6_wave_tvalid, ch7_wave_tvalid, ch8_wave_tvalid;
-  wire [15:0]  ch1_fifo_level_beats;
-  wire [15:0]  ch2_fifo_level_beats;
-  wire [15:0]  ch3_fifo_level_beats;
-  wire [15:0]  ch4_fifo_level_beats;
-  wire [15:0]  ch5_fifo_level_beats;
-  wire [15:0]  ch6_fifo_level_beats;
-  wire [15:0]  ch7_fifo_level_beats;
-  wire [15:0]  ch8_fifo_level_beats;
 
   // ========== DAC side ready from DAC IP ==========
   wire         dac_ch1_ready, dac_ch2_ready, dac_ch3_ready, dac_ch4_ready;
   wire         dac_ch5_ready, dac_ch6_ready, dac_ch7_ready, dac_ch8_ready;
 
-  // ========== DataMover AXI MM2S to DDR ==========
+  // ========== waveform reader AXI read channel to DDR ==========
   wire [63:0]  M_AXI_DM_araddr;
   wire [7:0]   M_AXI_DM_arlen;
   wire [2:0]   M_AXI_DM_arsize;
@@ -1536,67 +996,17 @@ module Top #(
   wire         M_AXI_DM_rready;
   wire [1:0]   M_AXI_DM_rresp;
   wire         M_AXI_DM_rvalid;
-  wire [63:0]  dm_data_tkeep;
 
-  // ========== GPIO out ==========
-  wire ps_trigger_raw = gpio_out_reg[0];
+  // ========== firmware status word (GPIO2) and HMC7044 done ==========
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if (!ddr4_ui_aresetn) begin
       firmware_status_meta <= 32'd0;
       firmware_status_ddr <= 32'd0;
       hmc_done_ddr_sync <= 2'b00;
-      sync_seen_ddr_sync <= 2'b00;
-      sync_ready_ddr_sync <= 2'b00;
-      sync_align_busy_ddr_sync <= 2'b00;
-      sync_align_failed_ddr_sync <= 2'b00;
-      sync_alignment_epoch_ddr_meta <= 6'd0;
-      sync_alignment_epoch_ddr <= 6'd0;
-      trigger_input_count_ddr_meta <= 32'd0;
-      trigger_input_count_ddr <= 32'd0;
-      trigger_accepted_count_ddr_meta <= 32'd0;
-      trigger_accepted_count_ddr <= 32'd0;
-      trigger_output_count_ddr_meta <= 32'd0;
-      trigger_output_count_ddr <= 32'd0;
-      playback_admitted_count_ddr_meta <= 32'd0;
-      playback_admitted_count_ddr <= 32'd0;
-      playback_skipped_count_ddr_meta <= 32'd0;
-      playback_skipped_count_ddr <= 32'd0;
-      diag_snapshot_ack_ddr_sync <= 3'b000;
-      diag_snapshot_ack_ddr_seen <= 1'b0;
-      diag_snapshot_hold_meta_ddr <= 512'd0;
-      diag_snapshot_hold_sync_ddr <= 512'd0;
-      diag_snapshot_hold_ddr <= 512'd0;
-      diag_snapshot_hold_valid_ddr <= 1'b0;
     end else begin
-      firmware_status_meta <= gpio_out_reg;
+      firmware_status_meta <= firmware_status_word;
       firmware_status_ddr <= firmware_status_meta;
       hmc_done_ddr_sync <= {hmc_done_ddr_sync[0], hmc7044_set_finish};
-      sync_seen_ddr_sync <= {sync_seen_ddr_sync[0], sync_seen};
-      sync_ready_ddr_sync <= {sync_ready_ddr_sync[0], sync_link_ready};
-      sync_align_busy_ddr_sync <= {sync_align_busy_ddr_sync[0], sync_align_busy};
-      sync_align_failed_ddr_sync <= {sync_align_failed_ddr_sync[0], sync_align_failed};
-      sync_alignment_epoch_ddr_meta <= sync_alignment_epoch;
-      sync_alignment_epoch_ddr <= sync_alignment_epoch_ddr_meta;
-      // Counters are monotonic snapshots. Two DDR-domain samples avoid
-      // exposing the PL-domain bus directly to RFCTRL2 STATUS.
-      trigger_input_count_ddr_meta <= trigger_input_count;
-      trigger_input_count_ddr <= trigger_input_count_ddr_meta;
-      trigger_accepted_count_ddr_meta <= trigger_accepted_count;
-      trigger_accepted_count_ddr <= trigger_accepted_count_ddr_meta;
-      trigger_output_count_ddr_meta <= trigger_output_count;
-      trigger_output_count_ddr <= trigger_output_count_ddr_meta;
-      playback_admitted_count_ddr_meta <= pc_trigger_admitted_count;
-      playback_admitted_count_ddr <= playback_admitted_count_ddr_meta;
-      playback_skipped_count_ddr_meta <= pc_trigger_skipped_count;
-      playback_skipped_count_ddr <= playback_skipped_count_ddr_meta;
-      diag_snapshot_ack_ddr_sync <= {diag_snapshot_ack_ddr_sync[1:0], diag_snapshot_ack_toggle_dac};
-      diag_snapshot_hold_meta_ddr <= diag_snapshot_hold_dac;
-      diag_snapshot_hold_sync_ddr <= diag_snapshot_hold_meta_ddr;
-      if (diag_snapshot_ack_ddr_sync[2] != diag_snapshot_ack_ddr_seen) begin
-        diag_snapshot_ack_ddr_seen <= diag_snapshot_ack_ddr_sync[2];
-        diag_snapshot_hold_ddr <= diag_snapshot_hold_sync_ddr;
-        diag_snapshot_hold_valid_ddr <= 1'b1;
-      end
     end
   end
 
@@ -1609,49 +1019,18 @@ module Top #(
           rfdc_operational_ready && rfdc_nco_sync_ready
       };
   end
-  reg [7:0] udp_trigger_stretch_cnt;
-  reg       udp_trigger_stretched;
-  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if(!ddr4_ui_aresetn) begin
-      udp_trigger_stretch_cnt <= 8'd0;
-      udp_trigger_stretched <= 1'b0;
-    end else if(control_trigger_pulse) begin
-      udp_trigger_stretch_cnt <= 8'd64;
-      udp_trigger_stretched <= 1'b1;
-    end else if(udp_trigger_stretch_cnt != 8'd0) begin
-      udp_trigger_stretch_cnt <= udp_trigger_stretch_cnt - 8'd1;
-      udp_trigger_stretched <= 1'b1;
-    end else begin
-      udp_trigger_stretched <= 1'b0;
-    end
-  end
-  // ========== trigger CDC ==========
-  // XS18/XS19 carry the independent playback Trigger.  Admission is gated
-  // on the external XS20 SYNC state (or the explicit runtime bypass).
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_event_ddr_sync_ff;
-  reg role_trigger_event_ddr_seen;
-  // Slave-bypass software Triggers use a dedicated DDR-to-DAC toggle. The
-  // HMC link still owns role/event counters, but a local bypass command must
-  // not depend on the HMC event toggle surviving a short replay-frame edge.
+  // ========== PAUSE/STOP into the DAC domain ==========
+  // Each command toggles a level in the DDR domain; the DAC domain turns the
+  // synchronized edge back into a one-cycle pulse.
   reg wave_pause_toggle_ddr, wave_stop_toggle_ddr;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] wave_pause_toggle_dac_sync_ff;
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] wave_stop_toggle_dac_sync_ff;
   reg wave_pause_toggle_dac_seen, wave_stop_toggle_dac_seen;
-  // The physical Trigger event is created in HMC PL_CLK. Transfer that event
-  // toggle directly to the DAC domain; PS pl_clk is not in this path.
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] role_trigger_dac_toggle_sync_ff;
-  reg role_trigger_dac_toggle_seen;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if(!ddr4_ui_aresetn) begin
-      role_trigger_event_ddr_sync_ff <= 3'b000;
-      role_trigger_event_ddr_seen <= 1'b0;
       wave_pause_toggle_ddr <= 1'b0;
       wave_stop_toggle_ddr <= 1'b0;
     end else begin
-      role_trigger_event_ddr_sync_ff <= {
-          role_trigger_event_ddr_sync_ff[1:0], trigger_event_toggle_hmc
-      };
-      role_trigger_event_ddr_seen <= role_trigger_event_ddr_sync_ff[2];
       if (wave_pause_valid)
         wave_pause_toggle_ddr <= ~wave_pause_toggle_ddr;
       if (wave_stop_valid)
@@ -1660,203 +1039,28 @@ module Top #(
   end
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
     if(!clk104_aresetn) begin
-      role_trigger_dac_toggle_sync_ff <= 3'b000;
-      role_trigger_dac_toggle_seen <= 1'b0;
       wave_pause_toggle_dac_sync_ff <= 3'b000;
       wave_stop_toggle_dac_sync_ff <= 3'b000;
       wave_pause_toggle_dac_seen <= 1'b0;
       wave_stop_toggle_dac_seen <= 1'b0;
     end else begin
-      role_trigger_dac_toggle_sync_ff <= {
-          role_trigger_dac_toggle_sync_ff[1:0], trigger_event_toggle_hmc
-      };
-      role_trigger_dac_toggle_seen <= role_trigger_dac_toggle_sync_ff[2];
       wave_pause_toggle_dac_sync_ff <= {wave_pause_toggle_dac_sync_ff[1:0], wave_pause_toggle_ddr};
       wave_stop_toggle_dac_sync_ff <= {wave_stop_toggle_dac_sync_ff[1:0], wave_stop_toggle_ddr};
       wave_pause_toggle_dac_seen <= wave_pause_toggle_dac_sync_ff[2];
       wave_stop_toggle_dac_seen <= wave_stop_toggle_dac_sync_ff[2];
     end
   end
-  wire hmc_trigger_event_ddr =
-      role_trigger_event_ddr_sync_ff[2] != role_trigger_event_ddr_seen;
-  wire role_trigger_dac_pulse =
-      role_trigger_dac_toggle_sync_ff[2] != role_trigger_dac_toggle_seen;
   wire wave_pause_dac_pulse = wave_pause_toggle_dac_sync_ff[2] != wave_pause_toggle_dac_seen;
   wire wave_stop_dac_pulse = wave_stop_toggle_dac_sync_ff[2] != wave_stop_toggle_dac_seen;
   wire wave_control_abort_dac = wave_pause_dac_pulse | wave_stop_dac_pulse;
 
-  // ---- Direct DAC-domain capture of the external Trigger (XS19/TRIG_2) ----
-  // The hmc_pl_clk detour above is kept alive as a measurement reference, but
-  // on a slave it no longer launches playback for an external Trigger: both
-  // clocks come from the same HMC7044 VCO with a 25:48 period ratio, so the
-  // hmc->dac toggle lands at one of 48 phases inside the 20 ns DAC period and
-  // spreads the launch over ~19.6 ns regardless of how clean XS19 is.
-  //
-  // Host commands still update HMC link status/counters. In slave bypass their
-  // local launch crosses directly from DDR to DAC; external and multi-board
-  // events remain on the HMC path. The external flag keeps the paths distinct.
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] trig_event_ext_dac_sync_ff;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_bypass_dac_sync_ff;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] sync_ready_dac_sync_ff;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] prefill_ready_dac_sync_ff;
-  reg pc_started_dac_prev;
-  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
-    if(!clk104_aresetn) begin
-      trig_event_ext_dac_sync_ff <= 3'b000;
-      sync_bypass_dac_sync_ff <= 3'b000;
-      sync_ready_dac_sync_ff <= 3'b000;
-      prefill_ready_dac_sync_ff <= 3'b000;
-      pc_started_dac_prev <= 1'b0;
-      diag_clear_events_dac_sync <= 3'b000;
-      diag_clear_counters_dac_sync <= 3'b000;
-      diag_snapshot_req_dac_sync <= 3'b000;
-      diag_snapshot_req_dac_seen <= 1'b0;
-      diag_clear_events_dac_seen <= 1'b0;
-      diag_clear_counters_dac_seen <= 1'b0;
-    end else begin
-      trig_event_ext_dac_sync_ff <= {trig_event_ext_dac_sync_ff[1:0], trigger_event_external_hmc};
-      sync_bypass_dac_sync_ff <= {sync_bypass_dac_sync_ff[1:0], sync_bypass_ddr};
-      sync_ready_dac_sync_ff <= {sync_ready_dac_sync_ff[1:0], sync_link_ready};
-      prefill_ready_dac_sync_ff <= {prefill_ready_dac_sync_ff[1:0], ex_dbg_prefill_ready};
-      pc_started_dac_prev <= pc_source_started;
-      diag_clear_events_dac_sync <= {diag_clear_events_dac_sync[1:0], diag_clear_events_toggle_ddr};
-      diag_clear_counters_dac_sync <= {diag_clear_counters_dac_sync[1:0], diag_clear_counters_toggle_ddr};
-      diag_snapshot_req_dac_sync <= {diag_snapshot_req_dac_sync[1:0], diag_snapshot_request_toggle};
-      if (diag_snapshot_request_dac)
-        diag_snapshot_req_dac_seen <= diag_snapshot_req_dac_sync[2];
-      if (diag_clear_events_dac)
-        diag_clear_events_dac_seen <= diag_clear_events_dac_sync[2];
-      if (diag_clear_counters_dac)
-        diag_clear_counters_dac_seen <= diag_clear_counters_dac_sync[2];
-    end
-  end
-  wire legacy_event_is_external_dac = trig_event_ext_dac_sync_ff[2];
-  wire pc_started_pulse_dac = pc_source_started && !pc_started_dac_prev;
-
-  // Same admission rule as the hmc_pl_clk path, evaluated on the clock that
-  // actually gates the samples.  PREPARED is native to this domain, so the
-  // one-Trigger-per-PREPARED interlock cannot miss a short PREPARED gap.
-  wire dac_ext_trigger_gate =
-      (sync_bypass_dac_sync_ff[2] || sync_ready_dac_sync_ff[2]) && waveform_prepared_dac;
-
-  // The retired XS18/XS20 emitter cannot launch waveform playback.  The
-  // waveform path generates TRIG_1 from its first real DAC transfer instead.
-  assign trigger_emit_dac_pulse = 1'b0;
-  assign trigger_emit_dac_count = 32'd0;
-
-  // Direct-trigger capture belonged to the retired RFCTRL2/XS20 path.  The
-  // waveform_playback_path owns TRIG_2 capture and admission; keep the old
-  // diagnostic outputs explicit and quiescent rather than sampling the pad twice.
   wire waveform_play_abort;
-  wire waveform_play_prepare;
   reg tdc_mode_dac;
-  assign dac_direct_trigger_pulse = 1'b0;
-  assign dac_direct_trigger_edge = 1'b0;
-  assign dac_direct_input_count = 32'd0;
-  assign dac_direct_accept_count = 32'd0;
-  assign dac_direct_capture_tick = 64'd0;
-  assign dac_direct_trigger_sync = 1'b0;
-  assign dac_direct_trigger_latched = 1'b0;
-
-  // The unified playback path owns Trigger admission and reports its result
-  // through the WAVECTR0 STATUS counters.  Keep this retired diagnostic pulse
-  // low so no legacy RFCTRL2 launch path can become a second start source.
-  assign dac_trigger_launch = 1'b0;
-
-  // DAC-domain timestamps are latched at the event boundary.  They are kept
-  // independent of the DDR/HMC status snapshots so a diagnostic read cannot
-  // perturb the Trigger path.
-  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
-    if (!clk104_aresetn) begin
-      dac_diag_tick <= 64'd0;
-      dac_diag_launch_tick <= 64'd0;
-      dac_diag_playback_start_tick <= 64'd0;
-      dac_diag_first_valid_tick <= 64'd0;
-      dac_diag_trigger_pulse_sticky <= 1'b0;
-      dac_diag_trigger_launch_sticky <= 1'b0;
-      dac_diag_playback_start_sticky <= 1'b0;
-      dac_any_valid_diag_prev <= 1'b0;
-      diag_snapshot_ack_toggle_dac <= 1'b0;
-      diag_snapshot_ack_pending_dac <= 1'b0;
-      diag_snapshot_hold_dac <= 512'd0;
-    end else begin
-      dac_diag_tick <= dac_diag_tick + 64'd1;
-      if (diag_clear_counters_dac) begin
-        dac_diag_launch_tick <= 64'd0;
-        dac_diag_playback_start_tick <= 64'd0;
-        dac_diag_first_valid_tick <= 64'd0;
-        dac_diag_trigger_pulse_sticky <= 1'b0;
-        dac_diag_trigger_launch_sticky <= 1'b0;
-        dac_diag_playback_start_sticky <= 1'b0;
-      end else begin
-        if (dac_trigger_launch) begin
-          dac_diag_launch_tick <= dac_diag_tick;
-          dac_diag_trigger_launch_sticky <= 1'b1;
-        end
-        if (dac_direct_trigger_pulse)
-          dac_diag_trigger_pulse_sticky <= 1'b1;
-        if (pc_started_pulse_dac)
-          dac_diag_playback_start_tick <= dac_diag_tick;
-        if (dac_any_valid_gated && !dac_any_valid_diag_prev) begin
-          dac_diag_first_valid_tick <= dac_diag_tick;
-          dac_diag_playback_start_sticky <= 1'b1;
-        end
-      end
-      dac_any_valid_diag_prev <= dac_any_valid_gated;
-      if (diag_snapshot_request_dac) begin
-        diag_snapshot_hold_dac <= {
-          178'd0,
-          rfdc_output_permitted_dac,
-          waveform_prepared_dac,
-          dac_diag_trigger_launch_sticky,
-          dac_diag_trigger_pulse_sticky,
-          wave_status_snapshot_valid,
-          wave_diag_active_dac,
-          wave_diag_underflow_seen,
-          dac_direct_accept_count,
-          dac_direct_input_count,
-          dac_diag_first_valid_tick,
-          dac_diag_playback_start_tick,
-          diag_trigger_launch_tick,
-          diag_trigger_capture_tick
-        };
-        // Delay ACK by one DAC edge.  The held bus is then stable before the
-        // DDR-domain synchronizer can observe the acknowledgement.
-        diag_snapshot_ack_pending_dac <= 1'b1;
-      end else if (diag_snapshot_ack_pending_dac) begin
-        diag_snapshot_ack_toggle_dac <= ~diag_snapshot_ack_toggle_dac;
-        diag_snapshot_ack_pending_dac <= 1'b0;
-      end
-    end
-  end
-
-  // Measures, per Trigger, how many DAC cycles the hmc_pl_clk detour adds.
-  // trig_lat_delta_max - trig_lat_delta_min is the launch jitter that path was
-  // contributing; it is the direct evidence for or against the 48-phase model.
-  wire [31:0] trig_lat_tick;
-  wire [15:0] trig_lat_delta_last;
-  wire [15:0] trig_lat_delta_min;
-  wire [15:0] trig_lat_delta_max;
-  wire [15:0] trig_lat_start_delta;
-  wire [31:0] trig_lat_pair_count;
-  wire [31:0] trig_lat_orphan_count;
-  wire        trig_lat_pending;
-  // No legacy-vs-direct launch latency is measured in the single-board
-  // waveform target.  Preserve the fixed-width diagnostic contract as zeros.
-  assign trig_lat_tick = 32'd0;
-  assign trig_lat_delta_last = 16'd0;
-  assign trig_lat_delta_min = 16'd0;
-  assign trig_lat_delta_max = 16'd0;
-  assign trig_lat_start_delta = 16'd0;
-  assign trig_lat_pair_count = 32'd0;
-  assign trig_lat_orphan_count = 32'd0;
-  assign trig_lat_pending = 1'b0;
 
   // ========== Calibrated event timestamps and eight-channel compensation ==========
   wire       clk_200mhz;
   wire       clk_200mhz_locked;
   wire pc_done_pulse;
-  reg cfg_loop_dac;
   tdc_clk_gen_200mhz tdc_clk_gen_200mhz_i (
       .clk_50mhz  (dac_axis_clk),
       .rst_n      (clk104_aresetn),
@@ -1965,40 +1169,25 @@ module Top #(
   wire [7:0] tdc_clipped;
   wire [31:0] tdc_accepted_epoch;
   wire [10:0] tdc_accepted_phase;
-  wire pc_source_prepared;
   wire tdc_runtime_fault;
-  wire tdc_clear = waveform_play_abort | waveform_play_prepare;
+  wire tdc_clear = waveform_play_abort;
   wire tdc_output_mute = tdc_mode_dac &&
       (tdc_fault || tdc_runtime_fault || !tdc_ready_sync[2] || !tdc_valid_sync[2] || tdc_clear);
-  wire long_buffer_ready_dac = prefill_ready_dac_sync_ff[2];
-  // waveform_prepared_dac and pc_started are mapped to the unified waveform
-  // state below; the retired executor no longer owns these status bits.
-  wire tdc_admission_open, tdc_request_valid, tdc_request_good;
-  wire [31:0] tdc_request_epoch;
-  wire [10:0] tdc_request_phase;
-  tdc_trigger_request_mux #(.IS_MASTER(IS_MASTER)) u_tdc_requests (
-      .prepared(waveform_prepared_dac), .sync_bypass(sync_bypass_dac_sync_ff[2]),
-      .sync_ready(sync_ready_dac_sync_ff[2]),
-      .external_valid(tdc_fifo_valid), .external_good(tdc_fifo_data[2]),
-      .external_epoch(tdc_fifo_data[56:25]), .external_phase(tdc_fifo_data[24:14]),
-      .software_pulse(role_trigger_dac_pulse), .software_is_external(legacy_event_is_external_dac),
-      .current_epoch(tdc_dac_epoch), .admission_open(tdc_admission_open),
-      .event_valid(tdc_request_valid), .event_good(tdc_request_good),
-      .event_epoch(tdc_request_epoch), .event_phase(tdc_request_phase)
-  );
+  // The scheduler takes every timestamped external Trigger straight from the
+  // event FIFO; tdc_fifo_data is {epoch, phase, tap, good, overflow, bubble}.
   tdc_compensating_trigger u_tdc_scheduler (
       .clk(dac_axis_clk), .rst_n(dac_rst_n), .clear(tdc_clear),
       .enable(tdc_mode_dac), .calibrated(tdc_valid_sync[2]),
-      .reference_ready(tdc_ready_sync[2]), .prepared(tdc_admission_open),
+      .reference_ready(tdc_ready_sync[2]), .prepared(waveform_prepared_dac),
       .source_running(pc_source_started), .output_busy(|tdc_filter_busy),
       // loop_enable tracks the descriptor loop count the controller actually
       // loops on (waveform_playback_controller loops while loop_count>1), not
       // the standalone cfg bit, so scheduler drain/complete stays in step.
       .source_done(pc_done_pulse), .loop_enable(wave_path_loop_count_dac > 32'd1),
       .runtime_fault(tdc_runtime_fault), .clip_pulse(tdc_clip_pulse),
-      .current_epoch(tdc_dac_epoch), .event_valid(tdc_request_valid),
-      .event_good(tdc_request_good), .event_epoch(tdc_request_epoch),
-      .event_phase_10ps(tdc_request_phase), .phase_offset_10ps(tdc_offset_dac),
+      .current_epoch(tdc_dac_epoch), .event_valid(tdc_fifo_valid),
+      .event_good(tdc_fifo_data[2]), .event_epoch(tdc_fifo_data[56:25]),
+      .event_phase_10ps(tdc_fifo_data[24:14]), .phase_offset_10ps(tdc_offset_dac),
       .clear_statistics(tdc_clear_sync[2] != tdc_clear_seen),
       .launch(tdc_launch), .config_valid(tdc_config_valid),
       .delay_samples(tdc_delay_samples), .fractional_phase(tdc_fractional_phase),
@@ -2093,179 +1282,6 @@ module Top #(
     end
   end
 
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_ddr_sync_ff;
-  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if(!ddr4_ui_aresetn) ps_trigger_ddr_sync_ff <= 3'b000;
-    else                 ps_trigger_ddr_sync_ff <= {ps_trigger_ddr_sync_ff[1:0], ps_trigger_raw};
-  end
-  wire ps_trigger_ddr_sync = ps_trigger_ddr_sync_ff[2] |
-                              udp_trigger_stretched |
-                              hmc_trigger_event_ddr;
-
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] ps_trigger_dac_sync_ff;
-  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [2:0] udp_trigger_dac_sync_ff;
-  always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
-    if(!clk104_aresetn) begin
-      ps_trigger_dac_sync_ff <= 3'b000;
-      udp_trigger_dac_sync_ff <= 3'b000;
-    end else begin
-      ps_trigger_dac_sync_ff <= {ps_trigger_dac_sync_ff[1:0], ps_trigger_raw};
-      udp_trigger_dac_sync_ff <= {udp_trigger_dac_sync_ff[1:0], udp_trigger_stretched};
-    end
-  end
-  wire ps_trigger_dac_sync = ps_trigger_dac_sync_ff[2] |
-                              udp_trigger_dac_sync_ff[2];
-
-  // ========== AXI-lite -> AXIS 指令 FIFO 接口（stub/IP替换） ==========
-  // M_AXI_INST signals
-  wire [31:0]  M_AXI_INST_araddr;
-  wire [1:0]   M_AXI_INST_arburst;
-  wire [3:0]   M_AXI_INST_arcache;
-  wire [7:0]   M_AXI_INST_arlen;
-  wire [0:0]   M_AXI_INST_arlock;
-  wire [2:0]   M_AXI_INST_arprot;
-  wire [3:0]   M_AXI_INST_arqos;
-  wire         M_AXI_INST_arready;
-  wire [2:0]   M_AXI_INST_arsize;
-  wire [15:0]  M_AXI_INST_aruser;
-  wire         M_AXI_INST_arvalid;
-
-  wire [31:0]  M_AXI_INST_awaddr;
-  wire [1:0]   M_AXI_INST_awburst;
-  wire [3:0]   M_AXI_INST_awcache;
-  wire [7:0]   M_AXI_INST_awlen;
-  wire [0:0]   M_AXI_INST_awlock;
-  wire [2:0]   M_AXI_INST_awprot;
-  wire [3:0]   M_AXI_INST_awqos;
-  wire         M_AXI_INST_awready;
-  wire [2:0]   M_AXI_INST_awsize;
-  wire [15:0]  M_AXI_INST_awuser;
-  wire         M_AXI_INST_awvalid;
-
-  wire         M_AXI_INST_bready;
-  wire [1:0]   M_AXI_INST_bresp;
-  wire         M_AXI_INST_bvalid;
-
-  wire [31:0]  M_AXI_INST_rdata;
-  wire         M_AXI_INST_rlast;
-  wire         M_AXI_INST_rready;
-  wire [1:0]   M_AXI_INST_rresp;
-  wire         M_AXI_INST_rvalid;
-
-  wire [31:0]  M_AXI_INST_wdata;
-  wire         M_AXI_INST_wlast;
-  wire         M_AXI_INST_wready;
-  wire [3:0]   M_AXI_INST_wstrb;
-  wire         M_AXI_INST_wvalid;
-
-  axi_fifo_interface #(
-      .AXI_DATA_WIDTH(32),
-      .FIFO_DATA_WIDTH(128),
-      .FIFO_DEPTH_LOG2(4)
-  ) axi_fifo_inst (
-      .s_axi_aclk    (pl_clk),
-      .s_axi_aresetn (pl_aresetn),
-
-      .s_axi_awaddr  (M_AXI_INST_awaddr),
-      .s_axi_awlen   (M_AXI_INST_awlen),
-      .s_axi_awvalid (M_AXI_INST_awvalid),
-      .s_axi_awready (M_AXI_INST_awready),
-      .s_axi_wdata   (M_AXI_INST_wdata),
-      .s_axi_wstrb   (M_AXI_INST_wstrb),
-      .s_axi_wvalid  (M_AXI_INST_wvalid),
-      .s_axi_wready  (M_AXI_INST_wready),
-      .s_axi_bvalid  (M_AXI_INST_bvalid),
-      .s_axi_bready  (M_AXI_INST_bready),
-      .s_axi_bresp   (M_AXI_INST_bresp),
-
-      .s_axi_araddr  (M_AXI_INST_araddr),
-      .s_axi_arlen   (M_AXI_INST_arlen),
-      .s_axi_arvalid (M_AXI_INST_arvalid),
-      .s_axi_arready (M_AXI_INST_arready),
-      .s_axi_rdata   (M_AXI_INST_rdata),
-      .s_axi_rlast   (M_AXI_INST_rlast),
-      .s_axi_rvalid  (M_AXI_INST_rvalid),
-      .s_axi_rready  (M_AXI_INST_rready),
-      .s_axi_rresp   (M_AXI_INST_rresp),
-
-      .m_aclk        (ddr4_ui_clk),
-      .m_aresetn     (ddr4_ui_aresetn),
-      .m_axis_tdata  (ps_instr_tdata),
-      .m_axis_tvalid (ps_instr_tvalid),
-      .m_axis_tready (ps_instr_tready)
-  );
-
-  // ========== executor outputs config ==========
-  wire [31:0] ch1_delay_cycles, ch2_delay_cycles, ch3_delay_cycles, ch4_delay_cycles;
-  wire [31:0] ch5_delay_cycles, ch6_delay_cycles, ch7_delay_cycles, ch8_delay_cycles;
-  wire [31:0] ch1_len_beats,   ch2_len_beats,   ch3_len_beats,   ch4_len_beats;
-  wire [31:0] ch5_len_beats,   ch6_len_beats,   ch7_len_beats,   ch8_len_beats;
-  wire        cfg_auto_start;
-  wire        cfg_loop;
-  wire [31:0] cfg_repeat_count;
-  wire        cfg_debug_alternate;
-  wire        cfg_commit; // 每次 END 提交一帧配置
-
-  localparam [15:0] TRIG_1_WIDTH_CYCLES = 16'd300;
-
-  // The descriptor reader/FIFO/DAC path below is the only waveform playback
-  // executor in the production design. The historical instruction executor is
-  // intentionally not instantiated; its status fields remain zero-valued for
-  // diagnostic ABI stability while the new WAVECTR0 status is authoritative.
-  assign ch1_arm = wave_descriptor_channel_mask[0];
-  assign ch2_arm = wave_descriptor_channel_mask[1];
-  assign ch3_arm = wave_descriptor_channel_mask[2];
-  assign ch4_arm = wave_descriptor_channel_mask[3];
-  assign ch5_arm = wave_descriptor_channel_mask[4];
-  assign ch6_arm = wave_descriptor_channel_mask[5];
-  assign ch7_arm = wave_descriptor_channel_mask[6];
-  assign ch8_arm = wave_descriptor_channel_mask[7];
-  assign ch1_delay_cycles = 32'd0;
-  assign ch2_delay_cycles = 32'd0;
-  assign ch3_delay_cycles = 32'd0;
-  assign ch4_delay_cycles = 32'd0;
-  assign ch5_delay_cycles = 32'd0;
-  assign ch6_delay_cycles = 32'd0;
-  assign ch7_delay_cycles = 32'd0;
-  assign ch8_delay_cycles = 32'd0;
-  assign ch1_len_beats = wave_descriptor_total_beats;
-  assign ch2_len_beats = wave_descriptor_total_beats;
-  assign ch3_len_beats = wave_descriptor_total_beats;
-  assign ch4_len_beats = wave_descriptor_total_beats;
-  assign ch5_len_beats = wave_descriptor_total_beats;
-  assign ch6_len_beats = wave_descriptor_total_beats;
-  assign ch7_len_beats = wave_descriptor_total_beats;
-  assign ch8_len_beats = wave_descriptor_total_beats;
-  assign cfg_auto_start = 1'b0;
-  assign cfg_loop = (wave_descriptor_loop_count > 32'd1);
-  assign cfg_repeat_count = wave_descriptor_loop_count;
-  assign cfg_debug_alternate = 1'b0;
-  assign cfg_commit = 1'b0;
-  assign ex_dbg_st = 3'd0;
-  assign ex_dbg_dm_st = 2'd0;
-  assign ex_dbg_dm_sel_ch1 = 1'b0;
-  assign ex_dbg_dm_chunk_beats = 32'd0;
-  assign ex_dbg_dm_beats_sent = 32'd0;
-  assign ex_dbg_ch1_bytes_left = 64'd0;
-  assign ex_dbg_ch2_bytes_left = 64'd0;
-  assign ex_dbg_ch1_base_addr = 64'd0;
-  assign ex_dbg_ch2_base_addr = 64'd0;
-  assign ex_dbg_ch1_need_hard = 1'b0;
-  assign ex_dbg_ch2_need_hard = 1'b0;
-  assign ex_dbg_ch1_need_soft = 1'b0;
-  assign ex_dbg_ch2_need_soft = 1'b0;
-  assign ex_dbg_instr_in_tdata = 128'd0;
-  assign ex_dbg_instr_in_tvalid = 1'b0;
-  assign ex_dbg_instr_in_tready = 1'b0;
-  assign ex_dbg_main_tdata = 128'd0;
-  assign ex_dbg_main_tvalid = 1'b0;
-  assign ex_dbg_main_tready = 1'b0;
-  assign ex_dbg_prefill_ready = new_prefetch_safe_ddr;
-  assign ex_dbg_pending_valid = 1'b0;
-  assign ex_dbg_active_valid = 1'b0;
-  assign ex_dbg_run_delay_cnt = 32'd0;
-  assign ex_dbg_bad_instr_count = 32'd0;
-
   // ==========================================================
   // DAC AXIS domain reset: synchronize clk104_aresetn to dac_axis_clk.
   // ==========================================================
@@ -2276,9 +1292,6 @@ module Top #(
   end
   assign dac_rst_n = dac_rstff[2];
 
-  wire waveform_play_trigger;
-  wire unused_single_board_inputs = EXT_TRIGGER_P | EXT_TRIGGER_N |
-      ^rfctrl2_epoch;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
     if (!ddr4_ui_aresetn) begin
       waveform_armed_meta <= 1'b0;
@@ -2289,8 +1302,6 @@ module Top #(
       waveform_pending_ddr <= 1'b0;
       pc_started_meta <= 1'b0;
       pc_started_ddr <= 1'b0;
-      diag_clear_events_toggle_ddr <= 1'b0;
-      diag_clear_counters_toggle_ddr <= 1'b0;
     end else begin
       waveform_armed_meta <= waveform_armed_dac;
       waveform_armed_ddr <= waveform_armed_meta;
@@ -2300,178 +1311,11 @@ module Top #(
       waveform_pending_ddr <= waveform_pending_meta;
       pc_started_meta <= pc_started;
       pc_started_ddr <= pc_started_meta;
-      if (diag_clear_events_pulse)
-        diag_clear_events_toggle_ddr <= ~diag_clear_events_toggle_ddr;
-      if (diag_clear_counters_pulse)
-        diag_clear_counters_toggle_ddr <= ~diag_clear_counters_toggle_ddr;
     end
   end
 
-  // The new waveform playback path owns command admission and DAC gating.
-  // RFCTRL2 status wires below are derived from that path; no legacy playback
-  // controller is present in the target hierarchy.
-
-  // ==========================================================
-  // DDR 域：配置帧打包，commit 时写入 cfg FIFO
-  // 关键修复：写入 FIFO 的 seq_id 使用 seq_id_next，避免第一帧=0 导致 DAC gating 卡死
-  // ==========================================================
-  reg [15:0] seq_id;
-  wire [15:0] seq_id_next = seq_id + 16'd1;
-  reg         cfg_wr_pending;
-  wire        cfg_wr_ready;
-  reg [576:0] cfg_wr_payload;
-  wire [576:0] cfg_payload_next = {
-      cfg_repeat_count,
-      cfg_debug_alternate,
-      ch1_delay_cycles,
-      ch2_delay_cycles,
-      ch3_delay_cycles,
-      ch4_delay_cycles,
-      ch5_delay_cycles,
-      ch6_delay_cycles,
-      ch7_delay_cycles,
-      ch8_delay_cycles,
-      ch1_len_beats,
-      ch2_len_beats,
-      ch3_len_beats,
-      ch4_len_beats,
-      ch5_len_beats,
-      ch6_len_beats,
-      ch7_len_beats,
-      ch8_len_beats,
-      6'd0,
-      cfg_loop,
-      cfg_auto_start,
-      ch1_arm,
-      ch2_arm,
-      ch3_arm,
-      ch4_arm,
-      ch5_arm,
-      ch6_arm,
-      ch7_arm,
-      ch8_arm,
-      seq_id_next
-  };
-
-  always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
-    if(!ddr4_ui_aresetn) begin
-      seq_id <= 16'd0;
-      cfg_wr_pending <= 1'b0;
-      cfg_wr_payload <= 577'd0;
-    end else begin
-      if(cfg_commit && !cfg_wr_pending) begin
-        cfg_wr_pending <= 1'b1;
-        cfg_wr_payload <= cfg_payload_next;
-      end
-
-      if(cfg_wr_pending && cfg_wr_ready) begin
-        seq_id <= seq_id_next;
-        cfg_wr_pending <= 1'b0;
-      end
-    end
-  end
-
-  wire cfg_wr_valid = cfg_wr_pending;
-
-  // ==========================================================
-  // cfg CDC FIFO (xpm_fifo_async)  DDR->DAC
-  // ==========================================================
-  wire [576:0] cfg_rd_data;
-  wire         cfg_rd_valid;
-  reg          cfg_rd_ready;
-
-  cfg_cdc_fifo_xpm #(
-    .W(577),
-    .DEPTH(16)
-  ) u_cfg_fifo (
-    .wr_clk(ddr4_ui_clk),
-    .wr_rst_n(ddr4_ui_aresetn),
-    .wr_data(cfg_wr_payload),
-    .wr_valid(cfg_wr_valid),
-    .wr_ready(cfg_wr_ready),
-
-    .rd_clk(dac_axis_clk),
-    .rd_rst_n(dac_rst_n),
-    .rd_data(cfg_rd_data),
-    .rd_valid(cfg_rd_valid),
-    .rd_ready(cfg_rd_ready)
-  );
-
-  // DAC 域：锁存最新一帧配置
-  reg [31:0] ch1_delay_dac, ch2_delay_dac, ch3_delay_dac, ch4_delay_dac;
-  reg [31:0] ch5_delay_dac, ch6_delay_dac, ch7_delay_dac, ch8_delay_dac;
-  reg [31:0] ch1_len_dac, ch2_len_dac, ch3_len_dac, ch4_len_dac;
-  reg [31:0] ch5_len_dac, ch6_len_dac, ch7_len_dac, ch8_len_dac;
-  reg        cfg_auto_start_dac;
-  reg [31:0] cfg_repeat_count_dac;
-  reg        cfg_debug_alternate_dac;
-  reg        ch1_arm_dac, ch2_arm_dac, ch3_arm_dac, ch4_arm_dac;
-  reg        ch5_arm_dac, ch6_arm_dac, ch7_arm_dac, ch8_arm_dac;
-  reg [15:0] seq_id_dac;
-
-  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
-    if(!dac_rst_n) begin
-      cfg_rd_ready  <= 1'b0;
-      ch1_delay_dac <= 0; ch2_delay_dac <= 0; ch3_delay_dac <= 0; ch4_delay_dac <= 0;
-      ch5_delay_dac <= 0; ch6_delay_dac <= 0; ch7_delay_dac <= 0; ch8_delay_dac <= 0;
-      ch1_len_dac   <= 0; ch2_len_dac   <= 0; ch3_len_dac <= 0; ch4_len_dac <= 0;
-      ch5_len_dac   <= 0; ch6_len_dac   <= 0; ch7_len_dac <= 0; ch8_len_dac <= 0;
-      cfg_auto_start_dac <= 0;
-      cfg_loop_dac <= 0;
-      cfg_repeat_count_dac <= 0;
-      cfg_debug_alternate_dac <= 0;
-      ch1_arm_dac   <= 0; ch2_arm_dac   <= 0; ch3_arm_dac <= 0; ch4_arm_dac <= 0;
-      ch5_arm_dac   <= 0; ch6_arm_dac   <= 0; ch7_arm_dac <= 0; ch8_arm_dac <= 0;
-      seq_id_dac    <= 0;
-    end else begin
-      cfg_rd_ready <= !tdc_mode_dac || (!tdc_active && !(|tdc_filter_busy));
-
-      if(cfg_rd_valid && cfg_rd_ready) begin
-        ch1_delay_dac <= cfg_rd_data[543:512];
-        ch2_delay_dac <= cfg_rd_data[511:480];
-        ch3_delay_dac <= cfg_rd_data[479:448];
-        ch4_delay_dac <= cfg_rd_data[447:416];
-        ch5_delay_dac <= cfg_rd_data[415:384];
-        ch6_delay_dac <= cfg_rd_data[383:352];
-        ch7_delay_dac <= cfg_rd_data[351:320];
-        ch8_delay_dac <= cfg_rd_data[319:288];
-        ch1_len_dac   <= cfg_rd_data[287:256];
-        ch2_len_dac   <= cfg_rd_data[255:224];
-        ch3_len_dac   <= cfg_rd_data[223:192];
-        ch4_len_dac   <= cfg_rd_data[191:160];
-        ch5_len_dac   <= cfg_rd_data[159:128];
-        ch6_len_dac   <= cfg_rd_data[127:96];
-        ch7_len_dac   <= cfg_rd_data[95:64];
-        ch8_len_dac   <= cfg_rd_data[63:32];
-        cfg_debug_alternate_dac <= cfg_rd_data[544];
-        cfg_repeat_count_dac <= cfg_rd_data[576:545];
-        cfg_loop_dac <= cfg_rd_data[25];
-        cfg_auto_start_dac <= cfg_rd_data[24];
-        ch1_arm_dac   <= cfg_rd_data[23];
-        ch2_arm_dac   <= cfg_rd_data[22];
-        ch3_arm_dac   <= cfg_rd_data[21];
-        ch4_arm_dac   <= cfg_rd_data[20];
-        ch5_arm_dac   <= cfg_rd_data[19];
-        ch6_arm_dac   <= cfg_rd_data[18];
-        ch7_arm_dac   <= cfg_rd_data[17];
-        ch8_arm_dac   <= cfg_rd_data[16];
-        seq_id_dac    <= cfg_rd_data[15:0];
-      end
-    end
-  end
-
-  // The DM AXI slot is owned by waveform_playback_path. The retired
-  // instruction/DataMover executor remains source-compatible for diagnostics,
-  // but is disconnected from DDR and RFDC output.
-  assign dm_cmd_tready = 1'b0;
-  assign dm_data_tvalid = 1'b0;
-  assign dm_data_tdata = 512'd0;
-  assign dm_data_tlast = 1'b0;
-  assign dm_mm2s_err = 1'b0;
-  assign dm_mm2s_sts_tvalid = 1'b0;
-  assign dm_mm2s_sts_tdata = 8'd0;
-  assign dm_mm2s_sts_tkeep = 1'b0;
-
+  // The waveform playback path owns command admission and DAC gating.  It also
+  // owns the DDR read channel (the M_AXI_DM slot of the DDR smartconnect).
   assign M_AXI_DM_arsize = 3'd6;
   assign M_AXI_DM_arburst = 2'b01;
 
@@ -2480,49 +1324,12 @@ module Top #(
   // ==========================================================
   wire [255:0] dac_in_ch1_tdata, dac_in_ch2_tdata, dac_in_ch3_tdata, dac_in_ch4_tdata;
   wire [255:0] dac_in_ch5_tdata, dac_in_ch6_tdata, dac_in_ch7_tdata, dac_in_ch8_tdata;
-  wire         dac_ch1_ready_gated, dac_ch2_ready_gated, dac_ch3_ready_gated, dac_ch4_ready_gated;
-  wire         dac_ch5_ready_gated, dac_ch6_ready_gated, dac_ch7_ready_gated, dac_ch8_ready_gated;
-  wire         dac_ch1_valid_gated, dac_ch2_valid_gated, dac_ch3_valid_gated, dac_ch4_valid_gated;
-  wire         dac_ch5_valid_gated, dac_ch6_valid_gated, dac_ch7_valid_gated, dac_ch8_valid_gated;
-
-  wire ch1_allow, ch2_allow, ch3_allow, ch4_allow;
-  wire ch5_allow, ch6_allow, ch7_allow, ch8_allow;
-  wire ch1_prog_empty, ch1_prog_full;
-  wire ch2_prog_empty, ch2_prog_full;
-  wire ch3_prog_empty, ch3_prog_full;
-  wire ch4_prog_empty, ch4_prog_full;
-  wire ch5_prog_empty, ch5_prog_full;
-  wire ch6_prog_empty, ch6_prog_full;
-  wire ch7_prog_empty, ch7_prog_full;
-  wire ch8_prog_empty, ch8_prog_full;
-
-  // Retired RFCTRL2/BRAM replay signals are not part of the waveform target.
-  // Keep the existing ILA width contract, but expose only quiescent values or
-  // counters owned by waveform_playback_path.  No replay storage or read mux
-  // remains in the DAC domain.
-  wire        pc_trig_pulse = 1'b0;
-  wire        pc_new_cfg = 1'b0;
-  wire        pc_trig_start = 1'b0;
-  wire [15:0] pc_last_seq_id = 16'd0;
-  wire [31:0] pc_ch1_fire_count = 32'd0;
-  wire [31:0] pc_ch2_fire_count = 32'd0;
-  wire [31:0] pc_ch3_fire_count = 32'd0;
-  wire [31:0] pc_ch4_fire_count = 32'd0;
-  wire [31:0] pc_ch5_fire_count = 32'd0;
-  wire [31:0] pc_ch6_fire_count = 32'd0;
-  wire [31:0] pc_ch7_fire_count = 32'd0;
-  wire [31:0] pc_ch8_fire_count = 32'd0;
-
   wire [2047:0] new_fifo_write_data, new_dac_data;
-  wire new_fifo_write_valid, new_fifo_write_last;
+  wire new_fifo_write_valid;
   wire [7:0] new_fifo_write_ready;
-  wire [7:0] new_fifo_read_ready, new_dac_valid, new_dac_last;
-  wire [255:0] new_dac_keep;
+  wire [7:0] new_fifo_read_ready, new_dac_valid;
   wire [31:0] new_reader_error_code_ddr;
   wire [63:0] new_reader_error_offset_ddr;
-  wire new_output_beat_fire, new_output_beat_last, new_output_underflow;
-  wire [15:0] new_fifo_level_min;
-  wire [15:0] new_fifo_free_min;
   wire [15:0] new_fifo_reader_credit;
   wire [7:0] wave_fifo_ready_actual = {ch8_wave_tready_internal, ch7_wave_tready_internal,
       ch6_wave_tready_internal, ch5_wave_tready_internal, ch4_wave_tready_internal,
@@ -2564,8 +1371,6 @@ module Top #(
       .fifo_wr_counts(wave_fifo_wr_counts),
       .fifo_ready_path(wave_fifo_ready_path),
       .fifo_valid_lane(wave_fifo_valid_lane),
-      .min_level(new_fifo_level_min),
-      .min_free(new_fifo_free_min),
       .reader_credit(new_fifo_reader_credit));
 
   waveform_playback_path waveform_playback_path_i (
@@ -2574,12 +1379,12 @@ module Top #(
       .pause_cmd(wave_pause_valid), .stop_cmd(wave_stop_valid), .abort_cmd(wave_abort_valid),
       .descriptor_base(wave_descriptor_base), .descriptor_total_beats(wave_descriptor_total_beats),
       .descriptor_channel_mask(wave_descriptor_channel_mask), .descriptor_loop_count(wave_descriptor_loop_count),
-      .descriptor_generation(wave_descriptor_generation), .fifo_level_beats(new_fifo_level_min),
+      .descriptor_generation(wave_descriptor_generation),
       .command_ready_ddr(wave_command_ready_ddr),
       .fifo_free_beats(wave_fifo_reader_credit_ddr_reg), .fifo_write_data(new_fifo_write_data),
       .fifo_write_valid(new_fifo_write_valid), .fifo_write_ready(new_fifo_write_ready),
-      .fifo_write_last(new_fifo_write_last), .prefetch_safe_ddr(new_prefetch_safe_ddr),
-      .fifo_clear_ddr(new_fifo_clear_ddr), .reader_busy_ddr(new_reader_busy_ddr), .reader_done_ddr(new_reader_done_ddr),
+      .fifo_write_last(), .prefetch_safe_ddr(new_prefetch_safe_ddr),
+      .fifo_clear_ddr(new_fifo_clear_ddr), .reader_busy_ddr(), .reader_done_ddr(),
       .reader_error_ddr(new_reader_error_ddr), .reader_error_code_ddr(new_reader_error_code_ddr),
       .reader_error_offset_ddr(new_reader_error_offset_ddr), .m_axi_araddr(M_AXI_DM_araddr),
       .m_axi_arlen(M_AXI_DM_arlen), .m_axi_arvalid(M_AXI_DM_arvalid), .m_axi_arready(M_AXI_DM_arready),
@@ -2595,7 +1400,7 @@ module Top #(
       .fifo_data({dac_in_ch8_tdata,dac_in_ch7_tdata,dac_in_ch6_tdata,dac_in_ch5_tdata,dac_in_ch4_tdata,dac_in_ch3_tdata,dac_in_ch2_tdata,dac_in_ch1_tdata}),
       .fifo_valid({dac_in_ch8_tvalid,dac_in_ch7_tvalid,dac_in_ch6_tvalid,dac_in_ch5_tvalid,dac_in_ch4_tvalid,dac_in_ch3_tvalid,dac_in_ch2_tvalid,dac_in_ch1_tvalid}),
       .fifo_read_ready(new_fifo_read_ready), .dac_ready({dac_ch8_ready,dac_ch7_ready,dac_ch6_ready,dac_ch5_ready,dac_ch4_ready,dac_ch3_ready,dac_ch2_ready,dac_ch1_ready}),
-      .dac_data(new_dac_data), .dac_valid(new_dac_valid), .dac_last(new_dac_last), .dac_keep(new_dac_keep),
+      .dac_data(new_dac_data), .dac_valid(new_dac_valid), .dac_last(), .dac_keep(),
       .state_dac(wave_new_state), .dac_gate(wave_new_dac_gate),
       .trigger_seen_count(wave_path_trigger_seen_count_dac),
       .trigger_dropped_count(wave_path_trigger_dropped_count_dac),
@@ -2603,8 +1408,8 @@ module Top #(
       .current_beat_dac(wave_path_current_beat_dac), .loop_position_dac(wave_path_loop_position_dac),
       .loop_count_dac(wave_path_loop_count_dac), .descriptor_generation_dac(wave_path_generation_dac),
       .channel_mask_dac(wave_path_channel_mask_dac), .underflow_count_dac(wave_path_underflow_count_dac),
-      .output_first_transfer(new_output_first_transfer), .output_beat_fire(new_output_beat_fire),
-      .output_beat_last(new_output_beat_last), .output_underflow(new_output_underflow)
+      .output_first_transfer(new_output_first_transfer), .output_beat_fire(),
+      .output_beat_last(), .output_underflow()
   );
 
   waveform_status_cdc #(.WIDTH(296)) waveform_status_cdc_i (
@@ -2638,10 +1443,10 @@ module Top #(
   assign {ch8_wave_tvalid,ch7_wave_tvalid,ch6_wave_tvalid,ch5_wave_tvalid,ch4_wave_tvalid,ch3_wave_tvalid,ch2_wave_tvalid,ch1_wave_tvalid} = wave_fifo_valid_lane;
   assign new_fifo_write_ready = wave_fifo_ready_path;
 
-  // Map the unified waveform state into the legacy diagnostic/status fields.
-  // These are level contracts only; command and data ownership stays in the
-  // new path above.  Register the DAC-domain levels before the DDR-domain
-  // status synchronizers consume them; this is not a second playback path.
+  // Playback status levels for RFCTRL2 STATUS, the network controller and
+  // the TDC scheduler, decoded from the playback FSM state.  They are
+  // registered in the DAC domain before the DDR-domain synchronizers so the
+  // CDC boundary does not depend on state-decode combinational logic.
   always @(posedge dac_axis_clk or negedge clk104_aresetn) begin
     if (!clk104_aresetn) begin
       waveform_armed_dac_reg <= 1'b0;
@@ -2661,17 +1466,13 @@ module Top #(
   assign waveform_armed_dac = waveform_armed_dac_reg;
   assign waveform_prepared_dac = waveform_prepared_dac_reg;
   assign waveform_start_pending_dac = waveform_start_pending_dac_reg;
-  assign waveform_play_prepare = 1'b0;
-  assign waveform_play_trigger = wave_new_dac_gate;
   assign waveform_play_abort = wave_control_abort_dac || (wave_new_state == 4'd8);
-  assign pc_source_prepared = waveform_prepared_dac;
   assign pc_source_started = pc_started_dac_reg;
   assign pc_started = pc_started_dac_reg;
 
-  // Drive the compensating-trigger scheduler's source_done. Previously
-  // pc_done_pulse was declared but never assigned (floating), so the scheduler
-  // could never complete/drain and would reject the next trigger. Pulse one
-  // dac_axis_clk cycle when the playback FSM enters ST_DONE (wave_new_state==7).
+  // source_done for the compensating-trigger scheduler: one dac_axis_clk
+  // pulse when the playback FSM enters ST_DONE (wave_new_state == 7).  Without
+  // it the scheduler never drains and rejects the next Trigger.
   reg wave_done_prev_dac;
   reg pc_done_pulse_reg;
   always @(posedge dac_axis_clk or negedge dac_rst_n) begin
@@ -2684,26 +1485,6 @@ module Top #(
     end
   end
   assign pc_done_pulse = pc_done_pulse_reg;
-
-  assign ch1_fifo_level_beats = ch1_wr_count[15:0];
-  assign ch2_fifo_level_beats = ch2_wr_count[15:0];
-  assign ch3_fifo_level_beats = ch3_wr_count[15:0];
-  assign ch4_fifo_level_beats = ch4_wr_count[15:0];
-  assign ch5_fifo_level_beats = ch5_wr_count[15:0];
-  assign ch6_fifo_level_beats = ch6_wr_count[15:0];
-  assign ch7_fifo_level_beats = ch7_wr_count[15:0];
-  assign ch8_fifo_level_beats = ch8_wr_count[15:0];
-
-  wire ch1_wave_tlast = 1'b0;
-  wire ch2_wave_tlast = 1'b0;
-  wire ch3_wave_tlast = 1'b0;
-  wire ch4_wave_tlast = 1'b0;
-  wire ch5_wave_tlast = 1'b0;
-  wire ch6_wave_tlast = 1'b0;
-  wire ch7_wave_tlast = 1'b0;
-  wire ch8_wave_tlast = 1'b0;
-  wire dac_out_ch1_tlast, dac_out_ch2_tlast, dac_out_ch3_tlast, dac_out_ch4_tlast;
-  wire dac_out_ch5_tlast, dac_out_ch6_tlast, dac_out_ch7_tlast, dac_out_ch8_tlast;
 
   reg [4:0] wave_fifo_reset_cnt;
   always @(posedge ddr4_ui_clk or negedge ddr4_ui_aresetn) begin
@@ -2721,47 +1502,13 @@ module Top #(
   end
   wire wave_fifo_aresetn = ddr4_ui_aresetn & (wave_fifo_reset_cnt == 5'd0);
 
-  // The new DAC stream is the sole owner of FIFO read enables. The retired
-  // retired replay path remains disconnected from this gate so it cannot
-  // consume a frame or alter the common beat position behind the new reader.
-  assign dac_ch1_ready_gated = new_fifo_read_ready[0];
-  assign dac_ch2_ready_gated = new_fifo_read_ready[1];
-  assign dac_ch3_ready_gated = new_fifo_read_ready[2];
-  assign dac_ch4_ready_gated = new_fifo_read_ready[3];
-  assign dac_ch5_ready_gated = new_fifo_read_ready[4];
-  assign dac_ch6_ready_gated = new_fifo_read_ready[5];
-  assign dac_ch7_ready_gated = new_fifo_read_ready[6];
-  assign dac_ch8_ready_gated = new_fifo_read_ready[7];
-  // The retired replay stream no longer exists.  Keep the diagnostic/debug
-  // masks tied to the descriptor accepted by the waveform path, and source
-  // all DAC-domain diagnostic data from the same stream that reaches RFDC.
-  assign ch1_allow = wave_path_channel_mask_dac[0];
-  assign ch2_allow = wave_path_channel_mask_dac[1];
-  assign ch3_allow = wave_path_channel_mask_dac[2];
-  assign ch4_allow = wave_path_channel_mask_dac[3];
-  assign ch5_allow = wave_path_channel_mask_dac[4];
-  assign ch6_allow = wave_path_channel_mask_dac[5];
-  assign ch7_allow = wave_path_channel_mask_dac[6];
-  assign ch8_allow = wave_path_channel_mask_dac[7];
-  assign dac_ch1_valid_gated = new_dac_valid[0];
-  assign dac_ch2_valid_gated = new_dac_valid[1];
-  assign dac_ch3_valid_gated = new_dac_valid[2];
-  assign dac_ch4_valid_gated = new_dac_valid[3];
-  assign dac_ch5_valid_gated = new_dac_valid[4];
-  assign dac_ch6_valid_gated = new_dac_valid[5];
-  assign dac_ch7_valid_gated = new_dac_valid[6];
-  assign dac_ch8_valid_gated = new_dac_valid[7];
-
   wire [2047:0] tdc_input_data = new_dac_data;
   wire [7:0] tdc_input_valid = new_dac_valid;
   wire [7:0] tdc_channel_allow = wave_path_channel_mask_dac;
   wire [7:0] tdc_channel_ready = {dac_ch8_ready, dac_ch7_ready, dac_ch6_ready, dac_ch5_ready,
       dac_ch4_ready, dac_ch3_ready, dac_ch2_ready, dac_ch1_ready};
-  wire [7:0] tdc_channel_arm = {ch8_arm_dac, ch7_arm_dac, ch6_arm_dac, ch5_arm_dac,
-      ch4_arm_dac, ch3_arm_dac, ch2_arm_dac, ch1_arm_dac};
   assign tdc_runtime_fault = tdc_mode_dac && tdc_active &&
-      ((|(tdc_channel_allow & ~tdc_input_valid)) ||
-       (|(tdc_channel_arm & ~tdc_channel_ready)) || !rfdc_output_permitted_dac || tdc_loss_sync[2]);
+      ((|(tdc_channel_allow & ~tdc_input_valid)) || !rfdc_output_permitted_dac || tdc_loss_sync[2]);
   wire [2047:0] tdc_filtered_data;
   wire [2047:0] tdc_corrected_data;
   // RFDC feed selects the TDC-compensated stream when tdc_mode_dac is set
@@ -2825,49 +1572,23 @@ module Top #(
   wire rfdc_ch7_tvalid = rfdc_all_valid[6];
   wire rfdc_ch8_tvalid = rfdc_all_valid[7];
 
-  assign dac_any_valid_gated = dac_ch1_valid_gated | dac_ch2_valid_gated |
-                             dac_ch3_valid_gated | dac_ch4_valid_gated |
-                             dac_ch5_valid_gated | dac_ch6_valid_gated |
-                             dac_ch7_valid_gated | dac_ch8_valid_gated;
-  reg        dac_any_valid_gated_d;
-  reg [15:0] trig_1_dac_valid_count;
-
-  always @(posedge dac_axis_clk or negedge dac_rst_n) begin
-    if(!dac_rst_n) begin
-      dac_any_valid_gated_d  <= 1'b0;
-      trig_1_dac_valid_count <= 16'd0;
-    end else begin
-      dac_any_valid_gated_d <= dac_any_valid_gated;
-      if(dac_any_valid_gated & ~dac_any_valid_gated_d) begin
-        trig_1_dac_valid_count <= TRIG_1_WIDTH_CYCLES;
-      end else if(trig_1_dac_valid_count != 16'd0) begin
-        trig_1_dac_valid_count <= trig_1_dac_valid_count - 16'd1;
-      end
-    end
-  end
-
-  wire trig_1_dac_valid = (trig_1_dac_valid_count != 16'd0);
-  wire trig_1_dac_valid_pulse = dac_any_valid_gated & ~dac_any_valid_gated_d;
-  // TRIG_1 is the dedicated XS18 Trigger output. The old DAC-valid debug
-  // pulse remains available internally as trig_1_dac_valid.
-
   axis_async_fifo_256 fifo_ch1_inst (
     .s_axis_aresetn(wave_fifo_aresetn),
     .s_axis_aclk   (ddr4_ui_clk),
     .s_axis_tvalid (ch1_wave_tvalid),
     .s_axis_tready (ch1_wave_tready_internal),
     .s_axis_tdata  (ch1_wave_tdata),
-    .s_axis_tlast  (ch1_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch1_tvalid),
-    .m_axis_tready (dac_ch1_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[0]),
     .m_axis_tdata  (dac_in_ch1_tdata),
-    .m_axis_tlast  (dac_out_ch1_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch1_wr_count),
-    .prog_empty        (ch1_prog_empty),
-    .prog_full         (ch1_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   axis_async_fifo_256 fifo_ch2_inst (
@@ -2876,17 +1597,17 @@ module Top #(
     .s_axis_tvalid (ch2_wave_tvalid),
     .s_axis_tready (ch2_wave_tready_internal),
     .s_axis_tdata  (ch2_wave_tdata),
-    .s_axis_tlast  (ch2_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch2_tvalid),
-    .m_axis_tready (dac_ch2_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[1]),
     .m_axis_tdata  (dac_in_ch2_tdata),
-    .m_axis_tlast  (dac_out_ch2_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch2_wr_count),
-    .prog_empty        (ch2_prog_empty),
-    .prog_full         (ch2_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
 
@@ -2896,17 +1617,17 @@ module Top #(
     .s_axis_tvalid (ch3_wave_tvalid),
     .s_axis_tready (ch3_wave_tready_internal),
     .s_axis_tdata  (ch3_wave_tdata),
-    .s_axis_tlast  (ch3_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch3_tvalid),
-    .m_axis_tready (dac_ch3_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[2]),
     .m_axis_tdata  (dac_in_ch3_tdata),
-    .m_axis_tlast  (dac_out_ch3_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch3_wr_count),
-    .prog_empty        (ch3_prog_empty),
-    .prog_full         (ch3_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   axis_async_fifo_256 fifo_ch4_inst (
@@ -2915,17 +1636,17 @@ module Top #(
     .s_axis_tvalid (ch4_wave_tvalid),
     .s_axis_tready (ch4_wave_tready_internal),
     .s_axis_tdata  (ch4_wave_tdata),
-    .s_axis_tlast  (ch4_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch4_tvalid),
-    .m_axis_tready (dac_ch4_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[3]),
     .m_axis_tdata  (dac_in_ch4_tdata),
-    .m_axis_tlast  (dac_out_ch4_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch4_wr_count),
-    .prog_empty        (ch4_prog_empty),
-    .prog_full         (ch4_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   axis_async_fifo_256 fifo_ch5_inst (
@@ -2934,17 +1655,17 @@ module Top #(
     .s_axis_tvalid (ch5_wave_tvalid),
     .s_axis_tready (ch5_wave_tready_internal),
     .s_axis_tdata  (ch5_wave_tdata),
-    .s_axis_tlast  (ch5_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch5_tvalid),
-    .m_axis_tready (dac_ch5_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[4]),
     .m_axis_tdata  (dac_in_ch5_tdata),
-    .m_axis_tlast  (dac_out_ch5_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch5_wr_count),
-    .prog_empty        (ch5_prog_empty),
-    .prog_full         (ch5_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   axis_async_fifo_256 fifo_ch6_inst (
@@ -2953,17 +1674,17 @@ module Top #(
     .s_axis_tvalid (ch6_wave_tvalid),
     .s_axis_tready (ch6_wave_tready_internal),
     .s_axis_tdata  (ch6_wave_tdata),
-    .s_axis_tlast  (ch6_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch6_tvalid),
-    .m_axis_tready (dac_ch6_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[5]),
     .m_axis_tdata  (dac_in_ch6_tdata),
-    .m_axis_tlast  (dac_out_ch6_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch6_wr_count),
-    .prog_empty        (ch6_prog_empty),
-    .prog_full         (ch6_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   axis_async_fifo_256 fifo_ch7_inst (
@@ -2972,17 +1693,17 @@ module Top #(
     .s_axis_tvalid (ch7_wave_tvalid),
     .s_axis_tready (ch7_wave_tready_internal),
     .s_axis_tdata  (ch7_wave_tdata),
-    .s_axis_tlast  (ch7_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch7_tvalid),
-    .m_axis_tready (dac_ch7_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[6]),
     .m_axis_tdata  (dac_in_ch7_tdata),
-    .m_axis_tlast  (dac_out_ch7_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch7_wr_count),
-    .prog_empty        (ch7_prog_empty),
-    .prog_full         (ch7_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   axis_async_fifo_256 fifo_ch8_inst (
@@ -2991,46 +1712,29 @@ module Top #(
     .s_axis_tvalid (ch8_wave_tvalid),
     .s_axis_tready (ch8_wave_tready_internal),
     .s_axis_tdata  (ch8_wave_tdata),
-    .s_axis_tlast  (ch8_wave_tlast),
+    .s_axis_tlast  (1'b0),
 
     .m_axis_aclk   (dac_axis_clk),
     .m_axis_tvalid (dac_in_ch8_tvalid),
-    .m_axis_tready (dac_ch8_ready_gated),
+    .m_axis_tready (new_fifo_read_ready[7]),
     .m_axis_tdata  (dac_in_ch8_tdata),
-    .m_axis_tlast  (dac_out_ch8_tlast),
+    .m_axis_tlast  (),
 
     .axis_wr_data_count(ch8_wr_count),
-    .prog_empty        (ch8_prog_empty),
-    .prog_full         (ch8_prog_full)
+    .prog_empty        (),
+    .prog_full         ()
   );
 
   // ==========================================================
-  // design_1（Block Design stub/IP替换）
-  // 注意：送入 DAC 的 tvalid 必须用 gated valid！
+  // PS AXI masters out of design_1
   // ==========================================================
-  // M_AXI_GPIO (stub)
+  // M_AXI_GPIO (AXI4-Lite): firmware status register
   wire [31:0] M_AXI_GPIO_araddr;
-  wire [1:0]  M_AXI_GPIO_arburst;
-  wire [3:0]  M_AXI_GPIO_arcache;
-  wire [7:0]  M_AXI_GPIO_arlen;
-  wire [0:0]  M_AXI_GPIO_arlock;
-  wire [2:0]  M_AXI_GPIO_arprot;
-  wire [3:0]  M_AXI_GPIO_arqos;
   wire        M_AXI_GPIO_arready;
-  wire [2:0]  M_AXI_GPIO_arsize;
-  wire [15:0] M_AXI_GPIO_aruser;
   wire        M_AXI_GPIO_arvalid;
 
   wire [31:0] M_AXI_GPIO_awaddr;
-  wire [1:0]  M_AXI_GPIO_awburst;
-  wire [3:0]  M_AXI_GPIO_awcache;
-  wire [7:0]  M_AXI_GPIO_awlen;
-  wire [0:0]  M_AXI_GPIO_awlock;
-  wire [2:0]  M_AXI_GPIO_awprot;
-  wire [3:0]  M_AXI_GPIO_awqos;
   wire        M_AXI_GPIO_awready;
-  wire [2:0]  M_AXI_GPIO_awsize;
-  wire [15:0] M_AXI_GPIO_awuser;
   wire        M_AXI_GPIO_awvalid;
 
   wire        M_AXI_GPIO_bready;
@@ -3038,23 +1742,20 @@ module Top #(
   wire        M_AXI_GPIO_bvalid;
 
   wire [31:0] M_AXI_GPIO_rdata;
-  wire [31:0] axigpio_rdata;
-  wire        M_AXI_GPIO_rlast;
   wire        M_AXI_GPIO_rready;
   wire [1:0]  M_AXI_GPIO_rresp;
   wire        M_AXI_GPIO_rvalid;
 
   wire [31:0] M_AXI_GPIO_wdata;
-  wire        M_AXI_GPIO_wlast;
   wire        M_AXI_GPIO_wready;
   wire [3:0]  M_AXI_GPIO_wstrb;
   wire        M_AXI_GPIO_wvalid;
 
-  wire [17:0] M_AXI_RFDC_araddr;
+  wire [31:0] M_AXI_RFDC_araddr;
   wire        M_AXI_RFDC_arready;
   wire        M_AXI_RFDC_arvalid;
 
-  wire [17:0] M_AXI_RFDC_awaddr;
+  wire [31:0] M_AXI_RFDC_awaddr;
   wire        M_AXI_RFDC_awready;
   wire        M_AXI_RFDC_awvalid;
 
@@ -3091,10 +1792,10 @@ module Top #(
   wire        RFDC_S_AXI_wvalid;
   axilite_arbiter_2to1 #(.ADDR_WIDTH(18)) ps_pl_rfdc_axil_arbiter_i (
       .clk(pl_clk), .rst_n(pl_aresetn),
-      .s0_awaddr(M_AXI_RFDC_awaddr), .s0_awvalid(M_AXI_RFDC_awvalid), .s0_awready(M_AXI_RFDC_awready),
+      .s0_awaddr(M_AXI_RFDC_awaddr[17:0]), .s0_awvalid(M_AXI_RFDC_awvalid), .s0_awready(M_AXI_RFDC_awready),
       .s0_wdata(M_AXI_RFDC_wdata), .s0_wstrb(M_AXI_RFDC_wstrb), .s0_wvalid(M_AXI_RFDC_wvalid), .s0_wready(M_AXI_RFDC_wready),
       .s0_bresp(M_AXI_RFDC_bresp), .s0_bvalid(M_AXI_RFDC_bvalid), .s0_bready(M_AXI_RFDC_bready),
-      .s0_araddr(M_AXI_RFDC_araddr), .s0_arvalid(M_AXI_RFDC_arvalid), .s0_arready(M_AXI_RFDC_arready),
+      .s0_araddr(M_AXI_RFDC_araddr[17:0]), .s0_arvalid(M_AXI_RFDC_arvalid), .s0_arready(M_AXI_RFDC_arready),
       .s0_rdata(M_AXI_RFDC_rdata), .s0_rresp(M_AXI_RFDC_rresp), .s0_rvalid(M_AXI_RFDC_rvalid), .s0_rready(M_AXI_RFDC_rready),
       .s1_awaddr(RV_AXI_RFDC_awaddr), .s1_awvalid(RV_AXI_RFDC_awvalid), .s1_awready(RV_AXI_RFDC_awready),
       .s1_wdata(RV_AXI_RFDC_wdata), .s1_wstrb(RV_AXI_RFDC_wstrb), .s1_wvalid(RV_AXI_RFDC_wvalid), .s1_wready(RV_AXI_RFDC_wready),
@@ -3190,7 +1891,6 @@ module Top #(
   wire [15:0]  M_AXI_PS_DDR_wstrb;
   wire         M_AXI_PS_DDR_wvalid;
 
-  wire         ddr4_init_calib_complete;
 
   design_1 design_1_i (
       .pl_clk(pl_clk),
@@ -3201,47 +1901,6 @@ module Top #(
 
 
 
-
-      // PS AXI master for instruction fifo (M_AXI_INST)
-      .M_AXI_INST_araddr(M_AXI_INST_araddr),
-      .M_AXI_INST_arburst(M_AXI_INST_arburst),
-      .M_AXI_INST_arcache(M_AXI_INST_arcache),
-      .M_AXI_INST_arlen(M_AXI_INST_arlen),
-      .M_AXI_INST_arlock(M_AXI_INST_arlock),
-      .M_AXI_INST_arprot(M_AXI_INST_arprot),
-      .M_AXI_INST_arqos(M_AXI_INST_arqos),
-      .M_AXI_INST_arready(M_AXI_INST_arready),
-      .M_AXI_INST_arsize(M_AXI_INST_arsize),
-      .M_AXI_INST_aruser(M_AXI_INST_aruser),
-      .M_AXI_INST_arvalid(M_AXI_INST_arvalid),
-
-      .M_AXI_INST_awaddr(M_AXI_INST_awaddr),
-      .M_AXI_INST_awburst(M_AXI_INST_awburst),
-      .M_AXI_INST_awcache(M_AXI_INST_awcache),
-      .M_AXI_INST_awlen(M_AXI_INST_awlen),
-      .M_AXI_INST_awlock(M_AXI_INST_awlock),
-      .M_AXI_INST_awprot(M_AXI_INST_awprot),
-      .M_AXI_INST_awqos(M_AXI_INST_awqos),
-      .M_AXI_INST_awready(M_AXI_INST_awready),
-      .M_AXI_INST_awsize(M_AXI_INST_awsize),
-      .M_AXI_INST_awuser(M_AXI_INST_awuser),
-      .M_AXI_INST_awvalid(M_AXI_INST_awvalid),
-
-      .M_AXI_INST_bready(M_AXI_INST_bready),
-      .M_AXI_INST_bresp(M_AXI_INST_bresp),
-      .M_AXI_INST_bvalid(M_AXI_INST_bvalid),
-
-      .M_AXI_INST_rdata(M_AXI_INST_rdata),
-      .M_AXI_INST_rlast(M_AXI_INST_rlast),
-      .M_AXI_INST_rready(M_AXI_INST_rready),
-      .M_AXI_INST_rresp(M_AXI_INST_rresp),
-      .M_AXI_INST_rvalid(M_AXI_INST_rvalid),
-
-      .M_AXI_INST_wdata(M_AXI_INST_wdata),
-      .M_AXI_INST_wlast(M_AXI_INST_wlast),
-      .M_AXI_INST_wready(M_AXI_INST_wready),
-      .M_AXI_INST_wstrb(M_AXI_INST_wstrb),
-      .M_AXI_INST_wvalid(M_AXI_INST_wvalid),
 
       .M_AXI_RFDC_araddr(M_AXI_RFDC_araddr),
       .M_AXI_RFDC_arready(M_AXI_RFDC_arready),
@@ -3302,43 +1961,20 @@ module Top #(
       .M_AXI_PS_DDR_wvalid(M_AXI_PS_DDR_wvalid),
 
 
-      // GPIO AXI master (M_AXI_GPIO) - stub pass-through in this file
       .M_AXI_GPIO_araddr (M_AXI_GPIO_araddr),
-      .M_AXI_GPIO_arburst(M_AXI_GPIO_arburst),
-      .M_AXI_GPIO_arcache(M_AXI_GPIO_arcache),
-      .M_AXI_GPIO_arlen  (M_AXI_GPIO_arlen),
-      .M_AXI_GPIO_arlock (M_AXI_GPIO_arlock),
-      .M_AXI_GPIO_arprot (M_AXI_GPIO_arprot),
-      .M_AXI_GPIO_arqos  (M_AXI_GPIO_arqos),
       .M_AXI_GPIO_arready(M_AXI_GPIO_arready),
-      .M_AXI_GPIO_arsize (M_AXI_GPIO_arsize),
-      .M_AXI_GPIO_aruser (M_AXI_GPIO_aruser),
       .M_AXI_GPIO_arvalid(M_AXI_GPIO_arvalid),
-
       .M_AXI_GPIO_awaddr (M_AXI_GPIO_awaddr),
-      .M_AXI_GPIO_awburst(M_AXI_GPIO_awburst),
-      .M_AXI_GPIO_awcache(M_AXI_GPIO_awcache),
-      .M_AXI_GPIO_awlen  (M_AXI_GPIO_awlen),
-      .M_AXI_GPIO_awlock (M_AXI_GPIO_awlock),
-      .M_AXI_GPIO_awprot (M_AXI_GPIO_awprot),
-      .M_AXI_GPIO_awqos  (M_AXI_GPIO_awqos),
       .M_AXI_GPIO_awready(M_AXI_GPIO_awready),
-      .M_AXI_GPIO_awsize (M_AXI_GPIO_awsize),
-      .M_AXI_GPIO_awuser (M_AXI_GPIO_awuser),
       .M_AXI_GPIO_awvalid(M_AXI_GPIO_awvalid),
-
       .M_AXI_GPIO_bready (M_AXI_GPIO_bready),
       .M_AXI_GPIO_bresp  (M_AXI_GPIO_bresp),
       .M_AXI_GPIO_bvalid (M_AXI_GPIO_bvalid),
-
       .M_AXI_GPIO_rdata  (M_AXI_GPIO_rdata),
-      .M_AXI_GPIO_rlast  (M_AXI_GPIO_rlast),
       .M_AXI_GPIO_rready (M_AXI_GPIO_rready),
       .M_AXI_GPIO_rresp  (M_AXI_GPIO_rresp),
       .M_AXI_GPIO_rvalid (M_AXI_GPIO_rvalid),
-
       .M_AXI_GPIO_wdata  (M_AXI_GPIO_wdata),
-      .M_AXI_GPIO_wlast  (M_AXI_GPIO_wlast),
       .M_AXI_GPIO_wready (M_AXI_GPIO_wready),
       .M_AXI_GPIO_wstrb  (M_AXI_GPIO_wstrb),
       .M_AXI_GPIO_wvalid (M_AXI_GPIO_wvalid)
@@ -3494,7 +2130,7 @@ module Top #(
       .c0_ddr4_dq(c0_ddr4_dq),
       .c0_ddr4_dqs_c(c0_ddr4_dqs_c),
       .c0_ddr4_dqs_t(c0_ddr4_dqs_t),
-      .c0_init_calib_complete(ddr4_init_calib_complete),
+      .c0_init_calib_complete(),
       .c0_ddr4_ui_clk(ddr4_ui_clk),
       .c0_ddr4_ui_clk_sync_rst(ddr4_ui_clk_sync_rst),
       .c0_ddr4_aresetn(ddr4_ui_aresetn),
@@ -3558,16 +2194,16 @@ module Top #(
       .user_sysref_dac(pl_sysref_dac),
       .dac2_clk_p(dac2_clk_clk_p),
       .dac2_clk_n(dac2_clk_clk_n),
-      .clk_dac0(clk_dac0),
+      .clk_dac0(),
       .s0_axis_aclk(dac_axis_clk),
       .s0_axis_aresetn(clk104_aresetn),
-      .clk_dac1(clk_dac1),
+      .clk_dac1(),
       .s1_axis_aclk(dac_axis_clk),
       .s1_axis_aresetn(clk104_aresetn),
       .clk_dac2(clk_dac2),
       .s2_axis_aclk(dac_axis_clk),
       .s2_axis_aresetn(clk104_aresetn),
-      .clk_dac3(clk_dac3),
+      .clk_dac3(),
       .s3_axis_aclk(dac_axis_clk),
       .s3_axis_aresetn(clk104_aresetn),
       .dac00_nco_freq(rfdc_dac_nco_freq[0 +: 48]),
@@ -3652,64 +2288,33 @@ module Top #(
       .s32_axis_tdata(rfdc_ch8_tdata),
       .s32_axis_tvalid(rfdc_ch8_tvalid),
       .s32_axis_tready(dac_ch8_ready),
-      .irq(rfdc_irq)
+      .irq()
   );
 
-  // ==========================================================
-  // GPIO IP（stub）—— 输出 gpio_out_reg
-  // ==========================================================
-  AXIGPIO axigpio_i (
-      .clock(pl_clk),
-      .reset(~pl_aresetn),
-      .io_axi_aw_ready(M_AXI_GPIO_awready),
-      .io_axi_aw_valid(M_AXI_GPIO_awvalid),
-      .io_axi_aw_bits_addr(M_AXI_GPIO_awaddr[8:0]),
-      .io_axi_aw_bits_burst(M_AXI_GPIO_awburst),
-      .io_axi_aw_bits_cache(M_AXI_GPIO_awcache),
-      .io_axi_aw_bits_lock(M_AXI_GPIO_awlock),
-      .io_axi_aw_bits_prot(M_AXI_GPIO_awprot),
-      .io_axi_aw_bits_qos(M_AXI_GPIO_awqos),
-      .io_axi_aw_bits_region(4'b0000),
-      .io_axi_aw_bits_size(M_AXI_GPIO_awsize),
-
-      .io_axi_ar_ready(M_AXI_GPIO_arready),
-      .io_axi_ar_valid(M_AXI_GPIO_arvalid),
-      .io_axi_ar_bits_addr(M_AXI_GPIO_araddr[8:0]),
-      .io_axi_ar_bits_burst(M_AXI_GPIO_arburst),
-      .io_axi_ar_bits_cache(M_AXI_GPIO_arcache),
-      .io_axi_ar_bits_lock(M_AXI_GPIO_arlock),
-      .io_axi_ar_bits_prot(M_AXI_GPIO_arprot),
-      .io_axi_ar_bits_qos(M_AXI_GPIO_arqos),
-      .io_axi_ar_bits_region(4'b0000),
-      .io_axi_ar_bits_size(M_AXI_GPIO_arsize),
-
-      .io_axi_w_ready(M_AXI_GPIO_wready),
-      .io_axi_w_valid(M_AXI_GPIO_wvalid),
-      .io_axi_w_bits_data(M_AXI_GPIO_wdata),
-      .io_axi_w_bits_last(M_AXI_GPIO_wlast),
-      .io_axi_w_bits_strb(M_AXI_GPIO_wstrb),
-
-      .io_axi_r_ready(M_AXI_GPIO_rready),
-      .io_axi_r_valid(M_AXI_GPIO_rvalid),
-      .io_axi_r_bits_data(axigpio_rdata),
-      .io_axi_r_bits_last(M_AXI_GPIO_rlast),
-      .io_axi_r_bits_resp(M_AXI_GPIO_rresp),
-
-      .io_axi_b_ready(M_AXI_GPIO_bready),
-      .io_axi_b_valid(M_AXI_GPIO_bvalid),
-      .io_axi_b_bits_resp(M_AXI_GPIO_bresp),
-
-      .io_gpio(),
-      .io_gpio2(gpio_out_reg)
+  // Firmware status word (DAC MTS / NCO sync results) into the PL; the
+  // firmware reads the HMC7044 configuration-done flag back in bit 31.
+  firmware_status_reg firmware_status_reg_i (
+      .s_axi_aclk   (pl_clk),
+      .s_axi_aresetn(pl_aresetn),
+      .s_axi_awaddr (M_AXI_GPIO_awaddr[8:0]),
+      .s_axi_awvalid(M_AXI_GPIO_awvalid),
+      .s_axi_awready(M_AXI_GPIO_awready),
+      .s_axi_wdata  (M_AXI_GPIO_wdata),
+      .s_axi_wstrb  (M_AXI_GPIO_wstrb),
+      .s_axi_wvalid (M_AXI_GPIO_wvalid),
+      .s_axi_wready (M_AXI_GPIO_wready),
+      .s_axi_bresp  (M_AXI_GPIO_bresp),
+      .s_axi_bvalid (M_AXI_GPIO_bvalid),
+      .s_axi_bready (M_AXI_GPIO_bready),
+      .s_axi_araddr (M_AXI_GPIO_araddr[8:0]),
+      .s_axi_arvalid(M_AXI_GPIO_arvalid),
+      .s_axi_arready(M_AXI_GPIO_arready),
+      .s_axi_rdata  (M_AXI_GPIO_rdata),
+      .s_axi_rresp  (M_AXI_GPIO_rresp),
+      .s_axi_rvalid (M_AXI_GPIO_rvalid),
+      .s_axi_rready (M_AXI_GPIO_rready),
+      .hmc_done     (hmc7044_set_finish),
+      .status       (firmware_status_word)
   );
-
-  // GPIO2 readback keeps the legacy HMC done bit and exposes the six-bit
-  // runtime SYNC event epoch in bits 30:25.  Firmware acknowledges the same
-  // epoch by writing those bits back in its GPIO2 status word.
-  // GPIO2 is bidirectional from the firmware's point of view: writes carry
-  // the ACK epoch, while reads must return the PL event epoch.  Do not OR the
-  // two epoch values together (for example, old ACK 1 OR new event 2 is 3).
-  assign M_AXI_GPIO_rdata =
-      {hmc7044_set_finish, sync_event_epoch, axigpio_rdata[24:0]};
 
 endmodule

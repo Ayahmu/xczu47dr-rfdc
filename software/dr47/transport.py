@@ -7,8 +7,8 @@ import sys
 import time
 from typing import Callable
 
-from .errors import ProtocolError, TransportError, TransportTimeout
-from .protocol import parse_rfresp2_packet, parse_wave_response, WAVE_RESP_MAGIC
+from .errors import TransportError, TransportTimeout
+from .protocol import parse_rfresp2_packet, parse_wave_response
 
 SO_BINDTODEVICE = getattr(socket, "SO_BINDTODEVICE", 25)
 

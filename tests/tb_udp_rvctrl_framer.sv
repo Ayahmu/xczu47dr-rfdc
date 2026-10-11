@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // Unit test for udp_rvctrl_framer: verifies RFCTRL2 packets are re-framed
-// into the rvctrl_* tfirst/tlast/word_count/protocol contract and that
+// into the rvctrl_* tfirst/tlast/word_count contract and that
 // WAVECTR0 packets are dropped.
 module tb_udp_rvctrl_framer;
   reg        clk = 0;
@@ -14,14 +14,13 @@ module tb_udp_rvctrl_framer;
   wire       rvctrl_tfirst;
   wire       rvctrl_tlast;
   wire [31:0] rvctrl_word_count;
-  wire [1:0]  rvctrl_protocol;
 
   udp_rvctrl_framer dut (
       .clk(clk), .rst_n(rst_n),
       .udp_tvalid(udp_tvalid), .udp_tdata(udp_tdata), .udp_tlast(udp_tlast),
       .rvctrl_tvalid(rvctrl_tvalid), .rvctrl_tdata(rvctrl_tdata),
       .rvctrl_tfirst(rvctrl_tfirst), .rvctrl_tlast(rvctrl_tlast),
-      .rvctrl_word_count(rvctrl_word_count), .rvctrl_protocol(rvctrl_protocol)
+      .rvctrl_word_count(rvctrl_word_count)
   );
 
   localparam [63:0] RFCTRL2_MAGIC = 64'h00324C5254434652;
@@ -48,7 +47,6 @@ module tb_udp_rvctrl_framer;
   reg        emitted_first [0:15];
   reg        emitted_last [0:15];
   reg [31:0] emitted_wc;
-  reg [1:0]  emitted_proto;
   integer    nwords = 0;
 
   always @(posedge clk) begin
@@ -57,7 +55,6 @@ module tb_udp_rvctrl_framer;
       emitted_first[nwords] <= rvctrl_tfirst;
       emitted_last[nwords] <= rvctrl_tlast;
       emitted_wc <= rvctrl_word_count;
-      emitted_proto <= rvctrl_protocol;
       nwords <= nwords + 1;
     end
   end
@@ -82,7 +79,6 @@ module tb_udp_rvctrl_framer;
     if (emitted[0] !== {32'h00000001, 16'h0000, 16'h0003}) begin $display("FAIL t1: hdr0 mismatch 0x%h", emitted[0]); errors=errors+1; end
     if (emitted_last[1] !== 1'b1) begin $display("FAIL t1: word1 tlast != 1"); errors=errors+1; end
     if (emitted_wc !== 32'd4) begin $display("FAIL t1: word_count=%0d want 4", emitted_wc); errors=errors+1; end
-    if (emitted_proto !== 2'd2) begin $display("FAIL t1: protocol=%0d want 2", emitted_proto); errors=errors+1; end
 
     // ---- Test 2: RFCTRL2 NETWORK_GET with 8-byte payload ----
     nwords = 0;

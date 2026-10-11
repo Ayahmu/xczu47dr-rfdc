@@ -140,6 +140,22 @@ def test_bulk_upload_resends_only_the_chunks_that_lost_frames():
     assert status["bulk_complete"] is True and status["bulk_complete_chunks"] == 4
 
 
+def test_bulk_upload_reports_only_its_own_dropped_frames():
+    board = _board()
+    image = _image(2 * MIB)
+    board.sim_drop_bulk_frames({(5 * 1024, 0)})
+    first = board.upload_image_bulk(image, session=5, channel_mask=1,
+                                    total_beats=len(image) // 256, loop_count=1)
+    assert (first["rx_dropped_full"], first["rx_dropped_bad"]) == (1, 0)
+
+    board.sim_drop_bulk_frames(None)
+    second = board.upload_image_bulk(image, session=6, channel_mask=1,
+                                     total_beats=len(image) // 256, loop_count=1)
+    # The board's link counters run from power-up: the frame lost earlier is still in them.
+    assert board.bulk_status(session=6)["bulk_rx_dropped_full"] == 1
+    assert (second["rx_dropped_full"], second["rx_dropped_bad"]) == (0, 0)
+
+
 def test_bulk_upload_gives_up_when_a_chunk_never_completes():
     board = _board()
     image = _image(2 * MIB)

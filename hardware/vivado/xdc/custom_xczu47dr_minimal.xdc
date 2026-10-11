@@ -1,6 +1,5 @@
-# Minimal constraints for the custom XCZU47DR bring-up target.
+# Pin and clock-domain constraints for the custom XCZU47DR waveform target.
 # Source of truth: /home/kyu/workspace/定制卡1原理图.pdf, page 14 (RFSOC-B84-B87).
-# END-complete trigger output is driven through XS18 TRIG_1 below.
 
 # RFDC analog output and tile clock pins use dedicated package wiring;
 # no PACKAGE_PIN constraints are applied for vout20/vout22/vout30/vout32 or dac2_clk here.
@@ -22,63 +21,28 @@ set_property IOSTANDARD LVCMOS25 [get_ports H7044_SDATA_0]
 set_property PACKAGE_PIN A5 [get_ports RST_88E1111]
 set_property IOSTANDARD LVCMOS25 [get_ports RST_88E1111]
 
-# XS18 TRIG_1 MMCX output. XS19 is the dedicated input and XS20 is the
-# bidirectional standalone SYNC connector.
+# XS18 TRIG_1 is the first-sample marker output; XS19 TRIG_2 is the external
+# playback Trigger input.  Both are asynchronous to every PL clock.
 set_property PACKAGE_PIN A6 [get_ports TRIG_1]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_1]
 set_property PACKAGE_PIN D10 [get_ports TRIG_2]
 set_property IOSTANDARD LVCMOS25 [get_ports TRIG_2]
-set_property PACKAGE_PIN C10 [get_ports TRIG_3]
-set_property IOSTANDARD LVCMOS25 [get_ports TRIG_3]
-
-# TRIG_1 is an asynchronous external observability/control output.
 set_false_path -to [get_ports TRIG_1]
 set_false_path -from [get_ports TRIG_2]
-set_false_path -to [get_ports TRIG_3]
-# PL_CLK and PL_SYSREF from HMC7044 (differential LVDS)
-set_property PACKAGE_PIN B10 [get_ports PL_CLK_P_0]
-set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_P_0]
-set_property IOSTANDARD LVDS_25 [get_ports PL_CLK_N_0]
-create_clock -name PL_CLK_P_0 -period 10.416667 [get_ports PL_CLK_P_0]
 
+# PL_SYSREF from HMC7044 (differential LVDS).  It goes straight from its
+# IBUFDS to the RFDC user_sysref_dac port and is never sampled by PL logic, so
+# it needs no synchronizer constraint.
 set_property PACKAGE_PIN C8 [get_ports PL_SYSREF_P_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_P_0]
 set_property PACKAGE_PIN C7 [get_ports PL_SYSREF_N_0]
 set_property IOSTANDARD LVDS_25 [get_ports PL_SYSREF_N_0]
 
-# X3 -> NB6N11 differential outputs.  This net also feeds HMC7044 EXT_SYNC.
-# The electrical standard must be reconfirmed during board qualification.
-set_property PACKAGE_PIN A10 [get_ports EXT_TRIGGER_P]
-set_property PACKAGE_PIN A9 [get_ports EXT_TRIGGER_N]
-set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_P]
-set_property IOSTANDARD LVDS_25 [get_ports EXT_TRIGGER_N]
-
 # The 100G QSFP28 link constraints live in custom_xczu47dr_100g.xdc.
 
-# First-stage synchronizer inputs that cross unrelated clocks.  Only stage 0 is
-# asynchronous; downstream stages stay timed.
-#
-# These names track the remaining RFDC/TDC diagnostic synchronizers in Top.v.
-# The retired multi-board sync-trigger hierarchy is intentionally absent from
-# this single-board waveform target.
-set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_ddr_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/ps_trigger_dac_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/udp_trigger_dac_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_event_ddr_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/role_trigger_dac_toggle_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/trig_event_ext_dac_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_bypass_dac_sync_ff_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_dac_sync_ff_reg[0]/D]
+# First-stage synchronizer input that crosses unrelated clocks.  Only stage 0
+# is asynchronous; the downstream stage stays timed.
 set_false_path -quiet -to [get_pins -quiet top_i/hmc_done_ddr_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_seen_ddr_sync_reg[0]/D]
-set_false_path -quiet -to [get_pins -quiet top_i/sync_ready_ddr_sync_reg[0]/D]
-# The trigger_*_count_ddr_meta registers have no constraint here: Top.v ties
-# those three counters to zero, so synthesis removes the registers.
-
-# PL_SYSREF goes straight from its IBUFDS to the RFDC user_sysref_dac port and
-# is never sampled by PL logic, so it needs no synchronizer constraint here.
-# The former top_i/user_sysref_dac_sync_reg[0]/D and top_i/u_rfctrl2_sync/...
-# constraints referred to logic that no longer exists and have been removed.
 
 # Single-DDR bring-up constraints adapted from the user-provided XCZU47DR
 # reference project MIG implementation. The custom card uses a 64-bit C0 DDR4
@@ -227,10 +191,3 @@ set_clock_groups -quiet -asynchronous \
     -group [get_clocks -quiet clk_pl_0] \
     -group [get_clocks -quiet mmcm_clkout0] \
     -group [get_clocks -quiet -include_generated_clocks RFDAC2_CLK]
-
-# HMC PL_CLK_P_0 is retained as an external phase reference. It is independent
-# from the PS PL and DDR UI/MMCM clocks, so do not time these domains as
-# phase-related.
-set_clock_groups -quiet -asynchronous \
-    -group [get_clocks -quiet PL_CLK_P_0] \
-    -group [get_clocks -quiet -include_generated_clocks {clk_pl_0 c0_sys_clk_p mmcm_clkout0 mmcm_clkout5 mmcm_clkout6 RFDAC2_CLK}]
