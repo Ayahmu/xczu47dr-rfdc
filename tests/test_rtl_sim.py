@@ -24,6 +24,12 @@ class RtlSimulationTests(unittest.TestCase):
             "PASS: disabled FIFO lanes cannot block or consume reader credit",
         )
 
+    def test_marker_pulse_stretcher(self):
+        self.run_sim("tb_marker_pulse_stretcher",
+                     [ROOT / "hardware/vivado/src/marker_pulse_stretcher.v",
+                      ROOT / "tests/tb_marker_pulse_stretcher.sv"],
+                     "PASS: marker is registered and stretched to WIDTH cycles")
+
     def test_waveform_dac_stream(self):
         self.run_sim("tb_waveform_dac_stream",
                      [ROOT / "hardware/vivado/src/waveform_dac_stream.v",

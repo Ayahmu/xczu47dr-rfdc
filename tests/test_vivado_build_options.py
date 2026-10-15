@@ -140,7 +140,7 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         )
         self.assertNotIn("waveform_trigger_cdc waveform_trigger_cdc_i", top)
         self.assertIn("waveform_trigger_cdc u_trigger", (REPO_ROOT / "hardware" / "vivado" / "src" / "waveform_playback_path.v").read_text(encoding="utf-8", errors="ignore"))
-        self.assertIn("assign TRIG_1 = new_output_first_transfer;", top)
+        self.assertIn(".marker(new_output_first_transfer), .out(TRIG_1)", top)
         self.assertIn("wire [7:0] rfdc_all_valid", top)
 
     def test_retired_playback_and_sync_rtl_is_gone(self):

@@ -140,14 +140,17 @@ module Top #(
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [31:0] firmware_status_ddr;
   wire waveform_prepared_dac;
 
-  // XS18 marks the first actual RFDC data transfer of a playback, not command
-  // receipt or a prefetch edge.
-  assign TRIG_1 = new_output_first_transfer;
-
   (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc_done_ddr_sync;
   wire hmc_done_ddr = hmc_done_ddr_sync[1];
   // Synchronized reset release for the DAC AXIS domain.
   wire dac_rst_n;
+
+  // XS18 marks the first actual RFDC data transfer of a playback (and of every
+  // loop pass), not command receipt or a prefetch edge.  The one-cycle marker
+  // is registered and held for 1 us (50 cycles of the 50 MHz DAC fabric clock)
+  // so it can start another instrument through a level shifter and a cable.
+  marker_pulse_stretcher #(.WIDTH(50)) xs18_marker (
+      .clk(dac_axis_clk), .rst_n(dac_rst_n), .marker(new_output_first_transfer), .out(TRIG_1));
 
   localparam [63:0] EXT_DDR_ADDR_BASE = 64'h0000_0048_0000_0000;
 
