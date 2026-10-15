@@ -18,13 +18,16 @@ USE IEEE.STD_LOGIC_ARITH.ALL;
 --   profile              reg 0x03   reg 0x05   R1        PLL1 PFD
 --   internal VCXO only      0x27      0x66      -         -
 --   CLKIN2 100 MHz          0x37      0x56      1         100 MHz   (reg 0x26 = 0x01)
---   CLKIN1 / XS17 250 MHz   0x2F      0x5A      25        10 MHz
---   CLKIN1 / XS17 10 MHz    0x2F      0x5A      1         10 MHz
+--   CLKIN1 / XS17 250 MHz   0x2F      0x5A      1 (0x1D=25) 10 MHz
+--   CLKIN1 / XS17 10 MHz    0x2F      0x5A      1 (0x1D=1)  10 MHz
 --
 -- This file programs the HMC7044 reference-clock profile.  The external XS17
--- reference frequency is selected by the REFERENCE_MHZ generic (250 or 10):
---   * 250 MHz: R1 = 250/10 = 25  -> PLL1 PFD 10 MHz
---   *  10 MHz: R1 =  10/10 =  1  -> PLL1 PFD 10 MHz
+-- reference frequency is selected by the REFERENCE_MHZ generic (250 or 10).
+-- The CLKIN1 prescaler (0x1D = REFERENCE_MHZ/10) and the OSCIN prescaler
+-- (0x20 = 10) bring both to fLCM = 10 MHz, where the reference is validated;
+-- R1 = 1 then gives the 10 MHz PLL1 PFD:
+--   * 250 MHz: 250 / 25 / R1 1 -> PLL1 PFD 10 MHz
+--   *  10 MHz:  10 /  1 / R1 1 -> PLL1 PFD 10 MHz
 -- PLL1 always closes on a 10 MHz PFD, so N1 (0x26 = 0x0A) and every downstream
 -- divider stay identical for both profiles.
 --
@@ -46,7 +49,13 @@ entity hmc7044 is
 
 generic(
 PLL2_SETTLE_TICKS : positive := 2500000;
-REFERENCE_MHZ : positive := 250
+REFERENCE_MHZ : positive := 250;
+-- Register readback after configuration.  SDATA is open drain on the HMC7044
+-- side (reg 0x54 = 0x01) and pulled up inside the FPGA, so every SCLK phase
+-- of a read is held for RB_PHASE_TICKS qualified (25 MHz) ticks to let the
+-- weak pull-up settle; RB_GAP_TICKS separates two register reads.
+RB_PHASE_TICKS : positive := 250;
+RB_GAP_TICKS : positive := 2500
 );
 port(
 clk   :	IN	STD_LOGIC;
@@ -54,13 +63,22 @@ rst   :	IN	STD_LOGIC;
 H7044_SLEN  :	OUT	STD_LOGIC;
 H7044_SCLK  :	OUT	STD_LOGIC;
 H7044_SDATA :	OUT	STD_LOGIC;
-SET_FINISH :	OUT	STD_LOGIC
+-- '1' while the FPGA drives SDATA; '0' during the data phase of a readback.
+H7044_SDATA_OE :	OUT	STD_LOGIC;
+H7044_SDATA_IN :	IN	STD_LOGIC := '1';
+SET_FINISH :	OUT	STD_LOGIC;
+-- Readback bank: HMC7044 registers 0x00..RB_LAST_ADDR, re-read continuously
+-- once SET_FINISH is high.  RB_WORD is registers 4*index+3 .. 4*index (MSB
+-- first); RB_SWEEPS counts completed passes over the whole bank.
+RB_WORD_INDEX :	IN	STD_LOGIC_VECTOR(5 downto 0) := (others => '0');
+RB_WORD :	OUT	STD_LOGIC_VECTOR(31 downto 0);
+RB_SWEEPS :	OUT	STD_LOGIC_VECTOR(15 downto 0)
 );
 end ;
 architecture MAPPED of hmc7044 is
 
 
-type 	 statetype is (config_wait,config_start,idle0,idle1,idle2,idle3,wr_clkl0,wr_clkl1,wr_clkh0,wr_clkh1,config_wait1,pll2_settle_wait,config_end);
+type 	 statetype is (config_wait,config_start,idle0,idle1,idle2,idle3,wr_clkl0,wr_clkl1,wr_clkh0,wr_clkh1,config_wait1,pll2_settle_wait,config_end,rb_gap,rb_low,rb_high,rb_store);
 signal spi_cntr_status : statetype;
 ---------------------------parameter------------------
 	signal HMC7044_SCLK		:	std_logic;
@@ -97,12 +115,42 @@ signal HMC7043_SDATA4 :		STD_LOGIC;
 	signal reset 				:	std_logic;
 	signal clk_div				:	std_logic_vector(1 downto 0);
 
+	constant RB_LAST_ADDR		:	std_logic_vector(7 downto 0) := x"9F";
+	type rb_bank_type is array (0 to 255) of std_logic_vector(7 downto 0);
+	signal rb_bank				:	rb_bank_type := (others => (others => '0'));
+	signal rb_addr				:	std_logic_vector(7 downto 0);
+	signal rb_shift			:	std_logic_vector(15 downto 0);
+	signal rb_data				:	std_logic_vector(7 downto 0);
+	signal rb_bit				:	integer range 0 to 23;
+	signal rb_ticks			:	integer range 0 to RB_GAP_TICKS;
+	signal rb_sweep_cnt		:	std_logic_vector(15 downto 0);
+	signal sdata_oe_reg		:	std_logic;
+	signal sdata_in_meta		:	std_logic;
+	signal sdata_in_sync		:	std_logic;
+
 
 begin
 
 H7044_SLEN  <=HMC7044_CS_N;
 H7044_SCLK  <=HMC7044_SCLK;
 H7044_SDATA <=HMC7044_SDIO;
+H7044_SDATA_OE <= sdata_oe_reg;
+RB_SWEEPS <= rb_sweep_cnt;
+
+	rb_word_read : process(RB_WORD_INDEX, rb_bank)
+		variable base : integer range 0 to 252;
+	begin
+		base := conv_integer(RB_WORD_INDEX) * 4;
+		RB_WORD <= rb_bank(base + 3) & rb_bank(base + 2) & rb_bank(base + 1) & rb_bank(base);
+	end process;
+
+	process(clk)
+	begin
+		if rising_edge(clk) then
+			sdata_in_meta <= H7044_SDATA_IN;
+			sdata_in_sync <= sdata_in_meta;
+		end if;
+	end process;
 
 	-- Preserve the original 25 MHz state-machine cadence while keeping all
 	-- sequential logic on the timing-constrained input clock.
@@ -224,17 +272,20 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"018" =>
 					config_reg <= x"001C" & x"01";		---clk0 input prescaler[7:0]
 				when x"019" =>
-					config_reg <= x"001D" & x"01";		---clk1 input prescaler[7:0]
+					-- CLKIN1 (XS17) prescaler: REFERENCE_MHZ -> fLCM = 10 MHz.  Every CLKIN and
+					-- OSCIN must reach the same fLCM; the HMC7044 validates the reference there
+					-- and R1 divides fLCM to the PLL1 PFD (fVCXO / N1 = fLCM / R1).
+					config_reg <= x"001D" & std_logic_vector(to_unsigned(REFERENCE_MHZ/10, 8));
 				when x"01A" =>
 					config_reg <= x"001E" & x"01";		 ---clk2 input prescaler[7:0]
 				when x"01B" =>
 					config_reg <= x"001F" & x"01";		---clk3 input prescaler[7:0]
 				when x"01C" =>
-					config_reg <= x"0020" & x"05";		---oscin input prescaler[7:0]
+					config_reg <= x"0020" & x"0A";		---oscin input prescaler: 100 MHz VCXO -> fLCM = 10 MHz (was 5: PLL1 never locked)
 				when x"01D" =>
 				--	config_reg <= x"0021" & x"04";	  --R1 DIVIDER[7:0]
 
-					config_reg <= x"0021" & std_logic_vector(to_unsigned(REFERENCE_MHZ/10, 8));
+					config_reg <= x"0021" & x"01";	  --R1 = 1: 10 MHz fLCM -> 10 MHz PFD
 
 				when x"01E" =>
 					config_reg <= x"0022" & x"00";	  --R1 DIVIDER[15:8]
@@ -311,7 +362,7 @@ H7044_SDATA <=HMC7044_SDIO;
 				when x"035" =>
 					config_reg <= x"0053" & x"37";	--gpox control
 				when x"036" =>
-					config_reg <= x"0054" & x"03";	--bit[0] sdata enable  bit[1] sdata mode, 0 for open drain mode 1 for cmos mode
+					config_reg <= x"0054" & x"01";	--bit[0] sdata enable  bit[1] sdata mode, 0 for open drain mode 1 for cmos mode; open drain: the 2.5 V FPGA bank pulls SDATA up
 				when x"037" =>
 					config_reg <= x"005A" & x"01";	--bit[2:0] pulse generator mode selection
 			when x"038" =>
@@ -745,6 +796,13 @@ H7044_SDATA <=HMC7044_SDIO;
 			HMC7044_CS_N		<= '1';
 			HMC7044_SDIO		<= '0';
 			SET_FINISH<='0';
+			sdata_oe_reg <= '1';
+			rb_addr <= (others => '0');
+			rb_shift <= (others => '0');
+			rb_data <= (others => '0');
+			rb_bit <= 0;
+			rb_ticks <= 0;
+			rb_sweep_cnt <= (others => '0');
 	        delay_cnt<= (others => '0');
 			pll2_settle_cnt <= 0;
 			spi_reg			<= (others => '0');
@@ -861,8 +919,76 @@ H7044_SDATA <=HMC7044_SDIO;
 					HMC7044_CS_N		<= '1';
 					HMC7044_SDIO		<= '0';
 					SET_FINISH<='1';
+					sdata_oe_reg <= '1';
+					rb_addr <= (others => '0');
+					rb_ticks <= 0;
 
-					spi_cntr_status <= config_end;
+					spi_cntr_status <= rb_gap;
+
+				-- Readback: '1' (read), W1:W0 = 00 (one byte), 13-bit address, then
+				-- the HMC7044 drives 8 data bits.  The FPGA releases SDATA from the
+				-- 17th SCLK low phase on and samples at the end of each high phase.
+				when rb_gap =>
+					HMC7044_SCLK		<= '0';
+					HMC7044_CS_N		<= '1';
+					HMC7044_SDIO		<= '0';
+					sdata_oe_reg <= '1';
+					if rb_ticks = RB_GAP_TICKS - 1 then
+						rb_ticks <= 0;
+						rb_bit <= 0;
+						rb_shift <= '1' & "00" & "00000" & rb_addr;
+						HMC7044_CS_N <= '0';
+						spi_cntr_status <= rb_low;
+					else
+						rb_ticks <= rb_ticks + 1;
+					end if;
+				when rb_low =>
+					HMC7044_SCLK		<= '0';
+					HMC7044_CS_N		<= '0';
+					if rb_bit < 16 then
+						sdata_oe_reg <= '1';
+						HMC7044_SDIO <= rb_shift(15);
+					else
+						sdata_oe_reg <= '0';
+						HMC7044_SDIO <= '0';
+					end if;
+					if rb_ticks = RB_PHASE_TICKS - 1 then
+						rb_ticks <= 0;
+						spi_cntr_status <= rb_high;
+					else
+						rb_ticks <= rb_ticks + 1;
+					end if;
+				when rb_high =>
+					HMC7044_SCLK		<= '1';
+					HMC7044_CS_N		<= '0';
+					if rb_ticks = RB_PHASE_TICKS - 1 then
+						rb_ticks <= 0;
+						if rb_bit >= 16 then
+							rb_data <= rb_data(6 downto 0) & sdata_in_sync;
+						end if;
+						rb_shift <= rb_shift(14 downto 0) & '0';
+						if rb_bit = 23 then
+							spi_cntr_status <= rb_store;
+						else
+							rb_bit <= rb_bit + 1;
+							spi_cntr_status <= rb_low;
+						end if;
+					else
+						rb_ticks <= rb_ticks + 1;
+					end if;
+				when rb_store =>
+					HMC7044_SCLK		<= '0';
+					HMC7044_CS_N		<= '1';
+					HMC7044_SDIO		<= '0';
+					sdata_oe_reg <= '1';
+					rb_bank(conv_integer(rb_addr)) <= rb_data;
+					if rb_addr = RB_LAST_ADDR then
+						rb_addr <= (others => '0');
+						rb_sweep_cnt <= rb_sweep_cnt + 1;
+					else
+						rb_addr <= rb_addr + 1;
+					end if;
+					spi_cntr_status <= rb_gap;
 				when others =>
 					HMC7044_SCLK		<= '0';
 					HMC7044_CS_N		<= '1';

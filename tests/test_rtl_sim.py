@@ -307,7 +307,7 @@ class RtlSimulationTests(unittest.TestCase):
                 ROOT / "hardware/vivado/src/firmware_status_reg.v",
                 ROOT / "tests/tb_firmware_status_reg.sv",
             ],
-            "PASS: firmware status register stores the word, reads back hmc_done and ignores stray accesses",
+            "PASS: firmware status register stores the word, reads back hmc_done, the HMC7044 readback bank and ignores stray accesses",
         )
 
     def test_pl_riscv_control_v1_decodes_rfctrl2_and_rejects_unsupported(self):

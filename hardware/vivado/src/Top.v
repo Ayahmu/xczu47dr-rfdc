@@ -9,7 +9,8 @@ module Top #(
     output H7044_SYNC_0,
     output H7044_SLEN_0,
     output H7044_SCLK_0,
-    output H7044_SDATA_0,
+    inout  H7044_SDATA_0,
+    input  H7044_GPIO1_0,
 
     // PL_SYSREF from HMC7044 (differential LVDS)
     input  PL_SYSREF_P_0,
@@ -107,6 +108,10 @@ module Top #(
 
 
   wire        hmc7044_set_finish;
+  wire        hmc7044_sdata_o, hmc7044_sdata_oe, hmc7044_sdata_i;
+  wire [5:0]  hmc7044_rb_index;
+  wire [31:0] hmc7044_rb_word;
+  wire [15:0] hmc7044_rb_sweeps;
   // External XS17 reference profile: XS17 drives CLKIN1.  HMC7044 divides it by
   // REFERENCE_MHZ/10 (250 MHz -> R1=25, 10 MHz -> R1=1) to obtain the 10 MHz
   // PLL1 PFD.
@@ -118,9 +123,28 @@ module Top #(
       .rst(pl_aresetn),
       .H7044_SLEN(H7044_SLEN_0),
       .H7044_SCLK(H7044_SCLK_0),
-      .H7044_SDATA(H7044_SDATA_0),
-      .SET_FINISH(hmc7044_set_finish)
+      .H7044_SDATA(hmc7044_sdata_o),
+      .H7044_SDATA_OE(hmc7044_sdata_oe),
+      .H7044_SDATA_IN(hmc7044_sdata_i),
+      .SET_FINISH(hmc7044_set_finish),
+      .RB_WORD_INDEX(hmc7044_rb_index),
+      .RB_WORD(hmc7044_rb_word),
+      .RB_SWEEPS(hmc7044_rb_sweeps)
   );
+
+  // SDATA is the 3-wire SPI data line: the FPGA drives it except during the
+  // data phase of a register readback, where the HMC7044 pulls it low (open
+  // drain) against the pad pull-up.
+  IOBUF hmc7044_sdata_iobuf (
+      .I (hmc7044_sdata_o),
+      .O (hmc7044_sdata_i),
+      .T (~hmc7044_sdata_oe),
+      .IO(H7044_SDATA_0)
+  );
+
+  (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [1:0] hmc7044_gpio1_sync;
+  always @(posedge pl_clk)
+    hmc7044_gpio1_sync <= {hmc7044_gpio1_sync[0], H7044_GPIO1_0};
 
   assign RESET_H7044_H_0 = 1'b0;
   // HMC7044 SYNC is not used by the single-board target; hold the pin low.
@@ -2317,6 +2341,10 @@ module Top #(
       .s_axi_rvalid (M_AXI_GPIO_rvalid),
       .s_axi_rready (M_AXI_GPIO_rready),
       .hmc_done     (hmc7044_set_finish),
+      .hmc_gpio1    (hmc7044_gpio1_sync[1]),
+      .hmc_rb_sweeps(hmc7044_rb_sweeps),
+      .hmc_rb_index (hmc7044_rb_index),
+      .hmc_rb_word  (hmc7044_rb_word),
       .status       (firmware_status_word)
   );
 

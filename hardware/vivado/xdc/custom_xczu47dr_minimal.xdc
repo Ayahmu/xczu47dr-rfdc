@@ -15,6 +15,11 @@ set_property PACKAGE_PIN E7 [get_ports H7044_SCLK_0]
 set_property IOSTANDARD LVCMOS25 [get_ports H7044_SCLK_0]
 set_property PACKAGE_PIN F6 [get_ports H7044_SDATA_0]
 set_property IOSTANDARD LVCMOS25 [get_ports H7044_SDATA_0]
+# SDATA is read back with the HMC7044 in open-drain mode (reg 0x54 = 0x01).
+set_property PULLUP TRUE [get_ports H7044_SDATA_0]
+set_property PACKAGE_PIN D6 [get_ports H7044_GPIO1_0]
+set_property IOSTANDARD LVCMOS25 [get_ports H7044_GPIO1_0]
+set_false_path -from [get_ports {H7044_SDATA_0 H7044_GPIO1_0}]
 
 # 88E1111 RESET/COMA net.  The schematic ties this active-low net to a
 # 4.7K pull-up and 1uF reset capacitor; drive it high after PL configuration.

@@ -1,7 +1,8 @@
 `timescale 1ns / 1ps
 
 // firmware_status_reg: the status word is stored with byte strobes, read back
-// with the HMC7044 done flag in bit 31, and stray accesses still complete.
+// with the HMC7044 done flag in bit 31, the HMC7044 readback bank and GPIO1
+// are readable, and stray accesses still complete.
 module tb_firmware_status_reg;
   reg clk = 1'b0;
   reg rst_n = 1'b0;
@@ -13,6 +14,11 @@ module tb_firmware_status_reg;
   reg  [8:0]  araddr = 0;  reg arvalid = 0;  wire arready;
   wire [31:0] rdata;       wire [1:0] rresp; wire rvalid;  reg rready = 0;
   reg         hmc_done = 1'b0;
+  reg         hmc_gpio1 = 1'b0;
+  reg  [15:0] hmc_rb_sweeps = 16'h0000;
+  wire [5:0]  hmc_rb_index;
+  // Stand-in for the HMC7044 readback bank: the word is a function of its index.
+  wire [31:0] hmc_rb_word = {8'hC0, 8'h00, 2'b00, hmc_rb_index, 8'h5A};
   wire [31:0] status;
 
   firmware_status_reg dut (
@@ -22,7 +28,8 @@ module tb_firmware_status_reg;
       .s_axi_bresp(bresp), .s_axi_bvalid(bvalid), .s_axi_bready(bready),
       .s_axi_araddr(araddr), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
       .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid), .s_axi_rready(rready),
-      .hmc_done(hmc_done), .status(status));
+      .hmc_done(hmc_done), .hmc_gpio1(hmc_gpio1), .hmc_rb_sweeps(hmc_rb_sweeps),
+      .hmc_rb_index(hmc_rb_index), .hmc_rb_word(hmc_rb_word), .status(status));
 
   task check(input condition, input string message);
     begin
@@ -96,7 +103,21 @@ module tb_firmware_status_reg;
     read(9'h000, value);
     check(value == 32'd0, "a stray read must return zero");
 
-    $display("PASS: firmware status register stores the word, reads back hmc_done and ignores stray accesses");
+    // 0x00C: {GPIO1, 15'b0, sweep count}; 0x100 + 4i: readback word i.
+    hmc_rb_sweeps = 16'h1234;
+    read(9'h00C, value);
+    check(value == 32'h0000_1234, "readback sweep count not at 0x00C");
+    hmc_gpio1 = 1'b1;
+    read(9'h00C, value);
+    check(value == 32'h8000_1234, "GPIO1 not read back in bit 31 of 0x00C");
+    read(9'h100, value);
+    check(value == 32'hC000_005A, "readback word 0 not at 0x100");
+    read(9'h1FC, value);
+    check(value == 32'hC000_3F5A, "readback word 63 not at 0x1FC");
+    read(9'h0FC, value);
+    check(value == 32'd0, "readback bank must not alias below 0x100");
+
+    $display("PASS: firmware status register stores the word, reads back hmc_done, the HMC7044 readback bank and ignores stray accesses");
     $finish;
   end
 endmodule

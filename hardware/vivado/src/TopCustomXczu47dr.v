@@ -7,7 +7,9 @@ module TopCustomXczu47dr #(
     output H7044_SYNC_0,
     output H7044_SLEN_0,
     output H7044_SCLK_0,
-    output H7044_SDATA_0,
+    inout  H7044_SDATA_0,
+    // HMC7044 GPIO1 (D6), sampled into the firmware status register.
+    input  H7044_GPIO1_0,
 
     output RST_88E1111,
     // XS18: first-sample marker output.  XS19: external playback Trigger input.
@@ -83,6 +85,7 @@ module TopCustomXczu47dr #(
       .H7044_SLEN_0(H7044_SLEN_0),
       .H7044_SCLK_0(H7044_SCLK_0),
       .H7044_SDATA_0(H7044_SDATA_0),
+      .H7044_GPIO1_0(H7044_GPIO1_0),
       
       // PL_SYSREF
       .PL_SYSREF_P_0(PL_SYSREF_P_0),

@@ -65,7 +65,7 @@ class Hmc7044ConfigTests(unittest.TestCase):
         self.assertIn("REFERENCE_MHZ : positive := 250", text)
         self.assertRegex(
             text,
-            r'config_reg\s*<=\s*x"0021"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
+            r'config_reg\s*<=\s*x"001D"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
         )
         # Top/TopCustomXczu47dr carry the generic and target_config drives it.
         top = TOP_VERILOG.read_text(encoding="utf-8", errors="ignore")
@@ -87,16 +87,15 @@ class Hmc7044ConfigTests(unittest.TestCase):
         text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
         self.assertRegex(
             text,
-            r'config_reg\s*<=\s*x"0021"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
+            r'config_reg\s*<=\s*x"001D"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10',
         )
         self.assertRegex(text, r'config_reg\s*<=\s*x"0026"\s*&\s*x"0A"')
 
-        # R1 = REFERENCE_MHZ/10; with the 250 MHz default, R1=25 and N1=10 keep
-        # the PLL1 PFD at 10 MHz and the VCXO at 100 MHz.
-        r1 = 25
-        n1 = 0x0A
-        self.assertEqual(250_000_000 / r1, 10_000_000)
-        self.assertEqual((250_000_000 / r1) * n1, VCXO_HZ)
+        # CLKIN1 prescaler = REFERENCE_MHZ/10 and R1 = 1; with the 250 MHz
+        # default, 250/25/1 = 10 MHz PFD = 100 MHz VCXO / N1 (10).
+        prescaler, r1, n1 = 25, 1, 0x0A
+        self.assertEqual(250_000_000 / prescaler / r1, 10_000_000)
+        self.assertEqual(250_000_000 / prescaler / r1 * n1, VCXO_HZ)
 
     def test_sync_uses_xs17_clkin1_reference(self):
         # XS17(250MHz) 接 CLKIN1；R1=25 产生 10MHz PLL1 PFD。
@@ -233,3 +232,25 @@ class Hmc7044ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Hmc7044Pll1LcmTests(unittest.TestCase):
+    def test_clkin1_and_oscin_prescalers_meet_at_one_lcm_frequency(self):
+        # The HMC7044 brings every CLKIN and OSCIN to one common frequency fLCM
+        # through its input prescaler (0x1C..0x20) and validates the reference
+        # (LOS) there; R1 then divides fLCM down to the PFD (ADI's hmc7044.c:
+        # in_prescaler[i] = f_i / lcm, fVCXO / N1 = fLCM / R1).  An OSCIN
+        # prescaler of 5 put the VCXO side at 20 MHz against a 10 MHz CLKIN1
+        # side: PLL1 never locked and the board ran 49 ppm off its reference.
+        text = HMC7044_VHDL.read_text(encoding="utf-8", errors="ignore")
+        regs = _hmc7044_registers()
+        self.assertRegex(text, r'config_reg\s*<=\s*x"001D"\s*&\s*std_logic_vector\s*\(\s*to_unsigned\s*\(\s*REFERENCE_MHZ\s*/\s*10')
+        self.assertEqual(regs[0x0020], 10)   # OSCIN prescaler: 100 MHz VCXO -> 10 MHz
+        self.assertEqual(regs[0x0021], 1)    # R1
+        self.assertEqual(regs[0x0022], 0)
+        self.assertEqual(regs[0x0026], 10)   # N1: 100 MHz / 10 = 10 MHz PFD
+        for reference_mhz in (10, 250):
+            lcm_clkin = reference_mhz / (reference_mhz // 10)
+            lcm_oscin = VCXO_HZ / 1e6 / regs[0x0020]
+            self.assertEqual(lcm_clkin, lcm_oscin)
+            self.assertEqual(lcm_clkin / regs[0x0021], VCXO_HZ / 1e6 / regs[0x0026])

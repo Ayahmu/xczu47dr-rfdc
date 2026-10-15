@@ -43,3 +43,4 @@ class Hmc7044RtlSimulationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, "\n".join(outputs))
 
             self.assertIn("HMC7044 SPI autotune sequence passed", outputs[-1])
+            self.assertIn("HMC7044 register readback passed", outputs[-1])

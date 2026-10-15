@@ -9,6 +9,11 @@
 //
 //   0x008  write  status word, byte strobes honoured
 //          read   {hmc_done, status[30:0]}
+//   0x00C  read   {hmc_gpio1, 15'b0, hmc_rb_sweeps[15:0]}
+//   0x100  read   HMC7044 register readback, 4 registers per word: the word
+//   ..1FC         at 0x100 + 4*i holds registers 4i+3..4i (MSB first).  The
+//                 PL re-reads registers 0x00..0x9F continuously after
+//                 configuration; hmc_rb_sweeps counts completed passes.
 //
 // Every other address reads as zero and ignores writes; both still complete
 // with OKAY so a stray access cannot hang the PS bus.
@@ -40,10 +45,17 @@ module firmware_status_reg (
 
     // HMC7044 configuration finished (same clock domain); read back in bit 31.
     input  wire        hmc_done,
+    input  wire        hmc_gpio1,
+    input  wire [15:0] hmc_rb_sweeps,
+    output wire [5:0]  hmc_rb_index,
+    input  wire [31:0] hmc_rb_word,
     output wire [31:0] status
 );
 
   localparam ADDR_STATUS = 9'h008;
+  localparam ADDR_HMC_RB_STATUS = 9'h00C;
+
+  assign hmc_rb_index = s_axi_araddr[7:2];
 
   reg [31:0] status_reg;
 
@@ -111,7 +123,14 @@ module firmware_status_reg (
       end
 
       if (read_fire) begin
-        s_axi_rdata <= (s_axi_araddr == ADDR_STATUS) ? {hmc_done, status_reg[30:0]} : 32'h00000000;
+        if (s_axi_araddr == ADDR_STATUS)
+          s_axi_rdata <= {hmc_done, status_reg[30:0]};
+        else if (s_axi_araddr == ADDR_HMC_RB_STATUS)
+          s_axi_rdata <= {hmc_gpio1, 15'd0, hmc_rb_sweeps};
+        else if (s_axi_araddr[8])
+          s_axi_rdata <= hmc_rb_word;
+        else
+          s_axi_rdata <= 32'h00000000;
         s_axi_rvalid <= 1'b1;
       end else if (s_axi_rvalid && s_axi_rready) begin
         s_axi_rvalid <= 1'b0;
