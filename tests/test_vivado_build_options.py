@@ -99,6 +99,15 @@ class VivadoBuildOptionsTests(unittest.TestCase):
         self.assertFalse((REPO_ROOT / "hardware/vivado/ip/xxv_ethernet_1").exists())
         self.assertFalse((REPO_ROOT / "hardware/vivado/reference/xxv_ethernet_v4_1_13.dcp").exists())
 
+    def test_cmac_gt_is_equalized_for_a_lossy_3m_dac(self):
+        create_project = (SCRIPTS / "create_project.tcl").read_text(encoding="utf-8", errors="ignore")
+
+        # No link training on this link: the board's GTY receiver must be
+        # set up for a 3 m 100G DAC (14 dB at 12.9 GHz) plus board traces,
+        # not the IP default of 12 dB channel loss with automatic EQ choice.
+        self.assertIn("CONFIG.INS_LOSS_NYQ 20", create_project)
+        self.assertIn("CONFIG.RX_EQ_MODE DFE", create_project)
+
     def test_single_board_waveform_has_no_master_trigger_hierarchy(self):
         top = (REPO_ROOT / "hardware" / "vivado" / "src" / "Top.v").read_text(
             encoding="utf-8", errors="ignore"

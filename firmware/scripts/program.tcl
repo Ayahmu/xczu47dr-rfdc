@@ -334,7 +334,15 @@ if {!$download_elf_only} {
 
     puts "Programming FPGA..."
     select_board_target $target pl
-    fpga ${bit_file}
+    if {[catch {fpga ${bit_file}} fpga_error]} {
+        # With a second board on another cable, fpga ignores a selected PL
+        # target and asks which PS TAP to use; give it this cable's.
+        if {[string first "Multiple FPGA devices" $fpga_error] < 0} {
+            error $fpga_error
+        }
+        select_board_target $target fpga
+        fpga ${bit_file}
+    }
 
     puts "Configuring PS-PL isolation and resets..."
     select_board_target $target psu

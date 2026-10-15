@@ -190,6 +190,10 @@ if {[file exists ${udp100g_src_dir}]} {
 # X0Y4~X0Y7 = QSFP28 BANK 128).  Generated fresh under the permanent
 # Design_Linking license with the same configuration as the reference
 # 100G example (cmac_usplus 3.1).
+# Without link training the receiver alone has to open the eye: equalize
+# for a 3 m 100G DAC (14 dB at 12.9 GHz) plus board traces with DFE.  The
+# IP default (12 dB, AUTO) got no host -> board frames through such a cable
+# (2026-10-14) while a 12 dB one had worked.
 set cmac_ip_dir "${generated_ip_dir}"
 file mkdir ${cmac_ip_dir}
 create_ip -force -name cmac_usplus -vendor xilinx.com -library ip -version 3.1 \
@@ -214,6 +218,8 @@ set_property -dict [list \
     CONFIG.INCLUDE_RS_FEC 1 \
     CONFIG.INCLUDE_AUTO_NEG_LT_LOGIC 0 \
     CONFIG.INCLUDE_AN_LT_TX_TRAINER 0 \
+    CONFIG.INS_LOSS_NYQ 20 \
+    CONFIG.RX_EQ_MODE DFE \
     CONFIG.ENABLE_AXI_INTERFACE 0 \
     CONFIG.GT_GROUP_SELECT {X0Y4~X0Y7} \
     CONFIG.ENABLE_PIPELINE_REG 0 \
